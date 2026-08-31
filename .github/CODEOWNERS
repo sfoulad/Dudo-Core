@@ -1,11 +1,34 @@
 # Dudo-Core code owners
 #
-# Every path in this repository is owned by @sfoulad by default.
-# More specific rules may be added below as the project grows; the last
-# matching pattern wins.
+# Every path is owned by @sfoulad. The per-path entries below record the
+# agent that owns each boundary — the human reviewer is the same either way,
+# but the mapping is what keeps agent ownership visible in review.
+#
+# Layout: docs/decisions/0004-repository-structure.md
+# The last matching pattern wins.
 #
 # Note: CODEOWNERS assigns review requests. It does not by itself require
 # approval — see docs/operations/github-foundation.md for why no human
 # approval requirement is set while this is a single-owner project.
 
-*   @sfoulad
+*                           @sfoulad
+
+# --- platform ------------------------------------------------------------
+/platform/core/             @sfoulad   # core-agent
+/platform/web/              @sfoulad   # web-agent
+/platform/capabilities/     @sfoulad   # plugin-agent
+
+# --- extensions ----------------------------------------------------------
+/apps/                      @sfoulad   # per-App owner, assigned per task
+/connectors/                @sfoulad   # plugin-agent
+
+# --- shared packages -----------------------------------------------------
+/packages/contracts/        @sfoulad   # architecture-agent — sole contract author
+/packages/sdk/              @sfoulad   # plugin-agent
+/packages/testing/          @sfoulad   # qa-agent
+
+# --- governance ----------------------------------------------------------
+/agents/                    @sfoulad   # architecture-agent
+/docs/                      @sfoulad   # Team Lead
+/.github/                   @sfoulad   # Team Lead
+/.coderabbit.yaml           @sfoulad   # Team Lead

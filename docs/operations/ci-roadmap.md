@@ -13,10 +13,16 @@ Planned automation for both Dudo repositories.
 > A green check that verifies nothing is worse than no check, because it produces false
 > confidence and would satisfy a required status check without doing any work.
 
-## Dudo-Core — after the technology stack is approved
+## Dudo-Core — TypeScript on Cloudflare
 
-Everything below is blocked on the stack decision. Language, framework, database, and
-hosting are all unselected, so the tools that would run these checks cannot be chosen yet.
+The stack is decided (`docs/decisions/0003-technology-stack-typescript-on-cloudflare.md`):
+TypeScript, Workers, D1, R2, Queues, Workflows, Durable Objects. Workflows below can now
+be written against a real toolchain — but the **web framework and testing framework are
+still unselected**, so the concrete tools remain open. Nothing is created until a check
+has something real to run.
+
+Paths follow `docs/decisions/0004-repository-structure.md`: `platform/**`, `apps/**`,
+`connectors/**`, `packages/**`.
 
 | Stage | What it does |
 |---|---|

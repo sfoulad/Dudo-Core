@@ -4,8 +4,9 @@ The authoritative map of who owns what and how the parts are allowed to talk. Th
 contribution and security rules that follow from this document are in `CONTRIBUTING.md`
 and `SECURITY.md`.
 
-> **The `Dudo-Core` technology stack has not been selected.** Swift, SwiftUI, and Xcode
-> are approved for `Dudo-Apple` only. This describes structure and responsibility.
+> **Stack:** `Dudo-Core` is TypeScript on Cloudflare (`0003`); `Dudo-Apple` is Swift,
+> SwiftUI, and Xcode (`0002`). No web framework, testing framework, or third-party
+> dependency is selected. This document describes structure and responsibility.
 
 ## Repositories
 
@@ -15,7 +16,7 @@ the published contract set:
 
 | Repository | Contents |
 |---|---|
-| **`sfoulad/Dudo-Core`** | `core/`, `packages/contracts/`, `apps/` (responsive web app), `plugins/`, `packages/plugin-sdk/`, `tests/`, `docs/` |
+| **`sfoulad/Dudo-Core`** | `platform/`, `apps/`, `connectors/`, `packages/`, `agents/`, `docs/` — layout fixed by `docs/decisions/0004-repository-structure.md` |
 | **`sfoulad/Dudo-Apple`** | Native Apple application — Xcode, Swift, SwiftUI; iPhone, iPad, macOS |
 
 Both repositories exist and are public. `Dudo-Apple` is intentionally empty until its
@@ -23,7 +24,7 @@ Xcode project is approved.
 
 ## Modules
 
-### Web experience — `apps/**` in `Dudo-Core` (owner: `web-agent`)
+### Web experience — `platform/web/**` in `Dudo-Core` (owner: `web-agent`)
 
 The responsive browser surface, across desktop, tablet, and phone widths. Renders,
 collects input, handles routing, presentation state, and accessibility.
@@ -47,32 +48,57 @@ platform-specific implementations where Apple UX genuinely differs.
   never authors a contract.
 - Does not edit `Dudo-Core`. Test targets belong to `qa-agent`.
 
-### Core — `core/**` and `packages/contracts/**` (owner: `core-agent`)
+### Contracts — `packages/contracts/**` (owner: `architecture-agent`)
 
-The domain. Business rules, application services, APIs, authorization, tenant
-isolation, workflows, and auditing — plus every shared contract in the system.
+Every boundary crossing in the system. Authored **only** here, and never by the agent
+that implements against them — the separation is what makes review independent.
 
 - **All cross-module contracts originate here.** No other module may author one, and
   **both clients consume one approved set** — divergence between web and Apple is a
   contract defect, not a client workaround.
+- A contract defines the request shape, the response shape, error cases, the
+  authorization expectation, and the tenant scope.
+- Also owns `docs/architecture/**` specifications and `agents/**`.
+
+### Core — `platform/core/**` (owner: `core-agent`)
+
+The domain. Business rules, application services, APIs, authorization, tenant
+isolation, workflows, and auditing.
+
+- **Core stays small.** Platform primitives only; business functionality belongs in an
+  App under `apps/` or in a Capability.
+- Implements against contracts; **does not author them.**
+- **Cloudflare services stay replaceable** — no Cloudflare type, client, or binding in
+  domain logic.
 - Decides authorization on every entry point; denies by default.
 - Enforces tenant scope on every data path.
 - Emits audit records for money, permissions, membership, export, and destructive
   operations.
-- Does not depend on `apps/**` or `plugins/**`.
+- Does not depend on `platform/web/**`, `apps/**`, or `connectors/**`.
 
-### Extensibility — `plugins/**` and `packages/plugin-sdk/**` (owner: `plugin-agent`)
+### Business Apps — `apps/**` (owner: assigned per App)
 
-The plugin runtime, host, loader, and the SDK third parties build against: manifests,
-lifecycle, permission declarations, and extension interfaces.
+**Reserved for installable business Apps** — CRM, Finance, Projects, Inventory, HR.
+Nothing else belongs here.
 
-- Plugins reach Core **only** through explicit, versioned contracts.
+- An App owns its logic, data, API, events, permissions, UI, and tests.
+- **No cross-App database access.** Apps meet through internal APIs and events only.
+- Apps request **capabilities, not vendors**.
+- Official Apps use exactly the SDK third-party developers use — no privileged path.
+- Per-App suites colocate at `apps/<name>/tests/`, owned by `qa-agent`.
+
+### Extensibility — `platform/capabilities/**`, `packages/sdk/**`, `connectors/**` (owner: `plugin-agent`)
+
+The capability registry, the App runtime, the SDK developers build against, and the
+adapters to external platforms.
+
+- Apps reach Core **only** through explicit, versioned contracts.
 - **No direct storage access** — no database connections, SQL, ORM models, Core caches,
   or Core files. No exception, including first-party plugins.
 - Never bypasses authorization and never selects its own tenant.
 - Consumes contracts; never authors them.
 
-### Verification — `tests/**` and Apple test targets (owner: `qa-agent`)
+### Verification — `packages/testing/**`, `apps/*/tests/**`, and Apple test targets (owner: `qa-agent`)
 
 Unit, integration, contract, security, tenant-isolation, and regression suites, across
 **both** repositories.
@@ -95,22 +121,31 @@ completion gate.
 ## Allowed dependencies
 
 ```
-   Dudo-Apple  ─────────┐
-                        │
-      apps/  ───────────┼──►  packages/contracts/  ◄──── core/  (author)
-                        │                                  │
-   plugins/ ────────────┘                                  │
-        │                                                  ▼
-        └── packages/plugin-sdk/                    (domain, authz,
-                                                     tenancy, audit)
-   tests/  ──── reads everything, both repositories
+      Dudo-Apple  ────────┐
+                          │
+   platform/web/  ────────┤
+                          ├──►  packages/contracts/  ◄──── architecture-agent
+          apps/  ─────────┤            ▲                      (sole author)
+                          │            │
+    connectors/  ─────────┘            │
+                                       │
+   platform/capabilities/ ─────────────┤
+        │                              │
+        └── packages/sdk/ ─────────────┘
+
+   platform/core/  ──► implements the contracts (domain, authz,
+                                                 tenancy, audit)
+
+   packages/testing/  ──── reads everything, both repositories
 ```
 
-- `apps/` (web) → `packages/contracts/` **only**.
+- `platform/web/` → `packages/contracts/` **only**.
 - `Dudo-Apple` → `packages/contracts/` **only**, across the repository boundary.
-- `plugins/` → `packages/plugin-sdk/` → `packages/contracts/` **only**.
-- `core/` → `packages/contracts/` (as author). Core depends on nothing above it.
-- `tests/` reads everything and depends on nothing.
+- `apps/` → `packages/sdk/` → `packages/contracts/` **only**. Never another App's storage.
+- `connectors/` → the capability contract they implement **only**.
+- `platform/capabilities/` → `packages/sdk/` → `packages/contracts/` **only**.
+- `platform/core/` implements contracts; it depends on nothing above it.
+- `packages/testing/` reads everything and depends on nothing.
 - **The two client repositories never depend on each other.**
 
 ## Forbidden edges
@@ -119,11 +154,15 @@ completion gate.
 |---|---|
 | Either client → database or datastore | Business data access belongs to Core |
 | Either client holding business rules | Rules must be enforced server-side, once |
-| `apps/` ↔ `Dudo-Apple` direct dependency | Clients meet only through contracts |
+| `platform/web/` ↔ `Dudo-Apple` direct dependency | Clients meet only through contracts |
+| Anything in `apps/` that is not an installable business App | `apps/` is reserved; clients and libraries belong elsewhere |
+| An App reaching another App's storage | Apps meet through APIs and events only |
+| An App depending on a named vendor | Apps request capabilities; Connectors supply vendors |
+| A Cloudflare type or binding in domain logic | Services must stay replaceable behind a Core interface |
 | One client's contract shape diverging from the other's | One approved contract set serves both |
 | Credentials, certificates, provisioning profiles, or env files in either repository | Both are public; exposure is permanent |
-| `plugins/` → database, Core cache, or Core files | Plugins must never touch storage |
-| `plugins/` → Core internals (bypassing contracts) | Breaks isolation and authorization |
+| An App or the runtime → database, Core cache, or Core files | Extensions must never touch storage |
+| An App or the runtime → Core internals (bypassing contracts) | Breaks isolation and authorization |
 | Anyone but Core authoring a contract | Contracts must have a single author |
 | Any module resolving its own tenant from client input | Breaks tenant isolation |
 | Any agent editing outside its ownership | Causes concurrent edits and lost work |
@@ -136,7 +175,7 @@ authorization expectation, and the tenant scope. Types alone are not contracts.
 Sequence — never out of order:
 
 1. Team Lead identifies the cross-module need.
-2. `core-agent` authors the contract in `packages/contracts/**`.
+2. `architecture-agent` authors the contract in `packages/contracts/**`.
 3. Team Lead reviews; the contract is agreed.
 4. Consumers implement against it.
 5. `qa-agent` writes contract tests binding producer and consumer.
@@ -154,13 +193,16 @@ fixtures, logs, and error messages.
 
 ## Open questions
 
-- The `Dudo-Core` technology stack — language, framework, database, hosting, web
-  framework. Not selected.
-- The tenancy implementation model (shared schema, schema-per-tenant, database-per-tenant).
-- Contract transport and versioning mechanics — pending the stack decision, and now a
-  **cross-repository** coordination problem serving two clients.
-- Plugin isolation mechanism (process, sandbox, or runtime-level) — decided jointly with
-  the `Dudo-Core` stack per `0001`.
+- **The tenancy implementation model** (shared schema, schema-per-tenant,
+  database-per-tenant). D1 is single-threaded per database — roughly 1,000 queries/second
+  at 1 ms — which argues against a shared database, while master plan §14 suggests
+  starting shared. Resolve before Phase 1.
+- The web framework, the testing framework, and every third-party dependency. `0003`
+  approves TypeScript and six Cloudflare services, nothing more.
+- Contract transport and versioning mechanics — now a **cross-repository** coordination
+  problem serving two clients.
+- **App isolation mechanism.** `0001` bound it to the stack decision; `0003` did not
+  approve Workers for Platforms, so it still needs its own record.
 - Service topology: modular monolith vs. separate deployables.
 - Where `Dudo-Apple`'s test targets live, for `qa-agent` ownership purposes — open until
   the Xcode project exists.

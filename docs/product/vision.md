@@ -56,12 +56,16 @@ Two public repositories, meeting only through the published contract set.
 
 **`sfoulad/Dudo-Core`**
 
-- **Web experience** (`apps/`) — the responsive web application.
-- **Core** (`core/`, `packages/contracts/`) — the domain: business rules, APIs,
-  authorization, tenant isolation, workflows, auditing, and every shared contract.
-- **Extensibility** (`plugins/`, `packages/plugin-sdk/`) — the runtime and SDK that let
-  Dudo be extended safely.
-- **Verification** (`tests/`) — the evidence that all of it holds.
+- **Platform** (`platform/core/`) — the domain: business rules, APIs, authorization,
+  tenant isolation, workflows, auditing. Core stays small.
+- **Web experience** (`platform/web/`) — the responsive web application.
+- **Contracts** (`packages/contracts/`) — every boundary crossing in the system.
+- **Extensibility** (`platform/capabilities/`, `packages/sdk/`) — the capability
+  registry, the App runtime, and the SDK that let Dudo be extended safely.
+- **Business Apps** (`apps/`) — installable applications: CRM, Finance, Projects,
+  Inventory, HR. Business logic lives here, not in Core.
+- **Connectors** (`connectors/`) — adapters to external platforms, behind capabilities.
+- **Verification** (`packages/testing/`) — the evidence that all of it holds.
 
 **`sfoulad/Dudo-Apple`**
 
@@ -82,10 +86,9 @@ These are open and need user input. Nothing should be built as if they were sett
 
 - **The first vertical feature slice** — which capability ships first, and in what order
   the rest follow.
-- **The `Dudo-Core` technology stack**: language, framework, database, hosting, web
-  framework, AI model integration. **Not selected.** See
-  `docs/decisions/README.md`. *(Swift, SwiftUI, and Xcode are approved for `Dudo-Apple`
-  only.)*
+- **The web framework, testing framework, and every third-party dependency.** The stack
+  itself is settled — TypeScript on Cloudflare (`0003`) — but that approves six
+  Cloudflare services and nothing else. AI model integration is not approved.
 - **The software license** for both public repositories. Public visibility is not a
   license grant; without a license file the repositories are "all rights reserved" by
   default, which is unlikely to be the intent.

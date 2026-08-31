@@ -22,8 +22,14 @@ contracts from this repository.
 
 ## Current state
 
-**No application code exists yet, and no technology stack has been selected** for this
-repository — language, framework, database, and hosting are all open decisions.
+**No application code exists yet.** The stack is now decided: **TypeScript on
+Cloudflare** — Workers for the API and web backend, D1 for relational tenant data, R2 for
+files, Queues for asynchronous work, Workflows for long-running processes, and Durable
+Objects only where real coordination is needed. See
+[`docs/decisions/0003-technology-stack-typescript-on-cloudflare.md`](docs/decisions/0003-technology-stack-typescript-on-cloudflare.md).
+
+No web framework, testing framework, or third-party dependency has been selected — those
+are separate decisions, and no Cloudflare service beyond the six above is approved.
 
 What exists today is the structure the code will be built into: module boundaries,
 binding development rules, agent definitions, product documentation, and decision
@@ -55,19 +61,28 @@ is in [`docs/product/mvp-delivery-policy.md`](docs/product/mvp-delivery-policy.m
 ## Repository layout
 
 ```
-core/                   domain logic, APIs, authorization, tenancy
-apps/                   responsive web application
+platform/core/          domain logic, APIs, authorization, tenancy
+platform/web/           responsive web application
+platform/capabilities/  capability registry and App runtime
+apps/                   installable business Apps (reserved — none yet)
+connectors/             adapters to external platforms (reserved — none yet)
 packages/contracts/     shared cross-module contracts
-plugins/                plugin runtime and first-party plugins
-packages/plugin-sdk/    plugin SDK, manifests, lifecycle
-tests/                  test suites
+packages/sdk/           the SDK App developers build against
+packages/testing/       test suites and shared harness
+agents/                 agent rules, prompts, task specifications
 docs/                   product, architecture, decisions, operations
 ```
 
 ## Licence
 
 **No licence has been selected yet.** No `LICENSE` file exists, which means default
-copyright applies and no permissions are granted. A licence decision is pending.
+copyright applies and no permissions are granted.
+
+**Apache-2.0 is the current recommendation** — a permissive licence with an explicit
+patent grant, well understood by the developer ecosystem an extensible platform depends
+on. It has not been adopted: a permissive licence allows commercial reuse of this code by
+anyone, including competitors, and that trade-off needs an explicit decision rather than
+a default.
 
 ## Contributing
 
