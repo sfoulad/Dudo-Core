@@ -18,7 +18,8 @@ the published contract set:
 | **`sfoulad/Dudo-Core`** | `core/`, `packages/contracts/`, `apps/` (responsive web app), `plugins/`, `packages/plugin-sdk/`, `tests/`, `docs/` |
 | **`sfoulad/Dudo-Apple`** | Native Apple application — Xcode, Swift, SwiftUI; iPhone, iPad, macOS |
 
-Neither exists yet. Creating either, or configuring a remote, needs user approval.
+Both repositories exist and are public. `Dudo-Apple` is intentionally empty until its
+Xcode project is approved.
 
 ## Modules
 

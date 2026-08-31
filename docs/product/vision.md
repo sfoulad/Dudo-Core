@@ -70,7 +70,8 @@ Two public repositories, meeting only through the published contract set.
   multiplatform codebase, with platform-specific implementations where Apple UX genuinely
   differs.
 
-Both clients consume the **same approved contracts**. Neither repository exists yet.
+Both clients consume the **same approved contracts**. Both repositories exist and are
+public; `Dudo-Apple` is empty until its Xcode project is approved.
 
 Detail: `docs/architecture/boundaries.md`. Decision:
 `docs/decisions/0002-repository-and-mvp-delivery-strategy.md`.

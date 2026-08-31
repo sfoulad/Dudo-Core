@@ -93,7 +93,9 @@ and SwiftUI is not approving any package or third-party dependency.
 - **Software license** for both public repositories — public visibility does not decide
   it, and no license file exists.
 - **The first vertical feature slice.**
-- **Repository creation and remote configuration** — neither repository exists.
+- ~~Repository creation and remote configuration~~ — **done 2026-08-31.** Both
+  repositories are public; `Dudo-Core` has its foundation commit, `Dudo-Apple` is empty
+  pending its Xcode project.
 - **Publication of the original master-plan PDF** — it stays outside both public
   repositories until approved.
 

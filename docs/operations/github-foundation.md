@@ -2,11 +2,17 @@
 
 The intended GitHub configuration for both Dudo repositories.
 
-> **Nothing in this document has been applied.** Neither repository exists. This records
-> what will be configured once the user approves repository creation. Every item is a
-> proposal, not a description of current state.
+> **Applied 2026-08-31.** Both repositories exist and the configuration below is live,
+> with the exceptions marked **Pending** — required status checks, and any secret. Items
+> deliberately *not* done (workflows, Dependabot ecosystems, CodeQL, `LICENSE`) remain
+> not done, with the reasons stated.
 
 Applies to **`sfoulad/Dudo-Core`** and **`sfoulad/Dudo-Apple`** unless noted.
+
+| | |
+|---|---|
+| `sfoulad/Dudo-Core` | Public. Foundation commit pushed to `main`. |
+| `sfoulad/Dudo-Apple` | Public. Intentionally empty until the Xcode project is approved. |
 
 ## Visibility
 
