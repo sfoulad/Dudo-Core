@@ -94,7 +94,7 @@
         "required": ["id", "scope", "reason"],
         "properties": {
           "id": { "$ref": "#/$defs/permissionId" },
-          "scope": { "$ref": "#/$defs/scope" },
+          "scope": { "$ref": "#/$defs/appRequestableScope" },
           "reason": {
             "type": "string",
             "minLength": 10,
@@ -344,6 +344,18 @@
         "resource"
       ]
     },
+    "appRequestableScope": {
+      "type": "string",
+      "enum": [
+        "organization",
+        "business",
+        "branch",
+        "team",
+        "own",
+        "resource"
+      ],
+      "description": "The scopes an App manifest may request a permission at. This is $defs/scope minus 'platform'. 'platform' is the only scope that spans Organizations, it belongs to platform operators, and it is reserved: an App is untrusted by assumption (SECURITY_STANDARD.md §1 threat 2), so a manifest requesting it fails validation and the App does not install. AUTHORIZATION_STANDARD.md §4 and §8."
+    },
     "sensitivity": {
       "type": "string",
       "enum": ["read", "write", "sensitive", "critical"]
@@ -358,7 +370,18 @@
         "financial-instrument",
         "secret"
       ],
-      "description": "SECURITY_STANDARD.md §3. 'secret' is never valid on an App entity field."
+      "description": "The full SECURITY_STANDARD.md §3 classification set, including 'secret'. NOT usable on an App entity field — see $defs/entityFieldClassification, which is what entity.fields[].classification references."
+    },
+    "entityFieldClassification": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "business-confidential",
+        "sensitive-personal",
+        "financial-instrument"
+      ],
+      "description": "The classifications valid on an App-owned entity field. This is $defs/dataClassification minus 'secret'. SECURITY_STANDARD.md §3 and §5: secret material — API keys, tokens, signing keys, passwords — is never shown to an App and never readable by an App, so App-owned storage declared to hold it is a declared secret-exposure path. A manifest classifying a field 'secret' fails validation. Secrets are referenced by name through a capability credential reference, never stored by the App."
     },
     "errorCode": {
       "type": "string",
@@ -391,7 +414,8 @@
         "tenantScopeJustification": { "type": "string", "minLength": 20 },
         "ownershipField": {
           "type": "string",
-          "description": "Required if any Action on this entity uses the 'own' scope. Without an ownership relation, 'own' grants everything."
+          "minLength": 1,
+          "description": "The field carrying the ownership relation — which principal created or is assigned to the record. REQUIRED if any Action on this entity uses the 'own' scope. Without an ownership relation 'own' grants everything while presenting as the narrowest scope in the system, so the developer who writes it believes they applied a control they did not. This is validation rule VAL-OWN (AUTHORIZATION_STANDARD.md §4): an Action with scope 'own' on an entity that declares no ownershipField FAILS validation and the App does not install. THE DEPENDENCY CROSSES THE 'actions' AND 'entities' SIBLING ARRAYS AND IS NOT EXPRESSIBLE IN JSON SCHEMA — this schema alone cannot reject it, and a registry-aware manifest validator must."
         },
         "fields": {
           "type": "array",
@@ -416,7 +440,7 @@
                   "reference"
                 ]
               },
-              "classification": { "$ref": "#/$defs/dataClassification" },
+              "classification": { "$ref": "#/$defs/entityFieldClassification" },
               "required": { "type": "boolean", "default": false },
               "description": { "type": "string" }
             }
@@ -475,7 +499,10 @@
           "$ref": "#/$defs/permissionId",
           "description": "Exactly one. An Action with no permission is unreachable, not open."
         },
-        "scope": { "$ref": "#/$defs/scope" },
+        "scope": {
+          "$ref": "#/$defs/appRequestableScope",
+          "description": "The scope level at which this Action's permission is evaluated. Evaluating at the wrong level is a silent privilege escalation, so it is part of the contract (AUTHORIZATION_STANDARD.md §4). 'platform' is NOT available here: an App manifest is an untrusted document throughout, and an Action claiming platform scope is the same tenant-boundary escape as a permission requesting it — reached through a different field of the same manifest. An App-declared Action may never be evaluated above the tenant boundary."
+        },
         "sensitivity": { "$ref": "#/$defs/sensitivity" },
         "idempotent": {
           "type": "boolean",

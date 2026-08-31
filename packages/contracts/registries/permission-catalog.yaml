@@ -36,6 +36,16 @@ model:
     - "No decision is cached beyond its scope. A cached yes that outlives a revoked role cannot be revoked."
     - "Permissions are additive. There are no negative permissions and no deny rules."
     - "Wildcards may appear in ROLE definitions. Never in an App manifest."
+    - >-
+      An App manifest may never request a permission at 'platform' scope. 'platform' is
+      reserved to platform principals; a manifest declaring it FAILS VALIDATION and the App
+      does not install. Enforced structurally by app-manifest.schema.json
+      ($defs/appRequestableScope), not by review.
+    - >-
+      An Action declaring scope 'own' on an entity that declares no ownershipField FAILS
+      VALIDATION (rule VAL-OWN, AUTHORIZATION_STANDARD.md §4). It is never accepted and
+      then evaluated as unrestricted — 'own' without an ownership relation grants
+      everything while presenting as the narrowest scope in the system.
     - "list is a separate permission from read. Enumeration is its own disclosure."
     - "export is always separate from read. Reading one record and downloading the book are different risks."
 
@@ -68,6 +78,15 @@ scopes:
     note: >-
       The only scope that spans organizations. It never grants access to tenant BUSINESS
       data without an explicit, audited, time-bounded elevation. See openQuestions AZ3.
+      THAT ELEVATION MECHANISM DOES NOT EXIST YET (AZ3 is unresolved), so until it is
+      recorded and built, platform-admin has no path to tenant business data at all: only
+      two permissions are declared at 'platform' scope —
+      core.principal.grant-platform-scope and core.marketplace.moderate — and
+      platform-admin holds exactly those two. This is deliberate and fail-closed; a
+      control that exists only as an English sentence is not a control. NOTE the one
+      remaining violation, left for the Team Lead rather than corrected here:
+      marketplace-moderator is a platform-scope role carrying core.app.read, which is
+      declared scopes: [organization, business].
   - id: organization
     grants: "One Organization and everything beneath it. The tenant boundary."
   - id: business
@@ -572,15 +591,33 @@ permissions:
 # defaultRoles — SEED DATA ONLY
 #
 # These ship as a starting point. They are data, never code: no role name may appear in a
-# conditional in source. Customers create and modify their own roles freely. Wildcards are
-# permitted here and nowhere else.
+# conditional in source. Customers create and modify their own roles freely.
+#
+# WILDCARDS: syntactically permitted in a role definition and nowhere else — but NO SEED
+# ROLE USES ONE. What a wildcard expands to is not defined by any accepted decision: the
+# rules above say only WHERE a wildcard may appear, never WHAT it expands to. The naive
+# reading (expand to every matching permission regardless of the permission's own declared
+# scopes) made 'business-owner' — a TENANT role — hold core.principal.grant-platform-scope,
+# which is tenant-to-platform privilege escalation in the most commonly assigned role in
+# the product. The seed roles below are therefore written as explicit lists that are safe
+# under EVERY candidate expansion rule, and each list contains only permissions whose own
+# declared 'scopes' include the role's 'scope'.
+#
+# The general expansion rule is a decision, not a schema detail. It is drafted as
+# docs/decisions/0007 D6 and that record is Proposed — it decides nothing. Until it is
+# accepted, do not reintroduce a wildcard here.
 # ---------------------------------------------------------------------------
 defaultRoles:
+  # Every permission below is declared at 'scopes: [platform]' in this catalog, and those
+  # are the only two that are. This role holds NO tenant-scoped permission: reaching
+  # tenant business data requires the AZ3 break-glass elevation, which does not exist yet.
   - id: platform-admin
     scope: platform
     status: proposed
-    description: "Platform operator. Does not read tenant business data without break-glass elevation."
-    permissions: ["core.*"]
+    description: "Platform operator. Holds no tenant-scoped permission and cannot read tenant business data. Support access to tenant data awaits the AZ3 break-glass record."
+    permissions:
+      - core.principal.grant-platform-scope
+      - core.marketplace.moderate
   - id: marketplace-moderator
     scope: platform
     status: proposed
@@ -591,11 +628,80 @@ defaultRoles:
     status: proposed
     description: "Builds and submits extensions."
     permissions: [core.developer.register, core.marketplace.submit, core.app.read]
+  # Every permission below declares 'organization' among its own 'scopes'. This is the
+  # former "core.*" expanded and then intersected with the role's scope: 59 of the 62
+  # catalogued permissions. The three omitted, and why:
+  #   core.principal.grant-platform-scope  scopes: [platform] — CRITICAL escalation. A
+  #                                        tenant role must never reach platform scope.
+  #   core.marketplace.moderate            scopes: [platform] — same reason.
+  #   core.notification.read               scopes: [own] — held at 'own', not at
+  #                                        'organization'. Reading one's own
+  #                                        notifications is not an organization-scope
+  #                                        power; see the note in openQuestions AZ5.
   - id: business-owner
     scope: organization
     status: proposed
-    description: "Owns the tenant. The most privileged tenant role."
-    permissions: ["core.*"]
+    description: "Owns the tenant. The most privileged tenant role — and strictly a TENANT role: it holds no platform-scope permission."
+    permissions:
+      - core.user.read
+      - core.user.list
+      - core.user.invite
+      - core.user.update
+      - core.user.deactivate
+      - core.session.list
+      - core.session.revoke
+      - core.organization.read
+      - core.organization.update
+      - core.organization.delete
+      - core.business.read
+      - core.business.create
+      - core.business.update
+      - core.branch.read
+      - core.branch.create
+      - core.branch.update
+      - core.team.read
+      - core.team.create
+      - core.team.update
+      - core.team.manage-membership
+      - core.role.read
+      - core.role.create
+      - core.role.update
+      - core.role.assign
+      - core.role.revoke
+      - core.api-credential.list
+      - core.api-credential.issue
+      - core.api-credential.revoke
+      - core.service-account.manage
+      - core.subscription.read
+      - core.subscription.change
+      - core.usage.read
+      - core.file.read
+      - core.file.create
+      - core.file.delete
+      - core.notification.send
+      - core.audit.read
+      - core.audit.export
+      - core.setting.read
+      - core.setting.update
+      - core.feature-flag.read
+      - core.feature-flag.update
+      - core.tenant.export
+      - core.app.read
+      - core.app.install
+      - core.app.configure
+      - core.app.grant-permission
+      - core.app.revoke-permission
+      - core.app.upgrade
+      - core.app.disable
+      - core.app.uninstall
+      - core.capability.read
+      - core.capability.configure-provider
+      - core.ai.invoke
+      - core.ai.configure
+      - core.mcp.connect
+      - core.mcp.configure-external
+      - core.developer.register
+      - core.marketplace.submit
   - id: business-admin
     scope: business
     status: proposed
@@ -659,3 +765,26 @@ openQuestions:
     question: "Permission grouping for the App install consent screen. Unreadable consent is not consent."
     recommendation: "Group by the 'group' field above, with expandable detail. Product decision."
     blocks: "Phase 2"
+  - id: AZ5
+    question: >-
+      How does a principal come to hold an 'own'-scope permission? core.notification.read
+      is declared scopes: [own], so no role at organization, business, branch or team
+      scope can legitimately carry it, yet every principal must be able to read their own
+      notifications. Removing it from business-owner closed an invalid role definition and
+      exposed the real gap: there is no defined grant path for an 'own'-scope permission.
+    recommendation: >-
+      Either a baseline self-role every principal holds at 'own' scope, or widen the
+      permission's declared scopes. Both are model decisions and neither is made here.
+      Fail-closed in the meantime: the permission is granted to nobody.
+    blocks: "Phase 1"
+  - id: AZ6
+    question: >-
+      What does a wildcard in a role definition expand to? The rules say only where a
+      wildcard may appear, never what it expands to. The naive union reading is
+      tenant-to-platform privilege escalation; the intersection reading is drafted as
+      docs/decisions/0007 D6, which is Proposed and decides nothing.
+    recommendation: >-
+      Record 0007 (or D6 alone) as accepted, then add the catalog lint that recomputes
+      every role's expanded set and fails on any permission whose declared scopes exclude
+      the role's scope. Until then no seed role uses a wildcard and none may be added.
+    blocks: "Phase 1; and the catalog lint check in CI"

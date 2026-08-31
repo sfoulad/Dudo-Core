@@ -68,6 +68,22 @@ are a subset. Where an AI acts on behalf of a user, the effective permission is 
 - **Wildcards may appear in role definitions, never in App manifests.** A customer's
   admin role may carry `crm.*`; an App may never request it. An App requests each
   permission by name, which is what makes a permission screen meaningful.
+- **What a wildcard *expands to* is not yet decided (AZ6), and until it is, no role uses
+  one.** This rule says only *where* a wildcard may appear. The naive reading — expand to
+  every matching permission regardless of that permission's own declared `scopes` — makes
+  a tenant role at `organization` scope hold `core.principal.grant-platform-scope`, which
+  is tenant-to-platform privilege escalation. The seed roles in `permission-catalog.yaml`
+  are therefore written as explicit lists that are safe under every candidate expansion
+  rule. **Do not reintroduce a wildcard into a role definition until AZ6 is recorded as an
+  accepted decision.**
+- **An App manifest may never request a permission at `platform` scope.** `platform` is
+  reserved to platform principals (§4). A manifest declaring it **fails validation and the
+  App does not install** — it is not accepted-then-trimmed, because an App installed in a
+  state where it will fail unpredictably at runtime is worse than one that did not
+  install. Enforced structurally by `app-manifest.schema.json` `$defs/appRequestableScope`,
+  which is `$defs/scope` minus `platform`. Every marketplace App is untrusted by
+  assumption, including our own (`SECURITY_STANDARD.md` §1 threat 2), so this cannot be a
+  review item.
 - **`list` is a separate permission from `read`.** Enumeration is its own disclosure: the
   count and the identifiers are information even when the records are not readable.
 - **`export` is always separate.** Reading one record and downloading the whole book are
@@ -98,11 +114,42 @@ Rules:
 - **A scope never crosses a tenant.** `platform` is the only scope that spans
   organizations, it belongs to platform operators, and it never grants access to tenant
   *business data* without an explicit, audited, time-bounded elevation (§7).
+  **That elevation mechanism does not exist yet (AZ3), so the rule must hold by
+  construction rather than by control.** Only two permissions are declared at `platform`
+  scope — `core.principal.grant-platform-scope` and `core.marketplace.moderate` — and
+  `platform-admin` holds exactly those two and nothing else. A platform operator therefore
+  has *no* path to tenant business data, including for support, which is the cost being
+  paid deliberately until AZ3 is recorded. A control that exists only as an English
+  sentence is not a control, so it must not be re-stated as one: **no platform-scope role
+  may be given a permission declared at any tenant scope in place of the break-glass
+  record.** One seed role still violates this — `marketplace-moderator` carries
+  `core.app.read`, declared `scopes: [organization, business]` — and is recorded as
+  outstanding rather than silently corrected here.
 - The Action declares the scope level at which its permission is evaluated. Evaluating at
   the wrong level is a silent privilege escalation, so it is part of the contract and part
   of review.
 - `own` requires a defined ownership relation on the entity. An entity with no ownership
   column cannot use `own`, and pretending otherwise grants everything.
+
+**VAL-OWN (normative validation rule).**
+
+> An Action declaring `scope: own` requires the entity it operates on to declare an
+> `ownershipField`. A manifest that does not satisfy this **fails validation, and the App
+> does not install.** It is never accepted and then evaluated as unrestricted.
+
+This is stated as a named failing rule rather than as prose because the failure mode is
+an authorization bypass *that presents as a security control*: the developer who writes
+`scope: own` believes they applied the narrowest scope in the system, and on an entity with
+no ownership relation they applied none at all. A rule written twice and enforced zero
+times is not a rule.
+
+**The dependency crosses the `actions` and `entities` sibling arrays and is therefore not
+expressible in JSON Schema.** `app-manifest.schema.json` records VAL-OWN on the
+`ownershipField` description but cannot reject a violation; a registry-aware manifest
+validator must, and until one exists this rule is stated and unenforced. That validator
+does not yet have a specification or an owner — it is the same gap that leaves
+`permission-catalog.yaml`, `event-catalog.yaml`, and `core-object-registry.yaml`
+unreferenced at install time.
 
 ---
 
@@ -224,6 +271,12 @@ Audit records are append-only and are never mutated. Details in
 - [ ] Cross-tenant access returns `not_found`, not `forbidden` (`API_STANDARD.md` §8).
 - [ ] `list` and `export` are separate permissions from `read`.
 - [ ] No wildcard permission in any App manifest.
+- [ ] No App manifest requests a permission at `platform` scope.
+- [ ] No role definition contains a permission whose declared `scopes` exclude that role's
+      own `scope` — checked against `permission-catalog.yaml`, seed and custom roles alike.
+- [ ] VAL-OWN: every Action with `scope: own` operates on an entity declaring
+      `ownershipField`.
+- [ ] No App entity field is classified `secret`.
 - [ ] No role name in a conditional.
 - [ ] No authorization decision cached beyond its scope.
 - [ ] Sensitivity class declared; audit implemented for `sensitive` and `critical`.
@@ -241,3 +294,5 @@ Audit records are append-only and are never mutated. Details in
 | AZ2 | **Authentication mechanism** — sessions, tokens, OAuth/OIDC — is unrecorded. Authorization assumes an authenticated principal but cannot produce one. | Needs an ADR with the Phase 1 identity work. This standard is written so it does not depend on the choice. |
 | AZ3 | **Platform-operator access to tenant business data.** §4 forbids it without elevation, but support will eventually need it. | Break-glass: explicit, time-bounded, reason-required, tenant-notified, always audited. Needs its own record before any admin portal reads tenant data — which is Phase 1. |
 | AZ4 | **Permission grouping for the install screen.** Twenty individually-named permissions are unreadable, and unreadable consent is not consent. | Group by resource with an expandable detail view; the catalog carries a `group` field for this. Product decision, flagged. |
+| AZ5 | **How does a principal come to hold an `own`-scope permission?** `core.notification.read` is declared `scopes: [own]`, so no role at `organization`, `business`, `branch` or `team` scope can legitimately carry it — yet every principal must read their own notifications. | Either a baseline self-role held at `own` scope by every principal, or widen the permission's declared scopes. Both are model decisions. Fail-closed meanwhile: the permission is in no seed role, so it is granted to nobody. Needed in Phase 1. |
+| AZ6 | **What does a wildcard in a role definition expand to?** §3.2 says only where one may appear. The naive union reading is tenant-to-platform escalation; the intersection reading is drafted as `docs/decisions/0007` D6, which is **Proposed and decides nothing**. | Record the expansion rule, then add the catalog lint that recomputes every role's expanded set and fails on any permission whose declared `scopes` exclude the role's `scope`. Until then no role uses a wildcard and none may be added. Blocks Phase 1 and the CI lint. |
