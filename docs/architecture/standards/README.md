@@ -32,6 +32,16 @@ Read `CONSTITUTION.md` first. Everything else elaborates it.
 | 14 | [TESTING_STANDARD.md](TESTING_STANDARD.md) | Seven test types, the isolation test, the permission matrix, definition of done. |
 | 15 | [CLOUDFLARE_STANDARD.md](CLOUDFLARE_STANDARD.md) | What is approved, what is not, and how every service stays replaceable. |
 
+Documents 1–15 are the set the master build plan §24 requires before any code. The three
+below are additional: each covers a part of the plan that §24's list does not name and that
+would otherwise have no standard at all.
+
+| # | Document | Answers | Plan reference |
+|---|---|---|---|
+| 16 | [STUDIO_STANDARD.md](STUDIO_STANDARD.md) | What Studio may create, for developers, business users, and AI agents. Studio emits the same artifacts an App declares — and nothing else. | §18, Phase 9 |
+| 17 | [SDK_STANDARD.md](SDK_STANDARD.md) | The fifteen SDK surfaces, what each must never expose, and the rule that developers should rarely need to understand Cloudflare. | §21, Phase 3 |
+| 18 | [ARCHITECTURE_VALIDATION_STANDARD.md](ARCHITECTURE_VALIDATION_STANDARD.md) | The binding pre-scale gate: validate the platform against two materially different applications before building many Apps. | §38 |
+
 ## The registries
 
 Machine-readable, in `packages/contracts/registries/`. Where a standard and a registry
@@ -75,11 +85,11 @@ the Team Lead owns.
 
 | Blocks | What is missing | Where |
 |---|---|---|
-| **Every schema** | The tenancy model. D1 is single-threaded per database, which argues against the master plan's "start shared". | `MULTITENANCY_STANDARD.md` §7 |
+| **Every schema** | The tenancy model — the physical placement of tenant data. D1 is single-threaded per database, which argues against the master plan's "start shared". **Drafted as `docs/decisions/0006-tenancy-model.md`, Status Proposed. Undecided.** | `MULTITENANCY_STANDARD.md` §7 |
 | **Every schema** | Confirmation that tenant = Organization. The plan carries `tenant_id` and `business_id` and defines neither. | `MULTITENANCY_STANDARD.md` §2 |
 | **Every contract** | The contract's executable form and transport. | `API_STANDARD.md` AS1 |
 | **Every test** | No test framework is approved. | `TESTING_STANDARD.md` TS1 |
-| **Phase 1** | The logical permission model as an ADR, required by `0001`. | `AUTHORIZATION_STANDARD.md` AZ1 |
+| **Phase 1, and all SDK work** | The logical permission model as an ADR, required by `0001`. **Drafted as `docs/decisions/0007-logical-permission-model.md`, Status Proposed. Not accepted.** | `AUTHORIZATION_STANDARD.md` AZ1 |
 | **Phase 1** | Authentication mechanism. | `AUTHORIZATION_STANDARD.md` AZ2 |
 | **Phase 1** | Break-glass platform-operator access, before the admin portal reads tenant data. | `AUTHORIZATION_STANDARD.md` AZ3 |
 | **Phase 1** | Service topology, and a migration runner. | `CLOUDFLARE_STANDARD.md` CF1, CF5 |
@@ -87,4 +97,8 @@ the Team Lead owns.
 | **Phase 7, and all third-party code** | The App and Connector isolation mechanism. Workers for Platforms is not approved. | `APP_STANDARD.md` AP2 |
 | **Every AI feature** | No AI provider is approved. This is a hard blocker on the product's central promise. | `AI_STANDARD.md` AI1 |
 | **Phase 8** | MCP transport and MCP authentication. | `MCP_STANDARD.md` MC1, MC2 |
+| **Phase 3** | The SDK's build, publish, and test toolchain, its distribution, and its licence. | `SDK_STANDARD.md` SD4, SD5 |
+| **Phase 4** | Which Apps constitute Phase 4, and how the validation applications get a Payment and an SMS provider when Connectors are Phase 5. | `ARCHITECTURE_VALIDATION_STANDARD.md` AV2–AV4 |
+| **Phase 9** | Studio has no repository path and no owning agent; `0004` does not name it. No Studio code until that is amended. | `STUDIO_STANDARD.md` ST1 |
+| **Phase 9** | Executable Studio output has no isolation mechanism — the same blocker as third-party Apps. | `STUDIO_STANDARD.md` ST2 |
 | **User decisions** | Data residency, retention periods, compliance obligations, the software licence. | `MULTITENANCY_STANDARD.md` MT3–MT4, `SECURITY_STANDARD.md` SE3–SE4 |

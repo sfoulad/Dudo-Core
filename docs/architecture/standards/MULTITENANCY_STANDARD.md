@@ -124,8 +124,10 @@ a change touching any carrier is checked against it.
 
 ## 7. The implementation model — options, not a decision
 
-**This is not decided here.** It needs its own record, and `0003` already flags it. What
-follows is the honest constraint set and `architecture-agent`'s recommendation.
+**This is not decided here, and nothing downstream of here treats it as decided.** It needs
+its own record; `0003` already flags it, and `docs/decisions/0006-tenancy-model.md` drafts
+it as **Proposed**. What follows is the honest constraint set and `architecture-agent`'s
+recommendation, in that order. The recommendation in §7.3 binds nothing.
 
 ### 7.1 The constraint, stated plainly
 
@@ -174,21 +176,36 @@ in a Core-owned tenant directory.
 - *Against:* the routing layer, the directory, and the promotion path must all exist
   early; migrations must run across shards; two operational modes to test.
 
-### 7.3 Recommendation
+### 7.3 Recommendation — advice only, adopted by nothing
 
-**Option C**, with one thing treated as non-negotiable regardless of which is chosen:
+**No option in §7.2 has been chosen, and this section chooses none.** What follows is
+`architecture-agent`'s recommendation to the Team Lead and the user. It is not binding, it
+is not non-negotiable, and no standard, checklist, or registry in this repository treats it
+as settled. The full comparison is drafted in
+`docs/decisions/0006-tenancy-model.md` (**Status: Proposed**); the decision is the user's.
 
-> **The storage port must resolve a tenant to a storage handle through a Core-owned tenant
-> directory, from the first line of Phase 1.**
+**The recommendation.** Option C, and a storage port that resolves a tenant to a storage
+handle through a Core-owned tenant directory rather than constructing handles in domain
+code.
 
-That indirection is the genuinely irreversible part. With it, A → C → B is a migration.
-Without it, every App, every query, and every migration hard-codes an assumption about
-physical layout, and changing the model later means rewriting the entire data layer of
-every App at once — exactly what `CONSTITUTION.md` §6 forbids.
+**The engineering argument, preserved for whoever decides.** The indirection is the part
+that is genuinely expensive to reverse. With it, A → C → B is a migration. Without it,
+every App, every query, and every migration hard-codes an assumption about physical
+layout, and changing the model later means rewriting the entire data layer of every App at
+once — which is what `CONSTITUTION.md` §6 exists to prevent. Under Option A the
+indirection costs almost nothing and preserves the exit; under B and C some mapping from
+tenant to database has to exist in any case.
 
-So the recommendation is: **build the indirection now, start on pooled shards, and let the
-Team Lead and the user decide the model on its merits.** If the decision is A, the
-indirection still costs almost nothing and preserves the exit.
+**The counter-argument, so the recommendation is not the only case on record.** Under
+Option A a directory is one row per tenant pointing at the same database — overhead with
+no present benefit — and the resolution step itself becomes an isolation boundary that
+needs its own test (a principal in tenant A must not be able to resolve, be handed, or
+cache tenant B's handle). That test is specified nowhere today and is a cost of the
+recommendation, not a free consequence of it.
+
+What *is* already binding, and does not depend on this decision, is `0003` constraint 2:
+storage sits behind a Core-owned port, and no Cloudflare binding appears in domain logic.
+That holds under A, B, and C alike.
 
 ### 7.4 What the decision must state
 
@@ -229,7 +246,10 @@ reason and proves nothing about isolation.
 - [ ] Cross-tenant access returns `not_found`.
 - [ ] No business data or foreign tenant identifier in any log or error message.
 - [ ] Tenant immutable after creation; no record moves between tenants.
-- [ ] Storage handle obtained through the tenant directory, never constructed.
+- [ ] Storage handle obtained from the Core-owned storage port — never constructed in
+      domain code, never taken from `env` (`0003` constraint 2, `CLOUDFLARE_STANDARD.md`
+      §4). *How* the port resolves a handle is the open tenancy decision (§7) and is not
+      verified by this checklist.
 - [ ] Isolation test present, using a fully privileged principal, and passing.
 - [ ] Fixtures and seeds contain no cross-tenant reference.
 
@@ -240,7 +260,7 @@ reason and proves nothing about isolation.
 | # | Question | Status |
 |---|---|---|
 | MT1 | **Tenant = Organization** (§2). | Recommended; needs Team Lead confirmation. Blocks every schema. |
-| MT2 | **The tenancy implementation model** (§7). | Open. Needs an ADR **before Phase 1**. Recommendation: option C with mandatory indirection. |
+| MT2 | **The tenancy implementation model** — the physical placement of tenant data (§7). | **Open. Undecided.** Needs an accepted ADR **before Phase 1**; drafted as `0006-tenancy-model.md`, Status Proposed. `architecture-agent` recommends option C with the directory indirection — a recommendation, adopted by nothing. |
 | MT3 | **Data residency.** Some customers will require data to stay in a region; the plan does not mention it. | Not decided. It is far cheaper to accommodate in the tenancy model than to retrofit — raise it with the user *before* MT2 is decided. |
 | MT4 | **Retention and deletion policy** — how long audit and event history survive a tenant deletion. | Not decided. Has legal consequences; needs the user. |
 | MT5 | **Search index isolation.** Core owns search infrastructure; no engine is approved, and a shared index is a shared data store. | Whatever is chosen, the index is tenant-partitioned. Blocked on the search engine decision. |

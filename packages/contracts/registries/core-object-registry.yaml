@@ -45,14 +45,23 @@ objects:
     tenancy: tenant-independent
     appAccess: none
     status: proposed
+    # Conditional. Phase 1 IF the decided tenancy model needs a tenant-to-database
+    # mapping at all. Not scheduled by this file. See conditional/blockedBy below.
     phase: 1
+    conditional: true
+    blockedBy: "docs/decisions/0006-tenancy-model.md — Status: Proposed. The tenancy model is undecided."
     description: >-
-      Maps a tenant to its storage location. The indirection that makes the tenancy model
-      changeable — every storage handle is resolved through it, never constructed.
+      Maps a tenant to the database that holds its data, in a tenancy model that has more
+      than one such database. Under a single shared database there is nothing to map and
+      this object does not exist.
     notes: >-
-      MULTITENANCY_STANDARD.md §7.3 identifies this as the genuinely irreversible part of
-      the tenancy decision. It must exist from the first line of Phase 1 regardless of
-      which model is chosen.
+      NOT scheduled, and NOT required by any accepted decision. MULTITENANCY_STANDARD.md
+      §7.3 recommends this indirection; a recommendation is not an adoption, and no ADR has
+      adopted it. Whether this object exists, what it holds, and which phase builds it all
+      follow from the tenancy ADR. It is recorded here so the option has a name in the
+      registry, not so Phase 1 builds it. What IS binding regardless of the model is
+      0003 constraint 2 — storage sits behind a Core-owned port — which is an interface
+      rule, not an object.
 
   # --- identity ---------------------------------------------------------------
   - name: User

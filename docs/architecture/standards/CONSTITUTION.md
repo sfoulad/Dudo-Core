@@ -231,7 +231,10 @@ condition the master plan places on all agent work (§24).
 | Anything at all | This document, `ARCHITECTURE.md` |
 | `platform/core/**` | `CORE_BOUNDARIES.md`, `AUTHORIZATION_STANDARD.md`, `MULTITENANCY_STANDARD.md`, `SECURITY_STANDARD.md` |
 | `apps/**` | `APP_STANDARD.md`, `API_STANDARD.md`, `EVENT_STANDARD.md`, `AUTHORIZATION_STANDARD.md`, `MULTITENANCY_STANDARD.md` |
-| `platform/capabilities/**`, `packages/sdk/**` | `CAPABILITY_STANDARD.md`, `APP_STANDARD.md`, `SECURITY_STANDARD.md` |
+| `platform/capabilities/**` | `CAPABILITY_STANDARD.md`, `APP_STANDARD.md`, `SECURITY_STANDARD.md` |
+| `packages/sdk/**` | `SDK_STANDARD.md`, `CAPABILITY_STANDARD.md`, `APP_STANDARD.md`, `SECURITY_STANDARD.md` |
+| Studio, or any App-authoring surface | `STUDIO_STANDARD.md`, `APP_STANDARD.md`, `AUTHORIZATION_STANDARD.md`, `AI_STANDARD.md` |
+| Planning or executing Phase 4 | `ARCHITECTURE_VALIDATION_STANDARD.md` |
 | `connectors/**` | `CONNECTOR_STANDARD.md`, `CAPABILITY_STANDARD.md`, `SECURITY_STANDARD.md` |
 | `packages/contracts/**` | `API_STANDARD.md`, `EVENT_STANDARD.md`, and every registry |
 | Anything AI or MCP | `AI_STANDARD.md`, `MCP_STANDARD.md`, `AUTHORIZATION_STANDARD.md` |

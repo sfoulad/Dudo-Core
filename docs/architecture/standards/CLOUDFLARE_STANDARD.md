@@ -101,9 +101,13 @@ Consequences, and the rules that follow:
 1. **Tenants sharing a database contend for one thread.** The tenancy model is therefore a
    performance decision as much as a security one — `MULTITENANCY_STANDARD.md` §7, still
    open.
-2. **Every database handle is obtained through the tenant directory**, never constructed
-   and never taken from `env` in domain code. This indirection is what keeps the tenancy
-   model changeable.
+2. **Every database handle is obtained from the Core-owned storage port**, never
+   constructed and never taken from `env` in domain code. This is `0003` constraint 2 —
+   every Cloudflare service stays replaceable behind an internal boundary — and it holds
+   under every candidate tenancy model. **What the port resolves to** — one shared
+   database, one per tenant, or a shard — **is undecided** (`MULTITENANCY_STANDARD.md` §7;
+   `docs/decisions/0006-tenancy-model.md`, Proposed). This rule assumes no outcome, and
+   the port is what keeps the outcome changeable.
 3. Queries are parameterised. Always.
 4. Every query is indexed for its access path. On a single thread, one unindexed scan is
    everyone's latency.
@@ -216,7 +220,8 @@ worse than no number, because it will be trusted.
 - [ ] Bindings used, not Cloudflare REST APIs.
 - [ ] Worker-to-Worker over Service Bindings/RPC; callee still authorizes.
 - [ ] No module-scope mutable state carrying tenant data.
-- [ ] D1 handle obtained through the tenant directory; queries parameterised and indexed.
+- [ ] D1 handle obtained from the Core-owned storage port, never from `env` in domain code;
+      queries parameterised and indexed.
 - [ ] Migrations forward-only, reviewed, with a rollback path and N-database handling.
 - [ ] Queue consumers idempotent and order-tolerant; DLQ owned and monitored.
 - [ ] Workflow steps idempotent; tenant never widened.
