@@ -1,0 +1,423 @@
+---
+# Dudo Event Catalog
+#
+# The central registry of every event type in Dudo. An event that is not registered here
+# is rejected at publication — that is what makes this file trustworthy rather than
+# aspirational.
+#
+# Governed by: docs/architecture/standards/EVENT_STANDARD.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS OF THIS FILE
+# Every entry below is status "proposed". No code exists yet, and no event has been
+# accepted. The entries are the events entailed by Core's declared responsibilities
+# (master build plan §6) and by the App lifecycle (§20). They are recorded now so that
+# Phase 1 and Phase 2 build against a reviewed shape rather than inventing one per module.
+# The Team Lead accepts them; architecture-agent does not.
+
+catalogVersion: 1
+updated: "2026-08-31"
+
+# ---------------------------------------------------------------------------
+# spec — the rules a catalog entry must satisfy. Machine-checkable.
+# ---------------------------------------------------------------------------
+spec:
+  entryRequiredFields:
+    - type
+    - version
+    - publisher
+    - status
+    - description
+    - payload
+    - tenancy
+  statusValues: [proposed, active, deprecated, retired]
+  namePattern: "^(core|platform|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[A-Z][A-Za-z0-9]*$"
+  naming:
+    format: "<namespace>.<Entity><PastTenseVerb>"
+    rules:
+      - "The namespace is the publisher's own — core, platform, or an App id."
+      - "The verb is past tense. The event describes something that already happened."
+      - "Never Create/Creating/Changed. 'Changed' gives a consumer nothing to act on."
+      - "Names are permanent. Renaming is a breaking change to consumers you cannot enumerate."
+  versioning:
+    additive: "New optional payload field. Same version. Consumers ignore unknown fields."
+    breaking: >-
+      Removing or renaming a field, changing a type, unit, format or meaning, making an
+      optional field required, narrowing an enumeration, or changing when the event fires.
+      Requires a new integer version, dual publication for a stated window, then retirement.
+  duplicateConcepts: >-
+    Apps may not invent an event concept that already exists. Search this catalog first.
+    Genuine disagreement between two Apps about meaning is an Architecture Review item for
+    the Team Lead, never a second event with a slightly different name.
+
+# ---------------------------------------------------------------------------
+# envelope — every event carries exactly these fields (master build plan §11)
+# ---------------------------------------------------------------------------
+envelope:
+  required:
+    - name: event_id
+      type: string
+      description: "Unique per event instance. The consumer's deduplication key."
+    - name: event_type
+      type: string
+      description: "Matches spec.namePattern."
+    - name: event_version
+      type: integer
+      description: "Starts at 1."
+    - name: tenant_id
+      type: string
+      description: >-
+        The Organization. Always present, never null, never a wildcard. Set by the
+        publishing runtime from authenticated context, never by application code.
+    - name: business_id
+      type: [string, "null"]
+      description: >-
+        Sub-scope within the tenant where applicable. An authorization scope, NOT an
+        isolation boundary. Isolation is by tenant_id.
+    - name: source_app
+      type: string
+      description: "The publishing namespace."
+    - name: actor
+      type: object
+      description: "{ type, id } — the principal that caused it. type is a principal type, plus 'system'."
+    - name: timestamp
+      type: string
+      description: "RFC 3339 UTC, when the fact occurred — not when it was published."
+    - name: correlation_id
+      type: string
+      description: "Propagated from the originating request across every downstream call."
+    - name: payload
+      type: object
+      description: "Facts only. No secrets, no credentials, no full payment instruments."
+  recommended:
+    - name: causation_id
+      type: string
+      description: >-
+        The id of the event or request that directly caused this one. Reserved. Without it,
+        a cascade of ten events is ten unrelated log lines during an incident.
+
+# ---------------------------------------------------------------------------
+# delivery — stated because designs that assume otherwise fail in production
+# ---------------------------------------------------------------------------
+delivery:
+  guarantee: at-least-once
+  ordering: none
+  consumerRequirements:
+    - "Idempotent. Deduplicate by event_id, or make the handler naturally idempotent."
+    - "Order-tolerant. A later event may arrive first."
+    - "Bounded retries with backoff, then dead-letter."
+    - "Every dead-letter queue has a named owner and monitoring."
+    - "Processing stays strictly inside the event's tenant."
+
+# ---------------------------------------------------------------------------
+# events
+# ---------------------------------------------------------------------------
+events:
+
+  # --- Organization structure -------------------------------------------------
+  - type: core.OrganizationCreated
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A new Organization — the tenant — was created."
+    payload:
+      - { name: organization_id, type: string, classification: internal }
+      - { name: name, type: string, classification: business-confidential }
+      - { name: created_by_principal_id, type: string, classification: internal }
+    tenancy: "tenant_id is the new organization. business_id is null."
+    consumers: []
+
+  - type: core.BusinessCreated
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A Business/Workspace was created inside an Organization."
+    payload:
+      - { name: business_id, type: string, classification: internal }
+      - { name: name, type: string, classification: business-confidential }
+    tenancy: "Scoped to the owning organization."
+    consumers: []
+
+  - type: core.BranchCreated
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A Branch/Location was created inside a Business."
+    payload:
+      - { name: branch_id, type: string, classification: internal }
+      - { name: name, type: string, classification: business-confidential }
+    tenancy: "Scoped to the owning organization and business."
+    consumers: []
+
+  - type: core.TeamCreated
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A Team was created. Teams are first-class principals."
+    payload:
+      - { name: team_id, type: string, classification: internal }
+      - { name: name, type: string, classification: business-confidential }
+      - { name: branch_id, type: [string, "null"], classification: internal }
+    tenancy: "Scoped to the owning organization."
+    consumers: []
+
+  - type: core.TeamMembershipChanged
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A principal was added to or removed from a Team. Sensitive — always audited."
+    payload:
+      - { name: team_id, type: string, classification: internal }
+      - { name: principal_id, type: string, classification: internal }
+      - { name: change, type: string, classification: internal, values: [added, removed] }
+    tenancy: "Scoped to the owning organization."
+    consumers: []
+
+  # --- Identity ---------------------------------------------------------------
+  - type: core.UserInvited
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A user was invited to an Organization."
+    payload:
+      - { name: invitation_id, type: string, classification: internal }
+      - { name: invited_principal_id, type: [string, "null"], classification: internal }
+    tenancy: "Scoped to the inviting organization. The invitee's email address is NOT in the payload."
+    consumers: []
+
+  - type: core.UserJoined
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A user accepted an invitation and became a member of an Organization."
+    payload:
+      - { name: user_id, type: string, classification: internal }
+      - { name: invitation_id, type: string, classification: internal }
+    tenancy: "Scoped to the joined organization."
+    consumers: []
+
+  - type: core.UserDeactivated
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A user's access to an Organization was withdrawn. Consumers must not retain access on their behalf."
+    payload:
+      - { name: user_id, type: string, classification: internal }
+      - { name: reason, type: string, classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  # --- Authorization ----------------------------------------------------------
+  - type: core.RoleAssigned
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A role was granted to a principal at a scope. Sensitive — always audited."
+    payload:
+      - { name: principal_id, type: string, classification: internal }
+      - { name: role_id, type: string, classification: internal }
+      - { name: scope, type: string, classification: internal }
+      - { name: scope_id, type: [string, "null"], classification: internal }
+    tenancy: "Scoped to the organization. Never carries the permission list itself."
+    consumers: []
+
+  - type: core.RoleRevoked
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A role was withdrawn from a principal. Takes effect on the next call, not the next deploy."
+    payload:
+      - { name: principal_id, type: string, classification: internal }
+      - { name: role_id, type: string, classification: internal }
+      - { name: scope, type: string, classification: internal }
+      - { name: scope_id, type: [string, "null"], classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  # --- Platform billing -------------------------------------------------------
+  - type: core.SubscriptionChanged
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A tenant's platform plan or subscription status changed. Entitlements follow from it."
+    payload:
+      - { name: plan_id, type: string, classification: internal }
+      - { name: previous_plan_id, type: [string, "null"], classification: internal }
+      - { name: status, type: string, classification: internal }
+    tenancy: "Scoped to the organization. Carries no payment instrument data of any kind."
+    consumers: []
+
+  - type: core.QuotaExceeded
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A tenant reached a plan limit. Distinct from rate limiting — this means upgrade or stop."
+    payload:
+      - { name: quota_name, type: string, classification: internal }
+      - { name: limit, type: integer, classification: internal }
+      - { name: app_id, type: [string, "null"], classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  # --- Core platform services -------------------------------------------------
+  - type: core.FileUploaded
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "An object was stored. Carries the key and ownership, never the content."
+    payload:
+      - { name: file_id, type: string, classification: internal }
+      - { name: app_id, type: string, classification: internal }
+      - { name: content_type, type: string, classification: internal }
+      - { name: size_bytes, type: integer, classification: internal }
+    tenancy: "Object key is prefixed t/<tenant_id>/<app_id>/."
+    consumers: []
+
+  - type: core.NotificationSent
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 1
+    description: "A notification was delivered to a principal. Carries no message body."
+    payload:
+      - { name: notification_id, type: string, classification: internal }
+      - { name: principal_id, type: string, classification: internal }
+      - { name: channel, type: string, classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  # --- App lifecycle (Phase 2) -------------------------------------------------
+  - type: core.AppInstalled
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "An App was installed into a tenant. Storage exists; the App is not yet reachable."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: app_version, type: string, classification: internal }
+      - { name: installation_id, type: string, classification: internal }
+    tenancy: "Scoped to the installing organization."
+    consumers: []
+
+  - type: core.AppActivated
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "An installed App became reachable for the tenant."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: installation_id, type: string, classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  - type: core.AppUpgraded
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "An App moved to a new version and its migrations committed."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: from_version, type: string, classification: internal }
+      - { name: to_version, type: string, classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  - type: core.AppDisabled
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "An App stopped executing for a tenant. Data is retained — disable is not uninstall."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: reason, type: string, classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  - type: core.AppUninstalled
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "An App was removed from a tenant, with the data disposition it declared."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: data_disposition, type: string, classification: internal, values: [retain, export, archive, delete] }
+    tenancy: "Scoped to the organization. The declared disposition is what actually happens."
+    consumers: []
+
+  - type: core.AppPermissionGranted
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "A tenant principal granted an App a declared permission. Sensitive — always audited."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: permission_id, type: string, classification: internal }
+      - { name: scope, type: string, classification: internal }
+      - { name: granted_by_principal_id, type: string, classification: internal }
+    tenancy: "Scoped to the organization. An App can never hold more than the granting principal held."
+    consumers: []
+
+  - type: core.AppPermissionRevoked
+    version: 1
+    publisher: core
+    status: proposed
+    phase: 2
+    description: "A grant was withdrawn. Effective on the App's next call."
+    payload:
+      - { name: app_id, type: string, classification: internal }
+      - { name: permission_id, type: string, classification: internal }
+    tenancy: "Scoped to the organization."
+    consumers: []
+
+  # --- Platform-level, tenant-independent (Phase 6) ----------------------------
+  # See EVENT_STANDARD.md EV3 — this pattern is RESERVED and needs Team Lead confirmation.
+  - type: platform.AppVersionPublished
+    version: 1
+    publisher: platform
+    status: proposed
+    phase: 6
+    description: "A marketplace App version passed review and was published. Not tenant data."
+    payload:
+      - { name: app_id, type: string, classification: public }
+      - { name: app_version, type: string, classification: public }
+      - { name: publisher_id, type: string, classification: public }
+    tenancy: >-
+      Tenant-independent. tenant_id is the reserved value "platform". Tenant-scoped
+      consumers must exclude the platform namespace explicitly — it is not a tenant.
+    consumers: []
+
+# ---------------------------------------------------------------------------
+# openQuestions — recorded, not resolved. See EVENT_STANDARD.md §12.
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: EV1
+    question: "Queue topology — one queue for everything, one per consumer, or one per event family."
+    recommendation: "One queue per consuming service, routed by subscription. Isolates a slow consumer from a fast one."
+    blocks: "Phase 2"
+  - id: EV2
+    question: "Event retention and replay. Nothing in the master plan says whether events are durable beyond delivery."
+    recommendation: "Persist per tenant with a defined retention window in Core storage. Needed for audit regardless."
+    blocks: "Phase 2"
+  - id: EV3
+    question: "Cross-tenant platform events have no tenant. The platform.* namespace above is a proposal."
+    recommendation: "Reserve tenant_id 'platform' and exclude it from tenant-scoped consumers explicitly."
+    blocks: "Phase 6"

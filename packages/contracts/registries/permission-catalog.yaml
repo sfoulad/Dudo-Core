@@ -1,0 +1,661 @@
+---
+# Dudo Permission Catalog
+#
+# Every permission in Dudo. A permission string that does not appear here does not exist:
+# code referencing one fails validation. An undeclared permission is a typo waiting to
+# become an authorization bypass — or, worse, an authorization failure that someone
+# "fixes" by removing the check.
+#
+# Governed by: docs/architecture/standards/AUTHORIZATION_STANDARD.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS OF THIS FILE
+# Every entry is status "proposed". No code exists. These are the permissions entailed by
+# Core's declared responsibilities (master build plan §6) and the App runtime (§20), so
+# that Phase 1 and Phase 2 build against a reviewed set rather than accreting one.
+#
+# AUTHORIZATION_STANDARD.md §1-§10 constitutes the "logical permission model" that
+# docs/decisions/0001 requires as its own decision record BEFORE implementation. That
+# record does not exist yet. Nothing implements against this catalog until it does.
+
+catalogVersion: 1
+updated: "2026-08-31"
+
+# ---------------------------------------------------------------------------
+# model
+# ---------------------------------------------------------------------------
+model:
+  formula: "Principal + Role + Permission + Scope = Access"
+  default: deny
+  rules:
+    - "Default = Deny. Not 'deny after the checks fail' — deny unless a check explicitly passed."
+    - "An entry point with no declared permission is unreachable, not open."
+    - "Authorization is decided in Core, at every entry point, on every call."
+    - "No caller is trusted to have already checked — not a client, not an App, not another service."
+    - "UI hiding is presentation, never security."
+    - "No decision is cached beyond its scope. A cached yes that outlives a revoked role cannot be revoked."
+    - "Permissions are additive. There are no negative permissions and no deny rules."
+    - "Wildcards may appear in ROLE definitions. Never in an App manifest."
+    - "list is a separate permission from read. Enumeration is its own disclosure."
+    - "export is always separate from read. Reading one record and downloading the book are different risks."
+
+naming:
+  format: "<namespace>.<resource>.<action>"
+  namePattern: "^(core|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+  rules:
+    - "namespace is 'core' or an App id."
+    - "resource is singular, kebab-case."
+    - "action is a verb: read, list, create, update, delete, export, approve, assign, revoke."
+
+principalTypes:
+  - id: user
+    description: "A person with a session."
+  - id: team
+    description: "First-class. Permissions may be held by a team; membership grants them."
+  - id: service-account
+    description: "Machine identity for integrations. Never a shared human account."
+  - id: ai-agent
+    description: >-
+      An AI acting on behalf of a user or organization. A principal, not an exception. Its
+      effective permission is the INTERSECTION of its own grants and the acting user's —
+      never the union.
+  - id: iot-device
+    description: "Narrow, usually single-purpose, usually branch-scoped."
+
+scopes:
+  - id: platform
+    grants: "Everything. Platform operators only. Rare and always audited."
+    note: >-
+      The only scope that spans organizations. It never grants access to tenant BUSINESS
+      data without an explicit, audited, time-bounded elevation. See openQuestions AZ3.
+  - id: organization
+    grants: "One Organization and everything beneath it. The tenant boundary."
+  - id: business
+    grants: "One Business/Workspace."
+  - id: branch
+    grants: "One Branch/Location."
+  - id: team
+    grants: "Resources belonging to one Team."
+  - id: own
+    grants: "Records the principal created or is assigned to."
+    note: "Requires a defined ownership relation on the entity. Without one, 'own' grants everything."
+  - id: resource
+    grants: "One named resource."
+
+sensitivityClasses:
+  - id: read
+    requires: [permission]
+  - id: write
+    requires: [permission]
+  - id: sensitive
+    requires: [permission, audit]
+    examples: "Export data, change permissions, change membership, view payroll, send on the tenant's behalf."
+  - id: critical
+    requires: [permission, audit, confirmation]
+    examples: "Move money, delete data irreversibly, rotate credentials, grant platform scope."
+
+elevation:
+  mechanisms: [user-confirmation, approval-workflow, mfa, step-up]
+  rules:
+    - "Elevation is per operation, never per session."
+    - "A confirmation is single-use, short-lived, and states exactly what will happen."
+    - "For AI principals, confirmation is collected by the platform from the human. A model asserting the user agreed is not a confirmation."
+
+# ---------------------------------------------------------------------------
+# permissions
+# ---------------------------------------------------------------------------
+permissions:
+
+  # --- identity ---------------------------------------------------------------
+  - id: core.user.read
+    group: identity
+    description: "View a user profile within the tenant."
+    sensitivity: read
+    scopes: [organization, business, branch, team, own]
+    status: proposed
+    phase: 1
+  - id: core.user.list
+    group: identity
+    description: "Enumerate users. Separate from read because the list itself is information."
+    sensitivity: read
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+  - id: core.user.invite
+    group: identity
+    description: "Invite a person into the tenant."
+    sensitivity: sensitive
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+  - id: core.user.update
+    group: identity
+    description: "Modify a user profile."
+    sensitivity: write
+    scopes: [organization, business, own]
+    status: proposed
+    phase: 1
+  - id: core.user.deactivate
+    group: identity
+    description: "Withdraw a user's access to the tenant."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.session.list
+    group: identity
+    description: "View active sessions for a principal."
+    sensitivity: sensitive
+    scopes: [organization, own]
+    status: proposed
+    phase: 1
+  - id: core.session.revoke
+    group: identity
+    description: "End a session. Takes effect immediately."
+    sensitivity: sensitive
+    scopes: [organization, own]
+    status: proposed
+    phase: 1
+
+  # --- organization structure -------------------------------------------------
+  - id: core.organization.read
+    group: organization
+    description: "View the Organization record."
+    sensitivity: read
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.organization.update
+    group: organization
+    description: "Modify Organization settings."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.organization.delete
+    group: organization
+    description: "Delete the Organization and everything in it."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.business.read
+    group: organization
+    description: "View a Business/Workspace."
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.business.create
+    group: organization
+    description: "Create a Business/Workspace inside the Organization."
+    sensitivity: write
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.business.update
+    group: organization
+    description: "Modify a Business/Workspace."
+    sensitivity: write
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.branch.read
+    group: organization
+    description: "View a Branch/Location."
+    sensitivity: read
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+  - id: core.branch.create
+    group: organization
+    description: "Create a Branch/Location."
+    sensitivity: write
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.branch.update
+    group: organization
+    description: "Modify a Branch/Location."
+    sensitivity: write
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+
+  # --- teams ------------------------------------------------------------------
+  - id: core.team.read
+    group: team
+    description: "View a Team."
+    sensitivity: read
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+  - id: core.team.create
+    group: team
+    description: "Create a Team."
+    sensitivity: write
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+  - id: core.team.update
+    group: team
+    description: "Modify a Team."
+    sensitivity: write
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+  - id: core.team.manage-membership
+    group: team
+    description: "Add or remove Team members. Membership grants the Team's permissions."
+    sensitivity: sensitive
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+
+  # --- authorization ----------------------------------------------------------
+  - id: core.role.read
+    group: authorization
+    description: "View roles and their permissions."
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.role.create
+    group: authorization
+    description: "Create a custom role. Roles are never hardcoded."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.role.update
+    group: authorization
+    description: "Modify a role's permission set."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.role.assign
+    group: authorization
+    description: "Grant a role to a principal at a scope. Never grants more than the granter holds."
+    sensitivity: sensitive
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+  - id: core.role.revoke
+    group: authorization
+    description: "Withdraw a role. Effective on the principal's next call."
+    sensitivity: sensitive
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+  - id: core.principal.grant-platform-scope
+    group: authorization
+    description: "Grant platform scope. The broadest grant in the system."
+    sensitivity: critical
+    scopes: [platform]
+    status: proposed
+    phase: 1
+
+  # --- credentials ------------------------------------------------------------
+  - id: core.api-credential.list
+    group: credential
+    description: "List API credentials and their last use. A credential nobody can find is one nobody will revoke."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.api-credential.issue
+    group: credential
+    description: "Issue an API credential with an explicit permission set — never 'everything its creator has'."
+    sensitivity: critical
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.api-credential.revoke
+    group: credential
+    description: "Revoke an API credential."
+    sensitivity: critical
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.service-account.manage
+    group: credential
+    description: "Create and configure service accounts."
+    sensitivity: critical
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+
+  # --- platform billing -------------------------------------------------------
+  - id: core.subscription.read
+    group: billing
+    description: "View the tenant's plan, quotas, and usage."
+    sensitivity: read
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.subscription.change
+    group: billing
+    description: "Change the tenant's platform plan. A spend decision."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.usage.read
+    group: billing
+    description: "View metered usage, including AI token and cost attribution."
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+
+  # --- files ------------------------------------------------------------------
+  - id: core.file.read
+    group: file
+    description: "Read a stored object."
+    sensitivity: read
+    scopes: [organization, business, branch, own, resource]
+    status: proposed
+    phase: 1
+  - id: core.file.create
+    group: file
+    description: "Store an object."
+    sensitivity: write
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+  - id: core.file.delete
+    group: file
+    description: "Delete a stored object."
+    sensitivity: sensitive
+    scopes: [organization, business, branch, own]
+    status: proposed
+    phase: 1
+
+  # --- notifications ----------------------------------------------------------
+  - id: core.notification.read
+    group: notification
+    description: "Read notifications addressed to the principal."
+    sensitivity: read
+    scopes: [own]
+    status: proposed
+    phase: 1
+  - id: core.notification.send
+    group: notification
+    description: "Send a notification to principals in the tenant."
+    sensitivity: sensitive
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 1
+
+  # --- audit and settings -----------------------------------------------------
+  - id: core.audit.read
+    group: audit
+    description: "Read the tenant's own audit log. Nobody reads another tenant's."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: core.audit.export
+    group: audit
+    description: "Export audit records. The export is itself audited."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.setting.read
+    group: settings
+    description: "Read tenant settings."
+    sensitivity: read
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+  - id: core.setting.update
+    group: settings
+    description: "Change tenant settings."
+    sensitivity: sensitive
+    scopes: [organization, business, branch]
+    status: proposed
+    phase: 1
+  - id: core.feature-flag.read
+    group: settings
+    description: "Read feature flag state for the tenant."
+    sensitivity: read
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.feature-flag.update
+    group: settings
+    description: "Change feature flag state for the tenant."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: core.tenant.export
+    group: audit
+    description: "Export the tenant's own data. Always audited, always scoped."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 1
+
+  # --- app runtime (Phase 2) ---------------------------------------------------
+  - id: core.app.read
+    group: app
+    description: "View installed Apps and their declared permissions."
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 2
+  - id: core.app.install
+    group: app
+    description: "Install an App into the tenant."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.app.configure
+    group: app
+    description: "Configure an installed App, including its capability provider selection."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 2
+  - id: core.app.grant-permission
+    group: app
+    description: "Grant an App a permission it declared. Delegation cannot manufacture authority."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.app.revoke-permission
+    group: app
+    description: "Withdraw a grant from an App. Effective on the App's next call."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.app.upgrade
+    group: app
+    description: "Move an App to a new version, running its migrations."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.app.disable
+    group: app
+    description: "Stop an App executing. Data is retained."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.app.uninstall
+    group: app
+    description: "Remove an App, applying its declared data disposition. May delete tenant data."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 2
+
+  # --- capabilities and connectors (Phase 5) -----------------------------------
+  - id: core.capability.read
+    group: capability
+    description: "View available capabilities and the tenant's provider selection."
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 5
+  - id: core.capability.configure-provider
+    group: capability
+    description: "Select and configure a capability provider for the tenant, including credential references."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 5
+
+  # --- AI and MCP (Phase 8) ----------------------------------------------------
+  - id: core.ai.invoke
+    group: ai
+    description: "Invoke an AI capability action. Metered and quota-bounded."
+    sensitivity: write
+    scopes: [organization, business, branch, team]
+    status: proposed
+    phase: 8
+  - id: core.ai.configure
+    group: ai
+    description: >-
+      Configure AI providers for the tenant, including which vendors are permitted and
+      whether tenant data may leave the platform. A data-processing decision.
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 8
+  - id: core.mcp.connect
+    group: ai
+    description: "Establish an authenticated MCP session bound to one tenant."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 8
+  - id: core.mcp.configure-external
+    group: ai
+    description: "Configure an external MCP server for the tenant. Everything it returns is untrusted."
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 8
+
+  # --- developer and marketplace (Phase 3, 6) -----------------------------------
+  - id: core.developer.register
+    group: developer
+    description: "Register as a Dudo developer."
+    sensitivity: write
+    scopes: [organization]
+    status: proposed
+    phase: 3
+  - id: core.marketplace.submit
+    group: marketplace
+    description: "Submit an App, Capability, Connector, or Template for review."
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 6
+  - id: core.marketplace.moderate
+    group: marketplace
+    description: "Approve or reject a marketplace submission. Platform operators only."
+    sensitivity: critical
+    scopes: [platform]
+    status: proposed
+    phase: 6
+
+# ---------------------------------------------------------------------------
+# defaultRoles — SEED DATA ONLY
+#
+# These ship as a starting point. They are data, never code: no role name may appear in a
+# conditional in source. Customers create and modify their own roles freely. Wildcards are
+# permitted here and nowhere else.
+# ---------------------------------------------------------------------------
+defaultRoles:
+  - id: platform-admin
+    scope: platform
+    status: proposed
+    description: "Platform operator. Does not read tenant business data without break-glass elevation."
+    permissions: ["core.*"]
+  - id: marketplace-moderator
+    scope: platform
+    status: proposed
+    description: "Reviews marketplace submissions."
+    permissions: [core.marketplace.moderate, core.app.read]
+  - id: developer
+    scope: organization
+    status: proposed
+    description: "Builds and submits extensions."
+    permissions: [core.developer.register, core.marketplace.submit, core.app.read]
+  - id: business-owner
+    scope: organization
+    status: proposed
+    description: "Owns the tenant. The most privileged tenant role."
+    permissions: ["core.*"]
+  - id: business-admin
+    scope: business
+    status: proposed
+    description: "Administers one Business without owning the Organization."
+    permissions:
+      - core.user.read
+      - core.user.list
+      - core.user.invite
+      - core.user.update
+      - core.business.read
+      - core.business.update
+      - core.branch.read
+      - core.branch.create
+      - core.branch.update
+      - core.team.read
+      - core.team.create
+      - core.team.update
+      - core.team.manage-membership
+      - core.role.read
+      - core.role.assign
+      - core.role.revoke
+      - core.setting.read
+      - core.setting.update
+      - core.audit.read
+      - core.file.read
+      - core.file.create
+      - core.notification.send
+      - core.app.read
+      - core.app.configure
+  - id: member
+    scope: business
+    status: proposed
+    description: "An ordinary user. Deliberately narrow — default = deny."
+    permissions:
+      - core.user.read
+      - core.business.read
+      - core.branch.read
+      - core.team.read
+      - core.file.read
+      - core.file.create
+      - core.notification.read
+      - core.setting.read
+
+# ---------------------------------------------------------------------------
+# openQuestions — recorded, not resolved. See AUTHORIZATION_STANDARD.md §13.
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: AZ1
+    question: "AUTHORIZATION_STANDARD.md §1-§10 is the logical permission model that 0001 requires as its own ADR."
+    recommendation: "Team Lead records it; architecture-agent drafts on request. Nothing implements until then."
+    blocks: "Phase 1"
+  - id: AZ2
+    question: "Authentication mechanism — sessions, tokens, OAuth/OIDC — is unrecorded."
+    recommendation: "ADR alongside Phase 1 identity work. This catalog does not depend on the choice."
+    blocks: "Phase 1"
+  - id: AZ3
+    question: "Platform-operator access to tenant business data. Support will eventually need it."
+    recommendation: "Break-glass: explicit, time-bounded, reason-required, tenant-notified, always audited."
+    blocks: "Phase 1 admin portal"
+  - id: AZ4
+    question: "Permission grouping for the App install consent screen. Unreadable consent is not consent."
+    recommendation: "Group by the 'group' field above, with expandable detail. Product decision."
+    blocks: "Phase 2"
