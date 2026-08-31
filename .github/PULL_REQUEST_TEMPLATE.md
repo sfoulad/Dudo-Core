@@ -6,12 +6,15 @@
 
 <!-- Tick everything this PR touches. -->
 
-- [ ] `core/**` — domain, API, authorization, tenancy, auditing
+- [ ] `platform/core/**` — domain, API, authorization, tenancy, auditing
 - [ ] `packages/contracts/**` — shared contracts
-- [ ] `apps/**` — responsive web application
-- [ ] `plugins/**` — plugin runtime
-- [ ] `packages/plugin-sdk/**` — plugin SDK
-- [ ] `tests/**` — test suites
+- [ ] `platform/web/**` — responsive web application
+- [ ] `platform/capabilities/**` — capability registry and App runtime
+- [ ] `packages/sdk/**` — the SDK App developers build against
+- [ ] `apps/**` — an installable business App
+- [ ] `connectors/**` — external platform adapter
+- [ ] `packages/testing/**` — test suites
+- [ ] `agents/**` — agent rules, prompts, task specifications
 - [ ] `docs/**` — documentation
 - [ ] Repository configuration / tooling
 - [ ] `Dudo-Apple` (coordinated change in the other repository)

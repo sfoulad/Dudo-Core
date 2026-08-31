@@ -70,28 +70,41 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 |---|---|---|
 | `0001-governance-and-decision-sequencing.md` | Accepted | Process only — the order in which the plugin decisions are made, and who owns root-level shared test configuration. **No architecture.** |
 | `0002-repository-and-mvp-delivery-strategy.md` | Accepted | Two public repositories, the Apple platform approach, Apple and web delivery policy, the seven-step feature completion gate, team changes, public-repository safety. |
+| `0003-technology-stack-typescript-on-cloudflare.md` | Accepted | TypeScript on Cloudflare for `Dudo-Core`: Workers, D1, R2, Queues, Workflows, Durable Objects. Bindings not REST. No blanket product adoption; every service stays replaceable behind an internal boundary. |
+| `0004-repository-structure.md` | Accepted | The master-plan layout — `platform/`, `apps/` (reserved for installable business Apps), `connectors/`, `packages/`, `agents/`, `docs/`. Contract authorship moves from `core-agent` to `architecture-agent`. |
+| `0005-foundation-gate-for-phases-0-3.md` | Accepted | Suspends the three delivery-only steps for Phases 0–3 and replaces them with a seven-condition Foundation Gate. Security, tenant isolation, contract compatibility, ownership, PR review, truthful reporting, secrets, and production controls are **not** suspended. |
 
 ### Technology stack status
 
 | Scope | Status |
 |---|---|
 | `Dudo-Apple` | **Approved** (`0002`): Xcode, Swift, SwiftUI; iPhone, iPad, macOS; true native macOS destination, never Mac Catalyst |
-| `Dudo-Core` | **Not selected** — language, framework, database, hosting, web framework all open |
-| Plugin isolation mechanism | **Not selected** — decided jointly with the `Dudo-Core` stack (`0001`) |
+| `Dudo-Core` | **Approved** (`0003`): TypeScript on Cloudflare — Workers, D1, R2, Queues, Workflows, and Durable Objects only where real coordination is needed. Bindings, not REST |
+| Web / testing framework, npm dependencies | **Not selected** — `0003` approves a language and six services, nothing more |
+| Other Cloudflare products | **Not approved.** Workers AI, AI Gateway, Agents SDK, Workers for Platforms, Analytics Engine, KV, Hyperdrive each need their own record |
+| App isolation mechanism | **Not selected** — `0001` bound it to the stack decision, but `0003` did not approve Workers for Platforms |
+| Tenancy model | **Not selected** — D1 is single-threaded per database, which argues against a shared database. Resolve before Phase 1 |
 
 An approved stack for one repository is not approval for the other, and approving Swift
 and SwiftUI is not approving any package or third-party dependency.
 
 ### Scheduled but not yet written
 
-1. The logical plugin permission model.
-2. The plugin permission and trust ADR — required before any SDK or runtime work.
-3. The `Dudo-Core` technology stack and the plugin isolation mechanism, decided jointly.
+1. The logical App permission model.
+2. The App permission and trust ADR — required before any SDK or runtime work.
+3. The App isolation mechanism — `0003` settled the stack but did not approve Workers for
+   Platforms, so this still needs its own record.
+4. The tenancy model — shared schema, schema-per-tenant, or database-per-tenant.
+5. Contract transport and versioning mechanics.
 
 ### Open user decisions
 
 - **Software license** for both public repositories — public visibility does not decide
-  it, and no license file exists.
+  it, and no license file exists. **Apache-2.0 is the standing recommendation**
+  (permissive, explicit patent grant, well understood by the developer ecosystem an
+  extensible platform depends on). **Not adopted:** it permits commercial reuse by anyone,
+  including competitors, and that trade-off needs an explicit decision rather than a
+  default. No `LICENSE` is added until the user confirms.
 - **The first vertical feature slice.**
 - ~~Repository creation and remote configuration~~ — **done 2026-08-31.** Both
   repositories are public; `Dudo-Core` has its foundation commit, `Dudo-Apple` is empty

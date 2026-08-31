@@ -1,24 +1,37 @@
-# apps/ — Responsive Web Application
+# apps/ — Installable Dudo business Apps
 
-**Owner: `web-agent`** (see `docs/architecture/boundaries.md`)
+**Reserved. This directory holds installable business Apps and nothing else.**
 
-The responsive web application for Dudo — the browser client, across desktop, tablet, and
-phone widths.
+An App is a complete business application a customer installs — CRM, Finance, Projects,
+Inventory, HR, Appointments, Customers, Commitments. Each owns its logic, data, API,
+events, permissions, UI, and tests.
 
-The native Apple application is **not** here. It lives in the separate `Dudo-Apple`
-repository and is owned by `app-agent`.
+> **This is not the web client.** The responsive web application lives at
+> `platform/web/`. Putting a client, a library, or a platform service here is a boundary
+> violation — see `docs/decisions/0004-repository-structure.md`.
 
-- Consumes contracts published by Core in `packages/contracts/**` — the **same** approved
-  contract set the Apple client consumes. Divergence between the two clients is a
-  contract defect, not a local workaround.
-- **No business rules here** — pricing, tax, entitlement, approvals, workflow
-  transitions, and permission decisions belong to `core/**`.
-- **No direct database access** — no SQL, ORM models, datastore clients, or connection
-  strings.
-- Never authors a contract.
+## Rules every App follows
 
-Boundaries: `docs/architecture/boundaries.md` · Delivery:
-`docs/product/mvp-delivery-policy.md` · Contributing: `CONTRIBUTING.md`
+- **An App owns its domain.** Logic, data, API, events, permissions, UI, tests.
+- **No cross-App database access, ever.** Apps communicate through internal APIs and
+  events — never by reaching into another App's storage.
+- **Business logic lives here, not in Core.** Core provides platform primitives; Apps
+  provide business behaviour.
+- **Apps request capabilities, not vendors.** Declare `Payment`, never `Stripe`. The
+  provider is resolved by the capability registry.
+- **Every operation is tenant aware.** No query, action, event, workflow, cache entry, or
+  file operation involving tenant data exists without tenant context.
+- **Official Apps get no special path.** First-party Apps use exactly the SDK third-party
+  developers use. If the SDK is awkward for us, it is awkward for them.
 
-*Empty placeholder. No application code exists yet and no `Dudo-Core` technology stack
-has been selected.*
+## Structure
+
+Each App is a directory with a manifest declaring its identity, version, dependencies,
+permissions, entities, actions, events published and consumed, capabilities required,
+APIs, UI extensions, and MCP tools. The manifest is the source of truth for whether an
+App can install.
+
+Per-App test suites colocate under `apps/<name>/tests/`, owned by `qa-agent`.
+
+*Empty. No Apps exist yet — they arrive in Phase 4, after the platform, runtime, and SDK
+are built. See `docs/decisions/0005-foundation-gate-for-phases-0-3.md`.*

@@ -59,7 +59,8 @@ to pass without doing anything is worse than no check at all.
 
 Checks become required only after they run for real:
 
-1. CI workflows, once the technology stack is approved and the workflows actually run.
+1. CI workflows, once they actually exist and run. The stack is approved (`0003`), but no
+   workflow has been written and none may be required before it has passed once for real.
 2. **CodeRabbit** — after activation, observe the **exact check name it reports** on a
    real pull request, then add that exact name as required. Do not guess the name in
    advance.

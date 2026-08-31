@@ -37,7 +37,11 @@ reviews:
         standards, which are authoritative: CONTRIBUTING.md,
         docs/architecture/boundaries.md, and docs/product/mvp-delivery-policy.md.
         Priorities, in order: tenant isolation, authorization, contract compatibility,
-        plugin boundaries, secrets, and truthful test reporting.
+        App and Capability boundaries, secrets, and truthful test reporting.
+        Layout is fixed by docs/decisions/0004-repository-structure.md: platform/ holds
+        the platform, apps/ is reserved for installable business Apps, connectors/ for
+        external adapters, packages/ for shared libraries. Flag anything placed outside
+        its boundary.
         Flag any credential, API key, token, certificate, signing key, provisioning
         profile, .env file, real customer data, or private planning document — this
         repository is public, and an exposed secret is compromised on landing.
@@ -45,9 +49,13 @@ reviews:
         weakened to produce a pass (deleted assertions, added skips, widened tolerances).
         Flag any agent editing outside its documented ownership boundary.
 
-    - path: "core/**"
+    - path: "platform/core/**"
       instructions: >-
         Core owns the domain, APIs, authorization, tenancy, workflows, and auditing.
+        Core stays small: flag any business-specific logic that belongs in an App under
+        apps/ or in a Capability. Cloudflare services must stay replaceable — flag any
+        Cloudflare type, client, or binding appearing in domain logic rather than behind
+        a Core-owned interface.
         Every entry point must authorize explicitly and deny by default; never assume a
         caller already checked. Every query, command, event, cache key, background job,
         file path, and export must be scoped to exactly one tenant, with tenant identity
@@ -69,10 +77,10 @@ reviews:
         Flag any shape that serves one client but not the other, and any contract that
         omits tenant scoping or authorization expectations.
 
-    - path: "apps/**"
+    - path: "platform/web/**"
       instructions: >-
-        This is the responsive web application — the documented web path for this
-        repository. It renders and collects; it does not decide. Flag any business rule
+        This is the responsive web application. It renders and collects; it does not
+        decide. Flag any business rule
         here: pricing, tax, entitlement, approval thresholds, workflow state transitions,
         permission decisions, or tenant resolution all belong in Core. Flag any direct
         data access: SQL, ORM models, datastore clients, or connection strings. Hiding a
@@ -81,9 +89,29 @@ reviews:
         not diverge from what the Apple client consumes. Check responsive behaviour and
         accessibility.
 
-    - path: "plugins/**"
+    - path: "apps/**"
       instructions: >-
-        The plugin runtime brokers untrusted code. Plugins and the runtime must never
+        This directory is RESERVED for installable Dudo business Apps — CRM, Finance,
+        Projects, Inventory, HR. Flag anything here that is a client, a shared library,
+        or a platform service; those belong in platform/ or packages/. An App owns its
+        logic, data, API, events, permissions, UI and tests. Flag any cross-App database
+        access — Apps communicate only through internal APIs and events. Flag any App
+        depending on a named vendor rather than a capability: it must request Payment,
+        never Stripe. Official Apps get no privileged path; they use exactly the SDK
+        third-party developers use.
+
+    - path: "connectors/**"
+      instructions: >-
+        Connectors adapt external platforms to a capability contract published by Core.
+        Flag any Connector inventing its own interface instead of implementing the
+        capability contract, any direct database or storage access, and any credential
+        present in the repository rather than referenced by name from the approved secret
+        store — this repository is public. External integrations must never become
+        dependencies of Core.
+
+    - path: "platform/capabilities/**"
+      instructions: >-
+        The capability registry and App runtime broker untrusted code. Plugins and the runtime must never
         open a database connection, issue SQL, use a Core ORM model, read Core caches, or
         touch Core files or object storage — with no exception for first-party plugins.
         All access goes through explicit versioned Core contracts. The runtime must never
@@ -92,16 +120,17 @@ reviews:
         escape, privilege escalation, or cross-tenant path, and any plugin failure or
         resource exhaustion that could take down the host.
 
-    - path: "packages/plugin-sdk/**"
+    - path: "packages/sdk/**"
       instructions: >-
         The public SDK surface: manifest schema, lifecycle, permission declarations, and
-        extension interfaces. Permissions must be manifest-declared, narrow,
+        extension interfaces. Flag any Cloudflare concept leaking into the SDK surface —
+        developers build against Dudo, not against Cloudflare. Permissions must be manifest-declared, narrow,
         tenant-scoped, revocable, and enforced by Core on every invocation — undeclared
         means denied, and enforcement must never live in the SDK or the plugin. Flag any
         API that would let a plugin widen its own grant, select its tenant, or reach Core
         internals. This is a public surface: breaking changes need a decision record.
 
-    - path: "tests/**"
+    - path: "packages/testing/**"
       instructions: >-
         Tests are the project's evidence, so honesty matters more than green. Flag any
         test weakened to produce a pass: deleted assertions, added skips, widened
