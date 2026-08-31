@@ -284,6 +284,30 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "description": "VAL-OWN, enforced structurally (AUTHORIZATION_STANDARD.md §4). If any Action declares scope 'own', this manifest must declare at least one entity carrying an ownershipField. 'own' with no ownership relation anywhere grants everything while presenting as the narrowest scope in the system, so such a manifest FAILS VALIDATION and the App does not install — it is never accepted and then evaluated as unrestricted. A manifest declaring 'own' with zero entities is rejected by the same rule, because 'contains' is not satisfiable on an empty array. This is the manifest-level form of VAL-OWN and it is what a schema can decide. The per-entity form — that the entity a given Action operates on is itself the one declaring ownership — is not decidable here and not decidable by any validator, because $defs/action carries no reference to the entity it operates on; that relation is absent from the manifest format. See AUTHORIZATION_STANDARD.md §4 and open question AZ7.",
+      "if": {
+        "required": ["actions"],
+        "properties": {
+          "actions": {
+            "contains": {
+              "required": ["scope"],
+              "properties": { "scope": { "const": "own" } }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["entities"],
+        "properties": {
+          "entities": {
+            "contains": { "required": ["ownershipField"] }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "slug": {
       "type": "string",
@@ -415,7 +439,7 @@
         "ownershipField": {
           "type": "string",
           "minLength": 1,
-          "description": "The field carrying the ownership relation — which principal created or is assigned to the record. REQUIRED if any Action on this entity uses the 'own' scope. Without an ownership relation 'own' grants everything while presenting as the narrowest scope in the system, so the developer who writes it believes they applied a control they did not. This is validation rule VAL-OWN (AUTHORIZATION_STANDARD.md §4): an Action with scope 'own' on an entity that declares no ownershipField FAILS validation and the App does not install. THE DEPENDENCY CROSSES THE 'actions' AND 'entities' SIBLING ARRAYS AND IS NOT EXPRESSIBLE IN JSON SCHEMA — this schema alone cannot reject it, and a registry-aware manifest validator must."
+          "description": "The field carrying the ownership relation — which principal created or is assigned to the record. Optional per entity: most entities have no ownership concept and must not be forced to invent one. But if any Action in this manifest declares scope 'own', at least one entity must declare an ownershipField — that is validation rule VAL-OWN (AUTHORIZATION_STANDARD.md §4), and it is enforced structurally by this schema's top-level 'allOf', not by review. Without an ownership relation 'own' grants everything while presenting as the narrowest scope in the system, so the developer who writes it believes they applied a control they did not. What this schema does NOT decide is the per-entity form of the rule — that the entity a particular Action operates on is the one declaring ownership. That is not a limit of JSON Schema; the dependency across the 'actions' and 'entities' sibling arrays is expressible, and is expressed above. It is a limit of the manifest format: $defs/action has additionalProperties false and no entity, target, or resource field, so an Action cannot name what it operates on and a registry-aware validator would have nothing to join on either. Recorded as open question AZ7."
         },
         "fields": {
           "type": "array",

@@ -19,7 +19,7 @@
 # record does not exist yet. Nothing implements against this catalog until it does.
 
 catalogVersion: 1
-updated: "2026-08-31"
+updated: "2026-09-01"
 
 # ---------------------------------------------------------------------------
 # model
@@ -79,14 +79,17 @@ scopes:
       The only scope that spans organizations. It never grants access to tenant BUSINESS
       data without an explicit, audited, time-bounded elevation. See openQuestions AZ3.
       THAT ELEVATION MECHANISM DOES NOT EXIST YET (AZ3 is unresolved), so until it is
-      recorded and built, platform-admin has no path to tenant business data at all: only
-      two permissions are declared at 'platform' scope —
-      core.principal.grant-platform-scope and core.marketplace.moderate — and
-      platform-admin holds exactly those two. This is deliberate and fail-closed; a
-      control that exists only as an English sentence is not a control. NOTE the one
-      remaining violation, left for the Team Lead rather than corrected here:
-      marketplace-moderator is a platform-scope role carrying core.app.read, which is
-      declared scopes: [organization, business].
+      recorded and built, NO platform-scope role has a path to tenant business data at
+      all: only two permissions are declared at 'platform' scope —
+      core.principal.grant-platform-scope and core.marketplace.moderate — and neither
+      platform-scope seed role holds anything outside that pair. This is deliberate and
+      fail-closed; a control that exists only as an English sentence is not a control.
+      marketplace-moderator previously carried core.app.read (declared scopes:
+      [organization, business]) and it has been REMOVED: a platform-scope role holding a
+      tenant-scoped permission is a cross-tenant read under the union reading and an
+      invalid role definition under the intersection reading drafted as 0007 D6. The
+      platform-scope view of published Apps that moderation actually needs is
+      openQuestions AZ8 and is deliberately not declared here.
   - id: organization
     grants: "One Organization and everything beneath it. The tenant boundary."
   - id: business
@@ -618,11 +621,18 @@ defaultRoles:
     permissions:
       - core.principal.grant-platform-scope
       - core.marketplace.moderate
+  # core.app.read was removed from this role: it is declared scopes: [organization,
+  # business], and a platform-scope role holding it reads every tenant's installed Apps
+  # across the tenant boundary. Moderation reviews PUBLISHED App versions, which is a
+  # different object from a tenant's INSTALLED Apps; the platform-scope permission for
+  # that does not exist and is openQuestions AZ8. Do not repair this by widening
+  # core.app.read's scopes to include 'platform' — that pushes a tenant-scope permission
+  # above the tenant boundary.
   - id: marketplace-moderator
     scope: platform
     status: proposed
-    description: "Reviews marketplace submissions."
-    permissions: [core.marketplace.moderate, core.app.read]
+    description: "Reviews marketplace submissions. Holds no tenant-scoped permission, so it currently has no view of Apps at all — see openQuestions AZ8."
+    permissions: [core.marketplace.moderate]
   - id: developer
     scope: organization
     status: proposed
@@ -788,3 +798,34 @@ openQuestions:
       every role's expanded set and fails on any permission whose declared scopes exclude
       the role's scope. Until then no seed role uses a wildcard and none may be added.
     blocks: "Phase 1; and the catalog lint check in CI"
+  - id: AZ7
+    question: >-
+      An Action cannot name the entity it operates on. app-manifest.schema.json
+      $defs/action has additionalProperties false and no entity, target or resource
+      field, so VAL-OWN is enforceable only in its manifest-level form — if any Action
+      declares scope 'own', at least one entity must declare an ownershipField — which
+      the schema now enforces structurally. The per-entity form is unenforceable by the
+      schema AND by any registry-aware validator, because the relation is absent from the
+      manifest format rather than from the schema's expressive power.
+    recommendation: >-
+      Decide whether an Action declares the entity or entities it operates on. If it
+      does, VAL-OWN tightens to the per-entity form and the SDK, Studio and
+      APP_STANDARD.md each gain a field to carry. If it does not, VAL-OWN stays
+      manifest-level and every statement of it must say so. A manifest-format change, so
+      it needs its own record and is not made in the schema.
+    blocks: "The per-entity form of VAL-OWN. Not Phase 2 itself."
+  - id: AZ8
+    question: >-
+      Marketplace moderation has no permission it may legitimately hold. core.app.read
+      was removed from marketplace-moderator because that role is platform-scope and the
+      permission is declared scopes: [organization, business]. Moderation reviews
+      PUBLISHED App versions and submissions, not a tenant's INSTALLED Apps, and no
+      permission over the former is declared at any scope.
+    recommendation: >-
+      Declare a new permission at 'platform' scope covering published App versions and
+      marketplace submissions. Do NOT widen core.app.read to include 'platform': that
+      pushes a tenant-scope permission above the tenant boundary and recreates the
+      escalation just removed. Declaring a new platform-scope permission is a model
+      decision, so it is recorded here rather than invented. Distinct from AZ3 — this
+      needs no tenant business data.
+    blocks: "Phase 6 marketplace moderation"

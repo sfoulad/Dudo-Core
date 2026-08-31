@@ -122,20 +122,32 @@ Rules:
   paid deliberately until AZ3 is recorded. A control that exists only as an English
   sentence is not a control, so it must not be re-stated as one: **no platform-scope role
   may be given a permission declared at any tenant scope in place of the break-glass
-  record.** One seed role still violates this — `marketplace-moderator` carries
-  `core.app.read`, declared `scopes: [organization, business]` — and is recorded as
-  outstanding rather than silently corrected here.
+  record.** Both platform-scope seed roles now satisfy this. `marketplace-moderator`
+  carried `core.app.read`, declared `scopes: [organization, business]`; it has been
+  removed. That was the last surviving instance of a platform role reaching a
+  tenant-scoped permission, and it was unsafe under both candidate readings of scope
+  intersection — a cross-tenant read of every tenant's installed Apps under the union
+  reading, an invalid role definition under the intersection reading drafted as `0007` D6.
+  **The cost is stated rather than absorbed:** marketplace moderation now has no view of
+  Apps at all. The fix is a properly platform-scoped App-read permission, declared at
+  `platform` scope and covering published App versions rather than tenant installations —
+  which is a model decision, recorded as **AZ8** and deliberately not made here. Widening
+  `core.app.read`'s declared scopes to include `platform` would be the wrong repair: it
+  pushes a tenant-scope permission above the tenant boundary and recreates exactly the
+  escalation this rule exists to prevent.
 - The Action declares the scope level at which its permission is evaluated. Evaluating at
   the wrong level is a silent privilege escalation, so it is part of the contract and part
   of review.
-- `own` requires a defined ownership relation on the entity. An entity with no ownership
-  column cannot use `own`, and pretending otherwise grants everything.
+- `own` requires a defined ownership relation. An entity with no ownership column cannot
+  meaningfully be reached at `own` scope, and pretending otherwise grants everything. What
+  a manifest can *state*, and the schema can *check*, is narrower than that: see VAL-OWN
+  immediately below, and AZ7 for why the per-entity form is not expressible today.
 
 **VAL-OWN (normative validation rule).**
 
-> An Action declaring `scope: own` requires the entity it operates on to declare an
-> `ownershipField`. A manifest that does not satisfy this **fails validation, and the App
-> does not install.** It is never accepted and then evaluated as unrestricted.
+> A manifest in which any Action declares `scope: own` must declare at least one entity
+> carrying an `ownershipField`. A manifest that does not satisfy this **fails validation,
+> and the App does not install.** It is never accepted and then evaluated as unrestricted.
 
 This is stated as a named failing rule rather than as prose because the failure mode is
 an authorization bypass *that presents as a security control*: the developer who writes
@@ -143,13 +155,35 @@ an authorization bypass *that presents as a security control*: the developer who
 no ownership relation they applied none at all. A rule written twice and enforced zero
 times is not a rule.
 
-**The dependency crosses the `actions` and `entities` sibling arrays and is therefore not
-expressible in JSON Schema.** `app-manifest.schema.json` records VAL-OWN on the
-`ownershipField` description but cannot reject a violation; a registry-aware manifest
-validator must, and until one exists this rule is stated and unenforced. That validator
-does not yet have a specification or an owner — it is the same gap that leaves
-`permission-catalog.yaml`, `event-catalog.yaml`, and `core-object-registry.yaml`
-unreferenced at install time.
+**VAL-OWN is enforced structurally, by the schema, not by review.**
+`app-manifest.schema.json` carries it as a top-level `allOf`: *if* any `actions[]` entry
+has `scope: "own"`, *then* `entities[]` must contain an entry with `ownershipField`. A
+manifest declaring `own` with zero entities is rejected by the same construct, since
+`contains` cannot be satisfied on an empty array; a mixed manifest with one owned and one
+unowned entity is accepted, as it must be, because `ownershipField` stays optional per
+entity.
+
+**Correction, recorded rather than removed.** An earlier version of this section and of
+the schema's `ownershipField` description stated — the schema in capitals — that the
+dependency crosses the `actions` and `entities` sibling arrays and is *therefore not
+expressible in JSON Schema*. **That was wrong.** It is expressible in draft 2020-12 with
+`if`/`then`/`contains`, it was demonstrated to be so by independent verification, and it
+is now expressed. The enforcement gap was a choice not yet made, not a limit of the
+format, and "inexpressible" read as closed-for-now when it was not.
+
+**What VAL-OWN still does not check, and why no validator can.** The rule enforced above
+is the manifest-level form. The per-entity form — *the entity this particular Action
+operates on* declares ownership — is not checkable, because `$defs/action` has
+`additionalProperties: false` and no `entity`, `target`, or `resource` field: **an Action
+cannot name the entity it operates on.** The relation is missing from the manifest format
+itself, so a registry-aware validator reading the same manifest has nothing to join on
+either. Adding an Action→entity reference is a manifest-format change with consequences
+for the SDK, Studio, `APP_STANDARD.md`, and every published manifest, so it is recorded as
+**AZ7** and not made here. The residual exposure is bounded and worth stating precisely:
+an App that claims `own` anywhere must now declare an ownership relation somewhere, so the
+bypass that presents as a control — `own` on a manifest with no ownership concept at all —
+is closed; what remains reachable is an App that declares ownership on one entity and
+applies `own` to an Action over a different, unowned one.
 
 ---
 
@@ -274,8 +308,10 @@ Audit records are append-only and are never mutated. Details in
 - [ ] No App manifest requests a permission at `platform` scope.
 - [ ] No role definition contains a permission whose declared `scopes` exclude that role's
       own `scope` — checked against `permission-catalog.yaml`, seed and custom roles alike.
-- [ ] VAL-OWN: every Action with `scope: own` operates on an entity declaring
-      `ownershipField`.
+- [ ] VAL-OWN: no manifest declares an Action at `scope: own` without at least one entity
+      declaring `ownershipField` — enforced by `app-manifest.schema.json`. The per-entity
+      correspondence is **not** checked and cannot be until AZ7 is decided; do not tick
+      this box as though it were.
 - [ ] No App entity field is classified `secret`.
 - [ ] No role name in a conditional.
 - [ ] No authorization decision cached beyond its scope.
@@ -296,3 +332,5 @@ Audit records are append-only and are never mutated. Details in
 | AZ4 | **Permission grouping for the install screen.** Twenty individually-named permissions are unreadable, and unreadable consent is not consent. | Group by resource with an expandable detail view; the catalog carries a `group` field for this. Product decision, flagged. |
 | AZ5 | **How does a principal come to hold an `own`-scope permission?** `core.notification.read` is declared `scopes: [own]`, so no role at `organization`, `business`, `branch` or `team` scope can legitimately carry it — yet every principal must read their own notifications. | Either a baseline self-role held at `own` scope by every principal, or widen the permission's declared scopes. Both are model decisions. Fail-closed meanwhile: the permission is in no seed role, so it is granted to nobody. Needed in Phase 1. |
 | AZ6 | **What does a wildcard in a role definition expand to?** §3.2 says only where one may appear. The naive union reading is tenant-to-platform escalation; the intersection reading is drafted as `docs/decisions/0007` D6, which is **Proposed and decides nothing**. | Record the expansion rule, then add the catalog lint that recomputes every role's expanded set and fails on any permission whose declared `scopes` exclude the role's `scope`. Until then no role uses a wildcard and none may be added. Blocks Phase 1 and the CI lint. |
+| AZ7 | **An Action cannot name the entity it operates on.** `$defs/action` has `additionalProperties: false` and no `entity`, `target`, or `resource` field, so VAL-OWN can only be enforced at manifest level (§4). The per-entity form is unenforceable by the schema *and* by any registry-aware validator, because the relation is absent from the manifest format. | Decide whether an Action declares the entity or entities it operates on. If it does, VAL-OWN tightens to the per-entity form and Studio, the SDK, and `APP_STANDARD.md` all gain a field to carry; if it does not, VAL-OWN stays manifest-level and this standard must keep saying so. A manifest-format change — needs its own record. Blocks the tighter form of VAL-OWN, not Phase 2. |
+| AZ8 | **Marketplace moderation has no permission it may legitimately hold to view Apps.** `marketplace-moderator` is `platform` scope; `core.app.read` is declared `scopes: [organization, business]` and has been removed from it (§4). Moderation reviews *published App versions*, which is not the same object as *a tenant's installed Apps*. | Declare a new permission at `platform` scope over published App versions and marketplace submissions — not a widening of `core.app.read`, which would push a tenant-scope permission above the tenant boundary. Declaring a new platform-scope permission is a model decision, so it is recorded, not invented. Related to AZ3 but distinct: this needs no tenant business data. Blocks Phase 6 moderation. |
