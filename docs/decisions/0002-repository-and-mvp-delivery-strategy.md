@@ -76,6 +76,11 @@ and pointer interaction, and file handling being the expected divergence points.
 **Neither repository is created and no remote is configured.** That requires separate
 user approval.
 
+> **Update 2026-08-31:** the user approved creation. Both repositories now exist and are
+> public, and `Dudo-Core`'s remote is configured. `Dudo-Apple` is intentionally empty
+> until its Xcode project is approved. The decision above is unchanged — only its
+> pending status is.
+
 ### 3. Apple delivery
 
 Every completed feature slice produces an **internal TestFlight build**. The Apple
