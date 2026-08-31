@@ -6,6 +6,37 @@
 - **Owning agent:** Team Lead records. Drafted by `architecture-agent` under
   `docs/decisions/README.md` ("Agents propose; the Team Lead records").
 
+> ## ⚠ SUPERSEDING CONSTRAINT — read before the analysis below
+>
+> **Added 2026-09-01 by the Team Lead, following
+> `docs/decisions/0008-zero-cost-mvp-infrastructure.md`.**
+>
+> Every D1 figure in this record is the **Workers Paid** allowance. ADR `0008` binds Dudo
+> to **USD 0 / BD 0 per month**, so the applicable ceiling is the **Free** tier — verified
+> against Cloudflare's published limits on 2026-09-01:
+>
+> | | Free (applicable) | Assumed in this record |
+> |---|---|---|
+> | Databases per account | **10** | 50,000 |
+> | Size per database | **500 MB** | 10 GB |
+> | Total storage | **5 GB** | — |
+> | Queries per Worker invocation | **50** | 1,000 |
+>
+> **What this changes:**
+>
+> - **Option B (database per tenant) is not viable at MVP.** Ten databases total, minus the
+>   reserves `0008` requires, leaves roughly four to six for tenants.
+> - **Option C** spends that same ten-database budget on shards.
+> - **Option A** is the only option that does not consume the database budget, but 500 MB
+>   then bounds the entire product's data.
+> - **The Option C recommendation in §6 was computed against paid limits and does not carry
+>   over. It must be re-derived.**
+>
+> **This record may not be Accepted until it contains a database allocation budget** across
+> control-plane / tenant-directory, application data, test and staging, and migration and
+> recovery capacity — without consuming all ten. Physical tenancy placement remains
+> **undecided**.
+
 > **This record selects nothing.** It sets out three options, compares them across the
 > dimensions that will actually decide the answer, and ends with a recommendation that is
 > labelled as a recommendation. Nothing in the repository may treat any option here as

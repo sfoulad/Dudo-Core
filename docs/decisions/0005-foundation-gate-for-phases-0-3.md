@@ -62,6 +62,22 @@ has passed for real at least once.
 Step 7 remains the user's alone. It cannot be inferred, assumed, or granted by the Team
 Lead.
 
+### Cost conditions — added by `0008`
+
+Every unit of work must additionally satisfy:
+
+| # | Condition |
+|---|---|
+| C1 | Projected monthly cost is **USD 0** |
+| C2 | **No paid-only service** exists in configuration |
+| C3 | Usage fits within free limits **with headroom** |
+| C4 | **No paid runner** or paid GitHub feature is configured |
+| C5 | The billing guardrail checklist is complete |
+| C6 | **No deployment occurs if cost cannot be proven zero** |
+
+A feature that requires payment is **BLOCKED**, reported with why it requires payment, the
+expected monthly cost, the free alternatives, and the Team Lead's recommendation.
+
 ### Explicitly NOT suspended
 
 These apply in full throughout Phases 0–3 and are not negotiable:
