@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/sfoulad/Dudo-Core/security/advisories/new
+    about: Report privately through a GitHub security advisory. Never open a public issue for a vulnerability.
+  - name: Security policy
+    url: https://github.com/sfoulad/Dudo-Core/blob/main/SECURITY.md
+    about: How vulnerabilities are reported and handled in this pre-alpha project.
+  - name: Contributing guide
+    url: https://github.com/sfoulad/Dudo-Core/blob/main/CONTRIBUTING.md
+    about: Branching, pull requests, contract-first development, and secret handling.

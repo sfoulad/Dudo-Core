@@ -1,0 +1,128 @@
+# CodeRabbit configuration for Dudo-Core — review only.
+#
+# CodeRabbit comments on pull requests. It does not commit, fix, or merge here:
+# finishing_touches.autofix is explicitly disabled, and request_changes_workflow
+# is off so reviews never block a merge on CodeRabbit's own verdict.
+#
+# Validated against the official CodeRabbit JSON schema (schema.v2.json).
+# Only keys present in that schema are used.
+
+language: en-US
+
+early_access: false
+
+reviews:
+  # Comment-only. Never request changes, never block the merge.
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+
+  auto_review:
+    enabled: true
+    # Draft pull requests are not reviewed.
+    drafts: false
+    base_branches:
+      - main
+
+  finishing_touches:
+    # No automatic fixes or commits from CodeRabbit.
+    autofix:
+      enabled: false
+
+  path_instructions:
+    - path: "**"
+      instructions: >-
+        Dudo is a multi-tenant business-management platform, pre-alpha, built one small
+        vertical feature at a time. Review against the repository's own documented
+        standards, which are authoritative: CONTRIBUTING.md,
+        docs/architecture/boundaries.md, and docs/product/mvp-delivery-policy.md.
+        Priorities, in order: tenant isolation, authorization, contract compatibility,
+        plugin boundaries, secrets, and truthful test reporting.
+        Flag any credential, API key, token, certificate, signing key, provisioning
+        profile, .env file, real customer data, or private planning document — this
+        repository is public, and an exposed secret is compromised on landing.
+        Flag any claim of passing tests that the diff does not support, and any test
+        weakened to produce a pass (deleted assertions, added skips, widened tolerances).
+        Flag any agent editing outside its documented ownership boundary.
+
+    - path: "core/**"
+      instructions: >-
+        Core owns the domain, APIs, authorization, tenancy, workflows, and auditing.
+        Every entry point must authorize explicitly and deny by default; never assume a
+        caller already checked. Every query, command, event, cache key, background job,
+        file path, and export must be scoped to exactly one tenant, with tenant identity
+        derived from the authenticated server-side context — never from client input, a
+        header the caller controls, a plugin, or an ambient default. A query with no
+        tenant scope is a defect. Money movement, permission changes, tenant membership
+        changes, data export, and destructive operations must leave audit records.
+        Error messages and logs must not leak business data or another tenant's
+        identifiers. Business rules belong here and nowhere else.
+
+    - path: "packages/contracts/**"
+      instructions: >-
+        Contracts are authored only here, only by the Core owner, and are consumed by
+        the web client, the Apple client, and plugins. A contract must define the request
+        shape, the response shape, the error cases, the authorization expectation, and
+        the tenant scoping — a type alone is not a contract. Check that changes are
+        additive and backwards compatible; a breaking change to a published contract
+        needs an explicit decision record and coordinated updates in BOTH clients.
+        Flag any shape that serves one client but not the other, and any contract that
+        omits tenant scoping or authorization expectations.
+
+    - path: "apps/**"
+      instructions: >-
+        This is the responsive web application — the documented web path for this
+        repository. It renders and collects; it does not decide. Flag any business rule
+        here: pricing, tax, entitlement, approval thresholds, workflow state transitions,
+        permission decisions, or tenant resolution all belong in Core. Flag any direct
+        data access: SQL, ORM models, datastore clients, or connection strings. Hiding a
+        control in the UI is presentation, never security — assume every request is
+        authorized server-side. Check that it consumes only published contracts and does
+        not diverge from what the Apple client consumes. Check responsive behaviour and
+        accessibility.
+
+    - path: "plugins/**"
+      instructions: >-
+        The plugin runtime brokers untrusted code. Plugins and the runtime must never
+        open a database connection, issue SQL, use a Core ORM model, read Core caches, or
+        touch Core files or object storage — with no exception for first-party plugins.
+        All access goes through explicit versioned Core contracts. The runtime must never
+        carry an elevated identity on a plugin's behalf, never cache an authorization
+        decision past its scope, and never let a plugin choose its own tenant. Flag any
+        escape, privilege escalation, or cross-tenant path, and any plugin failure or
+        resource exhaustion that could take down the host.
+
+    - path: "packages/plugin-sdk/**"
+      instructions: >-
+        The public SDK surface: manifest schema, lifecycle, permission declarations, and
+        extension interfaces. Permissions must be manifest-declared, narrow,
+        tenant-scoped, revocable, and enforced by Core on every invocation — undeclared
+        means denied, and enforcement must never live in the SDK or the plugin. Flag any
+        API that would let a plugin widen its own grant, select its tenant, or reach Core
+        internals. This is a public surface: breaking changes need a decision record.
+
+    - path: "tests/**"
+      instructions: >-
+        Tests are the project's evidence, so honesty matters more than green. Flag any
+        test weakened to produce a pass: deleted assertions, added skips, widened
+        tolerances, or stubbing past a real failure. Every feature touching tenant data
+        needs an explicit isolation test proving tenant A cannot read, write, enumerate,
+        or infer tenant B — a missing isolation test is itself a defect. Contract tests
+        must bind the producer and BOTH consumers. Fixtures must use synthetic data only;
+        flag any real customer data, credential, or token, including in expected output.
+
+    - path: "docs/**"
+      instructions: >-
+        Documentation is public. Flag unsupported marketing, security, or compliance
+        claims — this project is pre-alpha with no released version and no security
+        support commitments. Flag any statement that a stack, licence, or decision has
+        been settled when the decision records say otherwise, and any credential,
+        private URL, internal hostname, or reference to the private master build-plan PDF.
+
+    - path: ".github/**"
+      instructions: >-
+        Repository configuration is public. Flag any workflow granting broader
+        permissions than a job needs — the default token should be read-only, with write
+        scopes granted per job. Flag any workflow that would deploy to production, submit
+        to the App Store, or publish a release without an explicit approval gate, and any
+        secret referenced by value rather than by name.

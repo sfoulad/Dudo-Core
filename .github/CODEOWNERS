@@ -1,0 +1,11 @@
+# Dudo-Core code owners
+#
+# Every path in this repository is owned by @sfoulad by default.
+# More specific rules may be added below as the project grows; the last
+# matching pattern wins.
+#
+# Note: CODEOWNERS assigns review requests. It does not by itself require
+# approval — see docs/operations/github-foundation.md for why no human
+# approval requirement is set while this is a single-owner project.
+
+*   @sfoulad

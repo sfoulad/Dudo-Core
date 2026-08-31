@@ -1,0 +1,66 @@
+# === OS / editor ===
+.DS_Store
+Thumbs.db
+
+# === Local environment ===
+.env
+.env.*
+!.env.example
+
+# === Internal AI-agent working files (deliberately NOT published) ===
+# The agent definitions, binding rules, and Claude Code settings stay local.
+# Public engineering standards live in docs/ and CONTRIBUTING.md instead.
+.claude/
+CLAUDE.md
+
+# === Secrets and credential material ===
+# This repository is PUBLIC. Nothing below may ever be committed.
+# A secret that lands in public git history is compromised and must be rotated —
+# deleting the file does not undo it.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.der
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+credentials.json
+secrets.yml
+secrets.yaml
+*.secret
+*.secrets
+
+# === Apple signing material (relevant to Dudo-Apple; kept here as a shared guard) ===
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.certSigningRequest
+*.p8
+ExportOptions.plist
+AuthKey_*.p8
+
+# === Private planning documents ===
+# The master build-plan PDF must never be committed or published.
+# PDFs are excluded by default; to publish a specific one deliberately, add an
+# explicit negation (e.g. "!docs/public-diagram.pdf") below this line.
+*.pdf
+
+# === Build output (populated once a stack is selected) ===
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+coverage/
+*.log
+
+# === Xcode / macOS build artefacts ===
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+.build/

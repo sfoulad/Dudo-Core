@@ -1,0 +1,75 @@
+name: Bug report
+description: Report something that does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Dudo is pre-alpha and has no released build yet. Bug reports are welcome, but
+        expect gaps.
+
+        **Do not report security vulnerabilities here.** Use private reporting instead —
+        see [SECURITY.md](../blob/main/SECURITY.md).
+
+        **Never include** credentials, API keys, tokens, certificates, or real customer
+        data in an issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Core / API
+        - Web application
+        - Contracts
+        - Plugin runtime or SDK
+        - Documentation
+        - Repository tooling
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit or branch
+      description: The commit SHA or branch where you saw this.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Logs or additional context
+      description: Relevant output. Redact anything sensitive before pasting.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: This is not a security vulnerability (those go through private reporting).
+          required: true
+        - label: I have not included secrets, credentials, or real customer data.
+          required: true
