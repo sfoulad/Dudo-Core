@@ -92,7 +92,8 @@ These are open and need user input. Nothing should be built as if they were sett
 - **The software license** for both public repositories. Public visibility is not a
   license grant; without a license file the repositories are "all rights reserved" by
   default, which is unlikely to be the intent.
-- The tenancy model in detail (shared schema, schema-per-tenant, or database-per-tenant).
+- ~~The tenancy model~~ — **decided** (`docs/decisions/0006`, Accepted): one shared
+  production D1 database with mandatory indirection, for the Zero-Cost MVP.
 - The pricing, packaging, and billing model.
 - The plugin distribution model: marketplace, review process, and trust tiers.
 - Target markets, compliance obligations, and data-residency requirements.

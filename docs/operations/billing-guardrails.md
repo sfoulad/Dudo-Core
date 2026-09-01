@@ -35,6 +35,15 @@ Nothing on this list has been done. All items are **OPEN**.
 - [ ] Confirm **R2 Infrequent Access** is not in use.
 - [ ] Confirm **no paid add-on** is active.
 
+## CodeRabbit
+
+- [ ] **Confirm which CodeRabbit plan the account is on** and that it is free for public
+      repositories. It is **already active** on `Dudo-Core` and completed reviews during
+      Phase 0, so this is a live service, not a future one.
+- [ ] Confirm no paid seat, trial-to-paid conversion, or per-review charge applies.
+- [ ] If it is not free on the current plan, **disable it rather than pay** — `0008` permits
+      no charge without your written approval.
+
 ## Standing rules
 
 1. **A free allowance being exceeded must stop or degrade non-essential service.** It must
@@ -46,9 +55,13 @@ Nothing on this list has been done. All items are **OPEN**.
 
 ## What is currently spending money
 
-**Nothing.** No Cloudflare resource has been created. No workflow exists. Both public
-repositories use free features only. `Dudo-Plan` is a private repository within GitHub
+**No Cloudflare resource has been created and no workflow exists.** Both public
+repositories use free features only, and `Dudo-Plan` is a private repository within GitHub
 Free's included limits.
 
-The exposure is entirely **future**: the first Cloudflare resource, and the first workflow.
-Complete this checklist before either happens.
+**One live caveat: CodeRabbit is active and its plan is unverified.** It has already
+completed real reviews on `Dudo-Core`. It is very likely free for public repositories — but
+that is a belief, not evidence, and `0008` does not accept beliefs. Verify it.
+
+Apart from CodeRabbit, the exposure is entirely **future**: the first Cloudflare resource
+and the first workflow. Complete this checklist before either happens.

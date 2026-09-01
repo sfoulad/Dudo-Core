@@ -34,7 +34,7 @@ Every App, Capability, Connector, and Core module has all seven where applicable
 | **Contract** | Producer and consumer against the published contract | Both sides. §3. |
 | **Event** | Published and consumed events | Envelope, versioning, idempotency, out-of-order. §4. |
 | **Authorization** | Permissions and scopes | Matrix, not spot checks. §6. |
-| **Tenant isolation** | Tenant A never reaches tenant B | Mandatory for every tenant-data feature. §5. |
+| **Tenant isolation** | Tenant A never reaches tenant B | Mandatory for every tenant-data feature. Under `0006` (Option A, one shared database) this means five things, not one: canonical test, per-query-path coverage, `TenantStoreResolver` test, storage-boundary bypass test, negative control. §5. |
 | **Integration** | Cross-App behaviour through APIs and events | Real boundaries, not mocks of our own code. |
 | **E2E** | Critical user journeys | Both clients, from Phase 4. |
 
@@ -80,7 +80,37 @@ For every consumer:
 
 **Mandatory for every feature that touches tenant data.** No exceptions, no deferrals.
 
-The canonical test:
+### 5.1 What these tests are carrying, under the decided model
+
+`0006` is **Accepted**: **Option A — one shared production D1 database** — for the
+Zero-Cost MVP while `0008` is active (`MULTITENANCY_STANDARD.md` §7.1). State the
+consequence for testing plainly, because everything in this section follows from it:
+
+> **There is no physical boundary between two Organizations' data.** Every row of every
+> tenant sits in one database, and the only thing keeping tenant A out of tenant B's
+> records is a `tenant_id` predicate on every single query, applied **centrally by the
+> Core-owned storage boundary**. **One missing predicate is a breach of the entire customer
+> base**, not of two tenants.
+
+Two things follow, and both change how this section must be read.
+
+**These tests are now worth more, not less.** Under a database-per-tenant model an
+unexercised path was still structurally isolated, so an isolation test largely confirmed
+something the architecture already guaranteed. Under Option A the test exercises the
+**actual** failure mode of the architecture. A pass is meaningful.
+
+**And the standard for what counts as a pass is higher.** Under Option A an unexercised
+path is not a gap in coverage — it is an **unprotected path**. The value of a green result
+is realised only if coverage is complete, and completeness has to be demonstrated rather
+than assumed.
+
+`MULTITENANCY_STANDARD.md` §7.6 and §8 state the same obligations from the tenancy side.
+They are restated here in this document's own words, deliberately, so that a gate report
+cannot overstate what *"tenant-isolation tests pass"* means. §5.2–§5.7 are all **required**
+for any feature touching tenant data; none is optional and none is deferrable to a later
+phase.
+
+### 5.2 The canonical test
 
 > Create tenant A and tenant B with equivalent data. Acting as a **fully privileged**
 > principal in tenant A — an owner holding every permission — attempt to **read, list,
@@ -89,8 +119,7 @@ The canonical test:
 > search, and MCP.
 >
 > Every attempt returns `not_found` or an empty result. No response body, error message,
-> status code difference, log line, or timing difference reveals that tenant B's data
-> exists.
+> status code difference, or log line reveals that tenant B's data exists.
 
 Also asserted:
 
@@ -102,6 +131,146 @@ Also asserted:
 
 The privileged principal matters: an under-permissioned principal fails for the wrong
 reason and proves nothing about isolation.
+
+**Aggregates, counts, and facets are in scope of "infer".** A `COUNT`, `SUM`, `AVG`, `MAX`,
+report total, chart series, pagination total, search facet, autocomplete suggestion, rate
+limit, quota reading, or "N results" badge that includes tenant B's rows is a cross-tenant
+leak, even when no record of tenant B is returned. `MULTITENANCY_STANDARD.md` §7.7 notes
+that under Option A a cross-tenant aggregate is *"trivial — one `GROUP BY`"*, which is
+precisely why it is the cheapest leak to write by accident. **Every aggregate a feature
+exposes is asserted to change when tenant B's data changes only if the aggregate is tenant
+B's own.** An aggregate that is not asserted is not covered.
+
+### 5.3 Coverage is per query path, not per endpoint
+
+**A tenant-isolation suite is measured in query paths, not endpoints, actions, or
+features.** A query path is any distinct route by which the feature's code causes a read or
+write to reach tenant data — including list and detail reads, writes, deletes, exports,
+search and index reads, event-consumer reads, workflow-step reads, scheduled-job reads,
+cache population and cache reads, and every aggregate in §5.2. One endpoint routinely
+contains several; one query path may be reachable from several endpoints.
+
+- **Sampling is false assurance, and false assurance is worse than none.** A green result on
+  a sampled endpoint proves nothing about the path that was not sampled, and under Option A
+  the unsampled path is not weakly protected — it is unprotected.
+- **The set of query paths is enumerated, not estimated.** The isolation suite for a feature
+  records the enumeration it tested against and how the enumeration was derived — from the
+  storage-boundary call sites, not from the endpoint list.
+- **Completeness is evidenced in the report, not asserted.** A gate report states the number
+  of query paths enumerated, the number exercised, and **every path not exercised, by
+  name, with the reason.** "Isolation tests pass" with no denominator is not a result.
+- A new query path added later is a new isolation obligation. It does not inherit the
+  coverage of the endpoint it was added to.
+
+### 5.4 The `TenantStoreResolver` test — mandatory
+
+The Core-owned `TenantStoreResolver` (`MULTITENANCY_STANDARD.md` §7.2, binding by user
+decision in `0006` §0.2) is itself an isolation boundary, and it is the one every query path
+depends on. It carries its own dedicated suite, independent of any feature:
+
+- **Unknown Organization fails closed.** An unknown, unmapped, deleted, suspended, or
+  malformed Organization identifier resolves to **no** store. It must not fall back to a
+  default binding, the first binding, the last-used binding, an ambient binding, or an empty
+  but writable one. Asserted for each of those cases separately, because "fails closed" is a
+  claim about the default branch and the default branch is where it will be got wrong.
+- **No caller can select a binding.** No App, plugin, Connector, client, request field,
+  header, token claim, query parameter, event payload, workflow input, or test helper can
+  choose, name, override, or influence which store is resolved. Tenant identity comes from
+  the authenticated server-side context only (`MULTITENANCY_STANDARD.md` §3). Asserted as a
+  negative: an attempt to supply one is rejected, and does not silently win, and does not
+  silently lose while a caller-supplied value is used elsewhere.
+- **Only Core-configured bindings are returned.** The resolver returns bindings from Core
+  configuration and nothing else — never a binding constructed from input, never one read
+  from tenant-controlled data.
+- **No cross-tenant handle leak.** A principal in tenant A cannot resolve, be handed, or
+  **cache** another Organization's binding. Resolution is asserted to be per-request and not
+  memoized across tenants, principals, or requests in a way that outlives its scope.
+- **The resolver is exercised, not stubbed, by feature isolation suites.** An isolation suite
+  that replaces the resolver with a test double proves the feature, not the model. Where a
+  double is unavoidable it is recorded as an explicit gap in the gate report.
+
+### 5.5 The storage-boundary bypass test — mandatory, and structural
+
+**The control the model actually relies on is the central application of the `tenant_id`
+predicate. That control is required by `MULTITENANCY_STANDARD.md` §7.6 and must be tested
+directly** — not inferred from feature tests passing. This test is structural: it asserts a
+property of **all** query paths rather than of the paths someone remembered to exercise,
+which is the only form of coverage that scales under Option A.
+
+Required assertions:
+
+- **No query path reaches D1 outside the Core-owned storage port.** No module outside the
+  port constructs, holds, imports, receives, or issues a D1 query, statement, batch, or
+  handle. No domain module, App, Capability, Connector, or SDK surface can obtain a raw
+  binding from `env` or from any other ambient source.
+- **The port cannot emit a tenant-scoped read or write without a tenant predicate.** A
+  tenant-scoped query constructed without a tenant predicate fails at the boundary — loudly,
+  at construction or execution — rather than running unscoped.
+- **Every deliberate exception is enumerated and justified.** Genuinely tenant-independent
+  storage (platform configuration, migration bookkeeping) is listed by name in the test
+  itself, so the list is reviewable and additions to it are visible in a diff. An unlisted
+  unscoped query is a **critical defect**, exactly as in production code.
+
+This is the analogue, for the domain → D1 boundary, of `SDK_STANDARD.md` VAL-SDK-8 for the
+App → API boundary. Both exist because a boundary that is only documented is not a boundary.
+
+### 5.6 Negative control — a suite that cannot fail is not evidence
+
+**A passing isolation test tells you nothing unless you know it would fail if isolation
+were broken.** This matters more under Option A than it would under any other model: a suite
+that happens to query through a layer which silently scopes everything will pass whether or
+not the feature under test is correct. Without a sensitivity check, a green isolation
+result is ceremony.
+
+For every isolation suite, the following is **required before the suite may be cited as
+evidence in a gate report**:
+
+- **A recorded negative-control run.** The predicate is deliberately removed, the resolver
+  deliberately made to return tenant B's store, or the query path deliberately routed around
+  the storage boundary — and the suite is shown to **go red**, naming which assertions
+  failed.
+- **A suite that stays green under a deliberately broken predicate is a defective suite**,
+  reported as a defect against the suite, and its previous green results are withdrawn —
+  they were never evidence.
+- The negative control covers **each** of the three controls separately — predicate,
+  resolver, boundary — because a suite can be sensitive to one and blind to the others.
+- The break is **never** committed. It is a recorded run, with its output, in the gate
+  report. A permanently broken-by-configuration path does not exist in the repository.
+- Where the toolchain supports mutation testing, mutating the tenant predicate is the
+  preferred mechanical form of this requirement; where it does not, a manually recorded run
+  satisfies it. The requirement is the evidence, not the tool. **TS1 is unresolved, so the
+  mechanism is chosen when the framework is chosen; the obligation does not wait for it.**
+
+### 5.7 What a gate report may and may not claim
+
+The `- [ ] Tenant-isolation tests pass` item in §8 is **not tickable** from a passing
+canonical test alone. It is tickable only when all of the following are reported, with
+actual results:
+
+| Required for the tick | Reported as |
+|---|---|
+| §5.2 canonical test, including aggregates | passed · failed · skipped · not run |
+| §5.3 per-query-path coverage | paths enumerated, paths exercised, **paths not exercised by name** |
+| §5.4 `TenantStoreResolver` suite | passed · failed · skipped · not run |
+| §5.5 storage-boundary bypass test | passed · failed · skipped · not run, plus the enumerated exception list |
+| §5.6 negative control | the recorded red run for each of the three controls |
+
+Anything missing is reported as **missing**, not rounded up. "Tenant-isolation tests pass"
+asserted without a denominator, without the resolver and bypass suites, and without a
+sensitivity result is the overstatement this section exists to prevent.
+
+**On timing.** §5.2 deliberately omits the previous requirement that no *timing difference*
+reveal tenant B's data. Under a single shared, single-threaded D1 where
+`MULTITENANCY_STANDARD.md` §7.7 accepts that *"one Organization's heavy query is every
+Organization's latency"*, timing is structurally noisy and no verification method is
+specified anywhere. **It is retained as a design goal and recorded as an open question
+(TS5) — it is no longer a checklist item**, because a requirement nobody knows how to
+verify gets ticked rather than met, and a ticked box that means nothing devalues the boxes
+that mean something. Deterministic disclosure channels — response body, status code, error
+code, headers, log lines, result counts, and the aggregates in §5.2 — remain hard
+requirements. `MULTITENANCY_STANDARD.md` §8's restatement of the canonical test still
+carries the word *timing*; that file is outside this document's ownership and the
+divergence is flagged to the Team Lead rather than resolved here.
 
 ---
 
@@ -150,7 +319,11 @@ honestly:
 - [ ] Unit tests pass.
 - [ ] Contract tests pass — producer and every consumer.
 - [ ] Integration tests pass.
-- [ ] **Tenant-isolation tests pass.**
+- [ ] **Tenant-isolation tests pass** — all five parts of §5, reported per §5.7: canonical
+      test including aggregates; per-query-path coverage with paths enumerated, exercised,
+      and **not** exercised named; `TenantStoreResolver` suite; storage-boundary bypass
+      test; and the recorded negative-control red run. **Not tickable from a passing
+      canonical test alone, and not tickable from a sampled endpoint.**
 - [ ] **Permission tests pass.**
 - [ ] Security review passes (`SECURITY_STANDARD.md` §12), by an agent that did not write
       the code.
@@ -202,6 +375,7 @@ contract test · security checks · build · integration test · deploy staging 
 | # | Question | Recommendation |
 |---|---|---|
 | TS1 | **No test framework is approved.** The plan mentions Vitest against the Workers runtime (§31); `0003` approves no npm package. | Needs an ADR **before any test is written**. Recommend the framework that can execute against the real Workers runtime rather than a Node emulation — testing Workers code in Node proves the wrong thing. `qa-agent` should evaluate and the Team Lead record it. **This blocks Phase 1 verification.** |
-| TS2 | **Test data for the tenancy model** depends on a model that is not decided (`MULTITENANCY_STANDARD.md` MT2). | The isolation test in §5 is written to be model-independent; the harness that provisions two tenants is not, and waits on MT2. |
+| TS2 | ~~**Test data for the tenancy model** depends on a model that is not decided~~ — **UNBLOCKED by the model. MT2 is CLOSED; `0006` is Accepted** (Option A, one shared D1 database, MVP-scoped while `0008` is active). | The two-tenant harness is now specifiable: **one database, two `tenant_id` values**, no per-tenant provisioning step, no database creation, and **no remote slot consumed** — local and CI runs use `wrangler dev`'s local mode and never set `"remote": true` (`CLOUDFLARE_STANDARD.md` §4.1). The harness must also provision the `TenantStoreResolver` mapping for both tenants plus one **unmapped** Organization, because §5.4's fail-closed case cannot be tested without one. **What TS2 now depends on instead: TS1 only** — the harness cannot be written until a test framework is approved. It is no longer blocked on the architecture, only on the toolchain. |
 | TS3 | **Cross-repository contract testing.** `Dudo-Apple` is a separate repository, so verifying it against `Dudo-Core`'s contracts needs a distribution mechanism. | Depends on AS1 (contract form and transport). Flagged before the first shared contract. |
-| TS4 | **Coverage targets.** Not specified anywhere. | Do not set a percentage. Require instead that every checklist item in every applicable standard has a test. A percentage is satisfiable without testing anything that matters. |
+| TS4 | **Coverage targets.** Not specified anywhere. | Do not set a percentage. Require instead that every checklist item in every applicable standard has a test. A percentage is satisfiable without testing anything that matters. **Note:** §5.3 sets a coverage *denominator* for isolation specifically — query paths enumerated versus exercised — which is a completeness measure, not a percentage target, and is required regardless of how TS4 is resolved. |
+| TS5 | **Timing as a disclosure channel is unverifiable as previously written.** §5.2 no longer requires that no timing difference reveal tenant B's data. Under Option A, D1 is single-threaded per database and `MULTITENANCY_STANDARD.md` §7.7 accepts cross-tenant latency coupling as structural, so timing is noisy and informative at once, and no standard states a method. | Recommend it stay a **design goal**, not a checklist item, until someone specifies a method that can actually be run. Two things would change that: an accepted decision on Option C or another model with a physical boundary, or a stated measurement method with a defined threshold and sample size. **Do not reinstate it as a tickable requirement without a method** — that is how a box gets ticked without being met. Deterministic channels remain hard requirements in §5.2. `MULTITENANCY_STANDARD.md` §8 still quotes the timing clause; the Team Lead owns reconciling the two files. |

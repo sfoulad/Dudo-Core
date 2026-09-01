@@ -73,6 +73,9 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 | `0003-technology-stack-typescript-on-cloudflare.md` | Accepted | TypeScript on Cloudflare for `Dudo-Core`: Workers, D1, R2, Queues, Workflows, Durable Objects. Bindings not REST. No blanket product adoption; every service stays replaceable behind an internal boundary. |
 | `0004-repository-structure.md` | Accepted | The master-plan layout — `platform/`, `apps/` (reserved for installable business Apps), `connectors/`, `packages/`, `agents/`, `docs/`. Contract authorship moves from `core-agent` to `architecture-agent`. |
 | `0005-foundation-gate-for-phases-0-3.md` | Accepted | Suspends the three delivery-only steps for Phases 0–3 and replaces them with a seven-condition Foundation Gate. Security, tenant isolation, contract compatibility, ownership, PR review, truthful reporting, secrets, and production controls are **not** suspended. |
+| `0006-tenancy-model.md` | **Accepted** | **Option A — one shared production D1 database — with mandatory `TenantStoreResolver` indirection.** Scoped to the Zero-Cost MVP while `0008` is active. B excluded; C is the approved migration candidate. Free-tier budget: 4 of 10 databases allocated, 5–10 reserved. |
+| `0007-logical-permission-model.md` | Proposed | The logical permission model `0001` requires before SDK work. States the wildcard/scope intersection rule whose absence caused CRIT-1. **Not accepted.** |
+| `0008-zero-cost-mvp-infrastructure.md` | **Accepted** | Cloudflare and GitHub cost must remain **USD 0 / BD 0 per month**. Free allowances only; Workers Paid and Workers for Platforms prohibited. No agent may approve paid usage. |
 
 ### Technology stack status
 
@@ -83,19 +86,26 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 | Web / testing framework, npm dependencies | **Not selected** — `0003` approves a language and six services, nothing more |
 | Other Cloudflare products | **Not approved.** Workers AI, AI Gateway, Agents SDK, Workers for Platforms, Analytics Engine, KV, Hyperdrive each need their own record |
 | App isolation mechanism | **Not selected** — `0001` bound it to the stack decision, but `0003` did not approve Workers for Platforms |
-| Tenancy model | **Not selected** — D1 is single-threaded per database, which argues against a shared database. Resolve before Phase 1 |
+| Tenancy model | **Decided** (`0006`, Accepted): **Option A**, one shared production D1 database with mandatory indirection, for the Zero-Cost MVP. B excluded; C is the migration candidate |
+| **Cost ceiling** | **USD 0 / BD 0 per month** (`0008`, Accepted). Free allowances only. Applicable D1 limits are **10 databases, 500 MB each, 5 GB total** — not the paid figures |
 
 An approved stack for one repository is not approval for the other, and approving Swift
 and SwiftUI is not approving any package or third-party dependency.
 
 ### Scheduled but not yet written
 
-1. The logical App permission model.
+1. ~~The logical App permission model~~ — **drafted** as `0007`, **Status: Proposed**.
+   Needs user acceptance before any SDK work.
 2. The App permission and trust ADR — required before any SDK or runtime work.
-3. The App isolation mechanism — `0003` settled the stack but did not approve Workers for
-   Platforms, so this still needs its own record.
-4. The tenancy model — shared schema, schema-per-tenant, or database-per-tenant.
-5. Contract transport and versioning mechanics.
+3. The App isolation mechanism — `0003` settled the stack, and `0008` now prohibits Workers
+   for Platforms as paid-only, so this needs a record that reaches a **free** mechanism.
+4. Contract transport and versioning mechanics.
+5. Break-glass platform-operator access (AZ3) — `platform-admin` was correctly narrowed by
+   the CRIT-2 fix and is not operable for support until this exists.
+6. How a principal comes to hold an `own`-scope permission (AZ5).
+7. Wildcard expansion semantics (`0007` D6) — the general rule behind CRIT-1.
+
+*Tenancy was item 4 here. It is now decided — see `0006`.*
 
 ### Open user decisions
 

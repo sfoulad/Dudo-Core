@@ -81,11 +81,12 @@ are what still needs a decision — none of them is answered by an agent's assum
 ## The gaps, in one place
 
 Recorded rather than worked around. Each blocks real work and each needs a decision record
-the Team Lead owns.
+the Team Lead owns. Rows marked **CLOSED** are retained so the movement is visible; they
+cite an **Accepted** record and block nothing.
 
 | Blocks | What is missing | Where |
 |---|---|---|
-| **Every schema** | The tenancy model — the physical placement of tenant data. D1 is single-threaded per database, which argues against the master plan's "start shared". **Drafted as `docs/decisions/0006-tenancy-model.md`, Status Proposed. Undecided.** | `MULTITENANCY_STANDARD.md` §7 |
+| ~~**Every schema**~~ **CLOSED — no longer a gap** | The tenancy model — the physical placement of tenant data. **DECIDED: `docs/decisions/0006-tenancy-model.md`, Status Accepted.** Option A — one shared production D1 database — with a mandatory Core-owned `TenantStoreResolver`; decided for the Zero-Cost MVP only, while `0008` is active. Option C (hybrid routing) is the migration candidate, requires user approval, and is not the current model. Isolation is enforced entirely in code: one missing `tenant_id` predicate is a breach. | `MULTITENANCY_STANDARD.md` §7.1 |
 | **Every schema** | Confirmation that tenant = Organization. The plan carries `tenant_id` and `business_id` and defines neither. | `MULTITENANCY_STANDARD.md` §2 |
 | **Every contract** | The contract's executable form and transport. | `API_STANDARD.md` AS1 |
 | **Every test** | No test framework is approved. | `TESTING_STANDARD.md` TS1 |

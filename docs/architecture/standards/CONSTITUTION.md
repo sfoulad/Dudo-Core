@@ -259,12 +259,14 @@ And the engineering rule every agent follows:
 ## 7. Open questions this document does not settle
 
 Each needs a decision record before work builds on it. Recommendations are
-`architecture-agent`'s and are not decisions.
+`architecture-agent`'s and are not decisions. A row marked **DECIDED** cites an **Accepted**
+record and is no longer open — its right-hand column states the decision, not a
+recommendation.
 
 | # | Question | Recommendation |
 |---|---|---|
 | C1 | **What is a "tenant"?** The master plan's event envelope carries both `tenant_id` and `business_id` (§11) but never defines which one is the isolation boundary. | Tenant = **Organization**. `business_id` is a sub-scope inside it, never an isolation boundary of its own. See `MULTITENANCY_STANDARD.md` §2. |
-| C2 | **The tenancy implementation model.** Not decided here and not decided by any standard. | See `MULTITENANCY_STANDARD.md` §7 — options presented, hybrid routing recommended, decision belongs to the Team Lead and the user. |
+| C2 | ~~**The tenancy implementation model.**~~ **DECIDED — `0006`, Status Accepted, by the user.** Retained here because other documents cite C2. | **Option A — one shared production D1 database — with mandatory indirection** through a Core-owned `TenantStoreResolver`: no App, plugin, Connector, or client selects a database or binding; an unknown Organization mapping fails closed; only Core-configured bindings are returned. **MVP-scoped:** decided for the Zero-Cost MVP only, while `0008` remains active. **Option B is excluded** for that period. **Option C (hybrid routing) is the approved migration candidate, not the current model, and moving to it requires user approval and a new decision record.** The earlier "hybrid routing recommended" recommendation is **superseded** — see `MULTITENANCY_STANDARD.md` §7.1 for the decided model and §7.9 for the superseded comparison. Nothing in this repository may treat the model as open. |
 | C3 | **Search, Notifications, and Files are listed as Core services (§6) *and* as Capabilities (§2).** The plan contradicts itself. | Core owns the primitive service; the Capability is the vendor-neutral interface Apps call; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
 | C4 | **Public API path namespacing.** `/api/v1/customers` (§10) assumes a flat global resource namespace, which cannot survive arbitrary third-party Apps. | Reserved flat paths for Core and registered official Apps; `/api/v1/apps/<app_id>/...` for everything else. `API_STANDARD.md` §5. |
 | C5 | **Phase 1's admin portal is runnable**, so `0005`'s trigger ("the first runnable vertical feature") fires before Phase 4. | Team Lead to state explicitly which gate the admin portal falls under, before Phase 1 planning. |

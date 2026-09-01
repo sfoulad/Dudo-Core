@@ -46,6 +46,7 @@ official source, not the date usage was measured.
 | **GitHub Actions — public repos** | `docs.github.com` Actions billing | **Free, unmetered** on standard runners | Dudo-Core, Dudo-Apple CI | 0 | n/a | Never use a larger runner | Team Lead | 2026-09-01 |
 | **GitHub Actions — private (Dudo-Plan)** | same | **2,000 min/mo · 500 MB artifacts · 10 GB cache** | Minimal; docs only | 0 | 1,400 min / 350 MB | Disable workflows in that repo | Team Lead | 2026-09-01 |
 | GitHub Packages | GitHub billing | Free allowance | **None planned** | 0 | n/a | Do not publish packages | Team Lead | **unverified** |
+| **CodeRabbit** | app.coderabbit.ai plan page | **Unverified — believed free for public repositories** | Automated PR review on `Dudo-Core`. **Active now**: real reviews completed on `c09693f` and `477753f` | active, volume unmeasured | n/a | If it is ever not free on the current plan, **disable it** rather than pay | Team Lead | **UNVERIFIED — see note** |
 | GitHub Codespaces | GitHub billing | Free allowance | **None planned** | 0 | n/a | Do not use | Team Lead | **unverified** |
 
 **Local development and CI consume no remote D1 slots, and must not.** Verified against
@@ -58,6 +59,13 @@ configuration must never set it (`CLOUDFLARE_STANDARD.md` §4.1).
 decided tenancy model one shared database holds every Organization, so restoring one
 customer to a point in time is effectively unavailable — an accepted MVP limitation
 (`0006` §0.7), not an operational gap to be discovered during an incident.
+
+**CodeRabbit is in scope and is not yet evidenced.** `0008` covers "Cloudflare, GitHub, and
+GitHub-integrated development automation." CodeRabbit is exactly that, is configured at the
+repository root, and is **already active** — it completed real reviews during Phase 0. Its
+plan and cost have **not** been verified, so cost conditions C1–C3 and C5 cannot currently
+be evidenced for it. It is very likely free for public repositories; that is a belief, not
+evidence. **Verify the plan before the gate is called complete.**
 
 **Rows marked `unverified` have not been checked against their official source.** They
 carry no number because `CLOUDFLARE_STANDARD.md` §10 forbids quoting an unverified limit.

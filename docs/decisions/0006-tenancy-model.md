@@ -127,10 +127,28 @@ disagree, §0 governs.**
 - The indirection makes A → C a migration rather than a rewrite. **That is the whole point
   of paying for it now.**
 
-> **This record selects nothing.** It sets out three options, compares them across the
-> dimensions that will actually decide the answer, and ends with a recommendation that is
-> labelled as a recommendation. Nothing in the repository may treat any option here as
-> adopted while this record reads `Proposed`.
+> **⚠ SUPERSEDED — written while this record was Proposed.** It read: *"This record selects
+> nothing … Nothing in the repository may treat any option here as adopted while this record
+> reads `Proposed`."* That is no longer true. The user decided on 2026-09-01 and **§0
+> governs**: Option A with mandatory indirection, for the Zero-Cost MVP while `0008` is
+> active. Preserved so the record shows its own history.
+
+---
+
+## 0.8 How to read the rest of this record
+
+**§0 is the decision. §1–§9 are the analysis that produced it, preserved unaltered.**
+
+Two things to carry while reading them:
+
+1. **Their D1 figures are the Workers Paid allowance** — 10 GB per database, 50,000
+   databases. The applicable Free ceiling is **500 MB and 10 databases** (`0008`). Where a
+   paid figure appears below without a marker, this paragraph is its marker.
+2. **§6's recommendation of Option C is superseded**, and **§8 asserts that the standards
+   state the tenancy model as undecided "and should stay that way"** — also superseded, and
+   now the opposite of the requirement: the standards were updated to state the decision.
+
+Where §1–§9 and §0 disagree, **§0 governs.**
 
 ---
 

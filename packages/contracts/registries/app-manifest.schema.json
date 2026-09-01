@@ -357,6 +357,7 @@
       "description": "A hostname, optionally with a single leading wildcard label."
     },
     "scope": {
+      "$comment": "ORPHANED AND RESERVED — referenced by nothing in this schema, and it must stay that way. Retained as the full AUTHORIZATION_STANDARD.md §4 scope vocabulary for documentation and for future non-App-facing schemas. This is the only remaining place 'platform' appears in this file, so re-pointing any App-facing field at $defs/scope — permissions[].scope, actions[].scope, or any successor — silently reopens CRIT-3 and lets an App manifest request platform scope. App-facing fields reference $defs/appRequestableScope. Do not add a $ref to this definition.",
       "type": "string",
       "enum": [
         "platform",
@@ -385,6 +386,7 @@
       "enum": ["read", "write", "sensitive", "critical"]
     },
     "dataClassification": {
+      "$comment": "ORPHANED AND RESERVED — referenced by nothing in this schema, and it must stay that way. Retained as the full SECURITY_STANDARD.md §3 classification vocabulary for documentation and for future non-App-facing schemas. This is the only remaining place 'secret' appears in this file, so re-pointing any App-facing field at $defs/dataClassification — entity.fields[].classification or any successor — silently reopens CRIT-5 and lets a manifest declare App-owned storage holding secret material. App-facing fields reference $defs/entityFieldClassification. Do not add a $ref to this definition.",
       "type": "string",
       "enum": [
         "public",
