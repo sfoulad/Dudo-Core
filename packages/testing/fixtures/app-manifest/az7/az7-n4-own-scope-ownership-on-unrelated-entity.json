@@ -1,0 +1,82 @@
+{
+  "caseId": "az7-n4",
+  "kind": "manifest",
+  "title": "THE CWE-863 CASE — an unrelated Entity carries ownershipField while the targeted Entity does not",
+  "coversRequirement": "AZ7 negative #4",
+  "target": "AZ7 / VAL-OWN per-entity form",
+  "relatedFindings": ["CWE-863 (Major, CodeRabbit)", "CRIT-4", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "This is the exact defect CWE-863 named. 'AuditNote' declares ownershipField 'author_id'. 'Widget' declares no ownership relation at all. The Action DeleteWidget declares scope 'own' and targets 'Widget'. The manifest-level VAL-OWN rule is fully satisfied — an entity somewhere does declare ownership — so the manifest passes, installs, and the Action is then evaluated at 'own' scope against an entity that has no owner. Every Widget in the tenant is reachable by every principal holding the permission, while the manifest, the Studio UI, the SDK, and the consent screen all display the narrowest scope in the system. An ownershipField on an unrelated Entity does NOT satisfy 'own' on this Action, and the manifest must be rejected.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE — AND THIS IS THE WHOLE POINT OF THE SPLIT. Deciding this requires resolving action.targetEntity ('Widget') to the matching item of the sibling 'entities' array and then asking whether THAT item declares ownershipField. Draft 2020-12 cannot compare a value at one instance location against a value at another instance location, so no amount of schema authoring expresses it. The schema will and should ACCEPT this document. DO NOT REPORT THAT ACCEPT AS A SCHEMA FAILURE. What AZ7 changes at the schema level is that targetEntity now exists and is required for 'own', which is what makes the join possible for the registry-aware validator; before AZ7 the relation was absent from the manifest format and no validator could have decided it either. Contrast with az7-p2, which is structurally identical except that the targeted entity IS the owned one and therefore must be ACCEPTED — a validator that rejects both is over-rejecting, not enforcing.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "The TARGETED entity. Declares NO ownership relation, fixture use only.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      },
+      {
+        "name": "AuditNote",
+        "description": "An UNRELATED entity that does declare ownership. It is not the target of any own-scope Action here; its only role in this fixture is to satisfy the manifest-level VAL-OWN rule and thereby expose the gap.",
+        "tenantScoped": true,
+        "ownershipField": "author_id",
+        "fields": [
+          { "name": "author_id", "type": "reference", "classification": "internal", "required": true },
+          { "name": "body", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

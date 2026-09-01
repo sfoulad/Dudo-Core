@@ -1,0 +1,586 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:app-manifest:1",
+  "title": "Dudo App Manifest",
+  "description": "The machine-readable declaration of a Dudo App. The platform reads this to decide whether the App may install, what it may reach, and what it exposes. A declaration here is a promise the platform enforces: anything undeclared is denied at the boundary. Governed by docs/architecture/standards/APP_STANDARD.md. The security-relevant collections (permissions, capabilitiesRequired, eventsPublished, eventsConsumed, externalNetworkAccess) are REQUIRED even when empty, so that 'this App needs nothing here' is an explicit statement rather than an omission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "id",
+    "name",
+    "version",
+    "publisher",
+    "description",
+    "platform",
+    "permissions",
+    "capabilitiesRequired",
+    "entities",
+    "actions",
+    "eventsPublished",
+    "eventsConsumed",
+    "externalNetworkAccess",
+    "lifecycle"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "description": "Version of this manifest format. Currently 1.",
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/appId",
+      "description": "Globally unique App identifier, allocated at marketplace registration. Namespaces this App's permissions, events, and API paths, so it is permanent."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Human-readable display name."
+    },
+    "version": {
+      "$ref": "#/$defs/semver",
+      "description": "Semantic version. A breaking change to a published API shape, event payload, permission requirement, or entity meaning requires a major bump (APP_STANDARD.md §10)."
+    },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "url": { "type": "string", "format": "uri" },
+        "supportEmail": { "type": "string", "format": "email" }
+      }
+    },
+    "description": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 2000,
+      "description": "What the App does, for a customer deciding whether to install it."
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumVersion"],
+      "properties": {
+        "minimumVersion": {
+          "$ref": "#/$defs/semver",
+          "description": "Minimum Dudo platform version required."
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "Other Apps that must be installed. A dependency is an API and event relationship only — never shared storage (CONSTITUTION.md Rule 3).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["appId", "versionRange", "reason"],
+        "properties": {
+          "appId": { "$ref": "#/$defs/appId" },
+          "versionRange": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 10 },
+          "optional": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Every permission this App needs, by name. Undeclared is denied. Wildcards are prohibited in App manifests (AUTHORIZATION_STANDARD.md §3.2).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "scope", "reason"],
+        "properties": {
+          "id": { "$ref": "#/$defs/permissionId" },
+          "scope": { "$ref": "#/$defs/appRequestableScope" },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Shown to the tenant principal granting it. Consent that cannot be understood is not consent."
+          },
+          "optional": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, the App degrades deliberately when the permission is not granted."
+          }
+        }
+      }
+    },
+    "capabilitiesRequired": {
+      "type": "array",
+      "description": "Capabilities this App requests. Vendor names are prohibited here and everywhere else in an App (CONSTITUTION.md Rule 6).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability", "reason"],
+        "properties": {
+          "capability": { "$ref": "#/$defs/capabilityRef" },
+          "reason": { "type": "string", "minLength": 10 },
+          "optional": { "type": "boolean", "default": false },
+          "optionalActions": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Optional capability actions this App uses when a provider supports them (CAPABILITY_STANDARD.md §6)."
+          }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "description": "The data this App owns. Physical storage layout is not the App's business (APP_STANDARD.md §6).",
+      "items": { "$ref": "#/$defs/entity" }
+    },
+    "actions": {
+      "type": "array",
+      "description": "Every operation the App performs. One definition per Action; the internal API, public API, OpenAPI schema, SDK method, MCP tool, and documentation are all derived from it (ARCHITECTURE.md §4).",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "apis": {
+      "type": "array",
+      "description": "How Actions are surfaced as HTTP routes. References an Action; never redefines one.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "surface"],
+        "properties": {
+          "action": { "$ref": "#/$defs/actionId" },
+          "surface": { "type": "string", "enum": ["internal", "public"] },
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"]
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/[a-z0-9\\-/{}]*$",
+            "description": "Path relative to the App's allocated namespace. See API_STANDARD.md §5."
+          }
+        }
+      }
+    },
+    "eventsPublished": {
+      "type": "array",
+      "description": "Events this App publishes. Every entry must exist in event-catalog.yaml before the publishing code does (EVENT_STANDARD.md §6).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "version"],
+        "properties": {
+          "type": { "$ref": "#/$defs/eventType" },
+          "version": { "type": "integer", "minimum": 1 },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "eventsConsumed": {
+      "type": "array",
+      "description": "Events this App subscribes to. Consumers must be idempotent and tolerate out-of-order delivery (EVENT_STANDARD.md §9).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "version", "reason"],
+        "properties": {
+          "type": { "$ref": "#/$defs/eventType" },
+          "version": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    },
+    "uiExtensions": {
+      "type": "array",
+      "description": "Components registered into Core-declared extension locations. Apps never modify Core UI (APP_STANDARD.md §8).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location", "component"],
+        "properties": {
+          "location": { "$ref": "#/$defs/uiLocation" },
+          "component": { "type": "string", "minLength": 1 },
+          "permission": {
+            "$ref": "#/$defs/permissionId",
+            "description": "Presentation only. Hiding is never authorization — Core still denies the underlying Action."
+          }
+        }
+      }
+    },
+    "mcpTools": {
+      "type": "array",
+      "description": "Actions exposed to AI. Each references an Action whose exposure includes 'mcp'. No MCP-only code path exists (MCP_STANDARD.md §1).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": { "$ref": "#/$defs/actionId" },
+          "confirmation": {
+            "type": "string",
+            "enum": ["none", "user", "approval", "mfa"],
+            "description": "Elevation required when invoked by an AI principal. Collected by the platform from the human, never asserted by a model (MCP_STANDARD.md §5)."
+          }
+        }
+      }
+    },
+    "externalNetworkAccess": {
+      "type": "array",
+      "description": "The egress allowlist. Undeclared hosts are denied. Prefer routing external calls through a Connector (CONNECTOR_STANDARD.md §6).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "purpose"],
+        "properties": {
+          "host": { "$ref": "#/$defs/host" },
+          "purpose": { "type": "string", "minLength": 10 }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declared storage requirements. Used for placement and quota decisions; never for the App to address storage directly.",
+      "properties": {
+        "relational": { "type": "boolean", "default": true },
+        "objects": { "type": "boolean", "default": false },
+        "expectedRecordsPerTenant": { "type": "integer", "minimum": 0 },
+        "expectedObjectBytesPerTenant": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "quotas": {
+      "type": "object",
+      "description": "Limits the App declares against, by name.",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["onUninstall", "rollbackSupported"],
+      "description": "Data must never disappear unexpectedly (APP_STANDARD.md §9).",
+      "properties": {
+        "onUninstall": {
+          "type": "string",
+          "enum": ["retain", "export", "archive", "delete"],
+          "description": "What happens to tenant data on uninstall. The tenant is told before it proceeds, and this is what actually happens."
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Required when onUninstall is 'retain' or 'archive'."
+        },
+        "rollbackSupported": {
+          "type": "boolean",
+          "description": "Whether an upgrade can be rolled back. An App with false may not be published to the marketplace."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "onUninstall": { "enum": ["retain", "archive"] }
+            },
+            "required": ["onUninstall"]
+          },
+          "then": { "required": ["retentionDays"] }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "description": "VAL-OWN, manifest-level form, enforced structurally (AUTHORIZATION_STANDARD.md §4). If any Action declares scope 'own', this manifest must declare at least one entity carrying an ownershipField. 'own' with no ownership relation anywhere grants everything while presenting as the narrowest scope in the system, so such a manifest FAILS VALIDATION and the App does not install — it is never accepted and then evaluated as unrestricted. A manifest declaring 'own' with zero entities is rejected by the same rule, because 'contains' is not satisfiable on an empty array. This construct is retained as the cheap outer check and is NOT sufficient on its own: satisfying it with an ownershipField on an unrelated entity is exactly the gap AZ7 closes. The per-entity form is enforced in two halves — $defs/action requires 'targetEntity' whenever scope is 'own' (see the allOf inside $defs/action), and the registry-aware validator resolves that targetEntity against entities[].name and verifies the matched entity declares ownershipField. This schema does the first half. It cannot do the second: comparing a value in one array against values in a sibling array is not expressible in JSON Schema draft 2020-12. Do not read this construct, or the targetEntity requirement, as the full rule. See AUTHORIZATION_STANDARD.md §4 and AZ7.",
+      "if": {
+        "required": ["actions"],
+        "properties": {
+          "actions": {
+            "contains": {
+              "required": ["scope"],
+              "properties": { "scope": { "const": "own" } }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["entities"],
+        "properties": {
+          "entities": {
+            "contains": { "required": ["ownershipField"] }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
+    },
+    "appId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$",
+      "description": "Kebab-case, 3-64 characters, globally unique, permanent."
+    },
+    "namespace": {
+      "type": "string",
+      "pattern": "^(core|platform|[a-z][a-z0-9-]{1,62}[a-z0-9])$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "permissionId": {
+      "type": "string",
+      "pattern": "^(core|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$",
+      "description": "<namespace>.<resource>.<action>, e.g. crm.contact.create. No wildcards in an App manifest."
+    },
+    "actionId": {
+      "type": "string",
+      "pattern": "^(core|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[A-Z][A-Za-z0-9]*$",
+      "description": "<namespace>.<ActionName>, e.g. appointments.CreateAppointment."
+    },
+    "entityName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "description": "The name of an Entity declared in this manifest's 'entities' array. One definition, referenced by both entity.name and action.targetEntity, so the declaring form and the referencing form cannot drift apart."
+    },
+    "eventType": {
+      "type": "string",
+      "pattern": "^(core|platform|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[A-Z][A-Za-z0-9]*$",
+      "description": "<namespace>.<Entity><PastTenseVerb>, e.g. ecommerce.OrderCreated."
+    },
+    "capabilityRef": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "description": "A capability domain and integer version, e.g. payment@1. Never a vendor."
+    },
+    "uiLocation": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*(\\.[A-Z][A-Za-z0-9]*)+$",
+      "description": "A Core-declared extension location, e.g. Dashboard.Widget."
+    },
+    "host": {
+      "type": "string",
+      "pattern": "^(\\*\\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "description": "A hostname, optionally with a single leading wildcard label."
+    },
+    "scope": {
+      "$comment": "ORPHANED AND RESERVED — referenced by nothing in this schema, and it must stay that way. Retained as the full AUTHORIZATION_STANDARD.md §4 scope vocabulary for documentation and for future non-App-facing schemas. This enum is the only remaining place the scope value 'platform' appears in this file — the other occurrences are the unrelated top-level 'platform' property, the namespace patterns, and prose — so re-pointing any App-facing field at $defs/scope — permissions[].scope, actions[].scope, or any successor — silently reopens CRIT-3 and lets an App manifest request platform scope. App-facing fields reference $defs/appRequestableScope. Do not add a $ref to this definition.",
+      "type": "string",
+      "enum": [
+        "platform",
+        "organization",
+        "business",
+        "branch",
+        "team",
+        "own",
+        "resource"
+      ]
+    },
+    "appRequestableScope": {
+      "type": "string",
+      "enum": [
+        "organization",
+        "business",
+        "branch",
+        "team",
+        "own",
+        "resource"
+      ],
+      "description": "The scopes an App manifest may request a permission at. This is $defs/scope minus 'platform'. 'platform' is the only scope that spans Organizations, it belongs to platform operators, and it is reserved: an App is untrusted by assumption (SECURITY_STANDARD.md §1 threat 2), so a manifest requesting it fails validation and the App does not install. AUTHORIZATION_STANDARD.md §4 and §8."
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": ["read", "write", "sensitive", "critical"]
+    },
+    "dataClassification": {
+      "$comment": "ORPHANED AND RESERVED — referenced by nothing in this schema, and it must stay that way. Retained as the full SECURITY_STANDARD.md §3 classification vocabulary for documentation and for future non-App-facing schemas. This enum is the only remaining place the classification value 'secret' appears in this file — the other occurrences are prose — so re-pointing any App-facing field at $defs/dataClassification — entity.fields[].classification or any successor — silently reopens CRIT-5 and lets a manifest declare App-owned storage holding secret material. App-facing fields reference $defs/entityFieldClassification. Do not add a $ref to this definition.",
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "business-confidential",
+        "sensitive-personal",
+        "financial-instrument",
+        "secret"
+      ],
+      "description": "The full SECURITY_STANDARD.md §3 classification set, including 'secret'. NOT usable on an App entity field — see $defs/entityFieldClassification, which is what entity.fields[].classification references."
+    },
+    "entityFieldClassification": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "business-confidential",
+        "sensitive-personal",
+        "financial-instrument"
+      ],
+      "description": "The classifications valid on an App-owned entity field. This is $defs/dataClassification minus 'secret'. SECURITY_STANDARD.md §3 and §5: secret material — API keys, tokens, signing keys, passwords — is never shown to an App and never readable by an App, so App-owned storage declared to hold it is a declared secret-exposure path. A manifest classifying a field 'secret' fails validation. Secrets are referenced by name through a capability credential reference, never stored by the App."
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "failed_precondition",
+        "rate_limited",
+        "quota_exceeded",
+        "internal",
+        "not_implemented",
+        "unavailable",
+        "timeout"
+      ]
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "tenantScoped", "fields"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/entityName",
+          "description": "Unique within this manifest. An Action's 'targetEntity' resolves against this value. Uniqueness is a validator obligation (AZ7, AUTHORIZATION_STANDARD.md §4): JSON Schema cannot compare a field across sibling array items, so duplicate entity names are caught by the registry-aware validator, not here."
+        },
+        "description": { "type": "string", "minLength": 10 },
+        "tenantScoped": {
+          "type": "boolean",
+          "description": "True for anything holding tenant data. False requires a justification and is reviewed."
+        },
+        "tenantScopeJustification": { "type": "string", "minLength": 20 },
+        "ownershipField": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The field carrying the ownership relation — which principal created or is assigned to the record. Optional per entity: most entities have no ownership concept and must not be forced to invent one. But if any Action in this manifest declares scope 'own', at least one entity must declare an ownershipField — that is validation rule VAL-OWN (AUTHORIZATION_STANDARD.md §4), and it is enforced structurally by this schema's top-level 'allOf', not by review. Without an ownership relation 'own' grants everything while presenting as the narrowest scope in the system, so the developer who writes it believes they applied a control they did not. What this schema does NOT decide is the per-entity form of the rule — that the entity a particular Action targets is the one declaring ownership. The Action now names its target: $defs/action carries 'targetEntity', and this schema requires it whenever scope is 'own'. What remains outside JSON Schema is only the JOIN — comparing a targetEntity value against the name values of sibling items in the 'entities' array, and then checking that the matched entity declares this field. A cross-array value comparison is not expressible in draft 2020-12, so it is owed by the registry-aware validator, which now has something to join on. AZ7 in AUTHORIZATION_STANDARD.md §4 states the split precisely and normatively."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "type", "classification"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "integer",
+                  "decimal",
+                  "boolean",
+                  "timestamp",
+                  "date",
+                  "money",
+                  "json",
+                  "reference"
+                ]
+              },
+              "classification": { "$ref": "#/$defs/entityFieldClassification" },
+              "required": { "type": "boolean", "default": false },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "tenantScoped": { "const": false } },
+            "required": ["tenantScoped"]
+          },
+          "then": { "required": ["tenantScopeJustification"] }
+        }
+      ]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "input",
+        "output",
+        "errors",
+        "permission",
+        "scope",
+        "sensitivity",
+        "idempotent",
+        "audit"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/actionId" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": {
+          "type": "string",
+          "minLength": 20,
+          "description": "Read by humans and by AI models choosing a tool. States what it does and when to use it — not how it is implemented."
+        },
+        "input": {
+          "type": "object",
+          "description": "JSON Schema for the request. Unknown fields are rejected, not ignored."
+        },
+        "output": {
+          "type": "object",
+          "description": "JSON Schema for the response."
+        },
+        "errors": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/errorCode" },
+          "description": "The closed set this Action may return."
+        },
+        "permission": {
+          "$ref": "#/$defs/permissionId",
+          "description": "Exactly one. An Action with no permission is unreachable, not open."
+        },
+        "scope": {
+          "$ref": "#/$defs/appRequestableScope",
+          "description": "The scope level at which this Action's permission is evaluated. Evaluating at the wrong level is a silent privilege escalation, so it is part of the contract (AUTHORIZATION_STANDARD.md §4). 'platform' is NOT available here: an App manifest is an untrusted document throughout, and an Action claiming platform scope is the same tenant-boundary escape as a permission requesting it — reached through a different field of the same manifest. An App-declared Action may never be evaluated above the tenant boundary."
+        },
+        "targetEntity": {
+          "$ref": "#/$defs/entityName",
+          "description": "The Entity, declared in THIS manifest's 'entities' array, that this Action operates on. REQUIRED whenever 'scope' is 'own', because 'own' means 'records this principal owns' and that sentence has no referent until the Action names the record type. Optional otherwise, and outside 'own' it carries no scoping semantics at all — it is documentation, and it does not narrow, widen, or otherwise alter how the Action's permission is evaluated. Whenever it is present it must resolve to exactly one entity declared here; that resolution is a validator obligation, not a schema one (AZ7). It is never supplied at invocation time: a client, an App, or an AI principal cannot present an ownership relation with a call, because the only ownership relation the platform will honour is the one this manifest declared and the platform recorded at install."
+        },
+        "sensitivity": { "$ref": "#/$defs/sensitivity" },
+        "idempotent": {
+          "type": "boolean",
+          "description": "True means repeating with the same idempotency key is safe, and a key is required."
+        },
+        "exposure": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["internal", "public", "mcp"] },
+          "default": ["internal"],
+          "description": "Opt-in. Absent means internal only: nothing becomes public or AI-callable by accident."
+        },
+        "audit": {
+          "type": "boolean",
+          "description": "Must be true for 'sensitive' and 'critical' actions."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sensitivity": { "enum": ["sensitive", "critical"] }
+            },
+            "required": ["sensitivity"]
+          },
+          "then": {
+            "properties": { "audit": { "const": true } },
+            "required": ["audit"]
+          }
+        },
+        {
+          "$comment": "AZ7, Action-level half. An Action at scope 'own' MUST name its target entity. This closes the case where an 'own'-scoped Action silently borrowed the ownershipField of an unrelated entity to satisfy the manifest-level VAL-OWN check: the Action now has to say which entity it means, so the validator can check that THAT entity is the owned one. Missing targetEntity fails here; malformed targetEntity fails against $defs/entityName. Unknown and ambiguous targetEntity fail at the registry-aware validator (AUTHORIZATION_STANDARD.md §4, AZ7) — all four failures are validation failures, and the App does not install. Fail closed in every case; a manifest is never accepted with an unresolved ownership target and then evaluated as though 'own' had been applied.",
+          "if": {
+            "properties": { "scope": { "const": "own" } },
+            "required": ["scope"]
+          },
+          "then": { "required": ["targetEntity"] }
+        }
+      ]
+    }
+  }
+}

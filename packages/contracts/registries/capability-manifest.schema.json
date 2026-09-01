@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:capability-manifest:1",
+  "title": "Dudo Capability Manifest",
+  "description": "Two documents share this schema, distinguished by 'kind'. kind='capability' defines a vendor-neutral interface that Apps request (CAPABILITY_STANDARD.md). kind='provider' declares that a Connector implements one capability version for one vendor (CONNECTOR_STANDARD.md). They share a schema because a provider is only meaningful against the capability it implements, and keeping them in one place makes the pairing checkable.",
+  "oneOf": [
+    { "$ref": "#/$defs/capabilityDefinition" },
+    { "$ref": "#/$defs/providerDeclaration" }
+  ],
+  "$defs": {
+    "capabilityDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifestVersion",
+        "kind",
+        "id",
+        "version",
+        "title",
+        "description",
+        "errors",
+        "actions",
+        "semantics",
+        "conformance"
+      ],
+      "properties": {
+        "manifestVersion": { "type": "integer", "const": 1 },
+        "kind": { "type": "string", "const": "capability" },
+        "id": {
+          "$ref": "#/$defs/capabilityId",
+          "description": "Kebab-case domain name, e.g. payment. Never a vendor."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Integer capability version. Referenced as payment@1. A breaking change means a new version (CAPABILITY_STANDARD.md §7)."
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 20 },
+        "status": {
+          "type": "string",
+          "enum": ["proposed", "active", "deprecated"],
+          "default": "proposed"
+        },
+        "errors": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/capabilityErrorCode" },
+          "description": "The closed error set every provider maps into. A provider error reaching an App unmapped is a Connector defect."
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/capabilityAction" }
+        },
+        "configuration": {
+          "type": "array",
+          "description": "Per-tenant settings a provider needs. Secret values are never here — only their names.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "type", "description"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "type": {
+                "type": "string",
+                "enum": ["string", "integer", "boolean", "enum", "secret-ref"]
+              },
+              "description": { "type": "string", "minLength": 10 },
+              "required": { "type": "boolean", "default": true },
+              "values": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Permitted values when type is 'enum'."
+              }
+            }
+          }
+        },
+        "events": {
+          "type": "array",
+          "description": "Events the capability layer publishes. Registered in event-catalog.yaml like any other event.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "version"],
+            "properties": {
+              "type": { "$ref": "#/$defs/eventType" },
+              "version": { "type": "integer", "minimum": 1 },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "semantics": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The behaviour every provider must honour, stated so it can be tested. A capability with undefined semantics has providers that behave differently, which defeats substitutability.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "requirement"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+              "requirement": { "type": "string", "minLength": 20 },
+              "appliesTo": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Action names this requirement constrains. Omitted means all."
+              }
+            }
+          }
+        },
+        "conformance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["suite", "required"],
+          "description": "A Connector is not a provider until it passes this suite (CAPABILITY_STANDARD.md §10).",
+          "properties": {
+            "suite": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to the conformance suite, owned by qa-agent."
+            },
+            "required": {
+              "type": "boolean",
+              "const": true,
+              "description": "Conformance is never optional. A capability with no enforced suite may not be published."
+            }
+          }
+        }
+      }
+    },
+    "providerDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifestVersion",
+        "kind",
+        "id",
+        "capability",
+        "vendor",
+        "version",
+        "publisher",
+        "description",
+        "actionsImplemented",
+        "credentials",
+        "externalNetworkAccess",
+        "errorMapping"
+      ],
+      "properties": {
+        "manifestVersion": { "type": "integer", "const": 1 },
+        "kind": { "type": "string", "const": "provider" },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*-[a-z0-9][a-z0-9-]*$",
+          "description": "<capability>-<vendor>, kebab-case, e.g. payment-stripe."
+        },
+        "capability": {
+          "$ref": "#/$defs/capabilityRef",
+          "description": "Exactly one capability version. One Connector implements one capability for one vendor (CONNECTOR_STANDARD.md §1)."
+        },
+        "vendor": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The external platform. This is the only place in Dudo where a vendor name is permitted."
+        },
+        "version": { "$ref": "#/$defs/semver" },
+        "publisher": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "name"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$" },
+            "name": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "format": "uri" }
+          }
+        },
+        "description": { "type": "string", "minLength": 20 },
+        "actionsImplemented": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+          "description": "Capability actions this provider implements. Optional actions not listed return not_supported — never a silent no-op."
+        },
+        "credentials": {
+          "type": "array",
+          "description": "Declared BY NAME. No value ever appears in a manifest, in source, or in configuration.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "purpose"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+              "purpose": { "type": "string", "minLength": 10 },
+              "rotatable": {
+                "type": "boolean",
+                "default": true,
+                "description": "False means it cannot be rotated without a deploy, which is reviewed as a risk."
+              }
+            }
+          }
+        },
+        "externalNetworkAccess": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The egress allowlist. Undeclared hosts are denied.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["host", "purpose"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^(\\*\\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+              },
+              "purpose": { "type": "string", "minLength": 10 }
+            }
+          }
+        },
+        "webhooks": {
+          "type": "array",
+          "description": "Inbound vendor callbacks. Untrusted input arriving at a public endpoint (CONNECTOR_STANDARD.md §7).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "signatureVerification", "tenantResolution"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "signatureVerification": {
+                "type": "string",
+                "minLength": 5,
+                "description": "How the signature is verified. No signature, no processing."
+              },
+              "tenantResolution": {
+                "type": "string",
+                "const": "installation",
+                "description": "Tenant is resolved from the installation, never from a payload field. A payload field is attacker-controlled."
+              },
+              "replayProtection": { "type": "boolean", "default": true }
+            }
+          }
+        },
+        "errorMapping": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Every vendor error maps into the capability's closed set. Unmapped errors become 'internal' and are logged without the vendor's raw message.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["vendorCondition", "capabilityError", "retryable"],
+            "properties": {
+              "vendorCondition": { "type": "string", "minLength": 1 },
+              "capabilityError": { "$ref": "#/$defs/capabilityErrorCode" },
+              "retryable": { "type": "boolean" }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requestTimeoutMs": { "type": "integer", "minimum": 1 },
+            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "vendorRateLimitPerSecond": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "capabilityId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$"
+    },
+    "capabilityRef": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "eventType": {
+      "type": "string",
+      "pattern": "^(core|platform|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[A-Z][A-Za-z0-9]*$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "capabilityErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "conflict",
+        "rate_limited",
+        "provider_unavailable",
+        "provider_rejected",
+        "timeout",
+        "not_supported",
+        "internal"
+      ]
+    },
+    "capabilityAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "input",
+        "output",
+        "errors",
+        "idempotent",
+        "permission",
+        "sensitivity"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "description": { "type": "string", "minLength": 20 },
+        "optional": {
+          "type": "boolean",
+          "default": false,
+          "description": "An optional action may be unimplemented by a provider. Apps check support explicitly and degrade deliberately."
+        },
+        "input": { "type": "object" },
+        "output": { "type": "object" },
+        "errors": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/capabilityErrorCode" }
+        },
+        "idempotent": { "type": "boolean" },
+        "permission": {
+          "type": "string",
+          "pattern": "^(core|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": ["read", "write", "sensitive", "critical"]
+        }
+      }
+    }
+  }
+}

@@ -75,14 +75,12 @@ docs/                   product, architecture, decisions, operations
 
 ## Licence
 
-**No licence has been selected yet.** No `LICENSE` file exists, which means default
-copyright applies and no permissions are granted.
+**[Apache License 2.0](LICENSE)**, adopted 2026-09-01 for both `Dudo-Core` and
+`Dudo-Apple`. The `LICENSE` file is the unmodified upstream text, with no added clauses.
 
-**Apache-2.0 is the current recommendation** — a permissive licence with an explicit
-patent grant, well understood by the developer ecosystem an extensible platform depends
-on. It has not been adopted: a permissive licence allows commercial reuse of this code by
-anyone, including competitors, and that trade-off needs an explicit decision rather than
-a default.
+Apache-2.0 is permissive and carries an explicit patent grant, which matters for an
+extensible platform that expects third-party Apps and connectors. The trade-off was
+accepted knowingly: **it permits commercial reuse by anyone, including competitors.**
 
 ## Contributing
 

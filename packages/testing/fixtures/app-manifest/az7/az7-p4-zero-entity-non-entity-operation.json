@@ -1,0 +1,62 @@
+{
+  "caseId": "az7-p4",
+  "kind": "manifest",
+  "title": "A legitimate zero-entity, non-entity operation — an App that stores nothing and owns nothing",
+  "coversRequirement": "AZ7 positive #8",
+  "target": "AZ7 blast radius / zero-entity Apps",
+  "relatedFindings": ["CRIT-4", "VAL-OWN"],
+  "expectedOutcome": "ACCEPT",
+  "enforcedBy": "schema+validator",
+  "why": "This App declares no entities at all and one Action at 'organization' scope that performs a stateless operation. Such Apps are legitimate — a report renderer, a validator, a health probe — and the schema currently allows them: 'entities' is required but carries no minItems, so an empty array is valid, and the manifest-level VAL-OWN clause is conditioned on an Action declaring 'own', which none does here. AZ7 must not make an entity declaration mandatory as a side effect of requiring targetEntity for 'own'.",
+  "notes": "STATED AS 'IF CURRENTLY ALLOWED', AND IT IS. I verified against the head of app-manifest.schema.json that 'entities' has no minItems constraint, so entities: [] is accepted today. This fixture PINS that behaviour rather than asserting it should be so: if the platform later decides a zero-entity App is not permitted, that is a deliberate product decision and this fixture's expectedOutcome changes with it — it must not change silently as a side effect of an AZ7 amendment. Contrast az7-n6, which is the same empty entities array WITH an own-scope Action and must be REJECTED. The pair proves the rejection in n6 comes from 'own', not from emptiness.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.report.read",
+        "scope": "organization",
+        "reason": "Renders a stateless report for the organization. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [],
+    "actions": [
+      {
+        "id": "az7-fixture-app.RenderReport",
+        "title": "Render Report",
+        "description": "Renders a report from data supplied in the request and stores nothing. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows"],
+          "properties": { "rows": { "type": "array" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "document": { "type": "string" } }
+        },
+        "errors": ["invalid_argument", "forbidden"],
+        "permission": "az7-fixture-app.report.read",
+        "scope": "organization",
+        "sensitivity": "read",
+        "idempotent": true,
+        "audit": false
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

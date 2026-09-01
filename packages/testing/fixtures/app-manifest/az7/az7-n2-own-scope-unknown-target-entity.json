@@ -1,0 +1,74 @@
+{
+  "caseId": "az7-n2",
+  "kind": "manifest",
+  "title": "own scope with UNKNOWN targetEntity",
+  "coversRequirement": "AZ7 negative #2",
+  "target": "AZ7 / VAL-OWN per-entity form",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "The Action declares scope 'own' and names 'Gadget' as its target, but no entity called 'Gadget' is declared in this manifest. The reference resolves to nothing, so no ownership relation can be established and 'own' again narrows nothing. An unresolvable reference must FAIL CLOSED — rejected outright, never accepted and then evaluated as if unscoped.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE. This is referential: it requires comparing action.targetEntity against the 'name' values of items in the sibling 'entities' array. JSON Schema draft 2020-12 has no keyword that compares a value in one part of the instance with a value in another part of the instance, so this is NOT expressible in app-manifest.schema.json. The schema will and should ACCEPT this document — 'Gadget' is a well-formed $defs/entityName. DO NOT REPORT A SCHEMA ACCEPT HERE AS A SCHEMA DEFECT. The rejection is owed by the registry-aware validator. AZ7's contribution is that the validator now has something to join on; before AZ7 there was no targetEntity field and no join was possible at all.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record, fixture use only.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true },
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteGadget",
+        "title": "Delete Gadget",
+        "description": "Deletes a gadget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gadget_id"],
+          "properties": { "gadget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Gadget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "caseId": "az7-p3",
+  "kind": "manifest",
+  "title": "A legitimate non-own Action, unchanged by AZ7 — organization scope, no targetEntity, no ownershipField anywhere",
+  "coversRequirement": "AZ7 positive #7",
+  "target": "AZ7 blast radius / backward compatibility",
+  "relatedFindings": ["CRIT-4", "VAL-OWN"],
+  "expectedOutcome": "ACCEPT",
+  "enforcedBy": "schema+validator",
+  "why": "The Action is evaluated at 'organization' scope, declares no targetEntity, and no entity in the manifest declares an ownershipField. Nothing here needs an ownership relation, so nothing should be required to declare one. AZ7 constrains 'own' and only 'own'. If this manifest fails, AZ7 has been implemented as 'every Action must name a target entity' or 'every entity must declare ownership', either of which breaks every existing manifest and forces developers to invent ownership fields that do not exist — which is how a meaningless ownership column gets added and 'own' becomes untrustworthy again.",
+  "notes": "BLAST-RADIUS GUARD. Must be accepted by the pre-AZ7 schema, the post-AZ7 schema, and the validator alike. A REJECT here at any layer is a regression against existing App manifests and should be reported as a defect against the AZ7 implementation, not as a fixture problem. Note that the manifest also carries no 'own' anywhere in permissions[].scope, so the manifest-level VAL-OWN clause does not trigger.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.read",
+        "scope": "organization",
+        "reason": "Lists widgets across the organization. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record with no ownership relation, fixture use only.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.ListWidgets",
+        "title": "List Widgets",
+        "description": "Lists every widget in the organization. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "cursor": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "items": { "type": "array" } }
+        },
+        "errors": ["invalid_argument", "forbidden"],
+        "permission": "az7-fixture-app.widget.read",
+        "scope": "organization",
+        "sensitivity": "read",
+        "idempotent": true,
+        "audit": false
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

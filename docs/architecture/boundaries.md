@@ -191,12 +191,27 @@ ambient default. Every query, cache key, job, file path, and export carries it.
 Cross-tenant access is a critical defect wherever it appears — including tests,
 fixtures, logs, and error messages.
 
+## Tenancy implementation model — decided
+
+`docs/decisions/0006` is **Accepted**: **Option A — one shared production D1 database** for
+Organization business data, with `tenant_id` mandatory on every tenant-owned row, query,
+command, event, cache key, job, export, and object path, and **mandatory indirection through
+a Core-owned `TenantStoreResolver`**. Apps, plugins, Connectors, and clients cannot select a
+database or binding; unknown Organization mappings fail closed; business services never touch
+D1 directly.
+
+The decision is **scoped to the Zero-Cost MVP** and holds while `0008` is active. Database-
+per-tenant (**B**) is **excluded** for the MVP — the Free tier's ten databases cannot support
+it. Pooled shards (**C**) are the **approved migration candidate**, not the current model;
+migration and any paid-plan activation require user approval. D1 remains single-threaded per
+database, so noisy neighbours are structural and per-tenant restore is effectively
+unavailable — accepted MVP limitations recorded in `0006` §0.7, not open questions.
+
 ## Open questions
 
-- **The tenancy implementation model** (shared schema, schema-per-tenant,
-  database-per-tenant). D1 is single-threaded per database — roughly 1,000 queries/second
-  at 1 ms — which argues against a shared database, while master plan §14 suggests
-  starting shared. Resolve before Phase 1.
+- The **`TenantStoreResolver` contract shape** — the resolver's request/response form, its
+  failure mode surface, and the migration runner that sits behind it (`CLOUDFLARE_STANDARD.md`
+  CF5). The model is decided; this is Phase 1 implementation detail authored against `0006`.
 - The web framework, the testing framework, and every third-party dependency. `0003`
   approves TypeScript and six Cloudflare services, nothing more.
 - Contract transport and versioning mechanics — now a **cross-repository** coordination

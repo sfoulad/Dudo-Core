@@ -1,0 +1,73 @@
+{
+  "caseId": "az7-n5d",
+  "kind": "manifest",
+  "title": "UNKNOWN Entity reference by case variation — targetEntity 'WIDGET' is well-formed but matches no declared entity",
+  "coversRequirement": "AZ7 negative #5 (unresolvable-by-case form) / reinforces negative #2",
+  "target": "AZ7 / case-sensitive reference resolution / fail-closed",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "The manifest declares 'Widget' and the Action targets 'WIDGET'. The reference is grammatically valid — '^[A-Z][A-Za-z0-9]*$' accepts an all-caps name — but no entity by that exact name is declared, so it resolves to nothing and must fail closed exactly like az7-n2. This fixture exists because the tempting repair for az7-n2 is a case-insensitive lookup, and a case-insensitive lookup is itself a vulnerability: it lets an App name a target that is not the entity it declared, and combined with az7-n5a it lets a same-name-different-case decoy supply an ownership relation the real target does not have. Reference resolution must be exact and case-sensitive.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE. Like az7-n2, deciding this requires joining action.targetEntity against the sibling entities[].name values, which draft 2020-12 cannot express. The schema will and should ACCEPT this document — 'WIDGET' is a valid $defs/entityName. DO NOT REPORT THAT ACCEPT AS A SCHEMA FAILURE. This is a negative-control fixture for the resolution algorithm rather than for the grammar.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record, fixture use only. Note the exact casing.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "WIDGET",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

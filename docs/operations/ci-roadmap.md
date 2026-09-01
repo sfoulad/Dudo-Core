@@ -51,6 +51,21 @@ approved; nothing beyond them is.
 | **Contract compatibility checks** | The Apple client matches the published contract set, and has not drifted from the web client |
 | **Internal TestFlight upload** | **Only from an approved release workflow**, never from an ordinary pull-request build. Requires an approved credential and signing plan first |
 
+## Cost constraint — binding on everything below
+
+`docs/decisions/0008-zero-cost-mvp-infrastructure.md`: Dudo must cost **USD 0 / BD 0 per
+month**. Therefore:
+
+- **Standard GitHub-hosted runners only.** Larger runners are prohibited. Actions on
+  **public** repositories with standard runners are free and unmetered — verified against
+  GitHub's billing documentation, 2026-09-01.
+- `Dudo-Plan` is private and draws on GitHub Free's included 2,000 minutes / 500 MB
+  artifacts. Keep workflows out of it unless there is a reason.
+- **Artifacts small, retention as short as practical.**
+- Every workflow added must record its free-tier impact in
+  `docs/operations/free-tier-register.md` before it is enabled.
+- **No deployment step may be added until its cost is proven zero.**
+
 ## Shared
 
 | Stage | Applies to | Notes |

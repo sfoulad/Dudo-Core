@@ -1,0 +1,583 @@
+---
+# Dudo Core Object Registry
+#
+# Every object Core owns. If it is not here, Core does not own it — it belongs to an App
+# or a Capability. Adding an entry requires passing the four-question inclusion test in
+# docs/architecture/standards/CORE_BOUNDARIES.md §2, with the answers recorded in the task
+# specification.
+#
+# Governed by: docs/architecture/standards/CORE_BOUNDARIES.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS OF THIS FILE
+# Every entry is status "proposed", which means NOT YET BUILT — it does not mean optional
+# or unapproved. No code and no schema exist. These are the objects entailed by Core's
+# declared responsibilities (CORE_BOUNDARIES.md §3) and the App lifecycle (APP_STANDARD.md
+# §9), recorded so Phase 1 builds against a reviewed set. No entry here is a data model.
+#
+# The tenancy model is DECIDED: docs/decisions/0006-tenancy-model.md is Accepted (user,
+# 2026-09-01) — one shared production D1 database with mandatory indirection, for the
+# Zero-Cost MVP while 0008 is active. Every tenant-scoped object below therefore carries
+# tenant_id on every row and every query, and isolation is enforced entirely in code.
+
+registryVersion: 1
+updated: "2026-09-01"
+
+# ---------------------------------------------------------------------------
+# spec
+# ---------------------------------------------------------------------------
+spec:
+  entryRequiredFields: [name, domain, tenancy, appAccess, status, phase, description]
+  tenancyValues:
+    tenant-scoped: "Belongs to exactly one tenant (Organization). Every access carries tenant scope."
+    tenant-independent: "Platform-owned. Contains no tenant business data. Stored separately from tenant data."
+  appAccessValues:
+    none: "Apps cannot reach it at all."
+    read-via-contract: "Readable through a published Core contract, subject to permission."
+    write-via-contract: "Readable and writable through a published Core contract, subject to permission."
+  note: >-
+    appAccess NEVER means direct storage access. Apps reach Core only through explicit,
+    versioned contracts. There is no exception for first-party Apps.
+
+# ---------------------------------------------------------------------------
+# objects
+# ---------------------------------------------------------------------------
+objects:
+
+  # --- tenancy ----------------------------------------------------------------
+  - name: TenantDirectoryEntry
+    domain: tenancy
+    tenancy: tenant-independent
+    appAccess: none
+    # "proposed" means not yet built. It does NOT mean optional or unapproved:
+    # this object is REQUIRED by an accepted decision.
+    status: proposed
+    phase: 1
+    requiredBy: "docs/decisions/0006-tenancy-model.md §0.2 — Status: Accepted (user decision, 2026-09-01)."
+    description: >-
+      Maps an Organization to the storage binding that holds its data. Read only by Core's
+      server-controlled TenantStoreResolver. Under the decided model every Organization
+      resolves to the same production binding — the mapping exists anyway, so that moving
+      to pooled shards later changes no business-domain code and no public contract.
+    notes: >-
+      REQUIRED, not conditional. 0006 §0.2 is Accepted and makes the TenantStoreResolver
+      indirection binding by explicit user decision — the opposite of the earlier situation,
+      in which this entry was blocked because the indirection rested only on a
+      recommendation (MAJ-21, now resolved). Apps, plugins, Connectors, and clients cannot
+      select a database or binding; an unknown Organization mapping FAILS CLOSED; the
+      resolver returns only Core-configured bindings; business services never touch D1
+      directly. This entry is a resolver-owned mapping, never an App-reachable object, and
+      it is itself an isolation boundary: a principal in one Organization must not resolve,
+      receive, or cache another's binding, and that needs its own test
+      (MULTITENANCY_STANDARD.md §7.2, §8). Also binding, and separate: 0003 constraint 2 —
+      storage sits behind a Core-owned port — which is an interface rule, not an object.
+
+  # --- identity ---------------------------------------------------------------
+  - name: User
+    domain: identity
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A person. Identity is platform-level; membership binds a user to tenants."
+    notes: >-
+      A user may belong to more than one Organization, so the User record itself cannot be
+      tenant-scoped. Everything ABOUT a user within a tenant hangs off OrganizationMembership,
+      which is. Getting this backwards leaks the tenant list of a shared user.
+
+  - name: OrganizationMembership
+    domain: identity
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "Binds a User to an Organization, with status and profile within that tenant."
+
+  - name: Session
+    domain: identity
+    tenancy: tenant-scoped
+    appAccess: none
+    status: proposed
+    phase: 1
+    description: "An authenticated session bound to one principal and one active tenant."
+
+  - name: AuthCredential
+    domain: identity
+    tenancy: tenant-independent
+    appAccess: none
+    status: proposed
+    phase: 1
+    description: "A user's authentication material. Never readable, never returned, never logged."
+
+  - name: MfaFactor
+    domain: identity
+    tenancy: tenant-independent
+    appAccess: none
+    status: proposed
+    phase: 1
+    description: "A registered second factor. MFA-ready architecture from the start."
+
+  - name: Invitation
+    domain: identity
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A pending invitation into a tenant."
+
+  # --- organization structure -------------------------------------------------
+  - name: Organization
+    domain: organization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "The tenant. The isolation boundary. Owns the data and holds the subscription."
+    notes: "Tenant = Organization is a recommendation pending Team Lead confirmation (MULTITENANCY_STANDARD.md MT1)."
+
+  - name: Business
+    domain: organization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A Business/Workspace inside an Organization. An authorization scope, not an isolation boundary."
+
+  - name: Branch
+    domain: organization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A Branch/Location inside a Business. Optional in use, never optional in the model."
+
+  - name: Team
+    domain: organization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A first-class object with a manager, members, roles, permissions, and a branch. Can be a principal."
+
+  - name: TeamMembership
+    domain: organization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "Binds a principal to a Team. Membership grants the Team's permissions."
+
+  # --- principals and authorization -------------------------------------------
+  - name: Principal
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "The uniform subject of authorization: user, team, service-account, ai-agent, or iot-device."
+
+  - name: ServiceAccount
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A machine principal for integrations. Never a shared human account."
+
+  - name: AiAgentPrincipal
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 8
+    description: >-
+      An AI principal, optionally acting on behalf of a user. Effective permission is the
+      intersection of its grants and the user's — never the union.
+
+  - name: IotDevicePrincipal
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 5
+    description: "A device principal, narrowly scoped — usually branch or resource, usually one permission."
+
+  - name: ApiCredential
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: none
+    status: proposed
+    phase: 1
+    description: >-
+      A credential bound to exactly one principal with an explicit permission set — never
+      "everything its creator has", which silently grows as the creator's role grows.
+      Listable and revocable, with last use visible.
+
+  - name: Role
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A named bundle of permissions at a scope. Customer-definable; never hardcoded."
+
+  - name: RoleAssignment
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "Grants a Role to a Principal at a Scope. Revocation takes effect on the next call."
+
+  - name: PermissionDefinition
+    domain: authorization
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "The declared permission, sourced from permission-catalog.yaml and each App's manifest."
+
+  - name: AppPermissionGrant
+    domain: authorization
+    tenancy: tenant-scoped
+    appAccess: none
+    status: proposed
+    phase: 2
+    description: >-
+      A tenant's grant of a declared permission to an installed App. Enforced by Core on
+      every invocation — not once at load, not by the SDK, not by the App.
+
+  # --- platform billing -------------------------------------------------------
+  - name: Plan
+    domain: billing
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A platform subscription tier with its quotas."
+
+  - name: Subscription
+    domain: billing
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: >-
+      A tenant's platform subscription and status. Billing for USING Dudo — never a tenant's
+      own business payment processing, which belongs to the Payment Capability and an App.
+
+  - name: Quota
+    domain: billing
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "A limit derived from the tenant's plan. Exceeding one returns quota_exceeded."
+
+  - name: UsageRecord
+    domain: billing
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "Metered usage per tenant, App, and principal — including AI token and cost attribution."
+
+  - name: MarketplaceCharge
+    domain: billing
+    tenancy: tenant-scoped
+    appAccess: none
+    status: proposed
+    phase: 6
+    description: "A charge for a paid marketplace item. Carries no payment instrument data."
+
+  # --- core platform services --------------------------------------------------
+  - name: Notification
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: write-via-contract
+    status: proposed
+    phase: 1
+    description: "A message delivered to a principal. Core is the default provider of the Notifications capability."
+
+  - name: File
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: write-via-contract
+    status: proposed
+    phase: 1
+    description: >-
+      A stored object. Key is prefixed t/<tenant_id>/<app_id>/ — ownership is in the key,
+      not only in metadata, so listing cannot cross a tenant even by mistake.
+
+  - name: AuditEvent
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: >-
+      Append-only record of a sensitive or critical operation, success or denial. Contains
+      identifiers and decisions, never the business data itself. Never updated or deleted
+      by application code.
+
+  - name: ActivityEntry
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: write-via-contract
+    status: proposed
+    phase: 1
+    description: "A user-visible timeline item. Distinct from AuditEvent, which is a security record."
+
+  - name: Setting
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: write-via-contract
+    status: proposed
+    phase: 1
+    description: "Tenant configuration at organization, business, or branch scope."
+
+  - name: FeatureFlag
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    description: "Per-tenant feature state."
+
+  - name: SearchIndexEntry
+    domain: platform-services
+    tenancy: tenant-scoped
+    appAccess: write-via-contract
+    status: proposed
+    phase: 1
+    description: "An indexed record. The index is tenant-partitioned — a shared index is a shared data store."
+    notes: "Blocked: no search engine is approved (MULTITENANCY_STANDARD.md MT5)."
+
+  # --- app runtime and marketplace ---------------------------------------------
+  - name: App
+    domain: marketplace
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 2
+    description: "A registered App and its marketplace identity."
+
+  - name: AppVersion
+    domain: marketplace
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 2
+    description: "One published version of an App, with its validated manifest."
+
+  - name: Installation
+    domain: marketplace
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 2
+    description: >-
+      An App installed into a tenant, with its lifecycle state and configuration. The record
+      a webhook resolves its tenant from — never a payload field.
+
+  - name: CapabilityDefinition
+    domain: capability
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 5
+    description: "A registered capability version and its actions, errors, and semantics."
+
+  - name: CapabilityProvider
+    domain: capability
+    tenancy: tenant-independent
+    appAccess: none
+    status: proposed
+    phase: 5
+    description: "A Connector declaring it implements one capability version for one vendor."
+
+  - name: ProviderConfiguration
+    domain: capability
+    tenancy: tenant-scoped
+    appAccess: none
+    status: proposed
+    phase: 5
+    description: >-
+      A tenant's selection and configuration of a provider, including credential references.
+      Never visible to an App — an App that can read a payment credential can move money
+      outside the platform.
+
+  - name: EventTypeDefinition
+    domain: events
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 2
+    description: "A registered event type and version, sourced from event-catalog.yaml."
+
+  - name: EventSubscription
+    domain: events
+    tenancy: tenant-scoped
+    appAccess: none
+    status: proposed
+    phase: 2
+    description: "An App's subscription to an event type within a tenant, from its manifest."
+
+  - name: WorkflowDefinition
+    domain: workflow
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 2
+    description: "A registered long-running process definition. Core owns the runtime; the App owns the process."
+
+  - name: WorkflowRun
+    domain: workflow
+    tenancy: tenant-scoped
+    appAccess: read-via-contract
+    status: proposed
+    phase: 2
+    description: >-
+      One execution, carrying tenant and correlation id on the run and every step. No step
+      widens the tenant scope. Carries identifiers and progress, not business records.
+
+  - name: McpToolRegistration
+    domain: mcp
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 8
+    description: >-
+      An Action exposed to AI, derived from the Action definition. There is no MCP-only
+      code path. Discovery is filtered per principal, because a tool list is a description
+      of the system.
+
+  - name: Developer
+    domain: developer
+    tenancy: tenant-independent
+    appAccess: none
+    status: proposed
+    phase: 3
+    description: "A registered developer or publisher."
+
+  - name: MarketplaceListing
+    domain: marketplace
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 6
+    description: "The public listing for an App, Capability, Connector, AI Skill, or Template."
+
+  - name: ReviewSubmission
+    domain: marketplace
+    tenancy: tenant-independent
+    appAccess: none
+    status: proposed
+    phase: 6
+    description: "A submission moving through draft, automated validation, security review, moderation, approval, publication."
+
+# ---------------------------------------------------------------------------
+# uiExtensionLocations — Core declares; Apps register into them.
+# Apps never modify Core UI. An App naming an unknown location fails installation
+# rather than silently rendering nowhere. (APP_STANDARD.md §8)
+# ---------------------------------------------------------------------------
+uiExtensionLocations:
+  - id: Dashboard.Widget
+    status: proposed
+    phase: 2
+    description: "A card on the tenant dashboard."
+  - id: Customer.Profile.Tab
+    status: proposed
+    phase: 2
+    description: "A tab on a customer profile page."
+  - id: Navigation.Menu
+    status: proposed
+    phase: 2
+    description: "An entry in primary navigation."
+  - id: Business.Settings
+    status: proposed
+    phase: 2
+    description: "A settings panel within a Business."
+  - id: Search.Provider
+    status: proposed
+    phase: 2
+    description: "A source contributing results to platform search."
+  - id: ActivityTimeline.Item
+    status: proposed
+    phase: 2
+    description: "A renderer for an activity timeline entry."
+
+# ---------------------------------------------------------------------------
+# reservedApiPathSegments — the flat /api/v1/<resource> namespace.
+#
+# Reserved for Core and registered official Apps. Every other App is served under
+# /api/v1/apps/<app_id>/... Two Apps never hold one path. (API_STANDARD.md §5)
+# ---------------------------------------------------------------------------
+reservedApiPathSegments:
+  - segment: apps
+    owner: core
+    status: proposed
+    description: "The namespace under which every non-reserved App is served. Permanently reserved."
+  - segment: auth
+    owner: core
+    status: proposed
+  - segment: users
+    owner: core
+    status: proposed
+  - segment: organizations
+    owner: core
+    status: proposed
+  - segment: businesses
+    owner: core
+    status: proposed
+  - segment: branches
+    owner: core
+    status: proposed
+  - segment: teams
+    owner: core
+    status: proposed
+  - segment: roles
+    owner: core
+    status: proposed
+  - segment: permissions
+    owner: core
+    status: proposed
+  - segment: files
+    owner: core
+    status: proposed
+  - segment: notifications
+    owner: core
+    status: proposed
+  - segment: audit
+    owner: core
+    status: proposed
+  - segment: settings
+    owner: core
+    status: proposed
+  - segment: billing
+    owner: core
+    status: proposed
+  - segment: marketplace
+    owner: core
+    status: proposed
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: CO1
+    question: "User is tenant-independent while OrganizationMembership is tenant-scoped. Cross-tenant users are a real product case but a real isolation hazard."
+    recommendation: "Confirm explicitly. A user's list of Organizations must never be visible to any of them."
+    blocks: "Phase 1 schema"
+  - id: CO2
+    question: "No entry here is a data model. Column shapes, keys, and indexes still have to be designed."
+    recommendation: >-
+      MT2 is now closed — 0006 is Accepted, so the placement is known: one shared
+      production database, tenant_id on every tenant-scoped row and every query. A schema
+      may now be designed from this file, but the schema itself is separate work and no
+      table shape is recorded here.
+    blocks: "Nothing. The tenancy blocker is resolved."
+  - id: CO3
+    question: "SearchIndexEntry assumes a search engine. None is approved."
+    recommendation: "Blocked pending an ADR. Whatever is chosen, the index is tenant-partitioned."
+    blocks: "Phase 1 search"

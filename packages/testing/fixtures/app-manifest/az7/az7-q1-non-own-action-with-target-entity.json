@@ -1,0 +1,71 @@
+{
+  "caseId": "az7-q1",
+  "kind": "manifest",
+  "title": "A non-own Action that declares targetEntity anyway, and the reference does not resolve",
+  "coversRequirement": "VALIDATOR-AZ7 item 5 (with item 1) — AUTHORIZATION_STANDARD.md §4.1",
+  "target": "AZ7 / scope of the targetEntity reference rule",
+  "relatedFindings": ["CWE-863"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "The Action is evaluated at 'organization' scope and declares targetEntity 'Gadget', which no entity in this manifest declares. VALIDATOR-AZ7 item 5 settles this: 'targetEntity is optional outside own and carries no scoping semantics there ... Where it is present it must still satisfy items 1 and 2.' Item 1 requires that exactly one declared entity carry that name. Zero matches is a failure, so this manifest is rejected. The reason it matters is latency of harm rather than immediate harm: a dangling reference tolerated on a non-own Action becomes live the moment somebody changes that Action's scope to 'own', and the change passes review because the field was already there and already looked correct.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE. The check is the same cross-array join as az7-n2 and is not expressible in draft 2020-12; the schema will and should ACCEPT this document, and that accept is not a schema defect. PROVENANCE, KEPT DELIBERATELY: this case was authored as an OPEN QUESTION with expectedOutcome UNDECIDED, because AZ7 as originally stated to QA constrained 'own' only and said nothing about non-own Actions carrying targetEntity. Three readings were defensible and disagreed. AUTHORIZATION_STANDARD.md §4.1 VALIDATOR-AZ7 item 5 subsequently decided it, and this fixture's expectedOutcome was set from that recorded decision — NOT from observed behaviour, and NOT from QA's own preference, though the decision did match the reading QA recommended. If item 5 changes, this expectation changes with it and not otherwise.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.read",
+        "scope": "organization",
+        "reason": "Lists widgets across the organization. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record, fixture use only.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.ListWidgets",
+        "title": "List Widgets",
+        "description": "Lists every widget in the organization. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "cursor": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "items": { "type": "array" } }
+        },
+        "errors": ["invalid_argument", "forbidden"],
+        "permission": "az7-fixture-app.widget.read",
+        "scope": "organization",
+        "targetEntity": "Gadget",
+        "sensitivity": "read",
+        "idempotent": true,
+        "audit": false
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}
