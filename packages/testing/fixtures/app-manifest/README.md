@@ -4,9 +4,11 @@
 
 These fixtures pin the security behaviour of
 `packages/contracts/registries/app-manifest.schema.json` and of the registry-aware
-validator that will eventually sit alongside it. They exist so that a rule which was
-argued for once stays enforced, and so that the *reason* a case passes or fails is
-recorded next to the case rather than reconstructed later from a diff.
+validator that now sits alongside it,
+`packages/contracts/validation/app-manifest-relations.mjs` (ADR `0009`) — Foundation
+Gate tooling, not an admission path in any product runtime. They exist so that a rule
+which was argued for once stays enforced, and so that the *reason* a case passes or
+fails is recorded next to the case rather than reconstructed later from a diff.
 
 ---
 
@@ -155,7 +157,7 @@ recommends both; nothing here depends on it.
 
 ---
 
-## 5. How to run these, once a framework exists
+## 5. How to run these
 
 The fixtures are already runnable data. A runner needs to:
 
@@ -172,8 +174,35 @@ The fixtures are already runnable data. A runner needs to:
      report **PASS** or **FAIL**.
    - `enforcedBy` is `validator` → report **NOT-DECIDABLE-BY-SCHEMA**, and record the
      schema's actual answer for information only. **Never PASS/FAIL these on the schema.**
-6. Once a registry-aware validator exists, run every `manifest` case through it too, and
-   report `validator` and `schema+validator` cases as PASS/FAIL against that layer.
+6. Run every `manifest` case through the registry-aware relation validator too, and
+   report `validator` and `schema+validator` cases as PASS/FAIL against that layer. That
+   validator **exists and has been executed against these fixtures**:
+   `packages/contracts/validation/app-manifest-relations.mjs`, approved by ADR `0009`.
+   It is dependency-free, so this step needs no framework — import
+   `validateManifestRelations`, call it with `case.manifest`, and map `valid === true`
+   to ACCEPT and `valid === false` to REJECT.
+
+   **Re-run the validator rather than trusting any recorded count**, including one you
+   find in a report. The counts move whenever the fixture set does, and this file
+   deliberately keeps none: a hand-maintained number that nothing recomputes rots in
+   whichever copy is not being read. The single authoritative dated measurement — the
+   counts together with their fixture count, `index.json` version, date, runner and
+   validator path — is the `AZ7` entry under `openQuestions` in
+   `packages/contracts/registries/permission-catalog.yaml`.
+
+   Whatever you measure, report it with its scope attached, or it becomes the overclaim
+   §3 exists to prevent. These four are properties of the method, not of any one run:
+   - Every pass is at the **relation-validator layer, executed, against these
+     fixtures**. Fixture validation is what is proven.
+   - **Production admission-path enforcement does not exist.** The validator is not
+     wired into CI, sits on no installation path, and is called by no product runtime.
+     Nothing here proves a manifest would be rejected on admission.
+   - **The schema layer has never been executed**, for any case. No JSON Schema
+     implementation is present, TS1 is undecided, and ADR `0009` bars installing one.
+     Everything §3 says the schema will accept is **inspected, not run**.
+   - The `runtime` cases — `az7-r1`, `az7-r2`, `az7-r3` — are **NOT RUN** by this step
+     and no static validator can decide them. Runtime tenant isolation has been executed
+     by nothing in this directory.
 7. Report the pairs listed in `index.json` under `pairsThatMustBeReportedTogether`
    **side by side**. `az7-n4` alone can be made green by refusing every `own`-scope
    Action; only `az7-n4` **and** `az7-p2` together show the rule is enforced rather than

@@ -54,7 +54,13 @@ model:
       unknown, malformed or ambiguous targetEntity fails closed (VAL-OWN clauses 2 and 3,
       AUTHORIZATION_STANDARD.md §4 and §4.1). The schema enforces clauses 1 and 2; clause
       3 is a cross-array comparison JSON Schema cannot express and is owed by the
-      registry-aware validator as VALIDATOR-AZ7. It does not run yet.
+      registry-aware validator as VALIDATOR-AZ7. That validator exists and has been
+      executed against the recorded fixtures:
+      packages/contracts/validation/app-manifest-relations.mjs, approved by ADR 0009. JSON
+      Schema execution and integration into a production manifest-admission path have not
+      yet been implemented — no JSON Schema implementation is present in this repository,
+      and nothing invokes the relation validator automatically. See the AZ7 entry under
+      openQuestions for the measured result and its scope.
     - >-
       Ownership is declared in the manifest, never asserted at invocation. A client, an
       App, an SDK caller or an AI principal cannot supply a targetEntity, an ownership

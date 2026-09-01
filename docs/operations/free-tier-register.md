@@ -46,7 +46,7 @@ official source, not the date usage was measured.
 | **Durable Objects** | `developers.cloudflare.com/durable-objects/platform/pricing/` | **SQLite-backed ONLY on Free** (KV-backed requires a paid plan). 100,000 req/day · 13,000 GB-s/day · 5M rows read · 100k rows written · 5 GB stored | **Only where genuine coordination is required** (`0003`) | 0 | 70% of each | **SQLite backend only — never KV-backed.** Refuse new namespaces at the warn line | core-agent | 2026-09-01 |
 | **GitHub Actions — public repos** | `docs.github.com` Actions billing | **Free, unmetered** on standard runners | Dudo-Core, Dudo-Apple CI | 0 | n/a | Never use a larger runner | Team Lead | 2026-09-01 |
 | **GitHub Actions — private (Dudo-Plan)** | same | **2,000 min/mo · 500 MB artifacts · 10 GB cache** | Minimal; docs only | 0 | 1,400 min / 350 MB | Disable workflows in that repo | Team Lead | 2026-09-01 |
-| **CodeRabbit** | `coderabbit.ai/pricing` | **FREE FOREVER for public repositories — verified 2026-09-01.** No paid plan required; no metered billing on the free OSS tier | Automated PR review on `Dudo-Core`. **Active**: real reviews completed on `c09693f`, `477753f`, `1b8e2fa` | active | n/a | Rate limiting only, which is **acceptable and must never trigger an upgrade** | Team Lead | 2026-09-01 |
+| **CodeRabbit** | `coderabbit.ai/pricing` | **PUBLISHED OFFER ONLY:** published as free for public repositories; verified against the pricing page on 2026-09-01. **Subject to provider terms and to separate account-level verification.** This is the advertised offer, **not** evidence about Dudo's account | Automated PR review on `Dudo-Core`. **Active**: real reviews completed on `c09693f`, `477753f`, `1b8e2fa`, `685b99e`, `3cc5018` | active — **account plan UNVERIFIED** | n/a | Rate limiting only, which is **acceptable and must never trigger an upgrade**. **Dudo's own plan, billing status, paid add-ons and spending configuration remain UNVERIFIED** — C5 / B-CodeRabbit, blocked on user dashboard evidence | Team Lead | Offer 2026-09-01; **account state not verified** |
 | **GitHub Packages** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not publish packages. Not verified in detail because it is prohibited, not merely unused | Team Lead | 2026-09-01 (prohibited) |
 | **GitHub Codespaces** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not use. Prohibited by `0008` | Team Lead | 2026-09-01 (prohibited) |
 
@@ -84,12 +84,34 @@ decided tenancy model one shared database holds every Organization, so restoring
 customer to a point in time is effectively unavailable — an accepted MVP limitation
 (`0006` §0.7), not an operational gap to be discovered during an incident.
 
-**CodeRabbit is in scope and is not yet evidenced.** `0008` covers "Cloudflare, GitHub, and
-GitHub-integrated development automation." CodeRabbit is exactly that, is configured at the
-repository root, and is **already active** — it completed real reviews during Phase 0. Its
-plan and cost have **not** been verified, so cost conditions C1–C3 and C5 cannot currently
-be evidenced for it. It is very likely free for public repositories; that is a belief, not
-evidence. **Verify the plan before the gate is called complete.**
+### CodeRabbit — two separate claims, never to be merged
+
+`0008` covers "Cloudflare, GitHub, and GitHub-integrated development automation."
+CodeRabbit is exactly that, is configured at the repository root, and is **already active**
+— it completed real reviews during Phase 0 on `c09693f`, `477753f`, `1b8e2fa`, `685b99e`
+and `3cc5018`.
+
+Two claims are involved and they are **not** the same claim. Collapsing them is what
+produced the contradiction a reviewer caught on `3cc5018`, where this register said the
+plan was verified in one row and unverified six paragraphs later.
+
+| | Claim | Status |
+|---|---|---|
+| **A** | **Published offer.** CodeRabbit advertises free use for public repositories | **VERIFIED** against the published pricing page, 2026-09-01 |
+| **B** | **Dudo account state.** The actual plan, billing status, paid add-ons and spending configuration of the connected Dudo account | **UNVERIFIED** — pending user dashboard evidence, C5 / B-CodeRabbit |
+
+**A does not evidence B.** A published offer is what a provider advertises to everyone; it
+is not a statement about which plan this account is on, what payment instrument is
+attached, or whether an add-on is active. Only the account owner can see B, and billing
+pages are not readable through the available tooling.
+
+**Do not write "FREE FOREVER" as an unconditional platform guarantee.** The accurate form
+is: *published as free for public repositories; verified on 2026-09-01; subject to provider
+terms and separate account-level verification.*
+
+**Do not claim the account itself is verified free.** It is not, and **C5 stays BLOCKED**
+until the user completes the Group B actions in `billing-guardrails.md`. Cost conditions
+C1–C3 cannot be evidenced for CodeRabbit's account state either, for the same reason.
 
 **Rows marked `unverified` have not been checked against their official source.** They
 carry no number because `CLOUDFLARE_STANDARD.md` §10 forbids quoting an unverified limit.

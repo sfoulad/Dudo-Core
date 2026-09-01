@@ -18,11 +18,20 @@ No setting was changed. These are observations, confirmed against the GitHub API
 | A3 | No workflow exists that could use a larger runner | 0 workflows in both repositories | ✅ |
 | A4 | No repository-level Actions secrets | 0 in both | ✅ |
 | A5 | Free security features on, paid ones off | secret scanning **enabled**, push protection **enabled** — both free on public repos | ✅ |
-| A6 | CodeRabbit is free for public repositories | Verified against `coderabbit.ai/pricing`, 2026-09-01 | ✅ |
+| A6 | **CodeRabbit's PUBLISHED PUBLIC-REPOSITORY OFFER** — the advertised offer only, **not** the Dudo account | Read from the provider's pricing page | ✅ **offer only** |
 
-**A6 note:** free forever for public repos, no paid plan required, no metered billing on
-the OSS tier. Paid tiers and usage-based add-ons exist for private repositories and are
-**prohibited**.
+**A6, stated precisely.** Published pricing advertises CodeRabbit as free for public
+repositories; verified from the provider's pricing page on 2026-09-01. **This does not
+verify the Dudo account plan, billing state, add-ons or future terms.**
+
+A6 stays in Group A **only** under that definition. It is evidence about what the provider
+advertises, and about nothing else. Provider pricing and terms can change, so the check is
+dated and must be repeated — it is not a standing guarantee.
+
+Paid tiers and usage-based add-ons exist for private repositories and are **prohibited**
+(`0008`). **Dudo's own account plan, billing state, paid add-ons and spending configuration
+are UNVERIFIED** — that is a Group B item below, and **C5 stays BLOCKED** until you supply
+dashboard evidence.
 
 ## Group B — account-owner actions, BLOCKED until you confirm
 
@@ -39,6 +48,7 @@ confirm completion.
 | B5 | Confirm **no automatic upgrade** to Workers Paid is enabled | Cloudflare → Billing |
 | B6 | Enable **usage notifications** for Workers, D1, R2, Queues | Cloudflare → Notifications |
 | B7 | Confirm **Workers for Platforms is not enabled** (paid-only, prohibited) | Cloudflare → Workers for Platforms |
+| **B8** | **Confirm the actual CodeRabbit plan, billing state, paid add-ons and spending configuration for the Dudo account.** A6 verifies the *published offer* only and is not evidence about this account | CodeRabbit → Organization settings → Billing / Subscription |
 
 > **A critical distinction, because it is easy to get backwards.**
 >
@@ -79,12 +89,21 @@ confirm completion.
 
 ## CodeRabbit
 
-- [ ] **Confirm which CodeRabbit plan the account is on** and that it is free for public
-      repositories. It is **already active** on `Dudo-Core` and completed reviews during
-      Phase 0, so this is a live service, not a future one.
+**Two claims, never to be merged.** The **published offer** is VERIFIED as of a dated source
+check (A6). The **actual Dudo account** is UNVERIFIED until you supply dashboard evidence.
+A published offer is what the provider advertises to everyone; it says nothing about which
+plan this account is on, what payment instrument is attached, or whether an add-on is
+active.
+
+- [ ] **B8 — Confirm the actual CodeRabbit plan, billing state, paid add-ons and spending
+      configuration for the Dudo account.** It is **already active** on `Dudo-Core` and has
+      completed real reviews on `c09693f`, `477753f`, `1b8e2fa`, `685b99e` and `3cc5018`,
+      so this is a live service, not a future one.
 - [ ] Confirm no paid seat, trial-to-paid conversion, or per-review charge applies.
 - [ ] If it is not free on the current plan, **disable it rather than pay** — `0008` permits
       no charge without your written approval.
+- [ ] Re-check the published pricing page when relied on again. **Provider pricing and terms
+      can change**, so A6 is a dated observation, not a standing guarantee.
 
 ## Standing rules
 
@@ -101,9 +120,17 @@ confirm completion.
 repositories use free features only, and `Dudo-Plan` is a private repository within GitHub
 Free's included limits.
 
-**One live caveat: CodeRabbit is active and its plan is unverified.** It has already
-completed real reviews on `Dudo-Core`. It is very likely free for public repositories — but
-that is a belief, not evidence, and `0008` does not accept beliefs. Verify it.
+**One live caveat: CodeRabbit is active and THIS ACCOUNT'S plan is unverified.** It has
+already completed real reviews on `Dudo-Core`.
+
+Keep the two apart, because only one of them is evidence:
+
+- **Published offer — VERIFIED.** The provider's pricing page advertised free use for
+  public repositories, read on 2026-09-01. Dated, and subject to change.
+- **This account's plan, billing state, add-ons and spending configuration — UNVERIFIED.**
+  Inferring it from the published offer is a belief, and `0008` does not accept beliefs.
+
+**C5 stays BLOCKED** until B8 supplies dashboard evidence for the second one.
 
 Apart from CodeRabbit, the exposure is entirely **future**: the first Cloudflare resource
 and the first workflow. Complete this checklist before either happens.

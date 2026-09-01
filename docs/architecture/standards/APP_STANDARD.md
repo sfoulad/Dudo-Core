@@ -197,8 +197,15 @@ In addition to `TESTING_STANDARD.md` §8:
 - [ ] Every new Action declares permission, scope, sensitivity, schemas, and error set.
 - [ ] Every new Action at `scope: own` declares `targetEntity`, and that entity declares an
       `ownershipField` naming one of its own fields (VAL-OWN, `AUTHORIZATION_STANDARD.md`
-      §4). The referential half is unenforced until VALIDATOR-AZ7 runs — check it by hand
-      and say that you did.
+      §4). The referential half — that `targetEntity` resolves to an entity declared in the
+      same manifest, and that the **resolved** entity declares the `ownershipField` — is
+      checked by **VALIDATOR-AZ7, which exists and has been executed against the recorded
+      fixtures**: `packages/contracts/validation/app-manifest-relations.mjs` (ADR `0009`),
+      dependency-free. **Run it against your manifest and report the result.** It is **not
+      wired into CI or any installation path**, so nothing runs it for you and a manifest
+      can reach review unchecked. JSON Schema validates the **format** half only — it does
+      not evaluate this clause, and no JSON Schema implementation is executed in this
+      repository.
 - [ ] Every new permission exists in `permission-catalog.yaml`.
 - [ ] Every published and consumed event exists in `event-catalog.yaml`, with a version.
 - [ ] No cross-App storage access anywhere in the change.
