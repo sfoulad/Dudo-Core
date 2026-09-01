@@ -74,7 +74,7 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 | `0004-repository-structure.md` | Accepted | The planning-source layout — `platform/`, `apps/` (reserved for installable business Apps), `connectors/`, `packages/`, `agents/`, `docs/`. Contract authorship moves from `core-agent` to `architecture-agent`. |
 | `0005-foundation-gate-for-phases-0-3.md` | Accepted | Suspends the three delivery-only steps for Phases 0–3 and replaces them with a seven-condition Foundation Gate. Security, tenant isolation, contract compatibility, ownership, PR review, truthful reporting, secrets, and production controls are **not** suspended. |
 | `0006-tenancy-model.md` | **Accepted** | **Option A — one shared production D1 database — with mandatory `TenantStoreResolver` indirection.** Scoped to the Zero-Cost MVP while `0008` is active. B excluded; C is the approved migration candidate. Free-tier budget: 4 of 10 databases allocated, 5–10 reserved. |
-| `0007-logical-permission-model.md` | Proposed | The logical permission model `0001` requires before SDK work. States the wildcard/scope intersection rule whose absence caused CRIT-1. **Not accepted.** |
+| `0007-logical-permission-model.md` | **Accepted** | The logical permission model `0001` requires. **Accepted 2026-09-01 subject to ten binding rules:** Core is the only authorization authority; deny by default; no wildcards; explicit registration; requested scope cannot exceed user/role/tenant/App scope; Apps request but never grant; unknown/malformed/reserved fail closed; every `own`-scoped Action identifies target Entity and ownership relation; permission changes are audited; third-party Apps get least-privilege revocable tenant-scoped grants. |
 | `0008-zero-cost-mvp-infrastructure.md` | **Accepted** | Cloudflare and GitHub cost must remain **USD 0 / BD 0 per month**. Free allowances only; Workers Paid and Workers for Platforms prohibited. No agent may approve paid usage. |
 | `0009-phase-0-zero-dependency-contract-relation-validator.md` | **Accepted** | A narrow Phase 0 exception: one zero-dependency Node module enforcing the AZ7 referential rule JSON Schema cannot express, closing CWE-863. **Foundation Gate tooling, not product runtime.** Approves no toolchain, no dependency, and no Phase 1 work. |
 
@@ -95,16 +95,19 @@ and SwiftUI is not approving any package or third-party dependency.
 
 ### Scheduled but not yet written
 
-1. ~~The logical App permission model~~ — **drafted** as `0007`, **Status: Proposed**.
-   Needs user acceptance before any SDK work.
-2. The App permission and trust ADR — required before any SDK or runtime work.
+1. ~~The logical App permission model~~ — **done.** `0007`, **Accepted 2026-09-01** with ten
+   binding rules.
+2. The App permission and trust ADR — required before any SDK or runtime work. `0007`
+   accepts the *logical model*; it does not decide trust, review or admission.
 3. The App isolation mechanism — `0003` settled the stack, and `0008` now prohibits Workers
    for Platforms as paid-only, so this needs a record that reaches a **free** mechanism.
 4. Contract transport and versioning mechanics.
 5. Break-glass platform-operator access (AZ3) — `platform-admin` was correctly narrowed by
    the CRIT-2 fix and is not operable for support until this exists.
 6. How a principal comes to hold an `own`-scope permission (AZ5).
-7. Wildcard expansion semantics (`0007` D6) — the general rule behind CRIT-1.
+7. ~~Wildcard expansion semantics (`0007` D6)~~ — **closed by `0007`'s acceptance.** Binding
+   rule 3 prohibits wildcard permissions outright, so there are no expansion semantics to
+   define. Rule 5 states the intersection rule whose absence caused CRIT-1.
 
 *Tenancy was item 4 here. It is now decided — see `0006`.*
 

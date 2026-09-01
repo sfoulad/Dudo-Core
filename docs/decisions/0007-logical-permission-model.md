@@ -1,13 +1,42 @@
 # 0007 — The logical permission model
 
-- **Status:** **Proposed**
-- **Date:** 2026-09-01
-- **Deciders:** **Undecided.** The user decides; the Team Lead records.
+- **Status:** **Accepted**
+- **Date:** 2026-09-01 (drafted) · **Accepted 2026-09-01**
+- **Deciders:** **User** (explicit written acceptance, 2026-09-01), Dudo Team Lead
 - **Owning agent:** Team Lead records. Drafted by `architecture-agent`.
 
-> **This record decides nothing while it reads `Proposed`.** It is the draft that `0001`
-> decision 2 requires and `AUTHORIZATION_STANDARD.md` AZ1 records as outstanding. Nothing
-> implements against it until an accepted version exists.
+> **Accepted.** This record satisfies the obligation `0001` decision 2 requires and
+> `AUTHORIZATION_STANDARD.md` AZ1 records as outstanding. Implementation may now proceed
+> against it.
+
+## Binding rules
+
+The user accepted this record on 2026-09-01 subject to the following ten rules. They are
+binding on every agent and on the Team Lead, and they govern wherever the body of this
+record is silent or less specific.
+
+1. **Core is the only authorization authority.** No client, App, plugin, SDK or connector
+   decides authorization.
+2. **Deny by default.** Absence of an explicit grant is a denial.
+3. **No wildcard permissions.** Not in roles, not in manifests, not in grants.
+4. **Every permission must be registered explicitly** in `permission-catalog.yaml`.
+   Unregistered means non-existent.
+5. **Requested scope cannot exceed the user, role, tenant or App scope.** The effective
+   scope is the intersection, never the union.
+6. **Apps and plugins may request permissions but cannot grant or approve them.** A
+   request is not a grant, and no component grants to itself.
+7. **Unknown, malformed or reserved permissions fail closed.** Rejected outright, never
+   accepted and then evaluated as unrestricted.
+8. **Every `own`-scoped Action must identify its target Entity and ownership relationship**
+   (VAL-OWN, VALIDATOR-AZ7).
+9. **Permission changes require auditing.** Grants, revocations and role changes are
+   audited events.
+10. **Third-party Apps receive least privilege and revocable, tenant-scoped grants.**
+    Narrow, revocable, and scoped to exactly one tenant.
+
+Rule 3 is the general form of the defect recorded as CRIT-1. Rule 5 is the intersection
+rule whose absence allowed it. Rule 7 is why a malformed scope is a rejection rather than
+a fallback.
 
 ---
 
@@ -414,13 +443,15 @@ and they are listed so acceptance is not mistaken for "no work follows":
 
 ## 6. Approval
 
-**Not approved. Not accepted. Status is Proposed.**
+**Accepted by the user in writing on 2026-09-01**, subject to the ten binding rules stated
+at the head of this record. `architecture-agent` drafted it and holds no approval authority;
+a Team Lead instruction is not user approval (`.claude/rules/security.md` §8). The Team Lead
+records; the user decided.
 
-No user approval has been given for this model. `architecture-agent` drafted it and holds no
-approval authority; a Team Lead instruction is not user approval
-(`.claude/rules/security.md` §8). The Team Lead records; the user decides.
+With this acceptance, `AUTHORIZATION_STANDARD.md` is backed by a decision rather than
+standing alone, and the `0001` decision 2 obligation is discharged.
 
-Until an accepted version of this record exists, `AUTHORIZATION_STANDARD.md` remains a
-standard rather than a decision, `permission-catalog.yaml` remains entirely `proposed`, and
-**no SDK or App-runtime work begins** — that gate is `0001` decision 1, and this record does
-not open it.
+**What acceptance does not open.** SDK and App-runtime work still requires the App
+permission and trust ADR, and the App isolation mechanism — both still unwritten, and both
+constrained by `0008`, which prohibits Workers for Platforms as paid-only. Accepting the
+logical model does not decide the isolation mechanism that enforces it.
