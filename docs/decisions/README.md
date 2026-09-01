@@ -113,13 +113,15 @@ and SwiftUI is not approving any package or third-party dependency.
 
 ### Open user decisions
 
-- **Software license** for both public repositories — public visibility does not decide
-  it, and no license file exists. **Apache-2.0 is the standing recommendation**
-  (permissive, explicit patent grant, well understood by the developer ecosystem an
-  extensible platform depends on). **Not adopted:** it permits commercial reuse by anyone,
-  including competitors, and that trade-off needs an explicit decision rather than a
-  default. No `LICENSE` is added until the user confirms.
-- **The first vertical feature slice.**
+- ~~**Software license**~~ — **decided 2026-09-01: Apache License 2.0** for both
+  `Dudo-Core` and `Dudo-Apple`. Unmodified upstream text, no custom clauses. The
+  trade-off was accepted knowingly: it permits commercial reuse by anyone, including
+  competitors.
+- ~~**The first vertical feature slice**~~ — **decided 2026-09-01: Customer Directory.**
+  Create, list, search, view, edit, archive and restore a customer, under strict
+  Organization isolation and role-based authorization, with create/update/archive/restore
+  audited and one shared contract consumed by Core, web and Apple. Explicitly excluded
+  from this slice: invoicing, payments, accounting, leads, sales pipelines, automation.
 - ~~Repository creation and remote configuration~~ — **done 2026-08-31.** Both
   repositories are public; `Dudo-Core` has its foundation commit, `Dudo-Apple` is empty
   pending its Xcode project.
