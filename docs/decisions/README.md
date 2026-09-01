@@ -108,6 +108,16 @@ and SwiftUI is not approving any package or third-party dependency.
 5. Break-glass platform-operator access (AZ3) — `platform-admin` was correctly narrowed by
    the CRIT-2 fix and is not operable for support until this exists.
 6. How a principal comes to hold an `own`-scope permission (AZ5).
+7. **Whether the dependency-free validator extends beyond AZ7 — DEFERRED, not rejected.**
+   `qa-agent` observed that both `0011` clauses and the `0012` path grammar are decidable
+   without a JSON Schema engine — the lifecycle rule is two-branch key logic and the path
+   rule is one regex that can be read from the schema at runtime so it cannot drift. Roughly
+   thirty lines. **Deferred deliberately.** `0009` approved *one* module for *one* rule
+   family and said in terms that the precedent "cannot grow into a toolchain without a new
+   decision"; accreting a second ad-hoc validator is exactly the growth it forbids, and the
+   right moment to revisit is when `TS1` lands and there is a real validator story rather
+   than two hand-rolled modules. Until then the six fixtures stand as **NOT RUN**
+   conformance cases, which is honest. Revisit at `TS1`.
 8. **Audit-write ordering for irreversible destruction.** Every Action writes its audit
    record *after* the operation succeeds — except a purge, which must write *before*
    destroying the data, because after the purge there is nothing left to reconstruct the
