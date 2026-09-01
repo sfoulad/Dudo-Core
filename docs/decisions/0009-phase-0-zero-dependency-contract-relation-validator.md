@@ -91,6 +91,28 @@ produced the earlier "not expressible in JSON Schema" overclaim that had to be r
 
 **Do not claim a production runtime validator exists.** It does not.
 
+## Review dispositions
+
+### `maxLength: 64` on `$defs/entityName` — DECLINED
+
+CodeRabbit's review of `685b99e` recommended restoring `maxLength: 64` to
+`$defs/entityName`. It is not restored.
+
+> **Declined by explicit user decision. No entity-name length policy has been approved. A
+> reviewer suggestion cannot introduce a new product constraint.**
+
+The keyword arrived incidentally while AZ7 was being implemented — it was never a decision,
+and the user removed it to keep the change zero-delta beyond AZ7. Reinstating it on a
+reviewer's suggestion would let a review introduce a product constraint that no record
+approves, which inverts how decisions enter this repository.
+
+`$defs/entityName` therefore carries `type`, `minLength: 1`, and `pattern` only.
+`AUTHORIZATION_STANDARD.md` §4.1's enforcement table was corrected to match, so the
+standard and the schema agree.
+
+If an entity-name length limit is ever wanted, it is a product decision and needs its own
+record.
+
 ## Approval
 
 The user approved this exception in writing on 2026-09-01, enumerating both what it permits

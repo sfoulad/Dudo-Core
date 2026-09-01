@@ -196,7 +196,7 @@ schema language, and it is the *only* part that is one.
 | Guarantee | Where | Keywords |
 |---|---|---|
 | An Action at `scope: own` declares `targetEntity` | `$defs/action.allOf[1]` | `if` { `properties.scope.const: "own"`, `required: ["scope"]` } → `then` { `required: ["targetEntity"]` } |
-| `targetEntity` is well-formed and non-empty | `$defs/action.properties.targetEntity` → `$defs/entityName` | `$ref`, `type: string`, `minLength: 1`, `maxLength: 64`, `pattern: ^[A-Z][A-Za-z0-9]*$` |
+| `targetEntity` is well-formed and non-empty | `$defs/action.properties.targetEntity` → `$defs/entityName` | `$ref`, `type: string`, `minLength: 1`, `pattern: ^[A-Z][A-Za-z0-9]*$` |
 | An Action carries no *other* targeting field the runtime might read instead | `$defs/action` | `additionalProperties: false` |
 | A manifest using `own` declares at least one owned entity | top-level `allOf[0]` | `if` { `properties.actions.contains` { `required: ["scope"]`, `properties.scope.const: "own"` } } → `then` { `required: ["entities"]`, `properties.entities.contains.required: ["ownershipField"]` } |
 | The declaring and referencing forms of an entity name cannot drift | `$defs/entityName` | one definition, `$ref`-ed by `entity.name` and `action.targetEntity` |
@@ -231,10 +231,15 @@ closed — the manifest is rejected and the App does not install:
    identifier arriving in a request body, query string, header, or SDK argument is rejected,
    never merged and never preferred.
 
-Until VALIDATOR-AZ7 exists and runs in CI, clause 3 is **unenforced**, and the residual
-exposure is exactly this: an App declaring ownership on one entity and applying `own` to an
-Action whose `targetEntity` is a different, unowned entity. The manifest now *records* enough
-to detect it; nothing detects it yet. No checklist box below may be ticked as though it did.
+VALIDATOR-AZ7 now exists — `packages/contracts/validation/app-manifest-relations.mjs`,
+approved by `docs/decisions/0009` as a narrow Phase 0 exception — and it detects exactly the
+residual case: an App declaring ownership on one entity and applying `own` to an Action whose
+`targetEntity` is a different, unowned entity. Run against the AZ7 fixture set it is 17/17
+correct, rejecting that manifest with `AZ7_TARGET_ENTITY_NOT_OWNED`. **Until it runs in CI
+and on the install path, clause 3 is enforceable but not automatically enforced** — a
+manifest nobody ran it against has not been checked, and the module is Foundation Gate
+tooling, not a production installation-time validator (`0009`). Tick the checklist box below
+against an actual run and against nothing else.
 
 ---
 
@@ -366,8 +371,11 @@ Audit records are append-only and are never mutated. Details in
 - [ ] VAL-OWN clause 3: every `own`-scoped Action's `targetEntity` resolves to exactly one
       entity in the same manifest, and that entity declares a valid `ownershipField` —
       **not enforced by the schema and not enforceable by it** (§4.1). Tick only against a
-      run of VALIDATOR-AZ7. While no validator exists, this box stays empty; leaving it
-      empty is the honest state, not an outstanding chore.
+      run of VALIDATOR-AZ7 (`packages/contracts/validation/app-manifest-relations.mjs`,
+      `0009`) over the manifest in question — the validator exists and its AZ7 fixture run is
+      17/17 correct, so this box is now tickable by running it. A tick records that the
+      validator was run and passed; it does **not** record automated enforcement, because no
+      CI job and no install path invokes it yet.
 - [ ] No ownership relation is accepted from a caller at invocation time (§4, VALIDATOR-AZ7
       item 6).
 - [ ] No App entity field is classified `secret`.
@@ -390,5 +398,5 @@ Audit records are append-only and are never mutated. Details in
 | AZ4 | **Permission grouping for the install screen.** Twenty individually-named permissions are unreadable, and unreadable consent is not consent. | Group by resource with an expandable detail view; the catalog carries a `group` field for this. Product decision, flagged. |
 | AZ5 | **How does a principal come to hold an `own`-scope permission?** `core.notification.read` is declared `scopes: [own]`, so no role at `organization`, `business`, `branch` or `team` scope can legitimately carry it — yet every principal must read their own notifications. | Either a baseline self-role held at `own` scope by every principal, or widen the permission's declared scopes. Both are model decisions. Fail-closed meanwhile: the permission is in no seed role, so it is granted to nobody. Needed in Phase 1. |
 | AZ6 | **What does a wildcard in a role definition expand to?** §3.2 says only where one may appear. The naive union reading is tenant-to-platform escalation; the intersection reading is drafted as `docs/decisions/0007` D6, which is **Proposed and decides nothing**. | Record the expansion rule, then add the catalog lint that recomputes every role's expanded set and fails on any permission whose declared `scopes` exclude the role's `scope`. Until then no role uses a wildcard and none may be added. Blocks Phase 1 and the CI lint. |
-| AZ7 | **Binding an Action to its target entity.** *Partly closed.* `$defs/action` now carries `targetEntity`, and the schema requires it whenever `scope` is `own`, so an `own`-scoped Action can no longer borrow an unrelated entity's `ownershipField` to satisfy VAL-OWN unnoticed. Three things remain open. (a) The **referential clause is unenforced**: VALIDATOR-AZ7 (§4.1) is specified but no validator exists, and none can run until a toolchain is approved (TS1, `CONSTITUTION.md` Rule 12). (b) This is a **manifest-format change** touching the SDK, Studio, `APP_STANDARD.md`, and every future published manifest; it needs its own decision record, which the Team Lead owns. (c) An Action may target **exactly one** entity today. Multi-entity Actions are deliberately not given targeting semantics here rather than invented. | Team Lead records the format change and VALIDATOR-AZ7 as a decision; the validator is built with the Phase 1 toolchain and wired into CI. Do not treat the schema half as the rule — §4.1 states which half is which, and that distinction is load-bearing. |
+| AZ7 | **Binding an Action to its target entity.** *Contract enforcement closed; automated and runtime enforcement open.* `$defs/action` carries `targetEntity`, and the schema requires it whenever `scope` is `own`, so an `own`-scoped Action can no longer borrow an unrelated entity's `ownershipField` to satisfy VAL-OWN unnoticed. The referential clause is no longer unenforceable: `packages/contracts/validation/app-manifest-relations.mjs` implements VALIDATOR-AZ7 (§4.1) as a zero-dependency module, approved by `0009` as a narrow Phase 0 exception, and it has been **run against the AZ7 fixtures — 17/17 outcomes correct**, with `az7-n4`, the CWE-863 exploit manifest, moving ACCEPT → REJECT as `AZ7_TARGET_ENTITY_NOT_OWNED` while the positive owned-target fixture `az7-p2` still accepts. Three things remain open. (a) **Nothing runs it automatically** — no CI job, no install path, no runtime. The clause is *enforceable and proven against fixtures*; it is **not** enforced in production, and writing it up as though it were is the CRIT-4 overclaim. (b) This is a **manifest-format change** touching the SDK, Studio, `APP_STANDARD.md`, and every future published manifest; `0009` records the validator, not the format change, which still needs its own decision record — the Team Lead owns it. (c) An Action may target **exactly one** entity today. Multi-entity Actions are deliberately not given targeting semantics here rather than invented. | Team Lead records the format change; CI runs the validator over the AZ7 fixtures, and Phase 1 wires it into the install path against that same conformance suite (`0009`). Do not treat the schema half as the rule, and do not treat a fixture run as production enforcement — §4.1 states which half is which, and that distinction is load-bearing. |
 | AZ8 | **Marketplace moderation has no permission it may legitimately hold to view Apps.** `marketplace-moderator` is `platform` scope; `core.app.read` is declared `scopes: [organization, business]` and has been removed from it (§4). Moderation reviews *published App versions*, which is not the same object as *a tenant's installed Apps*. | Declare a new permission at `platform` scope over published App versions and marketplace submissions — not a widening of `core.app.read`, which would push a tenant-scope permission above the tenant boundary. Declaring a new platform-scope permission is a model decision, so it is recorded, not invented. Related to AZ3 but distinct: this needs no tenant business data. Blocks Phase 6 moderation. |

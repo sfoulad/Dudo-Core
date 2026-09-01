@@ -816,19 +816,50 @@ openQuestions:
       Binding an Action to its target entity. PARTLY CLOSED. app-manifest.schema.json
       $defs/action now carries targetEntity and the schema requires it whenever scope is
       'own', so an 'own'-scoped Action can no longer borrow an unrelated entity's
-      ownershipField to satisfy the manifest-level check. What remains open: (a) the
-      referential clause is UNENFORCED — VALIDATOR-AZ7 is specified in
-      AUTHORIZATION_STANDARD.md §4.1 but no validator exists and none can run until a
-      toolchain is approved (TS1); (b) this is a manifest-format change touching the SDK,
+      ownershipField to satisfy the manifest-level check. The referential clause is now
+      ENFORCEABLE AND PROVEN AGAINST FIXTURES — NOT ENFORCED IN PRODUCTION. VALIDATOR-AZ7
+      exists: packages/contracts/validation/app-manifest-relations.mjs, exporting
+      validateManifestRelations(manifest) -> { valid, errors }, approved by ADR 0009. It
+      runs WITHOUT selecting TS1 — that is the whole point of the 0009 exception: zero
+      dependencies, the Node standard runtime only, no framework, no package.json. It
+      enforces the contract relationships recorded today: targetEntity required for
+      own-scoped Actions, resolution against the entities in the same manifest, rejection
+      of missing, unknown, duplicate and ambiguous targets, and rejection when the
+      RESOLVED entity lacks ownershipField — an ownershipField on an unrelated entity
+      satisfies nothing. Measured on 2026-09-01 across the 19 active cases enumerated in
+      packages/testing/fixtures/app-manifest/index.json at fixtureSetVersion 1, on Node
+      v22.22.1, against packages/contracts/validation/app-manifest-relations.mjs: 16 PASS
+      / 0 FAIL / 3 NOT RUN / 0 HARNESS ERROR — run twice, independently, identical both
+      times. Read the scope before reading the number: all 16 passes are at the
+      RELATION-VALIDATOR layer, EXECUTED. The JSON Schema layer was executed for ZERO
+      cases and CANNOT be executed in Phase 0 — there is no JSON Schema implementation in
+      the repository, no package.json and no node_modules, TS1 is undecided, and ADR 0009
+      prohibits installing one — so every schema-layer verdict in the fixture set is
+      DETERMINED BY INSPECTION, NOT EXECUTED. The three NOT RUN are runtime-obligation
+      cases no static validator can decide. These counts are one measurement of one
+      fixture-set version on one date, not a permanent invariant; they move whenever the
+      fixture set does. az7-n4, the CWE-863 exploit, REJECTS with
+      AZ7_TARGET_ENTITY_NOT_OWNED; az7-n8 REJECTS with
+      AZ7_TARGET_OWNERSHIP_FIELD_UNDECLARED while its control az7-p2 ACCEPTS, and that
+      pair is what proves the ownershipField lookup is scoped to the RESOLVED entity
+      rather than to the manifest — the substitution gap az7-n8 was created to close.
+      What remains open: (a) nothing runs the validator automatically — no CI job, no
+      installation path, no runtime — so Phase 1 integration REMAINS MANDATORY before any
+      installation or admission path ships; (b) this is a manifest-format change touching the SDK,
       Studio, APP_STANDARD.md and every future published manifest, so it needs its own
-      decision record; (c) an Action targets exactly one entity — multi-entity targeting
-      semantics are deliberately not invented here.
+      decision record, which 0009 does NOT cover; (c) an Action targets exactly one entity
+      — multi-entity targeting semantics are deliberately not invented here.
     recommendation: >-
-      Team Lead records the format change and VALIDATOR-AZ7 as a decision; the validator
-      is built with the Phase 1 toolchain and wired into CI. Do not read the schema half
-      as the whole rule — the split in §4.1 is load-bearing, and collapsing it is the
-      overclaim that produced the original defect.
-    blocks: "The referential clause of VAL-OWN, until VALIDATOR-AZ7 runs in CI."
+      Team Lead records the manifest-format change as a decision — 0009 approves the
+      validator, not the format. Wire VALIDATOR-AZ7 into CI and into the installation and
+      admission paths in Phase 1; until it runs there, a manifest can reach installation
+      without the referential check ever having been applied to it. Do not read the schema
+      half as the whole rule — the split in §4.1 is load-bearing, and collapsing it is the
+      overclaim that produced the original defect. 'Proven against fixtures' is not
+      'enforced in production'; do not write the second.
+    blocks: >-
+      Automated enforcement of the referential clause of VAL-OWN, until VALIDATOR-AZ7 runs
+      in CI and on the installation path.
   - id: AZ8
     question: >-
       Marketplace moderation has no permission it may legitimately hold. core.app.read

@@ -14,7 +14,7 @@
     "why": "why this outcome is required, in security terms",
     "notes": "the schema-versus-validator split for this case, and any trap in reading its result",
     "manifest": "present when kind is 'manifest' — the App manifest under test",
-    "invocation": "present when kind is 'invocation' — the declaring case, the authenticated context, the client-supplied request, the attack, and the required outcome"
+    "invocation": "present when kind is 'invocation' — the declaring case, the authenticated context, the client-supplied request, the attack, and the required outcome. A case may additionally carry 'preExistingState' (the synthetic rows the call runs against) and 'additionalVectors' (further caller-controlled channels the same rule must close, each with its own note on what rejecting it does and does not prove)"
   },
   "sets": [
     {
@@ -39,12 +39,14 @@
         { "caseId": "az7-n5c", "file": "az7/az7-n5c-own-scope-empty-target-entity.json" },
         { "caseId": "az7-n5d", "file": "az7/az7-n5d-own-scope-case-variant-target-entity.json" },
         { "caseId": "az7-n6", "file": "az7/az7-n6-own-scope-zero-entities.json" },
+        { "caseId": "az7-n8", "file": "az7/az7-n8-own-scope-ownership-field-name-matched-on-unrelated-entity.json" },
         { "caseId": "az7-p1", "file": "az7/az7-p1-own-scope-targets-owned-entity.json" },
         { "caseId": "az7-p2", "file": "az7/az7-p2-own-scope-targets-owned-entity-alongside-unowned-entity.json" },
         { "caseId": "az7-p3", "file": "az7/az7-p3-non-own-action-without-target-entity.json" },
         { "caseId": "az7-p4", "file": "az7/az7-p4-zero-entity-non-entity-operation.json" },
         { "caseId": "az7-r1", "file": "az7/az7-r1-invocation-supplied-ownership-relation.json" },
         { "caseId": "az7-r2", "file": "az7/az7-r2-invocation-supplied-target-entity-override.json" },
+        { "caseId": "az7-r3", "file": "az7/az7-r3-cross-tenant-invocation.json" },
         { "caseId": "az7-q1", "file": "az7/az7-q1-non-own-action-with-target-entity.json" },
         { "caseId": "az7-q2", "file": "az7/az7-q2-ownership-field-names-no-declared-field.json" }
       ],
@@ -58,11 +60,23 @@
           "reason": "The same empty entities array, with and without an own-scope Action. Proves the rejection in n6 comes from 'own' and not from emptiness."
         },
         {
+          "pair": ["az7-n8", "az7-p2"],
+          "reason": "Identical in every respect except which entity declares the field named 'created_by' — on the resolved target 'Widget' in p2, on the unrelated 'Setting' in n8. n8 must be REJECTED and p2 must be ACCEPTED. Both rejected means the validator refuses own-scope Actions instead of scoping the ownershipField lookup to the resolved entity; both accepted means the lookup is manifest-wide and an unrelated entity's field can still substitute, which is the substitution gap one level below az7-n4. Neither failure is visible from n8 alone. az7-p2 is the over-rejection control for BOTH az7-n4 and az7-n8."
+        },
+        {
           "pair": ["az7-n2", "az7-n5d"],
           "reason": "An unresolvable reference, and an unresolvable reference that differs only by case. Both must be REJECTED. Accepting n5d means reference resolution was made case-insensitive to fix n2, which is itself a bypass."
         }
       ],
       "excludedFromTotals": [],
+      "retiredCaseIds": [
+        {
+          "retiredCaseId": "az7-n7",
+          "status": "RETIRED AND NOT REUSED",
+          "replacedBy": "az7-r3",
+          "reason": "The cross-tenant invocation case was authored as az7-n7, which contradicted this set's own taxonomy: the n-series is manifest negatives and the r-series is invocation cases, and that case is kind 'invocation' with enforcedBy 'runtime'. It was renamed to az7-r3, the next free r number. The id az7-n7 is NOT reassigned to any future case, deliberately — it names the cross-tenant case in earlier QA reporting, and rebinding it would silently falsify every one of those references. The resulting gap between az7-n6 and az7-n8 in the n-series is intentional; a reader who cannot find az7-n7 should read this entry, not assume a missing file."
+        }
+      ],
       "excludedFromTotalsHistory": "az7-q1 and az7-q2 were authored as UNDECIDED open questions and excluded from totals. Both were subsequently decided by AUTHORIZATION_STANDARD.md §4.1 VALIDATOR-AZ7 — item 5 for az7-q1, item 3 for az7-q2 — and now carry expectedOutcome REJECT at the validator layer. Their case files keep the provenance."
     }
   ]

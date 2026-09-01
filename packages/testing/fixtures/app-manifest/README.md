@@ -37,11 +37,17 @@ packages/testing/fixtures/app-manifest/
 ├── README.md      this file
 ├── index.json     the case index and the case-file shape
 └── az7/           AZ7 — own-scope Actions must name the Entity they operate on
-    ├── az7-n1 … az7-n6    negatives, each must be REJECTED
+    ├── az7-n1 … az7-n8    negatives, each must be REJECTED — there is NO az7-n7
     ├── az7-p1 … az7-p4    positives, each must be ACCEPTED
-    ├── az7-r1, az7-r2     invocation-time obligations (runtime, not manifest)
+    ├── az7-r1 … az7-r3    invocation-time obligations (runtime, not manifest)
     └── az7-q1, az7-q2     OPEN QUESTIONS — expectedOutcome is UNDECIDED
 ```
+
+**There is no `az7-n7`, and the gap is deliberate.** That id named the cross-tenant
+invocation case, which is `kind: "invocation"` and belonged in the r-series by this set's
+own taxonomy; it is now **`az7-r3`**. The id is **not reused**, because it appears in
+earlier QA reporting as the cross-tenant case and rebinding it would silently falsify
+those references. `index.json` records the retirement under `retiredCaseIds`.
 
 `index.json` lists the cases and documents the case-file shape. It deliberately **does
 not repeat any expected outcome**: the case file is the single source of truth, so the
@@ -73,8 +79,8 @@ That splits AZ7 into two layers:
 | `runtime` | An invocation-time obligation. No manifest fixture can decide it. | Not applicable; these are not run against the schema at all. |
 | `undecided` | An open question. `expectedOutcome` is `UNDECIDED`. | **Excluded from every pass/fail total until the question is answered.** |
 
-Cases **az7-n2, az7-n4, az7-n5a, az7-n5d, az7-q1 and az7-q2 are `validator`**. A schema
-run will **ACCEPT** all six. **That accept is correct and expected.** Report it as
+Cases **az7-n2, az7-n4, az7-n5a, az7-n5d, az7-n8, az7-q1 and az7-q2 are `validator`**. A
+schema run will **ACCEPT** all seven. **That accept is correct and expected.** Report it as
 `NOT-DECIDABLE-BY-SCHEMA`, never as `FAIL`, and never as a defect in
 `app-manifest.schema.json`.
 
@@ -104,11 +110,15 @@ An Action declaring `scope: "own"`:
    — *validator*.
 3. That Entity **MUST** itself declare a valid `ownershipField` — *validator*.
 4. An `ownershipField` on an **unrelated** Entity **does NOT** satisfy it — *validator*.
-   This is the CWE-863 case, isolated in `az7-n4`.
+   This is the CWE-863 case, isolated in `az7-n4`. The same principle applies one level
+   down, from the entity to the field: an `ownershipField` may name only a field the
+   **resolved** Entity declares, and `az7-n8` is the case where an unrelated Entity
+   declares a field of that name and must not be allowed to substitute.
 5. Missing, unknown, malformed or ambiguous `targetEntity` **FAILS CLOSED** — rejected
    outright, never accepted and then evaluated as unrestricted.
 6. Clients and Apps **cannot supply an ownership relation at invocation time**
-   — *runtime*, `az7-r1` and `az7-r2`.
+   — *runtime*, `az7-r1`, `az7-r2`, and — one level out, at the tenant boundary rather
+   than the ownership boundary — `az7-r3`.
 
 ### Case-to-obligation map
 
@@ -122,10 +132,17 @@ numbered obligations as **VALIDATOR-AZ7**. Every case here maps to one:
 | `targetEntity` well-formed, via `$defs/entityName` (*schema*) | `az7-n5b`, `az7-n5c` |
 | VALIDATOR-AZ7 **1** — resolution, exactly one match | `az7-n2`, `az7-n5d`, `az7-q1` |
 | VALIDATOR-AZ7 **2** — entity names unique, ambiguity rejected | `az7-n5a` |
-| VALIDATOR-AZ7 **3** — resolved entity owns, and `ownershipField` names a real field | `az7-q2`, `az7-p1` |
-| VALIDATOR-AZ7 **4** — no substitution from an unrelated entity | **`az7-n4`**, `az7-p2` |
+| VALIDATOR-AZ7 **3** — resolved entity owns, and `ownershipField` names a real field | `az7-q2`, **`az7-n8`**, `az7-p1` |
+| VALIDATOR-AZ7 **4** — no substitution from an unrelated entity | **`az7-n4`**, `az7-p2`, and at field level `az7-n8` |
 | VALIDATOR-AZ7 **5** — `targetEntity` outside `own` carries no scoping semantics | `az7-q1`, `az7-p3` |
-| VALIDATOR-AZ7 **6** — ownership never asserted at invocation | `az7-r1`, `az7-r2` |
+| VALIDATOR-AZ7 **6** — ownership never asserted at invocation | `az7-r1`, `az7-r2`, `az7-r3` |
+
+`az7-n8` is the one case listed on two rows, and the split is deliberate: the **rule that
+rejects it** is item 3 — the validator emits `AZ7_TARGET_OWNERSHIP_FIELD_UNDECLARED` with
+`rule: "VALIDATOR-AZ7 item 3"` — while the **defect it closes** is item 4's
+no-substitution principle applied from the entity down to the field. Listing it only on
+item 4 would map it to a rule the validator does not cite; only on item 3 would hide the
+gap it exists to close.
 
 Two questions this fixture set raised were open when the cases were written and have
 since been decided; `az7-q1` and `az7-q2` keep the `q` prefix and their provenance so the
@@ -160,7 +177,11 @@ The fixtures are already runnable data. A runner needs to:
 7. Report the pairs listed in `index.json` under `pairsThatMustBeReportedTogether`
    **side by side**. `az7-n4` alone can be made green by refusing every `own`-scope
    Action; only `az7-n4` **and** `az7-p2` together show the rule is enforced rather than
-   the feature banned.
+   the feature banned. **`az7-n8` has exactly the same property** and the same control:
+   it too goes green under a validator that refuses every `own`-scope Action, so it is
+   reported next to `az7-p2` as well. `az7-p2` is the over-rejection control for **both**
+   negatives, and a report naming only the `az7-n4`/`az7-p2` pair leaves `az7-n8`
+   uncontrolled.
 
 Use the real Workers runtime when TS1 is decided, not a Node emulation — per TS1,
 testing Workers code in Node proves the wrong thing. For pure JSON-Schema fixtures the

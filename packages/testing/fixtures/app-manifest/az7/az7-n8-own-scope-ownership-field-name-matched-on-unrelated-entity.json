@@ -1,0 +1,83 @@
+{
+  "caseId": "az7-n8",
+  "kind": "manifest",
+  "title": "THE FIELD-LEVEL SUBSTITUTION CASE — the resolved Entity's ownershipField names a field only an UNRELATED Entity declares",
+  "coversRequirement": "VALIDATOR-AZ7 item 3 (the rule that rejects it) applied to the substitution gap of item 4 — AUTHORIZATION_STANDARD.md §4.1",
+  "target": "AZ7 / the ownershipField lookup is scoped to the RESOLVED entity, not to the manifest",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "'Widget' is the resolved target of an own-scope Action and declares ownershipField 'created_by'. 'Widget' declares no field of that name — its only field is 'label'. 'Setting', an unrelated entity that is the target of nothing, DOES declare a field named 'created_by'. The ownership relation therefore has a referent SOMEWHERE IN THE MANIFEST and no referent ON THE ENTITY IT BELONGS TO, and that distance is the entire case. A validator that resolves the ownershipField by searching entities[].fields[] instead of the resolved entity's own fields[] accepts this manifest, and the end state is az7-n4's end state reached one level down: an ownership predicate bound to a column that does not exist on the table being filtered. Either the predicate errors at execution — safe only if that error is never swallowed — or the missing field is treated as absent and the predicate is dropped, at which point every Widget in the tenant is reachable by every principal holding the permission while 'own' still presents as the narrowest scope in the system. Item 4 says an ownershipField on an unrelated Entity does not satisfy the target; this case says the same thing about a FIELD, because a lookup that crosses the entity boundary reintroduces the substitution the rule was written to stop.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE. Deciding it requires joining entities[i].ownershipField against entities[i].fields[].name and then proving that no OTHER entity's fields[] was consulted — a comparison between two instance locations, which draft 2020-12 has no keyword for. The schema will and should ACCEPT this document; that accept is NOT a schema defect and must be reported as NOT-DECIDABLE-BY-SCHEMA. THE PAIR THAT CARRIES THE EVIDENCE: this fixture and az7-p2 differ in EXACTLY ONE dimension — which entity declares the field named 'created_by'. In az7-p2 it is on 'Widget', the resolved target, and the manifest must be ACCEPTED. Here the identical field object sits on 'Setting' instead, and the manifest must be REJECTED. Everything else is identical: same App id, same permissions, same Action, same targetEntity, same ownershipField value, same two entity names. Report them side by side or not at all — REJECTING BOTH means the validator is refusing own-scope Actions rather than scoping the field lookup, and ACCEPTING BOTH means the lookup is manifest-wide and the substitution gap is open. Neither failure is visible from this case alone, which is why it is registered as a pair in index.json. WHY IT IS NOT az7-q2: q2 has a single entity, so nothing COULD have substituted even if a validator wanted it to; q2 proves only that a dangling ownershipField is refused. This case supplies the substitute q2 could not, and is therefore the only case in the set that can distinguish a field lookup scoped to the resolved entity from one scoped to the manifest. q2's own notes named this gap explicitly and recorded that no such fixture existed; this fixture closes it. EXPECTED CODE, AND WHY THE CODE AND NOT JUST THE VERDICT: AZ7_TARGET_OWNERSHIP_FIELD_UNDECLARED at /entities/0/ownershipField, the same code and rule (VALIDATOR-AZ7 item 3) that az7-q2 produces, because item 3's second conjunct is what this manifest fails. A rejection carrying AZ7_TARGET_ENTITY_NOT_OWNED would be rejecting for a reason that is NOT TRUE of this manifest — 'Widget' does declare an ownershipField — and must be reported as a FAIL even though the verdict is REJECT. Read the code and the path, not the verdict. NOT ASSUMED HERE: whether the ownership field must additionally be 'required: true' and of type 'reference' is still open, and this fixture's REJECT does not depend on it. Every identifier is synthetic; the App holds no data.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "The TARGETED entity. Declares ownershipField 'created_by' and declares NO field of that name — its only field is 'label'. Fixture use only.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      },
+      {
+        "name": "Setting",
+        "description": "An UNRELATED entity, the target of no Action. It declares a field named 'created_by' — the same name Widget's ownershipField points at. Its only role in this fixture is to be the substitute that must NOT be allowed to satisfy Widget's ownership relation.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true },
+          { "name": "key", "type": "string", "classification": "internal", "required": true },
+          { "name": "value", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

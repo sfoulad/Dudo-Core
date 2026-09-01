@@ -1,0 +1,84 @@
+{
+  "caseId": "az7-r3",
+  "kind": "invocation",
+  "title": "A principal authenticated in one tenant invokes an own-scope Action against another tenant's record",
+  "coversRequirement": "VALIDATOR-AZ7 item 6 — AUTHORIZATION_STANDARD.md §4.1 — applied across the TENANT boundary rather than the ownership boundary",
+  "target": "AZ7 / runtime enforcement of own scope at the tenant boundary",
+  "relatedFindings": ["CWE-863", "CWE-639", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "runtime",
+  "why": "An own-scope Action is bounded twice, and the two bounds are not the same strength. Ownership answers 'which of THIS TENANT'S records belong to this principal'. The tenant boundary answers 'which records exist for this caller at all'. Ownership is a filter inside a tenant; the tenant boundary is the wall around it, and a filter is never a substitute for a wall. A principal authenticated in tenant-alpha-synthetic that invokes DeleteWidget naming a widget belonging to tenant-beta-synthetic must be refused by TENANT SCOPING, before the ownership predicate is evaluated at all — and the refusal must be indistinguishable from the record not existing. Order matters here and is the whole case: if ownership is evaluated first, the answer itself leaks, because 'forbidden' tells tenant-alpha that widget-synthetic-beta-0001 exists and belongs to someone else. That is a cross-tenant read performed through an error code, and no data ever has to be returned for it to be one. The declaring manifest, az7-p1, is fully AZ7-conformant and validates clean at both the schema and the validator layer. That is precisely the point of this case: a manifest can satisfy every AZ7 clause and the invocation against it can still cross a tenant, because nothing in a manifest knows what a tenant is.",
+  "notes": "RUNTIME OBLIGATION. THE STATIC VALIDATOR CANNOT DECIDE THIS CASE, IN WHOLE OR IN PART, AND THIS FIXTURE DOES NOT PRETEND OTHERWISE. Stated exactly: packages/contracts/validation/app-manifest-relations.mjs takes an already-parsed manifest and returns a pure function of it — no request, no authenticated context, no tenant identity, no stored rows. What it CAN decide statically for this scenario is only that the DECLARING manifest az7-p1 is relationally sound, and it already answers that, correctly, as valid=true. Running az7-p1 through the relation validator and observing 'no errors' is the EXPECTED result and is NOT evidence about this case; treating a green run there as cross-tenant coverage would be exactly the false green this fixture exists to prevent. What is owed at RUNTIME is VALIDATOR-AZ7 item 6: Core resolves the ownership relation for an own-scoped call from the INSTALLED MANIFEST RECORD ONLY, and any targetEntity, ownership field, or owner identifier arriving in a request body, query string, header, or SDK argument is rejected — never merged and never preferred. Item 6 is written about the OWNERSHIP relation; this case extends the same principle one level out to TENANT identity, which AUTHORIZATION_STANDARD.md §5 and SECURITY_STANDARD tenant isolation already require be derived from the authenticated server-side context and never from anything the caller controls. READ THIS TRAP BEFORE REPORTING A RESULT: the tenant-override vectors in 'additionalVectors' are the WEAK half of this case. A body field named 'tenantId' is refused by the Action's own input schema, which declares additionalProperties false and requires only widget_id, so it fails as a malformed request and that rejection proves NOTHING about tenant isolation. The isolation-proving vector is 'clientSuppliedRequest' as written: a perfectly well-formed, schema-valid request whose ONLY cross-tenant element is the record identifier itself. An implementation that rejects the override and honours the identifier has passed the easy half and failed the case. Report the two separately or not at all. ERROR-CODE QUESTION LEFT OPEN, NOT ASSUMED: az7-p1's Action declares errors ['not_found', 'forbidden'] and does not declare 'invalid_argument', so the invalid_argument outcome that az7-r1 and az7-r2 require is an ENVELOPE-level error rather than an Action-level one. Which layer emits it, and how an envelope error is surfaced, is for the invocation contract to settle; this fixture asserts the DECISION (reject, and do not confirm existence) and does not assert a code for the malformed variant. NOT YET EXECUTABLE, REPORT AS NOT RUN: there is no invocation contract or request-envelope schema in packages/contracts/**, no data layer, no implementation of the TenantStoreResolver indirection that docs/decisions/0006-tenancy-model.md makes mandatory, and no approved test framework (TESTING_STANDARD.md open question TS1). This is a SPECIFICATION carried in the fixture set so the obligation is not lost, NOT a passing test, and it must not be counted in any pass total. WHY 0006 MAKES THIS SHARPER RATHER THAN SOFTER: Option A puts every tenant's rows in one shared D1 database, so a query that omits its tenant predicate does not fail and does not 404 — it returns another tenant's row. There is no infrastructure boundary underneath to catch the mistake, which is the reason 0006 requires the resolver indirection and the reason this case must be run against the first Action that ever executes. NAMING — THE FULL SEQUENCE, KEPT RATHER THAN OVERWRITTEN. (1) The caseId az7-n7 and the filename az7-n7-cross-tenant-invocation.json were ASSIGNED BY THE TEAM LEAD when this case was commissioned. (2) AT AUTHORING TIME, qa-agent identified that the assignment contradicted this set's own taxonomy: the n-series is manifest negatives and the r-series is invocation cases, and this case is kind 'invocation' with enforcedBy 'runtime', so the convention implied az7-r3. (3) qa-agent DID NOT RENAME IT UNILATERALLY. Renaming a fixture assigned by the Team Lead is outside QA's authority, and a silent rename would also have broken the reference the commissioning task used. QA kept the assigned name, recorded the conflict in this note as 'NAMING, FLAGGED NOT DECIDED', and recommended the rename through the Team Lead. (4) The rename to az7-r3 was reviewed by the Team Lead and APPROVED BY THE USER on 2026-09-01, on the basis of the taxonomy rather than of anyone's expectation. THE RETIRED ID az7-n7 IS NOT REUSED BY ANY CASE, DELIBERATELY: it named this cross-tenant case in earlier QA reporting, so rebinding it to a different case would silently falsify those references. A permanent gap in the n-series between az7-n6 and az7-n8 is the cheaper defect, and index.json records the retirement and this reason. THIS PARAGRAPH IS PROVENANCE AND IS NOT TO BE COMPACTED AWAY: it records that the misname was caught immediately, by whom, why it nonetheless persisted through authoring, and who resolved it. The q-series in this set is kept for the same reason. RELATED DOCUMENTATION DRIFT, NOW FIXED: this directory's README.md §2 layout and §4 case-to-obligation map previously listed only az7-r1 and az7-r2 under VALIDATOR-AZ7 item 6, because updating README.md was outside the files the authoring task allowed. Both now list az7-r3, so the drift reported at authoring time is closed rather than carried.",
+  "invocation": {
+    "declaredBy": "az7-p1",
+    "action": "az7-fixture-app.DeleteWidget",
+    "declaredScope": "own",
+    "declaredTargetEntity": "Widget",
+    "declaredOwnershipField": "created_by",
+    "authenticatedContext": {
+      "tenantId": "tenant-alpha-synthetic",
+      "principalId": "principal-alpha-1-synthetic"
+    },
+    "preExistingState": {
+      "description": "Synthetic rows only. Two tenants of the same installed App. The tenant-beta row is the target and must remain unreachable and unobservable from tenant-alpha.",
+      "rows": [
+        {
+          "entity": "Widget",
+          "id": "widget-synthetic-alpha-0001",
+          "tenantId": "tenant-alpha-synthetic",
+          "created_by": "principal-alpha-1-synthetic"
+        },
+        {
+          "entity": "Widget",
+          "id": "widget-synthetic-beta-0001",
+          "tenantId": "tenant-beta-synthetic",
+          "created_by": "principal-beta-1-synthetic"
+        }
+      ]
+    },
+    "clientSuppliedRequest": {
+      "widget_id": "widget-synthetic-beta-0001"
+    },
+    "attack": "The request is SCHEMA-VALID and indistinguishable from a legitimate call. The caller supplies nothing forbidden and overrides nothing — it simply names a record identifier belonging to tenant-beta-synthetic while authenticated in tenant-alpha-synthetic. This is the vector that actually tests isolation, because there is no malformed field for input validation to catch: the only defence is that the read is tenant-scoped from the authenticated context before ownership is considered.",
+    "additionalVectors": [
+      {
+        "vector": "body",
+        "supplied": { "widget_id": "widget-synthetic-beta-0001", "tenantId": "tenant-beta-synthetic" },
+        "note": "Weak half of the case. Refused by the Action's input schema (additionalProperties false), so a rejection here demonstrates input validation, NOT tenant isolation. Must never be reported as cross-tenant coverage."
+      },
+      {
+        "vector": "header",
+        "supplied": { "X-Dudo-Tenant": "tenant-beta-synthetic" },
+        "note": "A caller-controlled header is not an identity. Tenant identity is derived server-side from the authenticated context and a header naming a tenant is ignored for resolution and rejected as an attempt, never merged with or preferred over the authenticated tenant."
+      },
+      {
+        "vector": "query",
+        "supplied": { "tenant": "tenant-beta-synthetic" },
+        "note": "Same as the header vector. Named separately only because VALIDATOR-AZ7 item 6 enumerates body, query string, header and SDK argument individually, and an implementation that closes three of the four has not closed the rule."
+      },
+      {
+        "vector": "sdkArgument",
+        "supplied": { "tenantId": "tenant-beta-synthetic" },
+        "note": "The SDK is a caller like any other. AUTHORIZATION_STANDARD.md §5: the SDK's answer is advisory and Core decides. An SDK-supplied tenant is a client-supplied tenant."
+      }
+    ],
+    "requiredOutcome": {
+      "decision": "REJECT",
+      "errorCode": "not_found",
+      "rationaleForCode": "not_found, NOT forbidden. 'forbidden' confirms that widget-synthetic-beta-0001 exists, which is itself the cross-tenant disclosure being prevented. A caller outside the tenant must not be able to distinguish 'exists but is not yours' from 'does not exist'. Within the tenant, 'forbidden' remains the correct answer for an ownership failure — the distinction is exactly the tenant boundary.",
+      "mustNot": [
+        "resolve tenant identity from the request body, query string, header, or SDK argument, under any circumstances",
+        "merge a client-supplied tenant with the authenticated tenant, or prefer it over the authenticated tenant",
+        "evaluate the ownership predicate before the tenant predicate, so that an ownership failure answers a cross-tenant probe",
+        "return 'forbidden', or any code, timing, or message that distinguishes a tenant-beta record that exists from one that does not",
+        "emit an audit or log line that discloses tenant-beta-synthetic, principal-beta-1-synthetic, or widget-synthetic-beta-0001 to tenant-alpha",
+        "delete, update, read, count, or enumerate widget-synthetic-beta-0001 in any way, including a soft delete or a returned row count"
+      ],
+      "mustAlso": [
+        "The tenant predicate is applied from the authenticated context first, so widget-synthetic-beta-0001 is not in the candidate set when ownership is evaluated at all.",
+        "The attempt is audited in tenant-alpha's audit trail as a failed access, without disclosing tenant-beta's data in that record.",
+        "The same invocation against widget-synthetic-alpha-0001 by principal-alpha-1-synthetic SUCCEEDS, proving the rejection came from the tenant boundary and not from the Action being broken or from own-scope being refused outright."
+      ]
+    }
+  }
+}
