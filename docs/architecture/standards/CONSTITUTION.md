@@ -3,7 +3,6 @@
 - **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance.
 - **Authored by:** `architecture-agent`. **Accepted by:** Team Lead only.
 - **Applies to:** every agent, every human contributor, every change in `Dudo-Core`.
-- **Source:** master build plan §3, §26, §27, §29, §30, §39.
 - **Depends on:** `docs/decisions/0003`, `0004`, `0005`.
 
 This is the highest architectural authority in the repository. Every other standard in
@@ -23,7 +22,7 @@ convenient reading; escalate to the Team Lead and record the resolution.
 | 3 | **This Constitution** | |
 | 4 | **The standards in `docs/architecture/standards/`** | Each is authoritative in its own subject area. |
 | 5 | **The registries in `packages/contracts/registries/`** | See the split rule below. |
-| 6 | **The master build plan** | The origin of this architecture, but superseded wherever an accepted ADR says otherwise. |
+| 6 | **The originating planning source** (private, not published) | The origin of this architecture, but superseded wherever an accepted ADR says otherwise. |
 | 7 | **Code, comments, and commit messages** | Never a source of architectural truth. |
 
 **Standards versus registries.** A standard defines *rules*; a registry defines *values*.
@@ -41,9 +40,8 @@ in one of them and goes to the Team Lead — it is never resolved locally by an 
 
 ## 2. The ten non-negotiable rules
 
-These are the master build plan's §3, restated so that each can be *checked* rather than
-merely agreed with. A change that violates any of them is rejected in review regardless
-of how well it works.
+Each is stated so that it can be *checked* rather than merely agreed with. A change that
+violates any of them is rejected in review regardless of how well it works.
 
 ### Rule 1 — Core stays small
 
@@ -54,7 +52,7 @@ Capability.
   test in `CORE_BOUNDARIES.md` §2. If it fails any one, it does not belong in Core.
 - **Why:** Core is the one thing every tenant, every App, and every future business type
   shares. Anything specific put there is a permanent constraint on businesses that do not
-  exist yet (master plan §39).
+  exist yet.
 
 ### Rule 2 — Apps own their domain
 
@@ -175,13 +173,13 @@ frameworks and web frameworks.
 
 ### 4.1 No self-review
 
-**The agent that writes an implementation is never the final approving agent** (master
-plan §26). The agent that defines a contract is not the agent that implements it — which
-is why `packages/contracts/**` moved to `architecture-agent` in `0004`.
+**The agent that writes an implementation is never the final approving agent.** The agent
+that defines a contract is not the agent that implements it — which is why
+`packages/contracts/**` moved to `architecture-agent` in `0004`.
 
 ### 4.2 Every task carries a specification
 
-Before code starts, a task has, in writing (master plan §29): Objective · Affected
+Before code starts, a task has, in writing: Objective · Affected
 App/Service · Business requirement · Architecture · API changes · Event changes ·
 Permission changes · Data changes · UI changes · MCP changes · **Files allowed to
 change** · Acceptance criteria · Test requirements · Security requirements.
@@ -223,8 +221,8 @@ information, not an obstacle.
 
 ## 5. Required reading
 
-An agent reads the standards relevant to its change **before** editing. This is the
-condition the master plan places on all agent work (§24).
+An agent reads the standards relevant to its change **before** editing. This is a standing
+condition on all agent work.
 
 | If your change touches | Read |
 |---|---|
@@ -265,8 +263,8 @@ recommendation.
 
 | # | Question | Recommendation |
 |---|---|---|
-| C1 | **What is a "tenant"?** The master plan's event envelope carries both `tenant_id` and `business_id` (§11) but never defines which one is the isolation boundary. | Tenant = **Organization**. `business_id` is a sub-scope inside it, never an isolation boundary of its own. See `MULTITENANCY_STANDARD.md` §2. |
+| C1 | **What is a "tenant"?** The event envelope carries both `tenant_id` and `business_id` (`EVENT_STANDARD.md` §3) but neither is defined as the isolation boundary. | Tenant = **Organization**. `business_id` is a sub-scope inside it, never an isolation boundary of its own. See `MULTITENANCY_STANDARD.md` §2. |
 | C2 | ~~**The tenancy implementation model.**~~ **DECIDED — `0006`, Status Accepted, by the user.** Retained here because other documents cite C2. | **Option A — one shared production D1 database — with mandatory indirection** through a Core-owned `TenantStoreResolver`: no App, plugin, Connector, or client selects a database or binding; an unknown Organization mapping fails closed; only Core-configured bindings are returned. **MVP-scoped:** decided for the Zero-Cost MVP only, while `0008` remains active. **Option B is excluded** for that period. **Option C (hybrid routing) is the approved migration candidate, not the current model, and moving to it requires user approval and a new decision record.** The earlier "hybrid routing recommended" recommendation is **superseded** — see `MULTITENANCY_STANDARD.md` §7.1 for the decided model and §7.9 for the superseded comparison. Nothing in this repository may treat the model as open. |
-| C3 | **Search, Notifications, and Files are listed as Core services (§6) *and* as Capabilities (§2).** The plan contradicts itself. | Core owns the primitive service; the Capability is the vendor-neutral interface Apps call; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
-| C4 | **Public API path namespacing.** `/api/v1/customers` (§10) assumes a flat global resource namespace, which cannot survive arbitrary third-party Apps. | Reserved flat paths for Core and registered official Apps; `/api/v1/apps/<app_id>/...` for everything else. `API_STANDARD.md` §5. |
+| C3 | **Search, Notifications, and Files are Core services *and* capability domains** (`CORE_BOUNDARIES.md` §3, `CAPABILITY_STANDARD.md` §3). Those two claims conflict. | Core owns the primitive service; the Capability is the vendor-neutral interface Apps call; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
+| C4 | **Public API path namespacing.** A flat path such as `/api/v1/customers` assumes a global resource namespace, which cannot survive arbitrary third-party Apps. | Reserved flat paths for Core and registered official Apps; `/api/v1/apps/<app_id>/...` for everything else. `API_STANDARD.md` §5. |
 | C5 | **Phase 1's admin portal is runnable**, so `0005`'s trigger ("the first runnable vertical feature") fires before Phase 4. | Team Lead to state explicitly which gate the admin portal falls under, before Phase 1 planning. |

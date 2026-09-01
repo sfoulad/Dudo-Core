@@ -5,7 +5,6 @@
 - **Applies to:** everything under `connectors/**`.
 - **Depends on:** `CAPABILITY_STANDARD.md`, `SECURITY_STANDARD.md`, `MULTITENANCY_STANDARD.md`.
 - **Machine-readable:** `packages/contracts/registries/capability-manifest.schema.json` (`kind: provider`).
-- **Source:** master build plan §2, §9, §13.
 
 A Connector is the only place in Dudo where a vendor's name is allowed to appear.
 
@@ -95,8 +94,8 @@ beyond Worker secret bindings. Connectors are written against a Core-owned secre
 - Retries use bounded exponential backoff with jitter, only for retryable conditions, and
   **only with an idempotency key for anything that changes state**.
 
-The master plan's enforcement mechanism for egress is the Workers for Platforms outbound
-Worker (§13), which is **not approved** (`0003`). Until it is, the allowlist is declared
+The intended enforcement mechanism for egress is the Workers for Platforms outbound
+Worker, which is **not approved** (`0003`). Until it is, the allowlist is declared
 in the manifest and enforced in the SDK egress helper. That is enforcement inside the
 Connector's own runtime rather than outside it — weaker, and stated as weaker. See §12.
 

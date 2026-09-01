@@ -5,7 +5,6 @@
 - **Applies to:** every App under `apps/**`, official and third-party alike.
 - **Depends on:** `CONSTITUTION.md`, `ARCHITECTURE.md`, `API_STANDARD.md`, `EVENT_STANDARD.md`, `AUTHORIZATION_STANDARD.md`, `MULTITENANCY_STANDARD.md`.
 - **Machine-readable:** `packages/contracts/registries/app-manifest.schema.json`.
-- **Source:** master build plan §3, §7, §8, §20, §22.
 
 An App is a complete business application a customer installs. This standard is what an
 App must satisfy to be installable.
@@ -67,8 +66,8 @@ database, and without Cloudflare. If it cannot be, the boundary between `domain/
 ## 4. The manifest is the source of truth
 
 `manifest.json` is not documentation. The platform reads it to decide whether the App may
-install, what it may reach, and what it exposes. Required sections, per master plan §8 and
-enforced by the schema:
+install, what it may reach, and what it exposes. The required sections, as enforced by
+`app-manifest.schema.json`:
 
 | Section | Decides |
 |---|---|
@@ -101,6 +100,13 @@ tool, and the documentation.
 
 Each Action declares its required permission, its scope, its sensitivity class, its input
 and output schemas, its error set, and whether it is idempotent.
+
+**An Action at `scope: own` additionally declares `targetEntity`** — the entity, declared in
+the same manifest, whose ownership relation `own` is evaluated against. That entity must
+itself declare an `ownershipField`; an ownership relation on a different entity does not
+count. Missing, unknown, malformed, or ambiguous `targetEntity` fails validation and the App
+does not install. `AUTHORIZATION_STANDARD.md` §4 (VAL-OWN) and §4.1 state which half the
+schema enforces and which half the registry-aware validator owes.
 
 **An App exposes no operation that is not an Action.** A route handler containing logic
 rather than dispatching to an Action is a defect — it is an operation with no permission,
@@ -189,6 +195,10 @@ In addition to `TESTING_STANDARD.md` §8:
 
 - [ ] `manifest.json` validates against `app-manifest.schema.json`.
 - [ ] Every new Action declares permission, scope, sensitivity, schemas, and error set.
+- [ ] Every new Action at `scope: own` declares `targetEntity`, and that entity declares an
+      `ownershipField` naming one of its own fields (VAL-OWN, `AUTHORIZATION_STANDARD.md`
+      §4). The referential half is unenforced until VALIDATOR-AZ7 runs — check it by hand
+      and say that you did.
 - [ ] Every new permission exists in `permission-catalog.yaml`.
 - [ ] Every published and consumed event exists in `event-catalog.yaml`, with a version.
 - [ ] No cross-App storage access anywhere in the change.

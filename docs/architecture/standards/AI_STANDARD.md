@@ -4,7 +4,6 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every AI-assisted feature, every AI Skill, every AI principal.
 - **Depends on:** `CONSTITUTION.md` Rules 7, 8; `CAPABILITY_STANDARD.md`; `AUTHORIZATION_STANDARD.md`; `MCP_STANDARD.md`; `SECURITY_STANDARD.md`.
-- **Source:** master build plan §17, §2, §32.
 
 Dudo is AI-native: AI participates in the work rather than sitting in a sidebar. That
 raises the stakes on every rule below, because an AI feature that is wrong is wrong at
@@ -33,7 +32,7 @@ other, with a closed error set, declared semantics, and a conformance suite.
 
 ## 2. The AI capability surface
 
-The plan's function list (§17), as capability actions:
+The AI function set, as capability actions:
 
 `generate` · `summarize` · `extract` · `translate` · `ocr` · `classify` · `forecast` ·
 `recommend` · `search` · `vision` · `speech` · `agent`

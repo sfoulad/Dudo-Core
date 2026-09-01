@@ -1,0 +1,72 @@
+{
+  "caseId": "az7-n3",
+  "kind": "manifest",
+  "title": "own scope targeting an Entity that has NO ownershipField",
+  "coversRequirement": "AZ7 negative #3",
+  "target": "AZ7 / VAL-OWN per-entity form",
+  "relatedFindings": ["CWE-863", "CRIT-4", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "schema+validator",
+  "why": "The Action declares scope 'own' and correctly names a declared entity, but that entity carries no ownership relation. There is no column to compare the acting principal against, so 'own' evaluates over every Widget in the tenant while the manifest reads as if the narrowest possible control were applied. That is exactly the silent privilege escalation VAL-OWN exists to stop.",
+  "notes": "TWO INDEPENDENT REASONS TO REJECT, AND THEY MUST NOT BE CONFLATED. (1) SCHEMA: in this fixture 'Widget' is the ONLY entity and it declares no ownershipField, so NO entity in the manifest declares one. The existing manifest-level VAL-OWN clause in the schema's top-level allOf therefore rejects this document by itself. A schema REJECT here is correct and expected. (2) VALIDATOR: the per-entity reason — that the entity THIS Action targets is the one that must declare ownership — is still a cross-array join and remains a validator obligation. This fixture alone does NOT prove the per-entity rule is enforced, because the manifest-level rule fires first and would fire even if the per-entity rule were absent. az7-n4 is the fixture that isolates the per-entity rule; that is why the two cases are separate and why n4 is the one that matters for CWE-863.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record with no ownership relation, fixture use only.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

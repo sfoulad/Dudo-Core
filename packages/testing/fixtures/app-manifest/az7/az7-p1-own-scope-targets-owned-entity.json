@@ -1,0 +1,74 @@
+{
+  "caseId": "az7-p1",
+  "kind": "manifest",
+  "title": "own scope targeting its declared owned Entity — the legitimate case",
+  "coversRequirement": "AZ7 positive #6",
+  "target": "AZ7 / VAL-OWN per-entity form",
+  "relatedFindings": ["CWE-863", "CRIT-4", "VAL-OWN"],
+  "expectedOutcome": "ACCEPT",
+  "enforcedBy": "schema+validator",
+  "why": "The Action declares scope 'own', names 'Widget' as its target, 'Widget' is declared in this manifest, and 'Widget' declares ownershipField 'created_by' — which is itself a declared field on that entity. Every link in the chain resolves. This is what an App legitimately doing owner-scoped access looks like, and it must install. A validator that cannot accept this one is not enforcing AZ7, it is refusing 'own' entirely.",
+  "notes": "MUST BE ACCEPTED BY BOTH LAYERS. This is the primary over-rejection guard for the whole AZ7 set. Any schema amendment or validator rule that rejects az7-n4 must still accept this fixture; if both fail, the implementation is broken in the opposite direction and the failure is a defect against the implementer, not against the fixture. Note also that ownershipField 'created_by' names a field that actually appears in entities[0].fields — that the ownershipField must name a real field on its own entity is a further validator obligation, and az7-q2 records it as an open question rather than assuming it.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record that declares a real ownership relation.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true },
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

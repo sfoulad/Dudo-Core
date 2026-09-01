@@ -5,7 +5,6 @@
 - **Applies to:** every event published or consumed anywhere in Dudo.
 - **Depends on:** `CONSTITUTION.md` Rules 5, 10; `MULTITENANCY_STANDARD.md`; `CLOUDFLARE_STANDARD.md` §5.
 - **Machine-readable:** `packages/contracts/registries/event-catalog.yaml`.
-- **Source:** master build plan §3, §11.
 
 Events are how Apps meet without knowing about each other. That decoupling only holds if
 the envelope, the naming, the versioning, and the delivery semantics are the same
@@ -57,8 +56,8 @@ has lost the property that made events worth using.**
 
 ## 3. The envelope
 
-Every event carries exactly these fields (master plan §11). Missing any one is a defect
-and the event is rejected at publication.
+Every event carries exactly these fields — the set is closed, and it is mirrored in
+`event-catalog.yaml`. Missing any one is a defect and the event is rejected at publication.
 
 | Field | Type | Rule |
 |---|---|---|
@@ -89,8 +88,9 @@ log lines.
 - Queue messages, dead-letter records, retry state, and consumer checkpoints all carry
   the tenant.
 - **`business_id` is a sub-scope, not an isolation boundary.** Isolation is by
-  `tenant_id`. This resolves an ambiguity the master plan leaves open by carrying both
-  fields without defining either (`CONSTITUTION.md` C1) and needs Team Lead confirmation.
+  `tenant_id`. This resolves an ambiguity left open by an envelope that carries both fields
+  without defining either (`CONSTITUTION.md` C1, `MULTITENANCY_STANDARD.md` §2) and needs
+  Team Lead confirmation.
 
 ---
 
@@ -153,8 +153,9 @@ additive case safe.
 
 ## 8. Duplicate concepts
 
-**Apps may not invent an event concept that already exists** (master plan §11). Before
-registering a new event type, search the catalog. If something close exists, consume it.
+**Apps may not invent an event concept that already exists.** This section is that rule's
+statement of record. Before registering a new event type, search `event-catalog.yaml`. If
+something close exists, consume it.
 
 If two Apps genuinely need different meanings for the same words, that is an Architecture
 Review item for the Team Lead — not a second event with a slightly different name.

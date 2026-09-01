@@ -340,7 +340,7 @@ authorization.
 
 ### D16 — Custom roles, without weakening the MVP
 
-Customers create custom roles. That is required (master plan §6: "roles must not be
+Customers create custom roles. That is required by the planning source ("roles must not be
 hardcoded"), and it is where a permission model usually acquires its holes. Four constraints
 keep it safe, and all four hold from the first custom role:
 

@@ -4,13 +4,13 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** the platform as a whole, before many business Apps are built on it.
 - **Depends on:** `CONSTITUTION.md`; `ARCHITECTURE.md`; `APP_STANDARD.md`; `CAPABILITY_STANDARD.md`; `TESTING_STANDARD.md`; `docs/decisions/0005` (Foundation Gate).
-- **Source:** master build plan §38 (p35), §37 Phase 4, §39.
+- **Applies from:** Phase 4.
 
 ---
 
 ## 1. The requirement
 
-The master plan, §38, in full:
+The requirement, in full:
 
 > **Before building many Apps, validate the platform with two very different applications.**
 >
@@ -29,7 +29,7 @@ The master plan, §38, in full:
 > Validation has been executed against two materially different applications and its
 > findings have been recorded and dispositioned by the Team Lead with user approval.**
 
-"Materially different" is the whole point, and the plan chose well: an appointment business
+"Materially different" is the whole point, and the pairing is well chosen: an appointment business
 is scheduling, human availability, and time; e-commerce is catalogue, inventory, and
 fulfilment. An architecture that fits two applications which resemble each other has
 demonstrated nothing.
@@ -69,8 +69,8 @@ validation that exercises four of six has validated four of six and is reported 
 | 6 | **Tenancy** | Is isolation a property of the architecture, or of these two Apps' code? | The canonical isolation test (`MULTITENANCY_STANDARD.md` §8) runs against **both** Apps across every surface each exposes |
 
 **The shared-concept test, which is where architectures usually fail.** Both applications
-have a **Customer** and both take a **Payment**. That overlap is deliberate in the plan and
-must be exercised, not designed around:
+have a **Customer** and both take a **Payment**. That overlap is deliberate and must be
+exercised, not designed around:
 
 - Does `Customer` belong to a Customers App that both consume, and does consuming it feel
   like a contract rather than a shared table? **Rule 3 forbids the shared table**; the
@@ -92,7 +92,7 @@ a validation that produces only "it worked" has not been performed rigorously.
 |---|---|---|
 | **Succeeds** | The App expressed the requirement through existing platform mechanisms, with no Core change and no exception | Record it. This is evidence the primitive is right, and it is worth stating explicitly so that later doubt has something to check against |
 | **Bends** | It worked, but through a workaround, an awkward shape, a duplicated concept, or an unwritten convention the App author had to invent | **Record it with the workaround written out in full.** A bend is a defect in the platform that was paid for by the App. Two Apps bending the same way is a missing primitive |
-| **Fails** | It could not be done without modifying Core, or could not be done at all | **Stop and report to the Team Lead immediately.** A Core change to serve one business domain is exactly what `CONSTITUTION.md` Rule 1 forbids, and the plan's own success criterion is "without Core modifications" |
+| **Fails** | It could not be done without modifying Core, or could not be done at all | **Stop and report to the Team Lead immediately.** A Core change to serve one business domain is exactly what `CONSTITUTION.md` Rule 1 forbids, and the success criterion in §1 is "without Core modifications" |
 
 **A Core modification requested during validation is a finding, never a task.** The response
 is to record what the App needed and why Core could not provide it, and route it to the Team
@@ -104,8 +104,8 @@ destroyed the experiment and produced a false pass.
 ## 5. When this runs
 
 - **After** the Core platform, the application runtime, and the SDK exist — the validation
-  must run against the real SDK a third party would use (plan §37 Phase 4: *"These must use
-  exactly the same SDK available to third parties"*).
+  must run against the real SDK a third party would use — *"these must use exactly the same
+  SDK available to third parties"* (`SDK_STANDARD.md` §1).
 - **Before** a broad programme of business App development. The plan says "before building
   many Apps"; this standard reads "many" as **more than the two validation applications
   themselves**.
@@ -146,7 +146,7 @@ by the Team Lead, and approved by the user under `0005` step 7. It contains all 
    each exposes.
 6. **What could not be validated and why** — an unapproved dependency, a missing decision, a
    surface that does not exist yet. Naming a gap is a result; assuming past it is not.
-7. **An explicit answer to the plan's own question:** did the same architecture support both
+7. **An explicit answer to §1's question:** did the same architecture support both
    applications cleanly, without Core modifications? Yes, or no, or with these exceptions.
 8. **A recommendation** on whether broad App development should begin, and any decision
    record the findings require.
@@ -182,7 +182,7 @@ experiment rather than a demonstration.** Any of the following is a `fails`:
 
 ## 8. Verification checklist
 
-- [ ] Two materially different applications built — Appointments and E-commerce, per plan §38.
+- [ ] Two materially different applications built — Appointments and E-commerce, per §1.
 - [ ] Both built against the same SDK a third party would use; no privileged path taken.
 - [ ] All six areas in §3 exercised, and any area not exercised is named as not exercised.
 - [ ] Shared concepts exercised, not avoided: one `Customer` contract, one Payment Capability,
@@ -202,8 +202,8 @@ experiment rather than a demonstration.** Any of the following is a `fails`:
 
 | # | Question | Status |
 |---|---|---|
-| AV1 | **How complete must each application be?** Enough to exercise the six areas is the criterion here; the plan does not quantify it. | Recommendation: the smallest slice that exercises all six honestly, chosen per application and stated in the report. Team Lead confirms before Phase 4 planning. |
-| AV2 | **Plan §37 Phase 4 names four official Apps** (Customers, Appointments, Commitments, Finance Health); **§38 names Appointments and E-commerce.** E-commerce is not in the Phase 4 list. | Unresolved. The validation needs the *difference* between the two, and Commitments and Finance Health are closer to Appointments than E-commerce is. Team Lead decides which Apps constitute Phase 4. |
-| AV3 | **Both applications need a Payment Connector**, and Connectors are Phase 5 — after Phase 4. | Ordering conflict in the plan. Either the payment path is validated with a test provider, which validates the capability boundary but not a real Connector, or Phase 5 partially precedes Phase 4. Team Lead decides; the report must state which was done. |
+| AV1 | **How complete must each application be?** Enough to exercise the six areas is the criterion here; nothing quantifies it further. | Recommendation: the smallest slice that exercises all six honestly, chosen per application and stated in the report. Team Lead confirms before Phase 4 planning. |
+| AV2 | **Phase 4 is planned around four official Apps** (Customers, Appointments, Commitments, Finance Health); **§1 requires Appointments and E-commerce.** E-commerce is not in the Phase 4 list. | Unresolved. The validation needs the *difference* between the two, and Commitments and Finance Health are closer to Appointments than E-commerce is. Team Lead decides which Apps constitute Phase 4. |
+| AV3 | **Both applications need a Payment Connector**, and Connectors are Phase 5 — after Phase 4. | An ordering conflict between the two phases. Either the payment path is validated with a test provider, which validates the capability boundary but not a real Connector, or Phase 5 partially precedes Phase 4. Team Lead decides; the report must state which was done. |
 | AV4 | **Application B needs SMS**, which is a Capability with no approved provider. | Same shape as AV3. A test provider validates the interface, not the integration; the report must not claim otherwise. |
 | AV5 | **Which gate applies to the validation applications** if either is released to users. | `0005` says the full gate is triggered by runnable work. Team Lead states which gate applies when assigning the work, per `CONSTITUTION.md` §4.5. |

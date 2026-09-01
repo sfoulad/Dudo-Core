@@ -12,8 +12,8 @@
 # STATUS OF THIS FILE
 # Every entry is status "proposed", which means NOT YET BUILT — it does not mean optional
 # or unapproved. No code and no schema exist. These are the objects entailed by Core's
-# declared responsibilities (master build plan §6, §14, §20) recorded so Phase 1 builds
-# against a reviewed set. No entry here is a data model.
+# declared responsibilities (CORE_BOUNDARIES.md §3) and the App lifecycle (APP_STANDARD.md
+# §9), recorded so Phase 1 builds against a reviewed set. No entry here is a data model.
 #
 # The tenancy model is DECIDED: docs/decisions/0006-tenancy-model.md is Accepted (user,
 # 2026-09-01) — one shared production D1 database with mandatory indirection, for the

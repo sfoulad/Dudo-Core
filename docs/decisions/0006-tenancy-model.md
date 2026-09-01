@@ -191,7 +191,7 @@ written:
 | Size | **10 GB per database** | A shared database has a tenant count beyond which it cannot grow |
 | Count | **50,000 databases** on Workers Paid; more on request | Database-per-tenant is supported at real scale, but not without limit |
 
-The master build plan §14 says "initial deployments can use shared D1 databases with strict
+The planning source says "initial deployments can use shared D1 databases with strict
 tenant isolation." That sentence is in tension with the threading model above and should
 not be adopted on the plan's authority alone — `CONSTITUTION.md` §1 ranks the plan at 6,
 below an accepted ADR.
@@ -461,7 +461,7 @@ now, under all three options, and it is what keeps this decision reversible.
 ### 4.13 Unapproved Cloudflare services
 
 **Direct answer to the question: none of A, B, or C requires Workers for Platforms.**
-Workers for Platforms concerns executing untrusted *code* (master plan §12, Phase 7); this
+Workers for Platforms concerns executing untrusted *code* (Phase 7); this
 decision concerns where *data* sits. They are independent.
 
 Other unapproved services, per option:
@@ -566,7 +566,7 @@ The reasoning, stated so it can be argued with:
 1. **A is a ceiling, not a starting point.** D1's single thread per database means A does
    not degrade gracefully — one tenant's report is everyone's outage — and per-tenant
    restore, which customers will eventually ask for by name, is effectively unavailable. The
-   master plan §14 recommends starting shared; the plan is rank 6 and this constraint is
+   the planning source recommends starting shared; that source is rank 6 and this constraint is
    verified, so the recommendation does not follow it.
 2. **B is the best architecture and has one unanswered question that could block it
    outright.** §4.4 is not a detail: if a Worker cannot obtain a D1 handle by id at runtime

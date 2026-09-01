@@ -5,7 +5,6 @@
 - **Applies to:** `platform/capabilities/**`, every App that requests a capability, every Connector that provides one.
 - **Depends on:** `CONSTITUTION.md` Rule 6, `API_STANDARD.md`, `CONNECTOR_STANDARD.md`.
 - **Machine-readable:** `packages/contracts/registries/capability-manifest.schema.json`.
-- **Source:** master build plan §2, §9, §10.
 
 ---
 
@@ -54,13 +53,13 @@ extension point for the rest (§6).
 
 ## 3. Capability domains
 
-Recognised domains, from master plan §2 and §9. Each needs its own contract before use;
-none is specified yet.
+The recognised domains. This list is the record of them. Each needs its own contract before
+use; none is specified yet.
 
 `payment` · `messaging` · `email` · `shipping` · `maps` · `ocr` · `search` ·
 `files` · `notifications` · `approval` · `ai` · `accounting` · `identity` · `iot`
 
-Illustrating the shape, from the plan's own example — `payment@1` would define
+Illustrating the shape — `payment@1` would define
 `AuthorizePayment`, `CapturePayment`, `RefundPayment`, `GetPaymentStatus`. The E-commerce
 App does not care which provider implements them.
 
@@ -208,5 +207,5 @@ that claim being true.
 | # | Question | Recommendation |
 |---|---|---|
 | CP1 | **Which capability is specified first.** Phase 5 lists payments, messaging, email, shipping, accounting, IoT with no order. | `payment@1` first — it is the one with the hardest semantics (idempotency, money, partial refunds). If the capability model survives payment, it survives the rest. |
-| CP2 | **The AI capability's action set** is listed in the plan (§17) but no provider is approved. | Define the interface now; provider selection blocked on an ADR. `AI_STANDARD.md` §2. |
+| CP2 | **The AI capability's action set** is specified (`AI_STANDARD.md`) but no provider is approved. | Define the interface now; provider selection blocked on an ADR. `AI_STANDARD.md` §2. |
 | CP3 | **Whether a tenant may run two providers of one capability simultaneously** (e.g. two payment gateways for different currencies). Not addressed by the plan. | Allow it, with the App selecting by *declared capability attributes* (currency, region) rather than by provider identity. Needs a contract mechanism; flagged before `payment@1` is written. |

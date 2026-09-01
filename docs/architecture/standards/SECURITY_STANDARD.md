@@ -4,7 +4,7 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** everything.
 - **Relationship to `.claude/rules/security.md`:** that document is the binding rule set for the team and **is not restated here.** This standard is the engineering elaboration: threat model, data classification, validation, audit, redaction, egress, dependencies, and review. Where the two overlap, the stricter reading applies.
-- **Source:** master build plan §32, §33, §34; `.claude/rules/security.md`.
+- **Source:** `.claude/rules/security.md`; `CONSTITUTION.md` Rule 10.
 
 ---
 
@@ -105,7 +105,8 @@ blocks Phase 5.
 
 ## 6. Audit
 
-Every sensitive operation produces an audit event (master plan §32). At minimum:
+Every sensitive operation produces an audit event
+(`AUTHORIZATION_STANDARD.md` §11, `.claude/rules/security.md` §6). At minimum:
 
 money movement · permission changes · role changes · tenant membership changes · data
 export · destructive actions · credential issue/rotate/revoke · App install, permission
@@ -193,7 +194,7 @@ precedence over everything else an agent is doing.
 
 ## 12. Security review
 
-Per master plan §25, a Security Agent — never the implementing agent (§26) — reviews:
+A Security Agent — never the implementing agent (`CONSTITUTION.md` §4.1) — reviews:
 
 - [ ] Authentication on every entry point.
 - [ ] Authorization on every entry point; deny by default; no trusted caller.

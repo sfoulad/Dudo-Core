@@ -7,7 +7,7 @@
 
 ## Context
 
-`Dudo-Core`'s layout did not match the master build plan §23, and one path actively
+`Dudo-Core`'s layout did not match the layout the planning source specifies, and one path actively
 collided. The plan uses `/apps` for **installable business Apps** — CRM, Finance,
 Inventory. Our tree used `apps/` for the **responsive web client**. Same path,
 incompatible meanings, and the collision would only get more expensive: once business
@@ -27,7 +27,7 @@ restructuring after Phase 1 means moving live code, contracts, and tests.
 
 ## Decision
 
-`Dudo-Core` adopts the master build plan §23 layout.
+`Dudo-Core` adopts the layout specified by the planning source.
 
 ```
 platform/            core, identity, authorization, tenant, billing, marketplace,
@@ -45,7 +45,7 @@ agents/              agent rules, prompts, and task specifications
 docs/                architecture, decisions, product, operations
 ```
 
-`Dudo-Apple` is unaffected — it is a separate repository and the master plan does not
+`Dudo-Apple` is unaffected — it is a separate repository and the planning source does not
 cover it.
 
 ### Moves
@@ -79,7 +79,7 @@ History is preserved with `git mv`. No file is dropped or silently overwritten.
 | Team Lead | repository root, shared configuration, `docs/**`, releases, integration |
 
 Per-App test suites colocate with their App under `apps/<name>/tests/` as Apps are built,
-per master plan §27. `packages/testing/` holds cross-cutting suites and the shared
+per the planning source's file-ownership rule. `packages/testing/` holds cross-cutting suites and the shared
 harness.
 
 ## Consequences
@@ -88,7 +88,7 @@ harness.
   and documentation reference changes with it. All are updated in the same change so the
   repository is never internally inconsistent.
 - **`core-agent` stops authoring contracts.** `packages/contracts/**` moves to
-  `architecture-agent`, resolving the master plan §26 violation where the implementing
+  `architecture-agent`, resolving the no-self-review violation where the implementing
   agent also authored and approved its own contract.
 - Phase 0 standards can be written against paths that will not move again.
 - `connectors/` and `agents/` are created empty with READMEs. Empty directories are

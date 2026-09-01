@@ -195,8 +195,8 @@ fixtures, logs, and error messages.
 
 - **The tenancy implementation model** (shared schema, schema-per-tenant,
   database-per-tenant). D1 is single-threaded per database — roughly 1,000 queries/second
-  at 1 ms — which argues against a shared database, while master plan §14 suggests
-  starting shared. Resolve before Phase 1.
+  at 1 ms — which argues against a shared database, while the zero-cost constraint argues
+  for starting shared (`docs/decisions/0006`, `0008`). Resolve before Phase 1.
 - The web framework, the testing framework, and every third-party dependency. `0003`
   approves TypeScript and six Cloudflare services, nothing more.
 - Contract transport and versioning mechanics — now a **cross-repository** coordination

@@ -4,7 +4,6 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** the shape of the whole system.
 - **Depends on:** `CONSTITUTION.md`, `docs/decisions/0003`, `0004`.
-- **Source:** master build plan §2, §5, §10, §11, §14, §23.
 
 `CONSTITUTION.md` says what may not be violated. This document says what the system *is*.
 Ownership and forbidden edges are in `docs/architecture/boundaries.md`; this document does
@@ -28,11 +27,11 @@ things. There is no sixth, and adding one is a Constitution amendment.
 The user selects a **business type**, not a set of technical modules. Templates are how
 that promise is kept.
 
-**AI Skills are not a separate runtime.** The master plan lists them as a fifth
-marketplace type but describes them as functionality reached through the AI Capability. A
-skill is therefore packaged and deployed as a Connector that provides the AI Capability;
-"AI Skill" is a marketplace category, not an execution model. This is
-`architecture-agent`'s reading of an under-specified area of the plan — see §9, A1.
+**AI Skills are not a separate runtime.** They are a fifth marketplace type, but the
+functionality is reached through the AI Capability. A skill is therefore packaged and
+deployed as a Connector that provides the AI Capability; "AI Skill" is a marketplace
+category, not an execution model. This is `architecture-agent`'s reading of an
+under-specified area — see §9, A1.
 
 ---
 
@@ -118,7 +117,7 @@ Internal  Public   OpenAPI    SDK       MCP tool     Documentation
   API      API     schema    method
 ```
 
-**Do not write five independent definitions** (master plan §15). Five definitions become
+**Do not write five independent definitions.** Five definitions become
 four definitions and one bug, and the one that drifts is always the one with the weakest
 tests.
 
@@ -165,9 +164,9 @@ is not a justification.
   `MULTITENANCY_STANDARD.md`), and it is why the port must exist from the first App rather
   than being introduced when the model changes.
 - **Files** live in R2, every object keyed with tenant and App ownership.
-- **Configuration and cache**: the master plan specifies KV; **KV is not approved**
-  (`0003`). Until a record approves it, configuration is read from Core storage and cached
-  in-request only. No standard in this repository depends on KV.
+- **Configuration and cache**: the intended store is KV; **KV is not approved** (`0003`).
+  Until a record approves it, configuration is read from Core storage and cached in-request
+  only. No standard in this repository depends on KV.
 
 ---
 
@@ -194,22 +193,22 @@ Logs must never contain business data, another tenant's identifiers, or internal
 returned to a caller (`SECURITY_STANDARD.md` §7). Observability that leaks is a data
 breach with good intentions.
 
-The master plan recommends Analytics Engine for analytics. **Analytics Engine is not
-approved.** Structured logs from Workers, which are part of the platform itself, carry the
-requirement until a record says otherwise.
+Analytics Engine is the recommended analytics store. **Analytics Engine is not approved**
+(`CLOUDFLARE_STANDARD.md` §1). Structured logs from Workers, which are part of the platform
+itself, carry the requirement until a record says otherwise.
 
 ---
 
-## 9. Where the master plan is ambiguous
+## 9. Where the architecture is ambiguous
 
 Recorded rather than papered over. Each needs a Team Lead decision; recommendations are
 `architecture-agent`'s.
 
 | # | Ambiguity | Recommendation |
 |---|---|---|
-| A1 | **AI Skills as a fifth extension type** (§2) are never given a runtime, a manifest, or a lifecycle distinct from Connectors. | Treat as a marketplace category of Connector providing the AI Capability. Recorded above; no separate runtime built. |
-| A2 | **Core owns "search infrastructure", "notifications", and "file service"** (§6) while §2 lists Search, Notifications, and Files as *Capabilities*. | Core owns the primitive; the Capability is the interface; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
-| A3 | **Core owns platform billing** (§6) but Rule 6 forbids Core depending on an external integration. Charging a card requires a payment provider. | Core owns billing *state* — plans, quotas, usage, subscription status. Money movement is invoked through the Payment **Capability contract**, which is a contract dependency, not a connector dependency. `CORE_BOUNDARIES.md` §5. |
-| A4 | **Per-App logical data ownership × per-tenant isolation** multiplies storage units by Apps × tenants. The plan never confronts what that means against D1's limits. | The storage port must make the physical mapping a routing decision, not an App-visible one. `MULTITENANCY_STANDARD.md` §7. |
-| A5 | **Egress control** is required by the App manifest's `externalNetworkAccess` (§8) but the enforcement mechanism described (§13) is the Workers for Platforms outbound Worker — **not approved**. | Declare the allowlist in the manifest from Phase 2 and enforce it in the Connector/SDK egress helper; full enforcement needs the Phase 7 record. Gap flagged, not hidden. |
-| A6 | **Two versioning schemes** — `/api/v1` for APIs (§3 Rule 9), integer `event_version` for events (§11) — are never reconciled. | Keep both; they version different things. Defined in `API_STANDARD.md` §6 and `EVENT_STANDARD.md` §7. |
+| A1 | **AI Skills as a fifth extension type** are never given a runtime, a manifest, or a lifecycle distinct from Connectors. | Treat as a marketplace category of Connector providing the AI Capability. Recorded above; no separate runtime built. |
+| A2 | **Core owns search infrastructure, notifications, and a file service**, while Search, Notifications, and Files are also capability domains (`CAPABILITY_STANDARD.md` §3). | Core owns the primitive; the Capability is the interface; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
+| A3 | **Core owns platform billing** but Rule 6 forbids Core depending on an external integration. Charging a card requires a payment provider. | Core owns billing *state* — plans, quotas, usage, subscription status. Money movement is invoked through the Payment **Capability contract**, which is a contract dependency, not a connector dependency. `CORE_BOUNDARIES.md` §5. |
+| A4 | **Per-App logical data ownership × per-tenant isolation** multiplies storage units by Apps × tenants, which is never confronted against D1's limits. | The storage port must make the physical mapping a routing decision, not an App-visible one. `MULTITENANCY_STANDARD.md` §7. |
+| A5 | **Egress control** is required by the App manifest's `externalNetworkAccess` (`APP_STANDARD.md` §4) but the intended enforcement mechanism is the Workers for Platforms outbound Worker — **not approved**. | Declare the allowlist in the manifest from Phase 2 and enforce it in the Connector/SDK egress helper; full enforcement needs the Phase 7 record. Gap flagged, not hidden. |
+| A6 | **Two versioning schemes** — `/api/v1` for APIs (`CONSTITUTION.md` Rule 9), integer `event_version` for events (`EVENT_STANDARD.md` §3) — are never reconciled. | Keep both; they version different things. Defined in `API_STANDARD.md` §6 and `EVENT_STANDARD.md` §7. |

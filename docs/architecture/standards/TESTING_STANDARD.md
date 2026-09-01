@@ -4,14 +4,13 @@
 - **Authored by:** `architecture-agent`. **Tests are authored by `qa-agent`.**
 - **Applies to:** `packages/testing/**`, `apps/*/tests/**`, `connectors/*/tests/**`, and Apple test targets.
 - **Depends on:** every other standard — the checklists in each are what tests verify.
-- **Source:** master build plan §25, §26, §30, §31.
 
 ---
 
 ## 1. Who tests
 
-**The test agent works independently from implementation** (master plan §25), and **the
-agent that writes the implementation is never the final approving agent** (§26).
+**The test agent works independently from implementation**, and **the agent that writes the
+implementation is never the final approving agent** (`CONSTITUTION.md` §4.1).
 
 - `qa-agent` authors and runs everything under test paths.
 - `qa-agent` never edits production feature code. Defects route to the owning agent
@@ -120,6 +119,9 @@ phase.
 >
 > Every attempt returns `not_found` or an empty result. No response body, error message,
 > status code difference, or log line reveals that tenant B's data exists.
+>
+> **For equivalent unauthorised requests, status, error shape, response-size class and
+> timing distribution must not reveal whether another tenant or its resource exists.**
 
 Also asserted:
 
@@ -140,6 +142,35 @@ that under Option A a cross-tenant aggregate is *"trivial — one `GROUP BY`"*, 
 precisely why it is the cheapest leak to write by accident. **Every aggregate a feature
 exposes is asserted to change when tenant B's data changes only if the aggregate is tenant
 B's own.** An aggregate that is not asserted is not covered.
+
+**On the timing clause — what it does and does not mean.** The sentence above is a
+requirement, not an aspiration, and the following is how it is read:
+
+- **Ordinary load variation on a shared D1 is not automatically a failure.** Under Option A
+  the database is shared and `MULTITENANCY_STANDARD.md` §7.7 accepts that *"one
+  Organization's heavy query is every Organization's latency"*. Latency that moves with
+  overall load, cold starts, queue depth, or an unrelated Organization's heavy query is
+  noise, and noise is not a finding.
+- **A statistically distinguishable difference that correlates with the existence of
+  another tenant or its resource is a failure.** The failure mode is signal, not variance:
+  if the distribution for "the resource exists in tenant B" separates from the distribution
+  for "the resource does not exist anywhere" for equivalent unauthorised requests, the
+  system is disclosing existence and that is a tenant-isolation defect.
+- **TS5 owns the method.** Sampling size, tolerance, statistical test, and the verification
+  procedure are defined by the resolution of TS5 (§11). This section states the obligation;
+  TS5 states how it is measured. Neither substitutes for the other.
+- **Until TS5 is resolved and implemented, this control is reported as `UNVERIFIED / NOT
+  RUN`.** That is its honest status, and it is stated in the gate report as such — per
+  §5.7 and the reporting standard, an unmeasured control is reported as unmeasured.
+- **It is never reported as passed without measurement.** No inspection, no argument from
+  design, no "we scope every query anyway" reasoning may tick it. Only a recorded
+  measurement, run by the method TS5 defines, can move it off `UNVERIFIED / NOT RUN`.
+
+**Phase scope.** This is a runtime control over a running system holding tenant data.
+Phase 0 has neither a runtime nor tenant data, so `UNVERIFIED / NOT RUN` here **does not
+block the Phase 0 foundation**. It **is a mandatory blocker before any production release
+that serves real tenant data** — the verification is owed, and the debt is recorded here
+rather than written off.
 
 ### 5.3 Coverage is per query path, not per endpoint
 
@@ -254,23 +285,31 @@ actual results:
 | §5.4 `TenantStoreResolver` suite | passed · failed · skipped · not run |
 | §5.5 storage-boundary bypass test | passed · failed · skipped · not run, plus the enumerated exception list |
 | §5.6 negative control | the recorded red run for each of the three controls |
+| §5.2 non-disclosure of existence — status, error shape, response-size class, timing distribution | passed · failed · **`UNVERIFIED / NOT RUN`** — and `UNVERIFIED / NOT RUN` until TS5 is resolved and implemented |
 
 Anything missing is reported as **missing**, not rounded up. "Tenant-isolation tests pass"
 asserted without a denominator, without the resolver and bypass suites, and without a
 sensitivity result is the overstatement this section exists to prevent.
 
-**On timing.** §5.2 deliberately omits the previous requirement that no *timing difference*
-reveal tenant B's data. Under a single shared, single-threaded D1 where
+**On timing.** §5.2 requires that *"for equivalent unauthorised requests, status, error
+shape, response-size class and timing distribution must not reveal whether another tenant
+or its resource exists."* It is a requirement of record. What is missing is not the
+obligation but the **method**: under a single shared, single-threaded D1 where
 `MULTITENANCY_STANDARD.md` §7.7 accepts that *"one Organization's heavy query is every
-Organization's latency"*, timing is structurally noisy and no verification method is
-specified anywhere. **It is retained as a design goal and recorded as an open question
-(TS5) — it is no longer a checklist item**, because a requirement nobody knows how to
-verify gets ticked rather than met, and a ticked box that means nothing devalues the boxes
-that mean something. Deterministic disclosure channels — response body, status code, error
-code, headers, log lines, result counts, and the aggregates in §5.2 — remain hard
-requirements. `MULTITENANCY_STANDARD.md` §8's restatement of the canonical test still
-carries the word *timing*; that file is outside this document's ownership and the
-divergence is flagged to the Team Lead rather than resolved here.
+Organization's latency"*, timing is noisy, and no sampling size, tolerance, or statistical
+test is specified anywhere yet. TS5 (§11) owns specifying it.
+
+The risk that motivated the earlier attempt to drop this clause is real — **a requirement
+nobody knows how to verify gets ticked rather than met** — and it is answered by reporting,
+not by deletion. Until TS5 is resolved and implemented, the control is reported as
+**`UNVERIFIED / NOT RUN`**, never as passed, and never silently omitted from the report. An
+unverified requirement is a debt that is visible; a deleted requirement is a debt nobody
+owes. The deterministic channels — response body, status code, error code, headers, log
+lines, result counts, and the aggregates in §5.2 — remain independently hard requirements
+and are verified today.
+
+`MULTITENANCY_STANDARD.md` §8 carries the same canonical sentence verbatim; the two
+documents are aligned and must be changed together.
 
 ---
 
@@ -311,8 +350,8 @@ wildcard in an App manifest fails validation.
 
 ## 8. Definition of done
 
-From master plan §30. A task is complete only when **all** hold, verified and reported
-honestly:
+This list is the definition of record. A task is complete only when **all** hold, verified
+and reported honestly:
 
 - [ ] Code compiles.
 - [ ] Type checking passes.
@@ -324,6 +363,10 @@ honestly:
       and **not** exercised named; `TenantStoreResolver` suite; storage-boundary bypass
       test; and the recorded negative-control red run. **Not tickable from a passing
       canonical test alone, and not tickable from a sampled endpoint.**
+- [ ] **Non-disclosure of existence** — status, error shape, response-size class and timing
+      distribution, per §5.2. Reported as `UNVERIFIED / NOT RUN` until TS5 defines and the
+      team implements the measurement method. **Never ticked without measurement.** Does not
+      block Phase 0; **blocks any production release serving real tenant data.**
 - [ ] **Permission tests pass.**
 - [ ] Security review passes (`SECURITY_STANDARD.md` §12), by an agent that did not write
       the code.
@@ -360,8 +403,8 @@ Lead** (`0001`); `qa-agent` proposes changes to it and does not edit the root.
 
 ## 10. CI
 
-Every merge runs, in order (master plan §36): format · lint · type check · unit test ·
-contract test · security checks · build · integration test · deploy staging · smoke test.
+Every merge runs, in order: format · lint · type check · unit test · contract test ·
+security checks · build · integration test · deploy staging · smoke test.
 
 - **A check that has never run is not a passing check.** Nothing becomes a required check
   until it has passed for real at least once (`0005` step 6).
@@ -374,8 +417,8 @@ contract test · security checks · build · integration test · deploy staging 
 
 | # | Question | Recommendation |
 |---|---|---|
-| TS1 | **No test framework is approved.** The plan mentions Vitest against the Workers runtime (§31); `0003` approves no npm package. | Needs an ADR **before any test is written**. Recommend the framework that can execute against the real Workers runtime rather than a Node emulation — testing Workers code in Node proves the wrong thing. `qa-agent` should evaluate and the Team Lead record it. **This blocks Phase 1 verification.** |
+| TS1 | **No test framework is approved.** Vitest against the Workers runtime is the candidate; `0003` approves no npm package. | Needs an ADR **before any test is written**. Recommend the framework that can execute against the real Workers runtime rather than a Node emulation — testing Workers code in Node proves the wrong thing. `qa-agent` should evaluate and the Team Lead record it. **This blocks Phase 1 verification.** |
 | TS2 | ~~**Test data for the tenancy model** depends on a model that is not decided~~ — **UNBLOCKED by the model. MT2 is CLOSED; `0006` is Accepted** (Option A, one shared D1 database, MVP-scoped while `0008` is active). | The two-tenant harness is now specifiable: **one database, two `tenant_id` values**, no per-tenant provisioning step, no database creation, and **no remote slot consumed** — local and CI runs use `wrangler dev`'s local mode and never set `"remote": true` (`CLOUDFLARE_STANDARD.md` §4.1). The harness must also provision the `TenantStoreResolver` mapping for both tenants plus one **unmapped** Organization, because §5.4's fail-closed case cannot be tested without one. **What TS2 now depends on instead: TS1 only** — the harness cannot be written until a test framework is approved. It is no longer blocked on the architecture, only on the toolchain. |
 | TS3 | **Cross-repository contract testing.** `Dudo-Apple` is a separate repository, so verifying it against `Dudo-Core`'s contracts needs a distribution mechanism. | Depends on AS1 (contract form and transport). Flagged before the first shared contract. |
 | TS4 | **Coverage targets.** Not specified anywhere. | Do not set a percentage. Require instead that every checklist item in every applicable standard has a test. A percentage is satisfiable without testing anything that matters. **Note:** §5.3 sets a coverage *denominator* for isolation specifically — query paths enumerated versus exercised — which is a completeness measure, not a percentage target, and is required regardless of how TS4 is resolved. |
-| TS5 | **Timing as a disclosure channel is unverifiable as previously written.** §5.2 no longer requires that no timing difference reveal tenant B's data. Under Option A, D1 is single-threaded per database and `MULTITENANCY_STANDARD.md` §7.7 accepts cross-tenant latency coupling as structural, so timing is noisy and informative at once, and no standard states a method. | Recommend it stay a **design goal**, not a checklist item, until someone specifies a method that can actually be run. Two things would change that: an accepted decision on Option C or another model with a physical boundary, or a stated measurement method with a defined threshold and sample size. **Do not reinstate it as a tickable requirement without a method** — that is how a box gets ticked without being met. Deterministic channels remain hard requirements in §5.2. `MULTITENANCY_STANDARD.md` §8 still quotes the timing clause; the Team Lead owns reconciling the two files. |
+| TS5 | **No verification method exists for the non-disclosure-of-existence control.** §5.2 **requires** that *"for equivalent unauthorised requests, status, error shape, response-size class and timing distribution must not reveal whether another tenant or its resource exists"* — by user decision the requirement stands. What is undecided is how it is measured. Under Option A, D1 is single-threaded per database and `MULTITENANCY_STANDARD.md` §7.7 accepts cross-tenant latency coupling as structural, so timing is noisy and informative at once. | **TS5 must define: sampling method and sample size, the tolerance and statistical test that separate load noise from an existence-correlated signal, which surfaces are measured, and where the measurement runs.** The distinguishing question is correlation with existence, not variance: shared-D1 load variation is not a failure; a distribution that separates on whether another tenant's resource exists is. Until TS5 is resolved and implemented, the control is reported **`UNVERIFIED / NOT RUN`** (§5.7) and **never reported as passed without measurement**. It does **not** block Phase 0 — no runtime and no tenant data exist — and it **does** block any production release serving real tenant data. Depends on TS1 for the harness. `MULTITENANCY_STANDARD.md` §8 carries the identical sentence; the two files move together. |

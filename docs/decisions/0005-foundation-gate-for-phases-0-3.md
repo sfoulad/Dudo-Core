@@ -11,7 +11,7 @@
 staging release **and** an internal TestFlight build, QA reports evidence for both, and
 the user explicitly accepts before the next feature begins.
 
-Master build plan §37 Phases 0–3 build a constitution, a core platform, an application
+The planning source's Phases 0–3 build a constitution, a core platform, an application
 runtime, and a developer SDK. **None of them produces anything a user can install or
 open.** Phase 0 is explicitly documents and registries with no business Apps at all.
 
@@ -47,7 +47,7 @@ when all seven hold:
 | # | Condition | Owner |
 |---|---|---|
 | 1 | A written standard, registry, contract, or ADR exists | `architecture-agent` |
-| 2 | Architecture review against the master build plan | `architecture-agent` + Team Lead |
+| 2 | Architecture review against `docs/architecture/standards/` | `architecture-agent` + Team Lead |
 | 3 | Automated validation wherever executable validation is possible — schema linting, YAML/JSON validity, cross-reference checks | `qa-agent` |
 | 4 | QA review for contradictions, missing requirements, and unsafe defaults | `qa-agent` |
 | 5 | CodeRabbit review — **after activation** | automated |
@@ -94,7 +94,7 @@ These apply in full throughout Phases 0–3 and are not negotiable:
 ### When the full gate returns
 
 **The complete seven-step feature-release gate of `0002` becomes mandatory beginning with
-the first runnable vertical product feature** — in practice master plan Phase 4, the
+the first runnable vertical product feature** — in practice Phase 4, the
 first official Apps. It is triggered by the work becoming runnable, not by a phase
 number: any Phase 0–3 work that produces something a user can actually open falls under
 the full gate.

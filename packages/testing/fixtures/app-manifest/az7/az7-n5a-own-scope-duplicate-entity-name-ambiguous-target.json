@@ -1,0 +1,81 @@
+{
+  "caseId": "az7-n5a",
+  "kind": "manifest",
+  "title": "DUPLICATE Entity reference — two entities named 'Widget', one owned and one not, so targetEntity is ambiguous",
+  "coversRequirement": "AZ7 negative #5 (duplicate form)",
+  "target": "AZ7 / VAL-OWN per-entity form / fail-closed on ambiguity",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "Two entities are declared with the same name 'Widget'. The first declares no ownership relation; the second declares ownershipField 'created_by'. The Action targets 'Widget'. The reference resolves to two different entities with two different answers to the only question that matters, so the ownership relation for this Action is ambiguous. Ambiguity must FAIL CLOSED. Resolving to the second (owned) match would let an App smuggle an unowned entity past the per-entity rule by declaring a same-named owned decoy — the CWE-863 escalation reintroduced through name collision instead of through an unrelated entity. Entity names must be unique within a manifest, and this manifest must be rejected.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE — AND NOT FIXABLE WITH uniqueItems. Uniqueness of a FIELD across sibling array items is not expressible in draft 2020-12. It is worth being explicit that 'uniqueItems: true' on the entities array would NOT catch this: uniqueItems compares whole items, and these two items differ (one has ownershipField, the other does not), so uniqueItems would pass them both. The check is 'the set of entities[].name values contains no duplicate', which requires extracting and comparing a projection of the array — outside JSON Schema. The schema will and should ACCEPT this document. DO NOT REPORT THAT ACCEPT AS A SCHEMA FAILURE, and do not propose uniqueItems as the remedy. $defs/entity.name already records duplicate-name uniqueness as an AZ7 validator obligation.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "FIRST declaration of the name Widget. Declares NO ownership relation.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      },
+      {
+        "name": "Widget",
+        "description": "SECOND declaration of the SAME name Widget. Declares an ownership relation, creating the ambiguity.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

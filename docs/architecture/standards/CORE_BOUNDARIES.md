@@ -4,7 +4,6 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** `platform/core/**` and every proposal to add something to it.
 - **Depends on:** `CONSTITUTION.md` Rule 1, `ARCHITECTURE.md`.
-- **Source:** master build plan §6, §14.
 
 Core is the smallest thing that lets every other thing exist. This document makes "Core
 stays small" enforceable instead of aspirational.
@@ -98,9 +97,10 @@ MCP Registry.
 
 ## 4. Primitive versus Capability
 
-The master plan lists Search, Notifications, and Files under **both** Core services (§6)
-and Capabilities (§2). That is a genuine contradiction in the source, and this is the
-resolution `architecture-agent` recommends — it needs Team Lead confirmation.
+Search, Notifications, and Files each have a claim to being **both** a Core service and a
+Capability (`CAPABILITY_STANDARD.md` §3 lists `search`, `notifications`, and `files` as
+capability domains). That is a genuine ambiguity, and this is the resolution
+`architecture-agent` recommends — it needs Team Lead confirmation.
 
 | Layer | Role |
 |---|---|

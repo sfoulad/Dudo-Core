@@ -4,7 +4,7 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every data path in Dudo, without exception.
 - **Depends on:** `CONSTITUTION.md` Rule 10, `SECURITY_STANDARD.md`, `CLOUDFLARE_STANDARD.md`, `docs/decisions/0006` (Accepted), `docs/decisions/0008`.
-- **Source:** master build plan §3 Rule 10, §6, §14; `docs/decisions/0003`, `0006`, `0008`.
+- **Source:** `CONSTITUTION.md` Rule 10; `docs/decisions/0003`, `0006`, `0008`.
 
 Dudo holds other companies' invoices, payroll, contracts, and bank details. A single
 cross-tenant read is not a bug report; it is the end of the product. Everything in this
@@ -26,7 +26,7 @@ clause away from a breach, and code review does not reliably catch a missing cla
 
 ## 2. Vocabulary
 
-The master plan carries both `tenant_id` and `business_id` in the event envelope (§11) and
+The event envelope carries both `tenant_id` and `business_id` (`EVENT_STANDARD.md` §3) and
 defines neither. This is the resolution `architecture-agent` recommends. **It needs Team
 Lead confirmation and it is load-bearing** — every table, key, and index depends on it.
 
@@ -187,10 +187,10 @@ figure applies anywhere in this document.**
 | Queries per Worker invocation | **50** | A request that needs more than 50 queries is a design defect, not a batching problem. |
 | Time Travel | **7 days** | The whole-database recovery window. Not a per-tenant restore. |
 
-**The master build plan §14 says "initial deployments can use shared D1 databases with
-strict tenant isolation."** That is now the decided model — but it was adopted on the
-user's decision under a zero-cost constraint, not on the plan's authority, and the
-threading consequence above is accepted with it rather than waved away.
+**"Initial deployments can use shared D1 databases with strict tenant isolation" is now the
+decided model** (`docs/decisions/0006`, Accepted) — but it was adopted on the user's decision
+under a zero-cost constraint (`0008`), not because it was recommended, and the threading
+consequence above is accepted with it rather than waved away.
 
 ### 7.4 Free-tier database allocation budget
 
@@ -326,11 +326,31 @@ canonical shape (`TESTING_STANDARD.md` §5):
 > principal in tenant A — an owner with every permission — attempt to read, list, update,
 > delete, export, enumerate, and infer tenant B's records through every available surface:
 > API, event, workflow, file, search, and MCP. Every attempt returns `not_found` or an
-> empty result. No response, error message, log line, or timing difference reveals that
-> tenant B's data exists.
+> empty result. No response, error message, or log line reveals that tenant B's data
+> exists.
+>
+> **For equivalent unauthorised requests, status, error shape, response-size class and
+> timing distribution must not reveal whether another tenant or its resource exists.**
 
 The privileged principal matters: an under-permissioned principal fails for the wrong
 reason and proves nothing about isolation.
+
+**On the non-disclosure sentence.** This is the canonical wording, identical to
+`TESTING_STANDARD.md` §5.2; the two files carry it verbatim and change together. It is a
+requirement, not an aspiration:
+
+- Ordinary shared-D1 load variation is **not** automatically a failure. §7.7 accepts that
+  under Option A *"one Organization's heavy query is every Organization's latency"*, and
+  latency that moves with overall load rather than with existence is noise.
+- A **statistically distinguishable difference correlated with another tenant or its
+  resource existing is a failure** — that is disclosure of existence, and it is a
+  tenant-isolation defect regardless of which channel carries it.
+- `TESTING_STANDARD.md` TS5 owns defining the sampling, tolerance and verification method.
+  Until TS5 is resolved and implemented, this control is reported **`UNVERIFIED / NOT
+  RUN`**, and it is **never reported as passed without measurement**.
+- Being unverified does **not** block the Phase 0 foundation — there is no runtime and no
+  tenant data yet — but it **is a mandatory blocker before any production release serving
+  real tenant data.** The verification is owed, not waived.
 
 **What this test proves under the decided model.** Under Option A (§7.1) the two tenants
 live in the same database and the only barrier between them is a `tenant_id` predicate, so
@@ -344,9 +364,10 @@ meaningful and a gap dangerous. Two obligations follow, and neither is discretio
    principal in tenant A cannot resolve, be handed, or cache another Organization's
    binding, and that an unknown Organization mapping fails closed rather than defaulting.
 
-`TESTING_STANDARD.md` needs the same statement in its own words so a gate report cannot
-overstate what "tenant-isolation tests pass" means — that file is outside this document's
-ownership and the change is flagged to the Team Lead.
+`TESTING_STANDARD.md` §5 states the same obligations in its own words so a gate report
+cannot overstate what "tenant-isolation tests pass" means, and §5.2 carries the
+non-disclosure sentence above verbatim. **The two documents are aligned; a change to that
+sentence in either file is a change to both.**
 
 ---
 
@@ -376,6 +397,10 @@ ownership and the change is flagged to the Team Lead.
       per-query-path coverage, not sampled (§8).
 - [ ] Resolver isolation test present: tenant A cannot resolve, receive, or cache another
       Organization's binding; unknown mapping fails closed (§7.2, §8).
+- [ ] **Non-disclosure of existence** — status, error shape, response-size class and timing
+      distribution, per §8. Reported `UNVERIFIED / NOT RUN` until `TESTING_STANDARD.md` TS5
+      defines and the team implements the method; **never ticked without measurement.** Not
+      a Phase 0 blocker; **a blocker before any production release serving tenant data.**
 - [ ] Files, attachments, and exports stored in R2, not D1 (§7.1).
 - [ ] No paid-tier D1 figure relied on anywhere; the applicable limits are §7.3's Free
       figures, and any other limit the design depends on is verified and recorded

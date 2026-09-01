@@ -3,11 +3,53 @@
 Binding decision: `docs/decisions/0008-zero-cost-mvp-infrastructure.md` — Dudo must cost
 **USD 0 / BD 0 per month**.
 
-> **No agent changes billing settings.** Every item below is for the account owner to do.
-> The Team Lead cannot verify most of them either: billing pages are not readable through
-> the tooling available here, so **these are unverified until you confirm them.**
+> **No agent changes billing settings.** Group B below is for the account owner alone.
 
-Nothing on this list has been done. All items are **OPEN**.
+The 13 safeguards are split by who can actually prove them.
+
+## Group A — verified read-only by the Team Lead, 2026-09-01
+
+No setting was changed. These are observations, confirmed against the GitHub API.
+
+| # | Safeguard | Observed | Status |
+|---|---|---|---|
+| A1 | Both product repositories are public (public repos get free Actions on standard runners) | `Dudo-Core` and `Dudo-Apple` both `private=false` | ✅ |
+| A2 | Actions default token is **read-only** | `read` on both; workflow PR-approval disabled on both | ✅ |
+| A3 | No workflow exists that could use a larger runner | 0 workflows in both repositories | ✅ |
+| A4 | No repository-level Actions secrets | 0 in both | ✅ |
+| A5 | Free security features on, paid ones off | secret scanning **enabled**, push protection **enabled** — both free on public repos | ✅ |
+| A6 | CodeRabbit is free for public repositories | Verified against `coderabbit.ai/pricing`, 2026-09-01 | ✅ |
+
+**A6 note:** free forever for public repos, no paid plan required, no metered billing on
+the OSS tier. Paid tiers and usage-based add-ons exist for private repositories and are
+**prohibited**.
+
+## Group B — account-owner actions, BLOCKED until you confirm
+
+**I cannot verify any of these.** Billing pages are not readable through the available
+tooling, and changing them is yours alone. Cost condition **C5 stays BLOCKED** until you
+confirm completion.
+
+| # | Action | Where |
+|---|---|---|
+| B1 | Set metered-product budgets to **$0** and enable **"Stop usage when budget limit is reached"** | GitHub → Settings → Billing and licensing → Budgets and alerts |
+| B2 | Confirm the account is on **GitHub Free**, not Team or Enterprise | GitHub → Settings → Billing |
+| B3 | Confirm **no payment method** can be charged without a further explicit step | GitHub → Settings → Billing → Payment information |
+| B4 | Confirm the Cloudflare account is on the **Workers Free** plan | Cloudflare → Workers & Pages → Plans |
+| B5 | Confirm **no automatic upgrade** to Workers Paid is enabled | Cloudflare → Billing |
+| B6 | Enable **usage notifications** for Workers, D1, R2, Queues | Cloudflare → Notifications |
+| B7 | Confirm **Workers for Platforms is not enabled** (paid-only, prohibited) | Cloudflare → Workers for Platforms |
+
+> **A critical distinction, because it is easy to get backwards.**
+>
+> **GitHub budgets can hard-stop.** Use "Stop usage when budget limit is reached" — an
+> alert-only budget tells you after the money is spent.
+>
+> **Cloudflare budget alerts are informational ONLY. They are not a spending cap and must
+> never be described as one.** Cloudflare cost protection for Dudo comes from four things
+> instead: remaining on Free plans, refusing paid-product activation, monitoring usage, and
+> **Dudo's own fail-closed thresholds in `free-tier-register.md`** — the last of which is
+> the only one that acts automatically.
 
 ## GitHub
 

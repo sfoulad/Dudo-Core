@@ -1,0 +1,69 @@
+{
+  "fixtureSetVersion": 1,
+  "description": "Index of App-manifest validation fixtures. Each entry points at a case file; the CASE FILE is the single source of truth for that case's expected outcome, and this index deliberately does not repeat it. A runner enumerates 'cases', loads each file, and reads expectedOutcome and enforcedBy from the file itself.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "caseFileShape": {
+    "caseId": "stable identifier, referenced in QA reports",
+    "kind": "'manifest' — the case carries a whole App manifest to validate | 'invocation' — the case describes a call against an already-validated manifest",
+    "title": "one line, what the case is",
+    "coversRequirement": "which stated AZ7 requirement this case covers, or 'none' for undecided cases",
+    "target": "the rule under test",
+    "relatedFindings": "prior findings this case pins",
+    "expectedOutcome": "'ACCEPT' | 'REJECT' | 'UNDECIDED'",
+    "enforcedBy": "'schema' — decidable by app-manifest.schema.json alone | 'validator' — referential, NOT expressible in JSON Schema, owed by the registry-aware validator | 'schema+validator' — both layers must agree | 'runtime' — an invocation-time obligation, not decidable from any manifest | 'undecided'",
+    "why": "why this outcome is required, in security terms",
+    "notes": "the schema-versus-validator split for this case, and any trap in reading its result",
+    "manifest": "present when kind is 'manifest' — the App manifest under test",
+    "invocation": "present when kind is 'invocation' — the declaring case, the authenticated context, the client-supplied request, the attack, and the required outcome"
+  },
+  "sets": [
+    {
+      "set": "az7",
+      "directory": "az7/",
+      "subject": "AZ7 — an own-scope Action must name the Entity it operates on, and that Entity must itself carry the ownership relation.",
+      "raisedBy": [
+        "CodeRabbit, CWE-863 (Major)",
+        "qa-agent, independently, while verifying CRIT-4"
+      ],
+      "governedBy": [
+        "docs/architecture/standards/AUTHORIZATION_STANDARD.md §4 (VAL-OWN, AZ7)",
+        "packages/contracts/registries/app-manifest.schema.json"
+      ],
+      "cases": [
+        { "caseId": "az7-n1", "file": "az7/az7-n1-own-scope-missing-target-entity.json" },
+        { "caseId": "az7-n2", "file": "az7/az7-n2-own-scope-unknown-target-entity.json" },
+        { "caseId": "az7-n3", "file": "az7/az7-n3-own-scope-target-entity-has-no-ownership-field.json" },
+        { "caseId": "az7-n4", "file": "az7/az7-n4-own-scope-ownership-on-unrelated-entity.json" },
+        { "caseId": "az7-n5a", "file": "az7/az7-n5a-own-scope-duplicate-entity-name-ambiguous-target.json" },
+        { "caseId": "az7-n5b", "file": "az7/az7-n5b-own-scope-malformed-target-entity.json" },
+        { "caseId": "az7-n5c", "file": "az7/az7-n5c-own-scope-empty-target-entity.json" },
+        { "caseId": "az7-n5d", "file": "az7/az7-n5d-own-scope-case-variant-target-entity.json" },
+        { "caseId": "az7-n6", "file": "az7/az7-n6-own-scope-zero-entities.json" },
+        { "caseId": "az7-p1", "file": "az7/az7-p1-own-scope-targets-owned-entity.json" },
+        { "caseId": "az7-p2", "file": "az7/az7-p2-own-scope-targets-owned-entity-alongside-unowned-entity.json" },
+        { "caseId": "az7-p3", "file": "az7/az7-p3-non-own-action-without-target-entity.json" },
+        { "caseId": "az7-p4", "file": "az7/az7-p4-zero-entity-non-entity-operation.json" },
+        { "caseId": "az7-r1", "file": "az7/az7-r1-invocation-supplied-ownership-relation.json" },
+        { "caseId": "az7-r2", "file": "az7/az7-r2-invocation-supplied-target-entity-override.json" },
+        { "caseId": "az7-q1", "file": "az7/az7-q1-non-own-action-with-target-entity.json" },
+        { "caseId": "az7-q2", "file": "az7/az7-q2-ownership-field-names-no-declared-field.json" }
+      ],
+      "pairsThatMustBeReportedTogether": [
+        {
+          "pair": ["az7-n4", "az7-p2"],
+          "reason": "Structurally identical apart from which entity the own-scope Action targets. n4 must be REJECTED and p2 must be ACCEPTED. Both rejected means the validator bans unowned entities instead of enforcing AZ7; both accepted means AZ7 is not implemented and CWE-863 is still open."
+        },
+        {
+          "pair": ["az7-n6", "az7-p4"],
+          "reason": "The same empty entities array, with and without an own-scope Action. Proves the rejection in n6 comes from 'own' and not from emptiness."
+        },
+        {
+          "pair": ["az7-n2", "az7-n5d"],
+          "reason": "An unresolvable reference, and an unresolvable reference that differs only by case. Both must be REJECTED. Accepting n5d means reference resolution was made case-insensitive to fix n2, which is itself a bypass."
+        }
+      ],
+      "excludedFromTotals": [],
+      "excludedFromTotalsHistory": "az7-q1 and az7-q2 were authored as UNDECIDED open questions and excluded from totals. Both were subsequently decided by AUTHORIZATION_STANDARD.md §4.1 VALIDATOR-AZ7 — item 5 for az7-q1, item 3 for az7-q2 — and now carry expectedOutcome REJECT at the validator layer. Their case files keep the provenance."
+    }
+  ]
+}

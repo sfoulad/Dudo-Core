@@ -1,0 +1,38 @@
+{
+  "caseId": "az7-r2",
+  "kind": "invocation",
+  "title": "A client redirects an own-scope Action onto a different entity at invocation time",
+  "coversRequirement": "AZ7 required behaviour — clients and Apps cannot supply an ownership relation at invocation time",
+  "target": "AZ7 / runtime enforcement of own scope",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "runtime",
+  "why": "targetEntity is part of the Action's declaration, not part of its input. A caller that can re-point an own-scope Action at another entity reproduces the CWE-863 escalation at runtime instead of in the manifest: the manifest validates cleanly against the owned 'Widget', and the call then executes against the unowned 'Setting', where the ownership predicate matches nothing to restrict. Whatever validation AZ7 adds to the manifest is worthless if the binding can be overridden per call, so this case must be run against every AZ7 implementation even after the manifest cases are green.",
+  "notes": "RUNTIME OBLIGATION. NOT DECIDABLE BY app-manifest.schema.json AT ALL. NOT YET EXECUTABLE: no invocation contract or request-envelope schema exists in packages/contracts/**, and no test framework is approved (TESTING_STANDARD.md open question TS1). Report as NOT RUN until an invocation contract exists. This is the runtime twin of az7-n4 and should be reported next to it. A related question the runtime contract must answer, which I did NOT assume: whether an unknown input field is refused with invalid_argument or the request is rejected earlier as a schema violation of the Action's declared input — $defs/action.input says 'Unknown fields are rejected, not ignored', so either path is a REJECT and the distinction is about the error code, not the decision.",
+  "invocation": {
+    "declaredBy": "az7-p2",
+    "action": "az7-fixture-app.DeleteWidget",
+    "declaredScope": "own",
+    "declaredTargetEntity": "Widget",
+    "declaredOwnershipField": "created_by",
+    "authenticatedContext": {
+      "tenantId": "tenant-alpha-synthetic",
+      "principalId": "principal-alpha-1-synthetic"
+    },
+    "clientSuppliedRequest": {
+      "widget_id": "widget-synthetic-0001",
+      "targetEntity": "Setting"
+    },
+    "attack": "The caller supplies 'targetEntity': 'Setting', re-pointing a validated own-scope Action at the manifest's unowned entity. If honoured, the ownership predicate has no field to bind to and the Action reaches every Setting row in the tenant.",
+    "requiredOutcome": {
+      "decision": "REJECT",
+      "errorCode": "invalid_argument",
+      "mustNot": [
+        "resolve targetEntity from the request at all",
+        "fall back to the declared targetEntity while accepting the field as valid input",
+        "evaluate the Action against Setting under any circumstances"
+      ],
+      "mustAlso": "targetEntity is read only from the installed manifest, once, at Action registration."
+    }
+  }
+}

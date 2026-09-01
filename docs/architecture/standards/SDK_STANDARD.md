@@ -1,20 +1,39 @@
 # Developer SDK Standard
 
-- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **The SDK is Phase 3**; this standard exists because `0001` gates SDK work behind two decision records and the SDK's shape must be settled before either is written.
+- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **This document specifies the SDK; it does not describe one that exists.** See §0.
 - **Authored by:** `architecture-agent`.
-- **Applies to:** `packages/sdk/**` — the public SDK third-party developers build against, and the same SDK every first-party App uses.
+- **Applies to:** `packages/sdk/**` — the path reserved for the public SDK third-party developers will build against, and the same SDK every first-party App will use. **The directory holds no code.**
 - **Owned by:** `plugin-agent` (`0004`). Authored here; implemented there.
 - **Depends on:** `CONSTITUTION.md` Rules 1, 3, 4, 7, 8, 9, 10, 11, 12; `API_STANDARD.md`; `AUTHORIZATION_STANDARD.md`; `MULTITENANCY_STANDARD.md`; `SECURITY_STANDARD.md`; `CAPABILITY_STANDARD.md`.
-- **Source:** master build plan §21 (p20–21), §15, §10, §7, Phase 3 (p32).
+- **Applies from:** Phase 3.
+
+---
+
+## 0. Status of the SDK — three separate things
+
+Conflating these three is how a specification gets read as a shipped component. They are
+stated separately, and every "the SDK does X" sentence below belongs to the first row.
+
+| | What it is | Where it stands |
+|---|---|---|
+| **(a) The architecture and contract** | The fifteen surfaces, the boundaries, the security requirements, the versioning policy, and the validation rules in this document. This is a *specification*: what the SDK must be when it is built. | **Draft. Not yet accepted.** `architecture-agent` proposes; the Team Lead accepts under the Foundation Gate (`docs/decisions/0005`). Binding on acceptance, not before. |
+| **(b) The implementation** | Executable code under `packages/sdk/**`: a client, a generator, a package, a published artifact. | **NOT STARTED. No SDK code exists in this repository, in any form** — not a stub, not a prototype, not a type declaration. Nothing imports an SDK because there is nothing to import. Every present-tense sentence in this document describes a requirement on future code, never an observed behaviour of existing code. |
+| **(c) What is blocked, and by what** | The gates that must clear before (b) may begin. | **`docs/decisions/0007` (logical permission model) is Proposed, not accepted**, and `0001` gates SDK work behind it plus an App permission-and-trust ADR that is not drafted — so **no `packages/sdk/**` code may be written yet** (SD1). Independently, **no package, framework, or test framework is approved** (`CONSTITUTION.md` Rule 12), so there is no build, publish, or test toolchain (SD4). Both must clear; clearing one does not unblock the work. Two surfaces stay blocked beyond that even once code begins: **Secrets** (CN1, no tenant-scoped secret store) and **AI/MCP** (AI1, MC1). |
+
+**Consequences that follow from (b), and are not negotiable while it holds.** No claim that
+the SDK "supports", "provides", or "exposes" anything is a statement of fact today. No
+verification checklist in §9 may be ticked. VAL-SDK-1 through VAL-SDK-8 (§7) are specified
+tests, none of which has ever been run. A future report that shows them green must say when
+they first ran, because a check that has never run is not a passing check.
 
 ---
 
 ## 1. The rule the SDK exists to satisfy
 
-The master plan, §21:
+The originating requirement:
 
-> BusinessOS provides a first-class SDK. **External developers should rarely need to
-> understand Cloudflare infrastructure directly. They develop against BusinessOS.**
+> Dudo provides a first-class SDK. **External developers should rarely need to
+> understand Cloudflare infrastructure directly. They develop against Dudo.**
 
 That sentence is the standard. Its checkable form:
 
@@ -27,8 +46,9 @@ This is `CONSTITUTION.md` Rule 11 applied to the one boundary where it is extern
 visible. A developer who has to learn D1's threading model to write a CRM App is a developer
 the SDK failed.
 
-**The second rule, from plan §7:** *"Even official Apps follow exactly the same architecture
-rules as third-party Apps. This ensures the SDK is actually usable by external developers."*
+**The second rule:** *"Even official Apps follow exactly the same architecture rules as
+third-party Apps. This ensures the SDK is actually usable by external developers."* Stated
+for Apps in `APP_STANDARD.md`; this is its SDK form.
 There is **one** SDK. If a first-party App reaches Core through a path the published SDK does
 not offer, the SDK is not the product — it is a demo, and its gaps will not be discovered
 until a third party hits them.
@@ -49,9 +69,9 @@ until a third party hits them.
 SDK. An App depends on the SDK and on contracts, never on Core internals
 (`CONSTITUTION.md` §6, `.claude/rules/architecture.md` §3).
 
-**Generated, not written** (plan §15). From one Action definition, BusinessOS generates the
-internal API, the public API, the OpenAPI schema, **the SDK method**, the MCP tool, and the
-documentation. *"Do not create five independent definitions."* A hand-written SDK method for
+**Generated, not written** (`ARCHITECTURE.md` §4). From one Action definition, the platform
+generates the internal API, the public API, the OpenAPI schema, **the SDK method**, the MCP
+tool, and the documentation. *"Do not create five independent definitions."* A hand-written SDK method for
 an Action that already exists is a sixth definition and is rejected in review — it is how
 the SDK and the API silently diverge.
 
@@ -59,8 +79,12 @@ the SDK and the API silently diverge.
 
 ## 3. The fifteen surfaces
 
-Plan §21 names fifteen. Each is listed with what it exposes, what it must never expose, and
-whether anything blocks it today.
+There are fifteen. Each is listed with what it must expose, what it must never expose, and
+whether anything blocks it beyond the global blockers.
+
+**Read the "Blocked by" column narrowly.** It lists blockers *specific to that surface*. A
+`—` means "nothing further beyond §0", **not** "buildable". Every surface is blocked by SD1
+and SD4 (§0 row c), so **no** row is buildable today. None of the fifteen exists.
 
 | # | Surface | Exposes | Must never expose | Blocked by |
 |---|---|---|---|---|
@@ -76,9 +100,9 @@ whether anything blocks it today.
 | 10 | **Capabilities** | Request a **capability**, never a vendor: `Payment`, never `Stripe` (`CONSTITUTION.md` Rule 6) | Any provider name, provider-specific field, or provider selection by the App | — |
 | 11 | **AI** | The AI capability's actions: generate, summarize, extract, translate, classify, and the rest | Any model or provider name; a raw provider client; a path that lets an App choose an LLM (`AI_STANDARD.md`) | AI1 — no AI provider approved |
 | 12 | **MCP** | Declare that an Action is AI-exposed; nothing more | A second code path for AI; a tool whose schema differs from the Action's (`MCP_STANDARD.md` §1) | MC1, MC2 — transport and auth undecided; Phase 8 |
-| 13 | **UI Extensions** | Registration of components into **approved extension locations** | Any way to modify Core UI directly (plan §22); an unregistered location | — |
+| 13 | **UI Extensions** | Registration of components into **approved extension locations** | Any way to modify Core UI directly (`APP_STANDARD.md` §8); an unregistered location | — |
 | 14 | **Secrets** | **Reference by name only**, plus injection performed by the platform at the egress boundary | **A secret value, ever.** Not returned, not logged, not in an error, not in a debug mode, not to a first-party App (`SECURITY_STANDARD.md` §5) | **CN1 — no tenant-scoped secret store exists** |
-| 15 | **Logging** | Structured logging with `request_id`, `tenant_id`, `principal_id`, `app_id`, `correlation_id` (plan §34) | Business data; another tenant's identifiers; anything classified `secret` or `sensitive-personal` unredacted | — |
+| 15 | **Logging** | Structured logging with `request_id`, `tenant_id`, `principal_id`, `app_id`, `correlation_id` (`ARCHITECTURE.md` §8) | Business data; another tenant's identifiers; anything classified `secret` or `sensitive-personal` unredacted | — |
 
 **Surface 14 is the one to read twice.** An SDK that can return a secret value to App code
 has defeated the entire secret-handling model, because every App is untrusted
@@ -87,7 +111,7 @@ platform-performed injection at the point of an outbound call; App code never ho
 value. **This surface cannot be built before CN1 is answered**, and building a placeholder
 that returns values "for now" is precisely the thing that will not be removed later.
 
-**Surface 4 is the second.** "Storage" in the plan's list does not mean database access. It
+**Surface 4 is the second.** "Storage" here does not mean database access. It
 means the App's own tenant-scoped storage through the Core-owned port. There is no SDK method
 that yields a `D1Database`, a connection, or a query string.
 
@@ -198,11 +222,15 @@ Per `TESTING_STANDARD.md`, and additionally:
 - **The bypass test** (VAL-SDK-8).
 - **A first-party/third-party parity test**: an official App and a synthetic third-party App
   perform the same operation through the same SDK surface with the same result. This is what
-  keeps plan §7's promise honest.
+  keeps §1's second rule honest.
 
 ---
 
 ## 9. Verification checklist
+
+**Every box below is unticked and stays unticked.** There is no SDK to verify (§0 row b), so
+no item here has been checked, and none may be reported as satisfied until it has been run
+against real code.
 
 - [ ] No Cloudflare type or binding in the SDK's public surface (VAL-SDK-1).
 - [ ] Every Action-invoking method generated from the Action definition; no duplicates.
@@ -212,7 +240,7 @@ Per `TESTING_STANDARD.md`, and additionally:
 - [ ] Capability calls name capabilities, never providers.
 - [ ] Every method maps to a declared, catalogued permission; undeclared is denied.
 - [ ] SDK permission checks documented as advisory; Core re-decides.
-- [ ] Structured logging carries the five plan §34 identifiers; redaction applied.
+- [ ] Structured logging carries the five `ARCHITECTURE.md` §8 identifiers; redaction applied.
 - [ ] Version stated, contract versions targeted, breaking changes gated on a new major.
 - [ ] Deprecations announced with a replacement and a window.
 - [ ] Contract, permission, isolation, bypass, and parity tests present and passing.
@@ -223,7 +251,7 @@ Per `TESTING_STANDARD.md`, and additionally:
 
 | # | Question | Status |
 |---|---|---|
-| SD1 | **SDK work is gated by `0001`.** The logical permission model and the App permission-and-trust ADR must both be accepted first. | Drafted as `0007` (Proposed); the trust ADR is not drafted. **No `packages/sdk/**` code until both are accepted.** |
+| SD1 | **SDK work is gated by `0001`.** The logical permission model and the App permission-and-trust ADR must both be accepted first. | The permission model is drafted as `0007` and is **Proposed, not accepted**; the trust ADR is not drafted at all. **No `packages/sdk/**` code until both are accepted** (§0 row c). |
 | SD2 | **The Secrets surface has no store** — CN1. Worker secret bindings are per-Worker, not per-tenant. | Hard blocker on surface 14. Building a value-returning placeholder is forbidden. |
 | SD3 | ~~**The Storage surface depends on the tenancy model**~~ — **UNBLOCKED. `0006` is Accepted.** | Option A — one shared production D1 database, reached only through the Core-owned `TenantStoreResolver` and the Core-owned storage port. The surface's shape is unchanged, as predicted: the App still never sees a binding, a handle, or SQL. Implementation is no longer blocked by the model; it remains blocked by SD4 (no approved toolchain) and SD1 (`0007`). `0006` is MVP-scoped while `0008` is active, so the port must not leak the physical model — a later move to Option C must not change SDK surface 4. |
 | SD4 | **No package, framework, or test framework is approved** (`CONSTITUTION.md` Rule 12, TS1), so the SDK has no build, publish, or test toolchain. | Blocks Phase 3 entirely. Needs decision records. |

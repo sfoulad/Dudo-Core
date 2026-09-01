@@ -2,18 +2,18 @@
 
 - **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **Studio is not built in Phase 0**; this standard exists so that when it is built it cannot become a second platform.
 - **Authored by:** `architecture-agent`.
-- **Applies to:** BusinessOS Studio — every surface through which an App is created inside Dudo rather than in a developer's editor.
+- **Applies to:** Dudo Studio — every surface through which an App is created inside Dudo rather than in a developer's editor.
 - **Depends on:** `CONSTITUTION.md` Rules 1, 7, 8, 9, 12; `APP_STANDARD.md`; `AUTHORIZATION_STANDARD.md`; `SECURITY_STANDARD.md`; `MCP_STANDARD.md`; `AI_STANDARD.md`.
 - **Machine-readable:** `packages/contracts/registries/app-manifest.schema.json` — Studio emits nothing that is not this.
-- **Source:** master build plan §18 (p18–19), §19, §20, §12, and Phase 9 (p34).
+- **Applies from:** Phase 9.
 
 ---
 
 ## 1. What Studio is, and the one rule that governs it
 
-The master plan, §18, in full:
+**Studio's scope, in full:**
 
-> Later phases introduce Studio. Studio creates BusinessOS applications. Creators can be:
+> Later phases introduce Studio. Studio creates Dudo applications. Creators can be:
 > Developers · Business users · **AI Agents**. Studio provides: Create Entity · Create Form ·
 > Create Page · Create Workflow · Create Dashboard · Create Permission · Create Action ·
 > Create API · Create Event · Create MCP Tool · Publish App.
@@ -58,7 +58,7 @@ would be:
 - **AI never writes to Core storage.** An AI that can author an App through a database
   handle has, by construction, every permission at once (`CONSTITUTION.md` Rule 7).
 - An AI-authored App receives no more trust than a human-authored one. Phase 9's
-  "BusinessOS builds the application" is a generation step whose *output* enters the same
+  "the platform builds the application" is a generation step whose *output* enters the same
   validation, security review, and moderator review as any other submission (§6).
 
 ---
@@ -70,17 +70,17 @@ introduces no new artifact type.
 
 | Studio operation | Produces | Governed by | Constraint that is easy to get wrong |
 |---|---|---|---|
-| Create Entity | `entities[]` in the manifest | `APP_STANDARD.md` | Tenant-scoped by construction; `ownershipField` required if any Action on it uses `own` scope |
+| Create Entity | `entities[]` in the manifest | `APP_STANDARD.md` | Tenant-scoped by construction; unique name within the manifest; `ownershipField` required if any Action targets it at `own` scope |
 | Create Form | A UI artifact bound to an entity and an Action | `APP_STANDARD.md` §8 | A form is a client of an Action. It is never a second write path |
 | Create Page | A UI artifact | `APP_STANDARD.md` §8 | Renders and collects. No business rule lives in it |
 | Create Dashboard | A UI artifact reading declared Actions | `APP_STANDARD.md` §8 | Aggregates within one tenant only (`MULTITENANCY_STANDARD.md` §5) |
 | Create Workflow | A workflow definition | `CLOUDFLARE_STANDARD.md` §6 | Every step idempotent; **no step widens the tenant scope** |
 | Create Permission | A permission in the **App's own namespace** | `AUTHORIZATION_STANDARD.md` §3 | See §4.2 — this is the most dangerous of the eleven |
-| Create Action | `actions[]` in the manifest | `API_STANDARD.md` §1 | One permission, one scope, one sensitivity, declared input and output schemas |
+| Create Action | `actions[]` in the manifest | `API_STANDARD.md` §1 | One permission, one scope, one sensitivity, declared input and output schemas. At `own` scope, Studio must make the user pick a `targetEntity` that already declares an `ownershipField` — offering the scope without the target is how the bypass gets built in a UI (`AUTHORIZATION_STANDARD.md` §4) |
 | Create API | `apis[]` — an exposure of an existing Action | `API_STANDARD.md` | **Exposure is opt-in.** It exposes an Action; it never creates a second implementation |
-| Create Event | `eventsPublished[]` + a registry entry | `EVENT_STANDARD.md` | **Apps may not invent duplicate event concepts** (plan §11). Registration is a reviewed act, not a form field |
+| Create Event | `eventsPublished[]` + a registry entry | `EVENT_STANDARD.md` | **Apps may not invent duplicate event concepts** (`EVENT_STANDARD.md` §8). Registration is a reviewed act, not a form field |
 | Create MCP Tool | `mcpTools[]` — an exposure of an existing Action | `MCP_STANDARD.md` | The Action's `exposure` must include `mcp`. A tool is never a code path of its own |
-| Publish App | A marketplace submission | `APP_STANDARD.md` §9, plan §19 | Enters the full lifecycle in §6. Publishing is not deploying |
+| Publish App | A marketplace submission | `APP_STANDARD.md` §9 | Enters the full lifecycle in §6. Publishing is not deploying |
 
 **Read the right-hand column as the specification.** Studio's job is to make these
 constraints unavoidable for a user who has never read a standard — which is a stronger
@@ -129,8 +129,8 @@ Core service.
 ### 4.3 Generated and customer-authored code
 
 Where a Studio App contains executable code — customer-written or AI-generated —
-`CONSTITUTION.md` and master plan §12 are unconditional: **it never executes inside the Core
-runtime.** The plan's answer is Cloudflare Workers for Platforms.
+`CONSTITUTION.md` Rules 1 and 12 are unconditional: **it never executes inside the Core
+runtime.** The intended isolation mechanism is Cloudflare Workers for Platforms.
 
 > **Workers for Platforms is not approved** (`0003`; `CONSTITUTION.md` Rule 12). Until it or
 > an alternative isolation mechanism has an accepted decision record, **Studio cannot ship a
@@ -184,7 +184,7 @@ be built first. That split is a recommendation to whoever plans Phase 9, not a d
   `APP_STANDARD.md` §10 and `API_STANDARD.md` §6. A Studio edit that removes a field,
   narrows a type, or changes an Action's contract is a **breaking** change and requires a
   new version exactly as a hand-written one would.
-- Publishing follows the plan §19 lifecycle without shortcut:
+- Publishing follows this lifecycle without shortcut:
 
   ```
   Draft → Automated Validation → Security Review → Moderator Review → Approved → Published
@@ -195,7 +195,7 @@ be built first. That split is a recommendation to whoever plans Phase 9, not a d
   form produced it, and an AI-generated App does not skip them because a model produced it.
 - Uninstall and data disposition are `APP_STANDARD.md`'s, unchanged: retain, export,
   archive, or delete, declared in the manifest. **Data must never disappear unexpectedly**
-  (plan §20).
+  (`APP_STANDARD.md` §9).
 - Rollback to a previous published version is required, as for any App.
 
 ---
@@ -269,7 +269,7 @@ not name Studio; `platform/` domain services belong to `core-agent` and
 | # | Question | Status |
 |---|---|---|
 | ST1 | **Studio has no path and no owning agent.** `0004` does not name it. | Needs a Team Lead decision amending `0004` before any Studio work. Recommendation: `platform/studio/**` as a platform application. **No code until then.** |
-| ST2 | **Executable Studio output has no isolation mechanism.** Plan §12 requires Workers for Platforms; it is not approved (`0003`). | Hard blocker on any code-generating surface. A declarative-only Studio is unblocked. Same root as `APP_STANDARD.md` AP2. |
+| ST2 | **Executable Studio output has no isolation mechanism.** §4.3 requires one, and the intended mechanism — Workers for Platforms — is not approved (`0003`). | Hard blocker on any code-generating surface. A declarative-only Studio is unblocked. Same root as `APP_STANDARD.md` AP2. |
 | ST3 | **Can a business user meaningfully consent to a permission set they authored?** Studio makes the creator and the grantor the same person, which removes the review a marketplace install provides. | Unresolved. Related to AZ4 (consent grouping). Needs a product decision before Studio ships permission creation. |
 | ST4 | **Who reviews an AI-generated App, and against what?** §6 requires security and moderator review; the plan does not say whether AI-generated submissions get a different depth. | Recommendation: same path, and volume is handled by better automated validation rather than by lighter review. Team Lead decision. |
 | ST5 | **The Studio secret surface is blocked on CN1** — no tenant-scoped secret store exists. | Cannot be built before CN1. Recorded, not worked around. |

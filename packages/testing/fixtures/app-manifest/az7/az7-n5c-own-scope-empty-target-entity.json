@@ -1,0 +1,73 @@
+{
+  "caseId": "az7-n5c",
+  "kind": "manifest",
+  "title": "MALFORMED Entity reference — targetEntity is the empty string",
+  "coversRequirement": "AZ7 negative #5 (malformed form, empty)",
+  "target": "AZ7 / entityName grammar / fail-closed",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "schema",
+  "why": "targetEntity is present but empty. This is the shape a naive implementation produces when a required field is emitted unset, and it is the shape most likely to be treated as 'no target specified' and then skipped rather than refused. Declaring the field and leaving it empty must be exactly as fatal as omitting it (az7-n1): an empty reference resolves to nothing, so 'own' has no ownership relation and must fail closed.",
+  "notes": "SCHEMA-DECIDABLE. $defs/entityName carries both minLength 1 and the pattern '^[A-Z][A-Za-z0-9]*$'; the empty string fails both. No cross-array join is involved, so a schema failure here is a real schema failure and should be reported as one. This fixture also guards against a validator that tests 'targetEntity in manifest' rather than 'targetEntity resolves to a declared entity'.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "A synthetic widget record, fixture use only.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

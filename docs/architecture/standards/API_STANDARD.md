@@ -4,7 +4,6 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every internal API, public API, and capability API in Dudo.
 - **Depends on:** `CONSTITUTION.md` Rules 4, 8, 9; `AUTHORIZATION_STANDARD.md`; `MULTITENANCY_STANDARD.md`.
-- **Source:** master build plan §3, §10, §15, §33.
 
 ---
 
@@ -79,14 +78,14 @@ schemas, errors, idempotency, and versioning.
 /api/v1/apps/<app_id>/<resource>      every other App
 ```
 
-**Why the split.** The master plan's `/api/v1/customers` (§10) assumes a single flat
-resource namespace, which cannot survive a marketplace where any developer may publish an
-App with a `customers` resource. Two Apps would collide, and whichever installed second
-would break the first. Reserving the flat namespace for Core and *registered* official
-Apps keeps the plan's examples valid while making third-party Apps safe by construction.
+**Why the split.** A path such as `/api/v1/customers` assumes a single flat resource
+namespace, which cannot survive a marketplace where any developer may publish an App with a
+`customers` resource. Two Apps would collide, and whichever installed second would break
+the first. Reserving the flat namespace for Core and *registered* official Apps keeps the
+short, readable paths valid while making third-party Apps safe by construction.
 
-This is `architecture-agent`'s resolution of a genuine gap in the plan and needs Team Lead
-confirmation (`CONSTITUTION.md` C4).
+This is `architecture-agent`'s resolution of a genuine gap and needs Team Lead confirmation
+(`CONSTITUTION.md` C4).
 
 Rules:
 

@@ -1,0 +1,73 @@
+{
+  "caseId": "az7-q2",
+  "kind": "manifest",
+  "title": "The targeted Entity declares an ownershipField that names no field it actually has",
+  "coversRequirement": "VALIDATOR-AZ7 item 3 — AUTHORIZATION_STANDARD.md §4.1",
+  "target": "AZ7 / depth of the ownership-relation check",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "validator",
+  "why": "Every link AZ7 names resolves: the Action declares 'own', names 'Widget', 'Widget' is declared, and 'Widget' declares ownershipField 'created_by'. But 'Widget' has no field called 'created_by' — its only field is 'label'. The declaration is therefore satisfied in form and empty in substance, and it produces the same end state as az7-n4: an ownership predicate with no column to bind to, over an entity whose rows have no owner, presented as the narrowest scope in the system. If AZ7's check stops at 'the targeted entity declares SOME ownershipField', this one-word change is a complete bypass of the fix.",
+  "notes": "VALIDATOR OBLIGATION, NOT A SCHEMA ONE. AUTHORIZATION_STANDARD.md §4.1 VALIDATOR-AZ7 item 3 decides this: the resolved entity 'declares ownershipField, and that value names a field present in that entity's own fields[]. An ownershipField naming a field the entity does not declare is not a valid ownership relation.' So 'valid' means RESOLVABLE, not merely well-formed, and this manifest is rejected. This is a SECOND join — ownershipField against entities[].fields[].name — and although it stays within a single entity object, it still compares two instance values and so is not expressible in draft 2020-12. The schema will and should ACCEPT this document; that accept is not a schema defect. PROVENANCE, KEPT DELIBERATELY: authored as an OPEN QUESTION with expectedOutcome UNDECIDED, because AZ7 as originally stated to QA said only that the entity must declare 'a valid ownershipField' and did not define 'valid'. Had the answer been 'well-formed is enough', this one-word change would have been a complete bypass of the CWE-863 fix and QA would have reported AZ7 as only partially closed. Item 3 settled it; the expectation was set from that recorded decision, not from observed behaviour. STILL NOT DECIDED, AND NOT ASSUMED HERE: whether the ownership field must additionally be 'required: true' and of type 'reference'. A nullable owner column silently un-scopes every row where it is null, so QA recommends both, but no fixture in this set asserts it.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "Declares ownershipField 'created_by' but has no such field. Fixture use only.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}

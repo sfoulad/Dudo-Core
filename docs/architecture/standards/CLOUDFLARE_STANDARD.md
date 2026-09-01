@@ -4,7 +4,7 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every use of a Cloudflare service in `Dudo-Core`.
 - **Depends on:** `docs/decisions/0003` (the approval and its two constraints), `docs/decisions/0006` (tenancy model, Accepted), `docs/decisions/0008` (zero-cost MVP — the Free tier is binding), `CONSTITUTION.md` Rules 11 and 12.
-- **Source:** master build plan §4, §5, §12, §13, §14, §35; `0003`, `0006`, `0008`.
+- **Source:** `docs/decisions/0003`, `0006`, `0008`.
 
 `0003` chose Cloudflare and accepted real vendor concentration. This document is how that
 concentration is kept survivable.
@@ -26,11 +26,11 @@ concentration is kept survivable.
 Gateway · Agents SDK · Workers for Platforms · Analytics Engine · KV · Hyperdrive ·
 Vectorize · API Shield · every npm package.
 
-**Being named in the master build plan is not approval.** The plan recommends several of
-the products above; `0003` deliberately did not adopt them. Where a standard in this
+**Being recommended is not approval.** Several of the products above are recommended for
+this architecture; `0003` deliberately did not adopt them. Where a standard in this
 directory would have needed one, it says so and stops rather than assuming.
 
-What this currently blocks, stated plainly: **KV** (the plan's configuration and cache
+What this currently blocks, stated plainly: **KV** (the intended configuration and cache
 layer — `ARCHITECTURE.md` §6), **Workers AI / AI Gateway** (every AI feature —
 `AI_STANDARD.md` AI1), **Agents SDK / remote MCP** (Phase 8 — `MCP_STANDARD.md` MC1),
 **Workers for Platforms** (Phase 7 customer code and out-of-runtime egress control —

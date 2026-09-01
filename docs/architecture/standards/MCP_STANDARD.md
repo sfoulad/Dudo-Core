@@ -4,7 +4,6 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every MCP tool Dudo exposes, and every external MCP server Dudo consumes.
 - **Depends on:** `AUTHORIZATION_STANDARD.md`, `API_STANDARD.md`, `AI_STANDARD.md`, `SECURITY_STANDARD.md`.
-- **Source:** master build plan §15, §16.
 
 MCP is how AI discovers and operates Dudo. It is a **presentation of existing authorized
 Actions** — never a second way into the system.
@@ -166,7 +165,7 @@ untrusted.
 
 | # | Question | Recommendation |
 |---|---|---|
-| MC1 | **How Dudo hosts an MCP server.** The plan names the Agents SDK and remote MCP (§15); **neither is approved** (`0003`). | This standard defines derivation, authorization, discovery, confirmation, and audit — all of which are transport-independent. The transport needs an ADR before Phase 8. Nothing here depends on it. |
+| MC1 | **How Dudo hosts an MCP server.** The candidates are the Agents SDK and remote MCP; **neither is approved** (`0003`). | This standard defines derivation, authorization, discovery, confirmation, and audit — all of which are transport-independent. The transport needs an ADR before Phase 8. Nothing here depends on it. |
 | MC2 | **MCP authentication.** Binding an MCP session to a Dudo principal and tenant has no recorded mechanism, and it is the security boundary of the whole surface. | Needs an ADR with AZ2 (authentication). **Phase 8 is blocked on it.** |
 | MC3 | **Whether tool descriptions are tenant-customisable.** Useful for domain vocabulary; also a way to make a tool describe itself as something it is not. | Do not allow free-text override of the description in the first version. Revisit with evidence. |
 | MC4 | **Cost attribution for AI-driven tool storms.** An agent can generate far more calls than a human. | Per-principal quota from the tenant's plan (§6). The pricing consequence is a user decision. |

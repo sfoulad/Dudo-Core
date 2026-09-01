@@ -11,8 +11,9 @@
 # STATUS OF THIS FILE
 # Every entry below is status "proposed". No code exists yet, and no event has been
 # accepted. The entries are the events entailed by Core's declared responsibilities
-# (master build plan §6) and by the App lifecycle (§20). They are recorded now so that
-# Phase 1 and Phase 2 build against a reviewed shape rather than inventing one per module.
+# (CORE_BOUNDARIES.md §3) and by the App lifecycle (APP_STANDARD.md §9). They are recorded
+# now so Phase 1 and Phase 2 build against a reviewed shape rather than inventing one per
+# module.
 # The Team Lead accepts them; architecture-agent does not.
 
 catalogVersion: 1
@@ -51,7 +52,7 @@ spec:
     the Team Lead, never a second event with a slightly different name.
 
 # ---------------------------------------------------------------------------
-# envelope — every event carries exactly these fields (master build plan §11)
+# envelope — every event carries exactly these fields (EVENT_STANDARD.md §3)
 # ---------------------------------------------------------------------------
 envelope:
   required:
@@ -414,7 +415,7 @@ openQuestions:
     recommendation: "One queue per consuming service, routed by subscription. Isolates a slow consumer from a fast one."
     blocks: "Phase 2"
   - id: EV2
-    question: "Event retention and replay. Nothing in the master plan says whether events are durable beyond delivery."
+    question: "Event retention and replay. Nothing records whether events are durable beyond delivery."
     recommendation: "Persist per tenant with a defined retention window in Core storage. Needed for audit regardless."
     blocks: "Phase 2"
   - id: EV3

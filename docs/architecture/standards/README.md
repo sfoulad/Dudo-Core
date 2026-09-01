@@ -6,7 +6,8 @@ registries the platform validates against.
 - **Status:** Draft for Team Lead review. **Binding on acceptance**, not before.
 - **Authored by:** `architecture-agent`. **Accepted by:** the Team Lead, with user
   approval under the Foundation Gate (`docs/decisions/0005`).
-- **Required by:** master build plan §24 — these exist *before* any code.
+- **Required by:** the Foundation Gate (`docs/decisions/0005`) and `CONSTITUTION.md` — these
+  exist *before* any code.
 
 ---
 
@@ -32,15 +33,15 @@ Read `CONSTITUTION.md` first. Everything else elaborates it.
 | 14 | [TESTING_STANDARD.md](TESTING_STANDARD.md) | Seven test types, the isolation test, the permission matrix, definition of done. |
 | 15 | [CLOUDFLARE_STANDARD.md](CLOUDFLARE_STANDARD.md) | What is approved, what is not, and how every service stays replaceable. |
 
-Documents 1–15 are the set the master build plan §24 requires before any code. The three
-below are additional: each covers a part of the plan that §24's list does not name and that
-would otherwise have no standard at all.
+Documents 1–15 are the required set: all fifteen exist before any code. The three below are
+additional — each covers an area the required set does not name and that would otherwise
+have no standard at all.
 
-| # | Document | Answers | Plan reference |
+| # | Document | Answers | Applies from |
 |---|---|---|---|
-| 16 | [STUDIO_STANDARD.md](STUDIO_STANDARD.md) | What Studio may create, for developers, business users, and AI agents. Studio emits the same artifacts an App declares — and nothing else. | §18, Phase 9 |
-| 17 | [SDK_STANDARD.md](SDK_STANDARD.md) | The fifteen SDK surfaces, what each must never expose, and the rule that developers should rarely need to understand Cloudflare. | §21, Phase 3 |
-| 18 | [ARCHITECTURE_VALIDATION_STANDARD.md](ARCHITECTURE_VALIDATION_STANDARD.md) | The binding pre-scale gate: validate the platform against two materially different applications before building many Apps. | §38 |
+| 16 | [STUDIO_STANDARD.md](STUDIO_STANDARD.md) | What Studio may create, for developers, business users, and AI agents. Studio emits the same artifacts an App declares — and nothing else. | Phase 9 |
+| 17 | [SDK_STANDARD.md](SDK_STANDARD.md) | The fifteen SDK surfaces, what each must never expose, and the rule that developers should rarely need to understand Cloudflare. | Phase 3 |
+| 18 | [ARCHITECTURE_VALIDATION_STANDARD.md](ARCHITECTURE_VALIDATION_STANDARD.md) | The binding pre-scale gate: validate the platform against two materially different applications before building many Apps. | Phase 4 |
 
 ## The registries
 

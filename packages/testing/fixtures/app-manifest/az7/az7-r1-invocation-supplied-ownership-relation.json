@@ -1,0 +1,40 @@
+{
+  "caseId": "az7-r1",
+  "kind": "invocation",
+  "title": "A client supplies the ownership relation at invocation time",
+  "coversRequirement": "AZ7 required behaviour — clients and Apps cannot supply an ownership relation at invocation time",
+  "target": "AZ7 / runtime enforcement of own scope",
+  "relatedFindings": ["CWE-863", "VAL-OWN"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "runtime",
+  "why": "The ownership relation is declared once, in the manifest, and resolved by the platform from the authenticated context. A caller that can name the owner it is scoped to can name any owner, which turns 'own' from a restriction into a parameter and defeats it entirely — the same class of defect as taking tenant identity from a client-supplied field. The extra fields here must be REFUSED, not ignored: a silently dropped field looks to the caller like it was honoured, and to a reviewer like the API accepts it.",
+  "notes": "RUNTIME OBLIGATION. NOT DECIDABLE BY app-manifest.schema.json AT ALL — the manifest is the declaration, this is an invocation against it, and no manifest fixture can test it. NOT YET EXECUTABLE: no invocation contract or request-envelope schema exists in packages/contracts/**, and no test framework is approved (TESTING_STANDARD.md open question TS1), so this case is a SPECIFICATION carried in the fixture set so the obligation is not lost, NOT a passing test. Report it as NOT RUN until an invocation contract exists. When it does exist, the enforcement point is Core: AUTHORIZATION_STANDARD.md requires the scope be evaluated server-side on every call, so the check belongs alongside tenant resolution and not in the App or the SDK.",
+  "invocation": {
+    "declaredBy": "az7-p1",
+    "action": "az7-fixture-app.DeleteWidget",
+    "declaredScope": "own",
+    "declaredTargetEntity": "Widget",
+    "declaredOwnershipField": "created_by",
+    "authenticatedContext": {
+      "tenantId": "tenant-alpha-synthetic",
+      "principalId": "principal-alpha-1-synthetic"
+    },
+    "clientSuppliedRequest": {
+      "widget_id": "widget-synthetic-0001",
+      "created_by": "principal-alpha-2-synthetic",
+      "ownershipField": "label"
+    },
+    "attack": "The caller supplies both a value for the ownership field ('created_by') naming a DIFFERENT principal, and a redefinition of which field carries ownership ('ownershipField': 'label'). Either one, if honoured, lets principal-alpha-1 act on records owned by principal-alpha-2.",
+    "requiredOutcome": {
+      "decision": "REJECT",
+      "errorCode": "invalid_argument",
+      "mustNot": [
+        "silently ignore the extra fields and proceed",
+        "use the client-supplied created_by value in the ownership predicate",
+        "use the client-supplied ownershipField name in place of the declared one",
+        "leak whether principal-alpha-2 or widget-synthetic-0001 exists"
+      ],
+      "mustAlso": "The ownership predicate is built from the manifest declaration and the authenticated principal only."
+    }
+  }
+}

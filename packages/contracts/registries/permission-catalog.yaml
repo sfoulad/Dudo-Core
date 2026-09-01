@@ -11,8 +11,9 @@
 #
 # STATUS OF THIS FILE
 # Every entry is status "proposed". No code exists. These are the permissions entailed by
-# Core's declared responsibilities (master build plan §6) and the App runtime (§20), so
-# that Phase 1 and Phase 2 build against a reviewed set rather than accreting one.
+# Core's declared responsibilities (CORE_BOUNDARIES.md §3) and the App lifecycle
+# (APP_STANDARD.md §9), so that Phase 1 and Phase 2 build against a reviewed set rather
+# than accreting one.
 #
 # AUTHORIZATION_STANDARD.md §1-§10 constitutes the "logical permission model" that
 # docs/decisions/0001 requires as its own decision record BEFORE implementation. That
@@ -46,6 +47,18 @@ model:
       VALIDATION (rule VAL-OWN, AUTHORIZATION_STANDARD.md §4). It is never accepted and
       then evaluated as unrestricted — 'own' without an ownership relation grants
       everything while presenting as the narrowest scope in the system.
+    - >-
+      An Action declaring scope 'own' MUST name its targetEntity, that entity must be
+      declared in the same manifest, and that entity must itself declare a valid
+      ownershipField. An ownershipField on an unrelated entity satisfies nothing. Missing,
+      unknown, malformed or ambiguous targetEntity fails closed (VAL-OWN clauses 2 and 3,
+      AUTHORIZATION_STANDARD.md §4 and §4.1). The schema enforces clauses 1 and 2; clause
+      3 is a cross-array comparison JSON Schema cannot express and is owed by the
+      registry-aware validator as VALIDATOR-AZ7. It does not run yet.
+    - >-
+      Ownership is declared in the manifest, never asserted at invocation. A client, an
+      App, an SDK caller or an AI principal cannot supply a targetEntity, an ownership
+      field or an owner identifier with a call to decide what 'own' means for that call.
     - "list is a separate permission from read. Enumeration is its own disclosure."
     - "export is always separate from read. Reading one record and downloading the book are different risks."
 
@@ -800,20 +813,22 @@ openQuestions:
     blocks: "Phase 1; and the catalog lint check in CI"
   - id: AZ7
     question: >-
-      An Action cannot name the entity it operates on. app-manifest.schema.json
-      $defs/action has additionalProperties false and no entity, target or resource
-      field, so VAL-OWN is enforceable only in its manifest-level form — if any Action
-      declares scope 'own', at least one entity must declare an ownershipField — which
-      the schema now enforces structurally. The per-entity form is unenforceable by the
-      schema AND by any registry-aware validator, because the relation is absent from the
-      manifest format rather than from the schema's expressive power.
+      Binding an Action to its target entity. PARTLY CLOSED. app-manifest.schema.json
+      $defs/action now carries targetEntity and the schema requires it whenever scope is
+      'own', so an 'own'-scoped Action can no longer borrow an unrelated entity's
+      ownershipField to satisfy the manifest-level check. What remains open: (a) the
+      referential clause is UNENFORCED — VALIDATOR-AZ7 is specified in
+      AUTHORIZATION_STANDARD.md §4.1 but no validator exists and none can run until a
+      toolchain is approved (TS1); (b) this is a manifest-format change touching the SDK,
+      Studio, APP_STANDARD.md and every future published manifest, so it needs its own
+      decision record; (c) an Action targets exactly one entity — multi-entity targeting
+      semantics are deliberately not invented here.
     recommendation: >-
-      Decide whether an Action declares the entity or entities it operates on. If it
-      does, VAL-OWN tightens to the per-entity form and the SDK, Studio and
-      APP_STANDARD.md each gain a field to carry. If it does not, VAL-OWN stays
-      manifest-level and every statement of it must say so. A manifest-format change, so
-      it needs its own record and is not made in the schema.
-    blocks: "The per-entity form of VAL-OWN. Not Phase 2 itself."
+      Team Lead records the format change and VALIDATOR-AZ7 as a decision; the validator
+      is built with the Phase 1 toolchain and wired into CI. Do not read the schema half
+      as the whole rule — the split in §4.1 is load-bearing, and collapsing it is the
+      overclaim that produced the original defect.
+    blocks: "The referential clause of VAL-OWN, until VALIDATOR-AZ7 runs in CI."
   - id: AZ8
     question: >-
       Marketplace moderation has no permission it may legitimately hold. core.app.read

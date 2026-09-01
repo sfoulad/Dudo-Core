@@ -1,0 +1,83 @@
+{
+  "caseId": "az7-p2",
+  "kind": "manifest",
+  "title": "own scope targeting the OWNED entity, in a manifest that also declares an unowned one",
+  "coversRequirement": "AZ7 positive #6 (over-rejection guard, structural twin of negative #4)",
+  "target": "AZ7 / VAL-OWN per-entity form",
+  "relatedFindings": ["CWE-863", "CRIT-4", "VAL-OWN"],
+  "expectedOutcome": "ACCEPT",
+  "enforcedBy": "schema+validator",
+  "why": "The manifest declares two entities: 'Widget', which declares ownershipField 'created_by', and 'Setting', which declares no ownership relation because a settings row has no owner and must not be forced to invent one. The own-scope Action targets 'Widget' — the entity that actually carries ownership. This is legitimate and must install. Most entities have no ownership concept, so a manifest mixing owned and unowned entities is the normal case, not a suspicious one.",
+  "notes": "THE DECISIVE PAIR. This fixture is byte-for-byte the same shape as az7-n4 apart from WHICH entity the Action targets: n4 targets the unowned one and must be REJECTED, p2 targets the owned one and must be ACCEPTED. A validator that rejects both is banning unowned entities rather than enforcing the per-entity rule; a validator that accepts both has not implemented AZ7 at all and CWE-863 is still open. Run these two together, always, and report them together. Like n4, the decision is a cross-array join and therefore a VALIDATOR obligation — the schema accepts both, correctly, and that accept is not a schema defect.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "az7-fixture-app",
+    "name": "AZ7 Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise AZ7 own-scope target-entity validation. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "reason": "Deletes widgets the acting principal owns. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Widget",
+        "description": "The TARGETED entity. Declares a real ownership relation.",
+        "tenantScoped": true,
+        "ownershipField": "created_by",
+        "fields": [
+          { "name": "created_by", "type": "reference", "classification": "internal", "required": true },
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      },
+      {
+        "name": "Setting",
+        "description": "An unowned configuration entity. Legitimately has no ownership concept and must not be forced to invent one.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "key", "type": "string", "classification": "internal", "required": true },
+          { "name": "value", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "az7-fixture-app.DeleteWidget",
+        "title": "Delete Widget",
+        "description": "Deletes a widget owned by the acting principal. Fixture use only.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["widget_id"],
+          "properties": { "widget_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "deleted": { "type": "boolean" } }
+        },
+        "errors": ["not_found", "forbidden"],
+        "permission": "az7-fixture-app.widget.delete",
+        "scope": "own",
+        "targetEntity": "Widget",
+        "sensitivity": "sensitive",
+        "idempotent": false,
+        "audit": true
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}
