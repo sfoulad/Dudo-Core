@@ -3,8 +3,8 @@
 - **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance.
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every use of a Cloudflare service in `Dudo-Core`.
-- **Depends on:** `docs/decisions/0003` (the approval and its two constraints), `CONSTITUTION.md` Rules 11 and 12.
-- **Source:** master build plan §4, §5, §12, §13, §14, §35; `0003`.
+- **Depends on:** `docs/decisions/0003` (the approval and its two constraints), `docs/decisions/0006` (tenancy model, Accepted), `docs/decisions/0008` (zero-cost MVP — the Free tier is binding), `CONSTITUTION.md` Rules 11 and 12.
+- **Source:** master build plan §4, §5, §12, §13, §14, §35; `0003`, `0006`, `0008`.
 
 `0003` chose Cloudflare and accepted real vendor concentration. This document is how that
 concentration is kept survivable.
@@ -89,37 +89,79 @@ abstraction added to code already shaped by the thing it was meant to hide.
 
 ## 4. D1
 
-**The constraint that shapes everything** (`0003`, verified against Cloudflare's published
-limits):
+**The Free-tier limits that shape everything.** `0008` binds Dudo to the Cloudflare **Free**
+tier, so these are the applicable figures — verified against
+`developers.cloudflare.com/d1/platform/limits/` on 2026-09-01. **No paid-tier D1 number
+applies anywhere in this standard.**
 
-- **Single-threaded per database.** Roughly **1,000 queries/second at 1 ms per query**.
-- **10 GB maximum per database.**
-- **50,000 databases** on Workers Paid; more on request.
+| Property | Free-tier value |
+|---|---|
+| Concurrency | **Single-threaded per database**, roughly **1,000 queries/second at 1 ms per query** (a per-database engine property from `0003`, not a tier allowance) |
+| Size | **500 MB per database** |
+| Total storage | **5 GB per account** |
+| Databases | **10 per account** |
+| Queries per Worker invocation | **50** |
+| Time Travel | **7 days** |
+
+**The database budget.** Ten databases is the whole allowance, allocated by `0006` §0.3:
+1 production control-plane / tenant directory, 2 production shared tenant data, 3 combined
+staging, 4 reserved migration / recovery, 5–10 unallocated emergency reserve. **Creating an
+eleventh database is not possible on the Free tier — refuse and degrade rather than
+upgrade** (`docs/operations/free-tier-register.md`).
 
 Consequences, and the rules that follow:
 
-1. **Tenants sharing a database contend for one thread.** The tenancy model is therefore a
-   performance decision as much as a security one — `MULTITENANCY_STANDARD.md` §7, still
-   open.
+1. **Tenants sharing a database contend for one thread.** Under the decided tenancy model
+   — **one shared production database** (`0006`, Accepted) — that thread is shared by the
+   entire customer base. The tenancy model is therefore a performance decision as much as a
+   security one (`MULTITENANCY_STANDARD.md` §7).
 2. **Every database handle is obtained from the Core-owned storage port**, never
-   constructed and never taken from `env` in domain code. This is `0003` constraint 2 —
-   every Cloudflare service stays replaceable behind an internal boundary — and it holds
-   under every candidate tenancy model. **What the port resolves to** — one shared
-   database, one per tenant, or a shard — **is undecided** (`MULTITENANCY_STANDARD.md` §7;
-   `docs/decisions/0006-tenancy-model.md`, Proposed). This rule assumes no outcome, and
-   the port is what keeps the outcome changeable.
+   constructed and never taken from `env` in domain code. Two accepted decisions now
+   require this, not one: `0003` constraint 2 (every Cloudflare service stays replaceable
+   behind an internal boundary) **and `0006` §0.2, which makes the server-controlled
+   `TenantStoreResolver` binding by explicit user decision.** Apps, plugins, Connectors,
+   and clients cannot select a database or a binding; an unknown Organization mapping
+   **fails closed**; the resolver returns only Core-configured bindings; business services
+   never touch D1 directly. **What the port resolves to today is one shared database** —
+   the indirection exists anyway, so that moving to pooled shards later changes no
+   business-domain code and no public contract.
 3. Queries are parameterised. Always.
 4. Every query is indexed for its access path. On a single thread, one unindexed scan is
    everyone's latency.
 5. Batch related statements rather than issuing them in a loop. A loop of round trips on a
    single-threaded database is the easiest way to build an outage.
-6. **No long-running or interactive transactions.** Keep write units small.
-7. **Migrations are forward-only, versioned, and reviewed**, with a stated rollback path.
-   They run through controlled deployment workflows, never ad hoc, and never against real
-   data without explicit user approval.
-8. Migrations must be designed to run across **N** databases with partial-failure handling
-   — a requirement that exists under every candidate tenancy model except a single shared
-   database.
+6. **Stay under 50 queries per Worker invocation.** A request that needs more is a design
+   defect; do not batch around the limit and do not split a request to evade it.
+7. **No long-running or interactive transactions.** Keep write units small.
+8. **Files, attachments, and large exports go to R2, not D1.** The 500 MB ceiling is for
+   structured business data. Storing blobs in D1 converts a storage problem into an outage
+   — see §8.
+9. **Watch the 500 MB production ceiling.** 70% warning and capacity review; 85% stop
+   onboarding new Organizations and stop non-essential growth; 90% emergency gate
+   preserving headroom for essential existing-customer operations (`0006` §0.4).
+   **Never delete financial, audit, or customer data merely to remain free** — stop
+   onboarding, degrade non-essential service, and escalate to the user.
+10. **Migrations are forward-only, versioned, and reviewed**, with a stated rollback path.
+    They run through controlled deployment workflows, never ad hoc, and never against real
+    data without explicit user approval.
+11. Migrations must still be **designed** to run across **N** databases with
+    partial-failure handling. Under the decided model N is currently 1, but the migration
+    candidate (`0006` §0.5) is pooled shards, and a runner written for exactly one database
+    is a runner that must be rewritten at the worst possible moment.
+
+### 4.1 Local development and CI
+
+**Local development and CI consume no remote database slots, and must not.** Verified
+against Cloudflare's local-development documentation on 2026-09-01: `wrangler dev` defaults
+to **local mode** powered by Miniflare, persisting to local disk, and does not reach remote
+D1. Targeting a remote database requires explicitly setting **`"remote": true`** in the
+binding configuration.
+
+- **Local development configuration must never set `"remote": true`.**
+- CI runs against local emulation. A CI job that touches a remote database burns a slot,
+  writes to shared data, and can create a charge.
+- A remote binding is a deliberate, reviewed act in a deployed environment — never a
+  developer convenience.
 
 ---
 
@@ -169,6 +211,9 @@ does not show up until load arrives.
 
 ## 8. R2
 
+- **Files, attachments, and large exports live here, not in D1** (`0006` §0.1). D1's 500 MB
+  ceiling is for structured business data; a blob in D1 spends the shared production
+  database's entire budget on one customer's upload.
 - Keys are `t/<tenant_id>/<app_id>/...` — **ownership is in the key**, not only in
   metadata, so a listing operation cannot cross a tenant even by mistake.
 - Every object carries tenant and App ownership metadata as well.
@@ -200,7 +245,11 @@ does not show up until load arrives.
 ## 10. Limits
 
 Cloudflare's limits change, and several of them shape the architecture. Only the D1 limits
-in §4 have been verified and recorded (`0003`).
+in §4 have been verified and recorded — the **Free-tier** figures, checked against
+`developers.cloudflare.com/d1/platform/limits/` on 2026-09-01, together with the
+single-thread engine property from `0003`. **`0008` makes the Free tier binding, so a
+paid-tier allowance is not a limit this architecture may rely on**; quoting one is the same
+defect as quoting an unverified number, and worse, because it looks researched.
 
 **Every other limit that a design depends on must be verified against Cloudflare's current
 documentation and recorded in the task specification before it is relied upon** — Worker
@@ -220,8 +269,15 @@ worse than no number, because it will be trusted.
 - [ ] Bindings used, not Cloudflare REST APIs.
 - [ ] Worker-to-Worker over Service Bindings/RPC; callee still authorizes.
 - [ ] No module-scope mutable state carrying tenant data.
-- [ ] D1 handle obtained from the Core-owned storage port, never from `env` in domain code;
-      queries parameterised and indexed.
+- [ ] D1 handle obtained from the Core-owned storage port and resolved by
+      `TenantStoreResolver`, never from `env` in domain code; no caller selects a database
+      or binding; unknown Organization mapping fails closed (`0006` §0.2).
+- [ ] Queries parameterised and indexed; **under 50 queries per Worker invocation**.
+- [ ] No paid-tier Cloudflare figure relied on; §4's Free-tier limits are the applicable
+      ones and the database budget is respected.
+- [ ] Local and CI configuration does **not** set `"remote": true` on any binding (§4.1).
+- [ ] Files, attachments, and exports stored in R2, not D1; production database growth
+      checked against the 70/85/90 thresholds.
 - [ ] Migrations forward-only, reviewed, with a rollback path and N-database handling.
 - [ ] Queue consumers idempotent and order-tolerant; DLQ owned and monitored.
 - [ ] Workflow steps idempotent; tenant never widened.
@@ -239,5 +295,5 @@ worse than no number, because it will be trusted.
 | CF1 | **Service topology** — one Worker, or a Worker per domain service. `0003` does not decide it, and it changes what a Service Binding is *for*. | Start with a small number of Workers split along the boundaries that already exist (edge/API, core domain, App runtime). Splitting later is easier than merging. Needs an ADR before Phase 1 implementation. |
 | CF2 | **KV is not approved**, so the plan's configuration and cache layer has no home. | Read configuration from Core storage with in-request caching only. If measurement later shows a real need, record a KV decision then — not preemptively. |
 | CF3 | **Analytics Engine is not approved**, so §34's observability requirements rest on Workers logs and traces alone. | Sufficient for Phases 0–3. Revisit when there is a real analytics requirement. |
-| CF4 | **Workers for Platforms availability** — Cloudflare's documentation does not state whether it requires an Enterprise plan (`0003`, unverified). | Verify before Phase 7 is planned, not when it is built. It gates third-party App and Connector isolation, which several standards already flag as blocking. |
-| CF5 | **Migration tooling** — no package is approved, so migrations have no runner. | Needs an ADR with TS1. Blocks the first schema. |
+| CF4 | **Workers for Platforms availability** — `0003` records this as unverified. `docs/operations/free-tier-register.md` lists it as **paid-only and prohibited outright** while `0008` is active. | Unavailable during the Zero-Cost MVP regardless of the Enterprise question. It gates third-party App and Connector isolation, so Phase 7 planning must assume it is not there unless the user approves a paid plan. Do not design against it in the meantime. |
+| CF5 | **Migration tooling** — no package is approved, so migrations have no runner. | Needs an ADR with TS1. Blocks the first schema. The tenancy model is no longer a blocker here (`0006` is Accepted): the runner targets one shared database today and must still handle N (§4 rule 11). |

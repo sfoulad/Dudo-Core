@@ -1,10 +1,10 @@
 # Multi-Tenancy Standard
 
-- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **§7 decides nothing** — the tenancy implementation model is an open decision belonging to the Team Lead and the user.
+- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **§7 is now decided** — `docs/decisions/0006-tenancy-model.md` is **Accepted** (user decision, 2026-09-01): **Option A, one shared production D1 database, with mandatory indirection**, for the Zero-Cost MVP only while `0008` is active.
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every data path in Dudo, without exception.
-- **Depends on:** `CONSTITUTION.md` Rule 10, `SECURITY_STANDARD.md`, `CLOUDFLARE_STANDARD.md`.
-- **Source:** master build plan §3 Rule 10, §6, §14; `docs/decisions/0003`.
+- **Depends on:** `CONSTITUTION.md` Rule 10, `SECURITY_STANDARD.md`, `CLOUDFLARE_STANDARD.md`, `docs/decisions/0006` (Accepted), `docs/decisions/0008`.
+- **Source:** master build plan §3 Rule 10, §6, §14; `docs/decisions/0003`, `0006`, `0008`.
 
 Dudo holds other companies' invoices, payroll, contracts, and bank details. A single
 cross-tenant read is not a bug report; it is the end of the product. Everything in this
@@ -116,107 +116,204 @@ a change touching any carrier is checked against it.
   is not a delete.
 - **Export** — a tenant can obtain its own data. Always audited, always scoped, never
   including another tenant's records even incidentally.
-- **Backup and restore** — restoring one tenant must not restore or expose another. If the
-  chosen tenancy model cannot restore a single tenant, that is a consequence the decision
-  in §7 must accept explicitly rather than discover later.
+- **Backup and restore** — restoring one tenant must not restore or expose another.
+  **Under the decided model (§7) per-tenant restore is effectively unavailable**, and
+  `0006` §0.7 accepts that consequence explicitly. It is a known MVP limitation and a
+  migration trigger, not a surprise to be discovered during an incident. D1 Time Travel
+  gives a **7-day** recovery window for the whole database, not for one tenant.
 
 ---
 
-## 7. The implementation model — options, not a decision
+## 7. The implementation model — DECIDED
 
-**This is not decided here, and nothing downstream of here treats it as decided.** It needs
-its own record; `0003` already flags it, and `docs/decisions/0006-tenancy-model.md` drafts
-it as **Proposed**. What follows is the honest constraint set and `architecture-agent`'s
-recommendation, in that order. The recommendation in §7.3 binds nothing.
+**The tenancy model is decided.** `docs/decisions/0006-tenancy-model.md` is **Accepted** —
+an explicit user decision recorded on 2026-09-01. This section states what was decided and
+what follows from it. It no longer presents options; §7.9 keeps the option comparison as
+**background only, clearly superseded**.
 
-### 7.1 The constraint, stated plainly
+### 7.1 The decision
 
-From `docs/decisions/0003`, verified against Cloudflare's published limits:
+**Option A — one shared production D1 database — with mandatory indirection.**
 
-| D1 property | Value | Consequence |
+This holds **for the Zero-Cost MVP only, while `docs/decisions/0008-zero-cost-mvp-infrastructure.md`
+is active.** It is an MVP decision, not a permanent architecture promise, and it is
+expected to be revisited rather than defended.
+
+- **One shared production D1 database** holds every Organization's business data.
+- **`tenant_id` is mandatory** on every tenant-owned row, query, command, event, cache key,
+  job, export, and object path — the eleven carriers in §4, without exception.
+- **Files, attachments, and large exports go to R2 Standard, not D1.** The 500 MB D1
+  ceiling is for structured business data; putting blobs there converts a storage problem
+  into an outage.
+- **Option B (database per tenant) is excluded during the Zero-Cost MVP.** Ten databases
+  total, minus the four allocated in §7.4, leaves six — six tenants is not a product.
+- **Option C remains the approved migration candidate, not the current model.** No
+  migration and no paid-plan activation is automatic; **both require user approval.**
+
+### 7.2 Mandatory indirection — `TenantStoreResolver`
+
+**This is approved and binding**, by user decision (`0006` §0.2), not by assertion in a
+standard. The architecture contract for a server-controlled `TenantStoreResolver` is
+implemented from the beginning. For MVP every Organization resolves to the same production
+binding — the indirection exists even though it currently has exactly one answer.
+
+- **Apps, plugins, Connectors, and clients cannot select a database or a binding.** There
+  is no parameter, header, manifest field, or SDK call that chooses storage.
+- **An unknown Organization mapping fails closed.** No fallback, no default database, no
+  "probably the shared one".
+- The resolver returns **only bindings configured and approved by Core**.
+- **Business services never touch D1 directly.** They go through the storage boundary
+  (`0003` constraint 2, `CLOUDFLARE_STANDARD.md` §4).
+- **Moving from A to C must not change business-domain code or public contracts.** That is
+  the entire reason the indirection is paid for now.
+
+> **This resolves MAJ-21.** The indirection was previously asserted as non-negotiable
+> inside a standard with no decision behind it, which was a process defect. The situation
+> is now the opposite: it is **explicitly user-approved and binding by decision**.
+
+### 7.3 The constraint, stated plainly — Free-tier figures
+
+`0008` binds Dudo to the Cloudflare **Free** tier. These are the Free limits, verified
+against `developers.cloudflare.com/d1/platform/limits/` on 2026-09-01. **No paid-tier
+figure applies anywhere in this document.**
+
+| D1 property | Free-tier value | Consequence |
 |---|---|---|
-| Concurrency | **Single-threaded per database** | Tenants sharing a database contend for one thread. |
-| Throughput | **~1,000 queries/second at 1 ms per query** | This is a *per-database* ceiling, and it is a hard one. |
-| Size | **10 GB per database** | A shared database has a tenant count beyond which it cannot grow. |
-| Count | **50,000 databases** on Workers Paid; more on request | Database-per-tenant is supported at real scale, but not unbounded. |
+| Concurrency | **Single-threaded per database** | Every Organization's every query queues behind every other's. Noisy neighbours are structural, not incidental. |
+| Throughput | **~1,000 queries/second at 1 ms per query**, per database | A per-database engine property recorded in `0003`, not a tier allowance. Under one shared database it is the ceiling for the whole customer base. |
+| Size | **500 MB per database** | This is a **product constraint**, not merely an infrastructure one. It bounds how many Organizations Dudo can serve before a decision is forced. |
+| Total storage | **5 GB across the account** | The account ceiling, across all databases. |
+| Count | **10 databases per account** | See the allocation budget in §7.4. |
+| Queries per Worker invocation | **50** | A request that needs more than 50 queries is a design defect, not a batching problem. |
+| Time Travel | **7 days** | The whole-database recovery window. Not a per-tenant restore. |
 
 **The master build plan §14 says "initial deployments can use shared D1 databases with
-strict tenant isolation." That recommendation is in tension with D1's threading model and
-should not be adopted on the plan's authority alone.** A shared database does not merely
-mean tenants share storage — it means every tenant's every query queues behind every other
-tenant's. One tenant running a report degrades everyone, and there is no query planner or
-connection pool to soften it. This is the single most consequential unexamined statement
-in the plan.
+strict tenant isolation."** That is now the decided model — but it was adopted on the
+user's decision under a zero-cost constraint, not on the plan's authority, and the
+threading consequence above is accepted with it rather than waved away.
 
-### 7.2 Options
+### 7.4 Free-tier database allocation budget
+
+Ten databases per account, allocated as follows (`0006` §0.3):
+
+| # | Purpose |
+|---|---|
+| 1 | Production control-plane / tenant directory |
+| 2 | Production shared tenant-data database |
+| 3 | Combined staging database |
+| 4 | Reserved migration / recovery database |
+| 5–10 | **Unallocated** — emergency growth reserve |
+
+**Local development and CI consume no remote slots.** Verified against Cloudflare's
+local-development documentation on 2026-09-01: `wrangler dev` defaults to **local mode**
+powered by Miniflare, persists to local disk, and does not reach remote D1. Targeting a
+remote database requires explicitly setting `"remote": true` in the binding configuration.
+**Local development must not set it.**
+
+**Nothing here creates a cloud resource.** This is an allocation budget, not deployment
+approval.
+
+### 7.5 Capacity protection
+
+The production shared database has a **500 MB** Free-tier ceiling.
+
+| Threshold | Action |
+|---|---|
+| **70%** (350 MB) | Warning and capacity review |
+| **85%** (425 MB) | **Stop onboarding new Organizations**; stop non-essential and background growth |
+| **90%** (450 MB) | Emergency capacity gate — preserve remaining headroom for essential operations for existing customers |
+
+**Never delete financial, audit, or customer data merely to remain free.** If the choice is
+between a charge and destroying a customer's records, it is not a choice: stop onboarding,
+degrade non-essential service, and escalate to the user. Retention deletion under a stated
+policy (§6, MT4) is a different thing and is unaffected.
+
+**Before admitting external MVP Organizations:**
+
+1. Validate storage estimates against the two architecture-validation applications
+   (`ARCHITECTURE_VALIDATION_STANDARD.md`).
+2. Measure representative row sizes and audit/event growth.
+3. Define a defensible initial Organization limit.
+4. **If no evidence exists, default to a closed beta of at most 10 Organizations.**
+
+### 7.6 Under Option A, isolation is enforced entirely in code
+
+State this plainly, because the decision rests on it:
+
+**There is no physical boundary between two Organizations' data. Every row of every tenant
+sits in one database, and the only thing keeping tenant A out of tenant B's records is a
+`tenant_id` predicate on every single query. One missing predicate is a breach — of the
+entire customer base, not of two tenants.**
+
+The consequences that follow are not optional:
+
+- The predicate is applied **centrally by the storage boundary**, not written by hand in
+  each query. A query path that bypasses the boundary is a critical defect.
+- The canonical isolation test in §8 is **not optional and cannot only sample.**
+  `TESTING_STANDARD.md`'s isolation gate must be read as a per-query-path obligation under
+  this model, not a per-endpoint smoke test — a green result on a sampled endpoint proves
+  nothing about the endpoint that was not sampled.
+- Under Option A a passing isolation test is worth a great deal, precisely because the
+  failure mode it detects (a missing predicate) is the actual failure mode of the model.
+  That value is only realised if coverage is complete.
+- `TenantStoreResolver` (§7.2) is itself an isolation boundary and needs its own test: a
+  principal in tenant A must not be able to resolve, be handed, or cache another
+  Organization's binding, and an unknown mapping must fail closed.
+
+### 7.7 Consequences accepted with this decision
+
+- **Per-tenant restore is effectively unavailable.** Customers will eventually ask for it
+  by name. Accepted MVP limitation and a migration trigger (`0006` §0.7).
+- **Noisy neighbours are structural.** D1 is single-threaded per database, so one
+  Organization's heavy query is every Organization's latency. Mitigations are architectural
+  — push heavy work to Workflows and Queues, forbid unbounded queries, meter per tenant.
+- **Tenant deletion must be proven complete** across every table plus R2, caches, queues,
+  and audit. There is no "drop the database" shortcut.
+- **Cross-tenant platform reporting is trivial** under A — one `GROUP BY`. §5 still forbids
+  any aggregate that spans tenants and contains business data; only platform metrics
+  without business data are legitimate.
+- **The 500 MB ceiling is a product constraint.** See §7.5.
+
+### 7.8 When Option C is reconsidered
+
+Option C is the approved migration candidate. Reconsider it when: the shared database
+reaches the §7.5 thresholds; noisy-neighbour evidence appears; restore or deletion
+requirements cannot be met safely; the user approves Workers Paid; or free-tier capacity or
+product limits change. **Migration requires user approval. So does any paid plan.**
+
+### 7.9 Background — the earlier option comparison (SUPERSEDED)
+
+> **⚠ Superseded by §7.1.** Retained as background so the reasoning is legible, not as a
+> live choice. Nothing in this repository may treat anything below as open. The full
+> comparison, including the recommendation that did not survive `0008`, is in
+> `docs/decisions/0006-tenancy-model.md` §1–§9 — where the **paid-tier** figures it was
+> computed against are preserved and labelled. **Do not carry any figure from §7.9 or from
+> `0006` §1–§9 into a design; §7.3 holds the applicable numbers.**
 
 **A — Shared database, row-level isolation.** One D1 database, `tenant_id` on every table.
-
-- *For:* simplest to build; one migration path; cross-tenant platform queries are trivial.
-- *Against:* every tenant contends for one thread; the 10 GB ceiling is shared; a single
-  missing predicate is a breach; per-tenant restore is effectively impossible; noisy
-  neighbours are structural, not incidental.
+*For:* simplest to build; one migration path; cross-tenant platform queries are trivial.
+*Against:* every tenant contends for one thread; the size ceiling is shared; a single
+missing predicate is a breach; per-tenant restore is effectively impossible; noisy
+neighbours are structural. **— This is the decided model. Its "against" column is accepted,
+not refuted (§7.6, §7.7).**
 
 **B — Database per tenant.** One D1 database per Organization.
-
-- *For:* isolation by construction — a missing predicate cannot leak because the handle
-  cannot reach; per-tenant throughput, size, restore, and deletion; supported to 50,000
-  databases.
-- *Against:* migrations must run across N databases with partial-failure handling;
-  provisioning is on the signup path; platform-wide queries need aggregation elsewhere;
-  a hard ceiling on tenant count that requires a Cloudflare conversation to lift.
+*For:* isolation by construction — a missing predicate cannot leak because the handle
+cannot reach; per-tenant throughput, size, restore, and deletion.
+*Against:* migrations across N databases with partial-failure handling; provisioning on the
+signup path; platform-wide queries need aggregation elsewhere. **— Excluded during the
+Zero-Cost MVP: ten databases total is not a customer base, and the runtime-binding question
+(`0006` §4.4) is unresolved.**
 
 **C — Hybrid: pooled shards, promotable to dedicated.** Small tenants share one of many
-databases; a tenant is promoted to its own database on size, load, or plan. Routing lives
-in a Core-owned tenant directory.
+databases; a tenant is promoted to its own on size, load, or plan.
+*For:* bounded blast radius; contention limited to a shard; promotion is a migration, not a
+rewrite. *Against:* routing, directory, and promotion path must all exist early; two
+operational modes to test. **— The approved migration candidate (§7.8), not the current
+model.**
 
-- *For:* bounded blast radius from day one; contention limited to a shard; promotion is a
-  migration, not a rewrite; matches the plan's "large Enterprise tenants may later receive
-  isolated databases" without accepting the single-shared-database starting point.
-- *Against:* the routing layer, the directory, and the promotion path must all exist
-  early; migrations must run across shards; two operational modes to test.
-
-### 7.3 Recommendation — advice only, adopted by nothing
-
-**No option in §7.2 has been chosen, and this section chooses none.** What follows is
-`architecture-agent`'s recommendation to the Team Lead and the user. It is not binding, it
-is not non-negotiable, and no standard, checklist, or registry in this repository treats it
-as settled. The full comparison is drafted in
-`docs/decisions/0006-tenancy-model.md` (**Status: Proposed**); the decision is the user's.
-
-**The recommendation.** Option C, and a storage port that resolves a tenant to a storage
-handle through a Core-owned tenant directory rather than constructing handles in domain
-code.
-
-**The engineering argument, preserved for whoever decides.** The indirection is the part
-that is genuinely expensive to reverse. With it, A → C → B is a migration. Without it,
-every App, every query, and every migration hard-codes an assumption about physical
-layout, and changing the model later means rewriting the entire data layer of every App at
-once — which is what `CONSTITUTION.md` §6 exists to prevent. Under Option A the
-indirection costs almost nothing and preserves the exit; under B and C some mapping from
-tenant to database has to exist in any case.
-
-**The counter-argument, so the recommendation is not the only case on record.** Under
-Option A a directory is one row per tenant pointing at the same database — overhead with
-no present benefit — and the resolution step itself becomes an isolation boundary that
-needs its own test (a principal in tenant A must not be able to resolve, be handed, or
-cache tenant B's handle). That test is specified nowhere today and is a cost of the
-recommendation, not a free consequence of it.
-
-What *is* already binding, and does not depend on this decision, is `0003` constraint 2:
-storage sits behind a Core-owned port, and no Cloudflare binding appears in domain logic.
-That holds under A, B, and C alike.
-
-### 7.4 What the decision must state
-
-1. The model (A, B, or C), with the shard sizing or promotion criteria if C.
-2. How migrations run across N databases, including partial failure and rollback.
-3. Where platform-wide queries get their data, given they cannot join across tenants.
-4. Per-tenant backup, restore, and deletion.
-5. Provisioning on signup: synchronous or asynchronous, and what the user sees.
-6. The ceiling — tenants per shard, or databases per account — and what happens at it.
-7. How App-owned data maps onto it, given Apps × tenants storage units
-   (`ARCHITECTURE.md` A4).
+**A fourth option, schema-per-tenant, is not available:** D1 is SQLite, which has no schema
+namespace of the kind Postgres offers.
 
 ---
 
@@ -235,6 +332,22 @@ canonical shape (`TESTING_STANDARD.md` §5):
 The privileged principal matters: an under-permissioned principal fails for the wrong
 reason and proves nothing about isolation.
 
+**What this test proves under the decided model.** Under Option A (§7.1) the two tenants
+live in the same database and the only barrier between them is a `tenant_id` predicate, so
+this test is exercising the exact failure mode of the architecture — which makes a pass
+meaningful and a gap dangerous. Two obligations follow, and neither is discretionary:
+
+1. **Coverage is per query path, not per endpoint.** A missing predicate on one unsampled
+   path is a breach of the whole customer base. Sampling produces false assurance, which is
+   worse than no assurance.
+2. **The resolver is tested too.** A `TenantStoreResolver` test (§7.2) must show that a
+   principal in tenant A cannot resolve, be handed, or cache another Organization's
+   binding, and that an unknown Organization mapping fails closed rather than defaulting.
+
+`TESTING_STANDARD.md` needs the same statement in its own words so a gate report cannot
+overstate what "tenant-isolation tests pass" means — that file is outside this document's
+ownership and the change is flagged to the Team Lead.
+
 ---
 
 ## 9. Verification checklist
@@ -248,9 +361,26 @@ reason and proves nothing about isolation.
 - [ ] Tenant immutable after creation; no record moves between tenants.
 - [ ] Storage handle obtained from the Core-owned storage port — never constructed in
       domain code, never taken from `env` (`0003` constraint 2, `CLOUDFLARE_STANDARD.md`
-      §4). *How* the port resolves a handle is the open tenancy decision (§7) and is not
-      verified by this checklist.
-- [ ] Isolation test present, using a fully privileged principal, and passing.
+      §4).
+- [ ] **Handle resolved through `TenantStoreResolver`** — the tenant directory / storage
+      port indirection (§7.2). No App, plugin, Connector, client, parameter, or header
+      selects a database or a binding; an unknown Organization mapping **fails closed**;
+      the resolver returns only Core-configured bindings; no business service touches D1
+      directly. **This item is now verified, not deferred.** It was previously excluded
+      from this checklist because the indirection rested on an unapproved recommendation
+      (MAJ-21); `0006` §0.2 is Accepted, so the indirection is **binding by user decision**
+      and its absence is a defect.
+- [ ] `tenant_id` predicate applied by the storage boundary on every read and write — never
+      hand-written per query, never optional (§7.6).
+- [ ] Isolation test present, using a fully privileged principal, and passing — with
+      per-query-path coverage, not sampled (§8).
+- [ ] Resolver isolation test present: tenant A cannot resolve, receive, or cache another
+      Organization's binding; unknown mapping fails closed (§7.2, §8).
+- [ ] Files, attachments, and exports stored in R2, not D1 (§7.1).
+- [ ] No paid-tier D1 figure relied on anywhere; the applicable limits are §7.3's Free
+      figures, and any other limit the design depends on is verified and recorded
+      (`CLOUDFLARE_STANDARD.md` §10).
+- [ ] Growth against the 500 MB production ceiling considered; §7.5 thresholds respected.
 - [ ] Fixtures and seeds contain no cross-tenant reference.
 
 ---
@@ -260,7 +390,8 @@ reason and proves nothing about isolation.
 | # | Question | Status |
 |---|---|---|
 | MT1 | **Tenant = Organization** (§2). | Recommended; needs Team Lead confirmation. Blocks every schema. |
-| MT2 | **The tenancy implementation model** — the physical placement of tenant data (§7). | **Open. Undecided.** Needs an accepted ADR **before Phase 1**; drafted as `0006-tenancy-model.md`, Status Proposed. `architecture-agent` recommends option C with the directory indirection — a recommendation, adopted by nothing. |
-| MT3 | **Data residency.** Some customers will require data to stay in a region; the plan does not mention it. | Not decided. It is far cheaper to accommodate in the tenancy model than to retrofit — raise it with the user *before* MT2 is decided. |
+| MT2 | **The tenancy implementation model** — the physical placement of tenant data (§7). | **CLOSED — decided.** `0006-tenancy-model.md` is **Accepted** (user, 2026-09-01): **Option A, one shared production D1 database, with mandatory indirection**, for the Zero-Cost MVP only while `0008` is active. Option C is the approved migration candidate; migration and any paid plan require user approval. |
+| MT6 | **The `TenantStoreResolver` indirection** (§7.2) — formerly MAJ-21, an unapproved assumption asserted inside a standard. | **CLOSED — approved and binding.** `0006` §0.2, Accepted. It is now a verification item in §9 rather than a recommendation. |
+| MT3 | **Data residency.** Some customers will require data to stay in a region; the plan does not mention it. | Not decided, and **now harder**: a single shared database has one location, so a residency requirement cannot be satisfied by placement under Option A. Raise it with the user before any Organization with a residency requirement is onboarded — it is a migration trigger (§7.8), not a configuration change. |
 | MT4 | **Retention and deletion policy** — how long audit and event history survive a tenant deletion. | Not decided. Has legal consequences; needs the user. |
 | MT5 | **Search index isolation.** Core owns search infrastructure; no engine is approved, and a shared index is a shared data store. | Whatever is chosen, the index is tenant-partitioned. Blocked on the search engine decision. |

@@ -10,13 +10,18 @@
 # Owner:       architecture-agent authors; Team Lead accepts.
 #
 # STATUS OF THIS FILE
-# Every entry is status "proposed". No code and no schema exist. These are the objects
-# entailed by Core's declared responsibilities (master build plan §6, §14, §20) recorded
-# so Phase 1 builds against a reviewed set. No entry here is a data model — column shapes,
-# keys, and indexes come with the tenancy decision, which is still open.
+# Every entry is status "proposed", which means NOT YET BUILT — it does not mean optional
+# or unapproved. No code and no schema exist. These are the objects entailed by Core's
+# declared responsibilities (master build plan §6, §14, §20) recorded so Phase 1 builds
+# against a reviewed set. No entry here is a data model.
+#
+# The tenancy model is DECIDED: docs/decisions/0006-tenancy-model.md is Accepted (user,
+# 2026-09-01) — one shared production D1 database with mandatory indirection, for the
+# Zero-Cost MVP while 0008 is active. Every tenant-scoped object below therefore carries
+# tenant_id on every row and every query, and isolation is enforced entirely in code.
 
 registryVersion: 1
-updated: "2026-08-31"
+updated: "2026-09-01"
 
 # ---------------------------------------------------------------------------
 # spec
@@ -44,24 +49,28 @@ objects:
     domain: tenancy
     tenancy: tenant-independent
     appAccess: none
+    # "proposed" means not yet built. It does NOT mean optional or unapproved:
+    # this object is REQUIRED by an accepted decision.
     status: proposed
-    # Conditional. Phase 1 IF the decided tenancy model needs a tenant-to-database
-    # mapping at all. Not scheduled by this file. See conditional/blockedBy below.
     phase: 1
-    conditional: true
-    blockedBy: "docs/decisions/0006-tenancy-model.md — Status: Proposed. The tenancy model is undecided."
+    requiredBy: "docs/decisions/0006-tenancy-model.md §0.2 — Status: Accepted (user decision, 2026-09-01)."
     description: >-
-      Maps a tenant to the database that holds its data, in a tenancy model that has more
-      than one such database. Under a single shared database there is nothing to map and
-      this object does not exist.
+      Maps an Organization to the storage binding that holds its data. Read only by Core's
+      server-controlled TenantStoreResolver. Under the decided model every Organization
+      resolves to the same production binding — the mapping exists anyway, so that moving
+      to pooled shards later changes no business-domain code and no public contract.
     notes: >-
-      NOT scheduled, and NOT required by any accepted decision. MULTITENANCY_STANDARD.md
-      §7.3 recommends this indirection; a recommendation is not an adoption, and no ADR has
-      adopted it. Whether this object exists, what it holds, and which phase builds it all
-      follow from the tenancy ADR. It is recorded here so the option has a name in the
-      registry, not so Phase 1 builds it. What IS binding regardless of the model is
-      0003 constraint 2 — storage sits behind a Core-owned port — which is an interface
-      rule, not an object.
+      REQUIRED, not conditional. 0006 §0.2 is Accepted and makes the TenantStoreResolver
+      indirection binding by explicit user decision — the opposite of the earlier situation,
+      in which this entry was blocked because the indirection rested only on a
+      recommendation (MAJ-21, now resolved). Apps, plugins, Connectors, and clients cannot
+      select a database or binding; an unknown Organization mapping FAILS CLOSED; the
+      resolver returns only Core-configured bindings; business services never touch D1
+      directly. This entry is a resolver-owned mapping, never an App-reachable object, and
+      it is itself an isolation boundary: a principal in one Organization must not resolve,
+      receive, or cache another's binding, and that needs its own test
+      (MULTITENANCY_STANDARD.md §7.2, §8). Also binding, and separate: 0003 constraint 2 —
+      storage sits behind a Core-owned port — which is an interface rule, not an object.
 
   # --- identity ---------------------------------------------------------------
   - name: User
@@ -561,9 +570,13 @@ openQuestions:
     recommendation: "Confirm explicitly. A user's list of Organizations must never be visible to any of them."
     blocks: "Phase 1 schema"
   - id: CO2
-    question: "No entry here is a data model. Column shapes, keys, and indexes depend on the tenancy decision."
-    recommendation: "Do not derive a schema from this file until MULTITENANCY_STANDARD.md MT2 is recorded."
-    blocks: "Phase 1"
+    question: "No entry here is a data model. Column shapes, keys, and indexes still have to be designed."
+    recommendation: >-
+      MT2 is now closed — 0006 is Accepted, so the placement is known: one shared
+      production database, tenant_id on every tenant-scoped row and every query. A schema
+      may now be designed from this file, but the schema itself is separate work and no
+      table shape is recorded here.
+    blocks: "Nothing. The tenancy blocker is resolved."
   - id: CO3
     question: "SearchIndexEntry assumes a search engine. None is approved."
     recommendation: "Blocked pending an ADR. Whatever is chosen, the index is tenant-partitioned."

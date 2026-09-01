@@ -87,9 +87,14 @@ record.
 
 ## Open, and not decided here
 
-1. **The tenancy model** — shared schema, schema-per-tenant, or database-per-tenant.
-   D1's per-database threading and its 10 GB / 50,000-database limits point away from a
-   shared database; the master plan §14 suggests starting shared. Needs its own record.
+1. ~~**The tenancy model**~~ — **DECIDED 2026-09-01 by `0006`: Option A, one shared
+   database, with mandatory indirection.** The reasoning below is superseded and left for
+   the record: it cites D1's **Workers Paid** allowance (10 GB per database,
+   50,000 databases), and `0008` since bound Dudo to the **Free** tier — 500 MB per
+   database, 10 databases. Under that ceiling the conclusion reverses, and a shared
+   database is the only model that does not spend the ten-database budget.
+   *Original text:* "D1's per-database threading and its 10 GB / 50,000-database limits
+   point away from a shared database; the master plan §14 suggests starting shared."
 2. **The plugin isolation mechanism** — bound to this decision by `0001`, still open.
 3. **Web framework, testing framework, and any npm dependency.**
 4. **Workers for Platforms availability** — Cloudflare's documentation does not state

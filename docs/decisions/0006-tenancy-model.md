@@ -1,41 +1,131 @@
 # 0006 — Tenancy model: the physical placement of tenant data
 
-- **Status:** **Proposed**
+- **Status:** **Accepted** — for the Zero-Cost MVP only, while
+  `docs/decisions/0008-zero-cost-mvp-infrastructure.md` remains active
 - **Date:** 2026-09-01
-- **Deciders:** **Undecided.** The user decides; the Team Lead records.
-- **Owning agent:** Team Lead records. Drafted by `architecture-agent` under
+- **Deciders:** **User** (explicit written decision, 2026-09-01), Dudo Team Lead
+- **Owning agent:** Team Lead records. Analysis drafted by `architecture-agent` under
   `docs/decisions/README.md` ("Agents propose; the Team Lead records").
 
-> ## ⚠ SUPERSEDING CONSTRAINT — read before the analysis below
->
-> **Added 2026-09-01 by the Team Lead, following
-> `docs/decisions/0008-zero-cost-mvp-infrastructure.md`.**
->
-> Every D1 figure in this record is the **Workers Paid** allowance. ADR `0008` binds Dudo
-> to **USD 0 / BD 0 per month**, so the applicable ceiling is the **Free** tier — verified
-> against Cloudflare's published limits on 2026-09-01:
->
-> | | Free (applicable) | Assumed in this record |
-> |---|---|---|
-> | Databases per account | **10** | 50,000 |
-> | Size per database | **500 MB** | 10 GB |
-> | Total storage | **5 GB** | — |
-> | Queries per Worker invocation | **50** | 1,000 |
->
-> **What this changes:**
->
-> - **Option B (database per tenant) is not viable at MVP.** Ten databases total, minus the
->   reserves `0008` requires, leaves roughly four to six for tenants.
-> - **Option C** spends that same ten-database budget on shards.
-> - **Option A** is the only option that does not consume the database budget, but 500 MB
->   then bounds the entire product's data.
-> - **The Option C recommendation in §6 was computed against paid limits and does not carry
->   over. It must be re-derived.**
->
-> **This record may not be Accepted until it contains a database allocation budget** across
-> control-plane / tenant-directory, application data, test and staging, and migration and
-> recovery capacity — without consuming all ten. Physical tenancy placement remains
-> **undecided**.
+## 0. The decision
+
+**Option A — one shared production D1 database — with mandatory indirection.**
+
+This is an **MVP decision, not a permanent architecture promise.** It holds while `0008`'s
+zero-cost constraint is active and is expected to be revisited, not defended.
+
+### 0.1 Physical model
+
+- **One shared production D1 database** for Organization business data.
+- **`tenant_id` is mandatory** on every tenant-owned row, query, command, event, cache key,
+  job, export, and object path.
+- **Organization** is the product and UI term; **tenant** is the security and persistence
+  boundary. They are the same thing in two vocabularies (`0005`-era user decision).
+- **Files, attachments, and large exports belong in R2 Standard, not D1.** D1's 500 MB
+  ceiling is for structured business data; putting blobs there converts a storage problem
+  into an outage.
+
+### 0.2 Mandatory indirection — `TenantStoreResolver`
+
+The architecture contract for a **server-controlled `TenantStoreResolver`** is implemented
+from the beginning. For MVP every Organization resolves to the same production binding —
+the indirection exists even though it currently has one answer.
+
+- **Apps, plugins, Connectors, and clients cannot select a database or binding.**
+- **Unknown Organization mappings fail closed.**
+- The resolver returns **only bindings configured and approved by Core**.
+- **Business services never touch D1 directly.** They use the storage boundary.
+- **Moving from A to C must not change business-domain code or public contracts.**
+
+> **This resolves MAJ-21.** The indirection was previously asserted as "non-negotiable"
+> inside a standard without a decision behind it, which was a process defect. It is now
+> **explicitly user-approved** and binding by decision rather than by assertion.
+
+### 0.3 Free-tier database allocation budget
+
+The Free tier allows **10 databases per account** (verified 2026-09-01,
+`developers.cloudflare.com/d1/platform/limits/`). Initial allocation:
+
+| # | Purpose |
+|---|---|
+| 1 | Production control-plane / tenant directory |
+| 2 | Production shared tenant-data database |
+| 3 | Combined staging database |
+| 4 | Reserved migration / recovery database |
+| 5–10 | **Unallocated** — emergency growth reserve |
+
+**Local development and CI consume no remote slots.** Verified against Cloudflare's
+local-development documentation on 2026-09-01: `wrangler dev` defaults to **local mode**
+powered by Miniflare, persists to local disk, and does not access remote D1. Targeting the
+production database requires explicitly setting `"remote": true` in the binding
+configuration. **Local development must not set it.**
+
+**No cloud resource is created by this record.** This is an allocation budget, not
+deployment approval.
+
+### 0.4 Capacity protection
+
+The production shared database has a **500 MB** Free-tier ceiling.
+
+| Threshold | Action |
+|---|---|
+| **70%** | Warning and capacity review |
+| **85%** | **Stop onboarding new Organizations**; stop non-essential and background growth |
+| **90%** | Emergency capacity gate — preserve remaining headroom for essential operations for existing customers |
+
+**Never delete financial, audit, or customer data merely to remain free.** If the choice is
+between a charge and destroying a customer's records, it is not a choice: stop onboarding,
+degrade non-essential service, and escalate to the user.
+
+Before admitting external MVP Organizations:
+
+1. Validate storage estimates against the two architecture-validation applications
+   (`ARCHITECTURE_VALIDATION_STANDARD.md`).
+2. Measure representative row sizes and audit/event growth.
+3. Define a defensible initial Organization limit.
+4. **If no evidence exists, default to a closed beta of at most 10 Organizations.**
+
+### 0.5 Why not B, and why C is deferred
+
+**Option B (database per tenant) is excluded during the Zero-Cost MVP.** Ten databases
+total, minus the four allocated above, leaves six — so B supports at most six tenants
+before exhausting the account. It is not a product. B also carries the unresolved binding
+question in §4.4: D1 bindings are declared statically and `0003` forbids REST, so B may not
+be implementable on the approved stack at all.
+
+**Option C remains the approved migration candidate, not the current model.** Reconsider it
+when: the shared database reaches the capacity thresholds; noisy-neighbour evidence
+appears; restore or deletion requirements cannot be met safely; the user approves Workers
+Paid; or free-tier capacity or product limits change.
+
+**No migration and no paid-plan activation is automatic. Both require user approval.**
+
+### 0.6 Why the earlier recommendation was invalidated
+
+§6 below recommends Option C. **That recommendation was computed against the Workers Paid
+allowance** — 10 GB per database and 50,000 databases — and does not survive `0008`. The
+applicable Free ceiling is **500 MB and 10 databases**: a 20× smaller database and a
+5,000× smaller count. Under that budget C spends the same scarce ten databases on shards
+without buying B's isolation, while A spends one.
+
+**§1–§9 below are preserved as the original analysis.** They are the reasoning that led
+here, and their paid-tier figures are left intact and clearly labelled rather than
+rewritten, so the record shows what was believed and why it changed. **Where §6 and §0
+disagree, §0 governs.**
+
+### 0.7 Consequences
+
+- The 500 MB ceiling is now a **product constraint**, not just an infrastructure one. It
+  bounds how many Organizations Dudo can serve before a decision is forced.
+- Isolation is enforced **entirely in code** — every query carries `tenant_id`, and a single
+  missing predicate is a breach. `TESTING_STANDARD.md`'s canonical isolation test is
+  therefore not optional and cannot only sample.
+- Per-tenant restore is **effectively unavailable** under A. Customers will eventually ask
+  for it by name; that is a known, accepted MVP limitation and a migration trigger.
+- Noisy neighbours are **structural**: D1 is single-threaded per database, so one
+  Organization's heavy query is every Organization's latency.
+- The indirection makes A → C a migration rather than a rewrite. **That is the whole point
+  of paying for it now.**
 
 > **This record selects nothing.** It sets out three options, compares them across the
 > dimensions that will actually decide the answer, and ends with a recommendation that is
@@ -444,7 +534,12 @@ complexity.
 
 ---
 
-## 6. Recommendation — `architecture-agent`'s recommendation, not a decision
+## 6. Recommendation — SUPERSEDED by §0
+
+> **⚠ This recommendation is superseded.** It was computed against the Workers **Paid**
+> allowance and did not survive `0008`'s zero-cost constraint. The accepted decision is
+> **Option A with mandatory indirection** — see **§0**. Preserved unaltered as the record
+> of what was recommended and why it changed.
 
 **Recommended: Option C, pooled shards with promotion, with shards deliberately small.**
 
@@ -523,6 +618,11 @@ accepted version of this record answers all eleven:
 ---
 
 ## 9. Approval
+
+> **⚠ SUPERSEDED — this record is now Accepted.** The user decided on 2026-09-01: **Option
+> A with mandatory indirection**, for the Zero-Cost MVP only, while `0008` is active. See
+> **§0**. The text below described the record's state before that decision and is preserved
+> for the history.
 
 **Not approved. Not accepted. Status is Proposed.**
 
