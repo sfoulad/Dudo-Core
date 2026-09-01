@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:pagination:1",
+  "title": "Dudo Cursor Pagination",
+  "description": "The one pagination shape for every Dudo collection. A transcription of API_STANDARD.md §7 plus the tenancy rules the cursor must satisfy under docs/decisions/0006 (one shared D1 database). Cursor pagination only: offset pagination is inconsistent under concurrent writes and expensive at depth. NOT EXECUTED: no JSON Schema implementation exists in this repository (AS1, TS1).",
+  "$defs": {
+    "cursor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,512}$",
+      "description": "An OPAQUE continuation token issued by the server. The client never parses, constructs, edits, or reasons about it.\n\nNORMATIVE, and the reason this definition exists rather than a bare string:\n1. THE TENANT PREDICATE IS NEVER TAKEN FROM THE CURSOR. Tenant identity is derived from the authenticated server-side context on every page, exactly as on the first (MULTITENANCY_STANDARD.md §3). A cursor is a position, never a scope. An input that decides its own scope is not an input, it is a grant.\n2. The cursor is integrity-protected by the server, so a client cannot craft or mutate one.\n3. The cursor records the tenant it was issued for. On presentation that recorded tenant is COMPARED against the authenticated tenant and, on mismatch, the cursor is rejected — it is never used to select, widen, or redirect the query.\n4. A cursor that is malformed, expired, forged, bound to a different tenant, or bound to different filter or sort parameters is rejected with 'invalid_argument', with an IDENTICAL error code, message and detail token in all five cases. Distinguishing them tells a caller which of its guesses was closer, and the tenant-mismatch case is the one that would leak."
+    },
+    "pageSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 25,
+      "description": "Documented default 25, documented maximum 100 (API_STANDARD.md §7 requires both to be stated). The maximum is also a disclosure control: it is what stops a 'list' permission from being an undeclared bulk export in a single call, which matters because 'export' is a separate permission that this slice deliberately does not declare."
+    },
+    "nextCursor": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9_-]{1,512}$",
+      "description": "The cursor for the following page, or null when this is the last page. Absent-versus-null is not a distinction any client should have to make, so it is always present and null-valued at the end."
+    },
+    "collectionEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "description": "The envelope every collection response uses. Concrete responses redefine 'data' with their own item schema; this definition fixes the shape and the fields that must NOT appear.\n\nNO TOTAL COUNT. There is deliberately no 'total', 'total_count', or 'has_more_count' field. Two reasons, both binding: (a) TESTING_STANDARD.md §5.2 places counts, aggregates and pagination totals in scope of 'infer' — a total computed without a tenant predicate is a cross-tenant leak that returns no records at all, and it is the cheapest such leak to write by accident under 0006 Option A; (b) a total needs a second aggregate query against the 50-queries-per-Worker-invocation Free-tier budget (MULTITENANCY_STANDARD.md §7.3) on a single-threaded shared database. Adding a total later is a new optional response field and therefore additive (API_STANDARD.md §6) — but it would be a new query path with its own tenant-isolation obligation.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "description": "The page. Redefined by each concrete response with its item schema."
+        },
+        "next_cursor": { "$ref": "#/$defs/nextCursor" }
+      }
+    }
+  }
+}

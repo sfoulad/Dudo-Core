@@ -1,0 +1,71 @@
+{
+  "caseId": "adr0011-p2",
+  "kind": "manifest",
+  "title": "onUninstall 'archive' stating how long — a bounded hold that says what its bound is",
+  "coversRequirement": "ADR 0011 clause 1, positive form — retentionDays is REQUIRED under 'archive', and a manifest supplying it must install",
+  "target": "lifecycle.onUninstall = 'archive' / lifecycle.retentionDays present",
+  "relatedFindings": ["ADR 0011"],
+  "expectedOutcome": "ACCEPT",
+  "enforcedBy": "schema",
+  "why": "'archive' is the disposition for an App that holds tenant data for a bounded period and then disposes of it, and this manifest states the bound. It is the legitimate counterpart to 'retain': an App that wants a timer declares 'archive' and says how long, which is exactly what ADR 0011 left available so that no author has a reason to write a number under 'retain'. A validator that rejects this has removed the honest way to declare a bounded hold, and the pressure goes straight back onto the field ADR 0011 closed.",
+  "notes": "MUST BE ACCEPTED. Over-rejection control for adr0011-n2, and reported beside it: rejecting both means the validator bans 'archive' outright instead of requiring the bound. Also reported beside adr0011-n1 — the two differ only in their lifecycle block and BOTH carry a retentionDays (their day counts differ, 90 here and 30 there, and neither number is load-bearing), so this pair is what distinguishes 'retentionDays is conditional on the disposition' from 'retentionDays is always allowed'. If both are accepted, ADR 0011 clause 2 is unimplemented even though this case looks green. Decidable by the schema alone. Declares no Action at scope 'own', so no result here is attributable to VAL-OWN or AZ7. The value 90 is arbitrary and carries no policy meaning; it is not the 30-day customer deletion recovery window, which is a per-record property and belongs in the App's own contract, never in this field.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "adr0011-fixture-app",
+    "name": "ADR 0011 Lifecycle Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise the ADR 0011 lifecycle retention grammar. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "adr0011-fixture-app.record.read",
+        "scope": "organization",
+        "reason": "Reads synthetic fixture records. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Record",
+        "description": "A synthetic record that exists only to give the lifecycle block something to describe.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal", "required": true }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "adr0011-fixture-app.ReadRecord",
+        "title": "Read Record",
+        "description": "Reads a synthetic fixture record. Present so the manifest is realistic; not the subject of this case.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["record_id"],
+          "properties": { "record_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "label": { "type": "string" } }
+        },
+        "errors": ["not_found"],
+        "permission": "adr0011-fixture-app.record.read",
+        "scope": "organization",
+        "sensitivity": "read",
+        "idempotent": true,
+        "audit": false
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "archive", "retentionDays": 90, "rollbackSupported": true }
+  }
+}

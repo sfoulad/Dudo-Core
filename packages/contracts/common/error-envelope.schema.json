@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:error-envelope:1",
+  "title": "Dudo Error Envelope",
+  "description": "The one error shape returned by every Dudo API, internal and public alike. This schema is a transcription of API_STANDARD.md §8 into a machine-readable form; it introduces no new decision and no new code. It is platform-wide rather than App-owned because an error shape that varies per module is not a shape. NOT EXECUTED: no JSON Schema implementation exists in this repository (AS1, TS1), so this document is normative and hand-checked, not machine-validated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "request_id"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "For a developer. NEVER contains business data, another tenant's identifiers, a stack trace, a query, a hostname, a library version, or internal structure (API_STANDARD.md §8, SECURITY_STANDARD.md §7). For a given code and a given failing condition the message is a fixed string that does not vary with the data involved — a message that varies with the record is a disclosure channel."
+        },
+        "details": {
+          "type": "array",
+          "description": "Machine-readable detail, under the same restriction as 'message'. Names the offending field and a stable issue token; never the offending value.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "issue"],
+            "properties": {
+              "field": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "The request field, in wire form (snake_case), optionally dotted for nesting."
+              },
+              "issue": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80,
+                "description": "A stable machine token, e.g. must_not_be_blank. Not a sentence, not the rejected value."
+              }
+            }
+          }
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "Returned on every response, success or error. It is what makes a support conversation possible without asking a customer to share their data (API_STANDARD.md §11). It is the ONLY identifier an error message carries — never a tenant id, never a resource id (MULTITENANCY_STANDARD.md §4 carrier 11)."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "errorCode": {
+      "type": "string",
+      "description": "The closed taxonomy from API_STANDARD.md §8. An Action declares the subset it may return; anything outside that subset is a defect in the Action, not a new code.",
+      "enum": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "failed_precondition",
+        "rate_limited",
+        "quota_exceeded",
+        "internal",
+        "not_implemented",
+        "unavailable",
+        "timeout"
+      ]
+    }
+  }
+}

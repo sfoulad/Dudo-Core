@@ -1,0 +1,501 @@
+{
+  "manifestVersion": 1,
+  "id": "customers",
+  "name": "Customer Directory",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "dudo",
+    "name": "Dudo"
+  },
+  "description": "Keeps the record of the people and companies your organisation does business with. Create a customer in one of your businesses, find it by name, email address or telephone number, view and correct its details, and archive it when you stop dealing with it. Archived customers are kept indefinitely and can be restored at any time. Permanently deleting a customer is a separate, deliberate act: it can be undone for 30 days, after which the customer's data is erased and cannot be recovered.",
+  "platform": {
+    "minimumVersion": "0.1.0"
+  },
+  "permissions": [
+    {
+      "id": "customers.customer.create",
+      "scope": "organization",
+      "reason": "To add new customers to the businesses in your organisation."
+    },
+    {
+      "id": "customers.customer.read",
+      "scope": "organization",
+      "reason": "To show a customer's full details, including its address and notes."
+    },
+    {
+      "id": "customers.customer.list",
+      "scope": "organization",
+      "reason": "To show your customer directory and to search it by name, email address or telephone number."
+    },
+    {
+      "id": "customers.customer.update",
+      "scope": "organization",
+      "reason": "To correct and complete the details recorded against a customer."
+    },
+    {
+      "id": "customers.customer.archive",
+      "scope": "organization",
+      "reason": "To withdraw a customer from active use while keeping its record. Nothing is deleted."
+    },
+    {
+      "id": "customers.customer.restore",
+      "scope": "organization",
+      "reason": "To bring an archived customer back into active use."
+    },
+    {
+      "id": "customers.customer.move",
+      "scope": "organization",
+      "reason": "To move a customer from one of your businesses to another within the same organisation."
+    },
+    {
+      "id": "customers.customer.delete",
+      "scope": "organization",
+      "reason": "To permanently delete an archived customer at your request. This starts a 30-day period during which the deletion can still be cancelled; after that the customer's data is erased and cannot be recovered."
+    },
+    {
+      "id": "customers.customer.restore-deleted",
+      "scope": "organization",
+      "reason": "To cancel a permanent deletion during the 30-day recovery period and keep the customer."
+    }
+  ],
+  "capabilitiesRequired": [],
+  "entities": [
+    {
+      "name": "Customer",
+      "description": "A person or company the organisation does business with. Owned by this App; no other App reads or writes it, and it is reached only through the Actions below.",
+      "tenantScoped": true,
+      "fields": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "classification": "internal",
+          "required": true,
+          "description": "Opaque, non-sequential, unguessable identifier. Server-set and permanent."
+        },
+        {
+          "name": "business_id",
+          "type": "string",
+          "classification": "internal",
+          "required": true,
+          "description": "The Business inside the Organization this customer belongs to. An authorization scope, never a tenant boundary and never an ownership relation: it names a Business, not a principal, so it can never be borrowed to satisfy 'own' scope."
+        },
+        {
+          "name": "display_name",
+          "type": "string",
+          "classification": "business-confidential",
+          "required": true,
+          "description": "The name the customer is known by. Maximum 200 characters, trimmed before storage."
+        },
+        {
+          "name": "customer_type",
+          "type": "string",
+          "classification": "business-confidential",
+          "required": true,
+          "description": "Whether this customer is a natural person or an organisation: 'person' or 'company'."
+        },
+        {
+          "name": "email",
+          "type": "string",
+          "classification": "sensitive-personal",
+          "required": false,
+          "description": "Contact email address. Maximum 254 characters. Classified at the highest class it can hold, not the class it is expected to hold."
+        },
+        {
+          "name": "phone",
+          "type": "string",
+          "classification": "sensitive-personal",
+          "required": false,
+          "description": "Contact telephone number as the tenant recorded it. Maximum 32 characters. Not E.164 and not dial-safe."
+        },
+        {
+          "name": "country",
+          "type": "string",
+          "classification": "business-confidential",
+          "required": false,
+          "description": "ISO 3166-1 alpha-2, uppercase. Well-formedness only; no code list is validated against."
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "classification": "sensitive-personal",
+          "required": false,
+          "description": "Free-text address. Maximum 500 characters."
+        },
+        {
+          "name": "notes",
+          "type": "string",
+          "classification": "sensitive-personal",
+          "required": false,
+          "description": "Free-text notes kept about this customer. Maximum 2000 characters. Because it is free text it may contain anything a member of staff types, so it is classified at the highest class it can hold. Never searched and never returned in a listing."
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "classification": "internal",
+          "required": true,
+          "description": "Lifecycle state: 'active', 'archived' or 'pending_deletion'. Server-set; changed only by the archive, restore, delete and cancel-deletion Actions."
+        },
+        {
+          "name": "deletion_scheduled_at",
+          "type": "timestamp",
+          "classification": "internal",
+          "required": false,
+          "description": "When the record's data will be permanently purged. Non-null if and only if status is 'pending_deletion'; null in every other state, including 'archived'. Archiving sets no value here and starts no clock."
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "classification": "internal",
+          "required": true,
+          "description": "Server-set. RFC 3339, UTC."
+        },
+        {
+          "name": "created_by_principal_id",
+          "type": "string",
+          "classification": "internal",
+          "required": true,
+          "description": "Server-set metadata recording who created the record. NOT an ownership relation: this entity declares no ownershipField, deliberately, and no Action in this App uses 'own' scope."
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "classification": "internal",
+          "required": true,
+          "description": "Server-set. RFC 3339, UTC."
+        },
+        {
+          "name": "updated_by_principal_id",
+          "type": "string",
+          "classification": "internal",
+          "required": true,
+          "description": "Server-set metadata recording who last changed the record. NOT an ownership relation."
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "customers.CreateCustomer",
+      "title": "Create customer",
+      "description": "Add a new customer to a named Business in this Organization's directory. Use when a person or company the Organization does business with is to be recorded for the first time. The Business must be stated; the new customer starts active. Does not check for duplicates.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/createCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/createCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "quota_exceeded",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.create",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "sensitive",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    },
+    {
+      "id": "customers.GetCustomer",
+      "title": "View customer",
+      "description": "Retrieve one customer's full record, including address and notes. Use when showing a customer's detail view. Returns archived and pending-deletion customers as well as active ones — a withdrawn record is still readable by identifier; it is only withheld from the default listing.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/getCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/getCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.read",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "read",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": false
+    },
+    {
+      "id": "customers.ListCustomers",
+      "title": "List customers",
+      "description": "Return a page of customers in a stable order, active ones by default, from every Business the caller is authorized over — or from one named Business. Use for the directory view and for paging through it. Does not accept a search term — use SearchCustomers for that.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/listCustomersInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/listCustomersOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.list",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "read",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": false
+    },
+    {
+      "id": "customers.SearchCustomers",
+      "title": "Search customers",
+      "description": "Find customers whose name, email address or telephone number matches a term. Use when a person is looking for a specific customer rather than browsing. Matches on display name, email and phone only — never on notes or address.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/searchCustomersInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/searchCustomersOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.list",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "read",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": false
+    },
+    {
+      "id": "customers.UpdateCustomer",
+      "title": "Edit customer",
+      "description": "Change a customer's recorded details. Use to correct or complete a record. Only the fields supplied are changed. Cannot change the customer's status — archive and restore are separate operations — cannot change which Business the customer belongs to, which is MoveCustomerToBusiness, and cannot be applied to an archived or pending-deletion customer.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/updateCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/updateCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "conflict",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.update",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "sensitive",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    },
+    {
+      "id": "customers.ArchiveCustomer",
+      "title": "Archive customer",
+      "description": "Withdraw a customer from active use while keeping the record. Use when an Organization stops doing business with a customer. The record remains readable by identifier and restorable; it is removed from the default listing and the default search. This never deletes data and starts no clock: an archived customer is retained indefinitely, and only an explicit DeleteCustomer ever ends that.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/archiveCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/archiveCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.archive",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "sensitive",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    },
+    {
+      "id": "customers.RestoreCustomer",
+      "title": "Restore customer",
+      "description": "Return an archived customer to active use. Use when an Organization resumes business with a customer that was archived. The record reappears in the default listing and the default search. Does not apply to a customer whose permanent deletion has been ordered — cancelling that is a separate operation.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/restoreCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/restoreCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.restore",
+      "scope": "business",
+      "targetEntity": "Customer",
+      "sensitivity": "sensitive",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    },
+    {
+      "id": "customers.MoveCustomerToBusiness",
+      "title": "Move customer to another business",
+      "description": "Move one customer from the Business it is in to another Business in the same Organization. Use when a customer is served by a different part of the Organization than the one that recorded it. The customer's details and lifecycle state are unchanged; only which Business it belongs to changes. This is the only operation that changes a customer's Business.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/moveCustomerToBusinessInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/moveCustomerToBusinessOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.move",
+      "scope": "organization",
+      "targetEntity": "Customer",
+      "sensitivity": "sensitive",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    },
+    {
+      "id": "customers.DeleteCustomer",
+      "title": "Delete customer permanently",
+      "description": "Request the permanent deletion of an archived customer. Use when the Organization must genuinely erase a customer's records rather than withdraw them. This is not archive. The record moves to pending deletion and, after 30 days, the customer's data is permanently purged and cannot be recovered by anyone. Within those 30 days the deletion can be cancelled. NOT IMPLEMENTED IN THE MVP — see the note in the contract.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/deleteCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/deleteCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.delete",
+      "scope": "organization",
+      "targetEntity": "Customer",
+      "sensitivity": "critical",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    },
+    {
+      "id": "customers.RestoreDeletedCustomer",
+      "title": "Cancel deletion",
+      "description": "Cancel a pending permanent deletion and keep the customer. Use within the 30-day recovery window when a deletion was requested in error or is no longer wanted. The customer returns to archived — the state it was in when the deletion was ordered. NOT IMPLEMENTED IN THE MVP — see the note in the contract.",
+      "input": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/restoreDeletedCustomerInput" },
+      "output": { "$ref": "urn:dudo:schema:customer-directory:1#/$defs/restoreDeletedCustomerOutput" },
+      "errors": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "failed_precondition",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "timeout"
+      ],
+      "permission": "customers.customer.restore-deleted",
+      "scope": "organization",
+      "targetEntity": "Customer",
+      "sensitivity": "sensitive",
+      "idempotent": false,
+      "exposure": ["internal", "public"],
+      "audit": true
+    }
+  ],
+  "apis": [
+    {
+      "action": "customers.CreateCustomer",
+      "surface": "public",
+      "method": "POST",
+      "path": "/customers"
+    },
+    {
+      "action": "customers.ListCustomers",
+      "surface": "public",
+      "method": "GET",
+      "path": "/customers"
+    },
+    {
+      "action": "customers.SearchCustomers",
+      "surface": "public",
+      "method": "GET",
+      "path": "/customers/search"
+    },
+    {
+      "action": "customers.GetCustomer",
+      "surface": "public",
+      "method": "GET",
+      "path": "/customers/{customer_id}"
+    },
+    {
+      "action": "customers.UpdateCustomer",
+      "surface": "public",
+      "method": "PATCH",
+      "path": "/customers/{customer_id}"
+    },
+    {
+      "action": "customers.ArchiveCustomer",
+      "surface": "public",
+      "method": "POST",
+      "path": "/customers/{customer_id}/archive"
+    },
+    {
+      "action": "customers.RestoreCustomer",
+      "surface": "public",
+      "method": "POST",
+      "path": "/customers/{customer_id}/restore"
+    },
+    {
+      "action": "customers.MoveCustomerToBusiness",
+      "surface": "public",
+      "method": "POST",
+      "path": "/customers/{customer_id}/move"
+    },
+    {
+      "action": "customers.DeleteCustomer",
+      "surface": "public",
+      "method": "DELETE",
+      "path": "/customers/{customer_id}"
+    },
+    {
+      "action": "customers.RestoreDeletedCustomer",
+      "surface": "public",
+      "method": "POST",
+      "path": "/customers/{customer_id}/cancel-deletion"
+    }
+  ],
+  "eventsPublished": [],
+  "eventsConsumed": [],
+  "externalNetworkAccess": [],
+  "storage": {
+    "relational": true,
+    "objects": false,
+    "expectedRecordsPerTenant": 5000
+  },
+  "lifecycle": {
+    "onUninstall": "retain",
+    "rollbackSupported": true
+  }
+}

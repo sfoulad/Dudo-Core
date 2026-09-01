@@ -1,0 +1,81 @@
+{
+  "caseId": "adr0012-p1",
+  "kind": "manifest",
+  "title": "apis[].path carrying a snake_case path parameter — API_STANDARD.md §5's own worked example",
+  "coversRequirement": "ADR 0012 — the apis[].path character class must admit '_', so snake_case path parameters are expressible",
+  "target": "apis[].path pattern ^/[a-z0-9_\\-/{}]*$",
+  "relatedFindings": ["ADR 0012", "API_STANDARD.md §5"],
+  "expectedOutcome": "ACCEPT",
+  "enforcedBy": "schema",
+  "why": "API_STANDARD.md §5 requires snake_case on the wire consistently and everywhere, and the path parameter carries the field name it names. Before ADR 0012 the character class omitted '_', so the standard's own worked example — /api/v1/orders/{order_id} — was rejected by the registry that is supposed to encode the standard, and the only paths the schema accepted were the ones the standard forbids. That is not a cosmetic mismatch: the cheapest way past a red light was to write {order-id}, putting a kebab-case parameter on the wire in a platform that mandates snake_case, and a grammar that only accepts non-conforming paths trains every App author to write non-conforming paths. This case pins the widened class so the defect cannot silently return in a later edit to the pattern.",
+  "notes": "MUST BE ACCEPTED. Report side by side with adr0012-n1: this case alone going red means ADR 0012 is not implemented; both going green means the path grammar is not being enforced at all. Decidable by the schema alone — it is a plain grammar check on one string, with no cross-array join, so this is NOT a validator-layer case and a rejection here is a real schema defect. The path is /orders/{order_id}, the §5 example form. The manifest declares no Action at scope 'own', so no result is attributable to VAL-OWN or AZ7, and it is byte-identical to adr0012-n1 apart from the single apis[0].path string. The Action's exposure includes 'public' so that the 'public' surface declared in the apis entry is not an undeclared exposure — that consistency is not schema-enforced, and this fixture does not test it; it is set correctly only so the fixture is not quietly modelling a second defect while testing the first.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "adr0012-fixture-app",
+    "name": "ADR 0012 API Path Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise the ADR 0012 apis[].path grammar. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "adr0012-fixture-app.order.read",
+        "scope": "organization",
+        "reason": "Reads synthetic fixture orders. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Order",
+        "description": "A synthetic order record that exists only to give the API route something to address.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "order_id", "type": "string", "classification": "internal", "required": true },
+          { "name": "label", "type": "string", "classification": "internal" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "adr0012-fixture-app.ReadOrder",
+        "title": "Read Order",
+        "description": "Reads a synthetic fixture order by its identifier. Present so the apis entry has an Action to reference.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["order_id"],
+          "properties": { "order_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "label": { "type": "string" } }
+        },
+        "errors": ["not_found"],
+        "permission": "adr0012-fixture-app.order.read",
+        "scope": "organization",
+        "sensitivity": "read",
+        "idempotent": true,
+        "exposure": ["internal", "public"],
+        "audit": false
+      }
+    ],
+    "apis": [
+      {
+        "action": "adr0012-fixture-app.ReadOrder",
+        "surface": "public",
+        "method": "GET",
+        "path": "/orders/{order_id}"
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "delete", "rollbackSupported": true }
+  }
+}
