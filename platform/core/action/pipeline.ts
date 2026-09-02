@@ -32,6 +32,13 @@
  * it is available. The one place the contract INVERTS the order is the purge, which is out
  * of scope for this slice (contract §11.1) and has no code here.
  *
+ * SUCCESS AND DENIAL ARE GATED SEPARATELY. `auditsSuccesses` gates step 7; `auditsOnDenial`
+ * gates `fail`. They are the same value for every Action except `customers.GetCustomer`,
+ * whose successes stay unaudited and whose denials must be recorded so that a cross-tenant
+ * probing campaign is not the one attack shape that leaves no trace (action.ts,
+ * `auditOnDenial`). The split can only ever add auditing: `assertAuditPolicy` refuses an
+ * Action that audits successes and suppresses denials.
+ *
  * WHY AN UNAUTHENTICATED REQUEST WRITES NO AUDIT RECORD. There is no tenant yet, so there is
  * no tenant-scoped store, so there is nowhere it could be written that would not be a
  * cross-tenant or untenanted write. This is a real gap and it is named rather than hidden:
@@ -40,6 +47,7 @@
  */
 
 import type { AnyActionDefinition } from './action.ts';
+import { assertAuditPolicy, auditsOnDenial, auditsSuccesses } from './action.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import type { CoreError, ErrorCode } from '../kernel/errors.ts';
@@ -48,6 +56,9 @@ import type { ActionContext, AuthenticatedPrincipal } from '../tenancy/tenant-co
 import type { TenantStoreResolver } from '../tenancy/tenant-store-resolver.ts';
 import type { Authorizer, AppPermissionEnvelope } from '../authorization/authorizer.ts';
 import type { AuditDenialReason, AuditEntry, AuditSink } from '../audit/audit.ts';
+import { deriveActorBusinessContext } from '../audit/audit.ts';
+import type { AuditFailureReporter } from '../audit/audit-failure.ts';
+import { announceAuditFailure } from '../audit/audit-failure.ts';
 import type { Clock } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import { createStoreAuditSink } from '../audit/store-audit-sink.ts';
@@ -65,6 +76,15 @@ export type PipelineDependencies = {
     store: Parameters<typeof createStoreAuditSink>[0],
     ids: IdGenerator,
   ) => AuditSink;
+  /**
+   * An ADDITIONAL destination for audit-write failure notices.
+   *
+   * Optional, and optional does not weaken anything: `announceAuditFailure` emits to a
+   * last-resort channel unconditionally before it consults this. Omitting it, supplying a
+   * broken one, or supplying one that throws all produce the same guarantee — the failure is
+   * announced. See audit/audit-failure.ts for why the floor is not injectable.
+   */
+  readonly auditFailureReporter?: AuditFailureReporter;
 };
 
 export type InvocationEnvelope = {
@@ -109,7 +129,25 @@ export async function invokeAction(
   rawInput: unknown,
 ): Promise<Result<unknown>> {
   const { principal } = envelope;
+
+  // Checked here as well as in `createRouter`, because the router guards the HTTP surface and
+  // this function is the surface EVERYTHING else arrives through — the internal API, an SDK
+  // call, an MCP tool. A statically-broken audit policy is a defect in Dudo's code that no
+  // caller can cause and no caller can influence, so it throws, like the storage boundary's
+  // own guards, and surfaces as `internal` at the transport edge.
+  assertAuditPolicy(action);
+
   const occurredAt = dependencies.clock.now();
+
+  // ---- The actor's business context, for the audit record (D2 requirement 2).
+  //
+  // DERIVED HERE, AND THE POSITION IS THE POINT. This runs before the tenant store is
+  // resolved, before the permission is evaluated and long before the handler sees a row — so
+  // at the moment this value is computed there is NO RESOLVED RECORD IN SCOPE to take a
+  // Business from, only the authenticated principal. It is then the same value on every
+  // branch below: the same on a success and a denial, and the same whether the identifier the
+  // caller supplied belongs to another Organization or to nobody at all.
+  const actorBusinessIds = deriveActorBusinessContext(principal);
 
   // ---- Step 2. Derive the tenant. It comes from the authenticated principal and from
   // nowhere else; `rawInput` is not consulted, and no Action in this contract has a tenant
@@ -148,6 +186,9 @@ export async function invokeAction(
       // the disclosure the refusal withheld. Making this unconditional means no denial path
       // can populate it by accident.
       relatedBusinessIds: [],
+      // The CALLER's own Businesses, never the record's. The line above and this one are
+      // adjacent deliberately: they are the two halves of the same distinction.
+      actorBusinessIds,
       changedFieldNames: [],
       requestId: envelope.requestId,
       correlationId: envelope.correlationId,
@@ -157,15 +198,43 @@ export async function invokeAction(
 
   async function fail(error: CoreError, permissionId: string, scope: string): Promise<Result<unknown>> {
     const constrained = constrainToDeclaredErrors(action, error);
-    if (action.audit) {
+    if (auditsOnDenial(action)) {
       // Failures are audited, not only successes: "An attack looks like a long run of
       // failures, and a log containing only successes cannot show one."
       //
-      // A failure to WRITE the audit record does not change the answer to the caller. The
-      // request already failed; converting a denial into an `internal` because the log was
-      // unavailable would tell a caller something about Dudo's internals and would turn a
-      // correct refusal into a retryable-looking error.
-      await auditSink.append(denialEntry(constrained, permissionId, scope));
+      // `auditsOnDenial` rather than `action.audit` is what makes GetCustomer's probe
+      // detection possible: it is the one Action whose successes are deliberately unaudited
+      // and whose denials must be recorded (action.ts, and get-customer.ts for the history).
+      //
+      // THE ANSWER TO THE CALLER DOES NOT DEPEND ON WHETHER THIS SUCCEEDS. Not as a
+      // convenience — as a requirement. On the cross-tenant path this denial is a
+      // `not_found` that must stay byte-identical to the `not_found` for an identifier that
+      // exists nowhere. A response that varied when the audit table was unhappy would be a
+      // channel a caller could learn to open.
+      //
+      // FAILING TO WRITE IT IS NOT ALLOWED TO BE SILENT, EITHER. The unwritten record is the
+      // absence of the evidence this control exists to produce, so the loss is announced
+      // internally. `announceAuditFailure` never throws and cannot be configured off.
+      const entry = denialEntry(constrained, permissionId, scope);
+      let written;
+      try {
+        written = await auditSink.append(entry);
+      } catch (cause) {
+        // A throw out of the sink — a guard trip, a defect below the boundary — must not
+        // escape into the request. Before this it would have propagated and turned a correct
+        // `not_found` into an `internal`, which is the disclosure described above.
+        announceAuditFailure(
+          { organizationId: principal.organizationId, cause: 'write_threw', entry },
+          dependencies.auditFailureReporter,
+        );
+        return err(constrained);
+      }
+      if (!written.ok) {
+        announceAuditFailure(
+          { organizationId: principal.organizationId, cause: 'write_rejected', entry },
+          dependencies.auditFailureReporter,
+        );
+      }
     }
     return err(constrained);
   }
@@ -218,8 +287,12 @@ export async function invokeAction(
   // ---- Step 7. Operate, commit, audit — as ONE transaction where the boundary allows it,
   // which it does. The audit insert is appended to the handler's writes, so a mutation that
   // commits without its audit record is not a state this code can reach.
+  // `auditsSuccesses` is `action.audit`, unconditionally: `auditOnDenial` narrows the denial
+  // path and can never reach this one. A successful GetCustomer therefore still writes
+  // NOTHING, which is the half of the user's 2026-09-02 decision that is easiest to drift
+  // past — "Keep successful customer reads unaudited."
   const writes = [...outcome.value.writes];
-  if (action.audit) {
+  if (auditsSuccesses(action)) {
     writes.push(
       auditSink.operation({
         appId: action.appId,
@@ -234,6 +307,9 @@ export async function invokeAction(
         targetResourceId: outcome.value.audit.targetResourceId,
         targetUnresolved: false,
         relatedBusinessIds: outcome.value.audit.relatedBusinessIds,
+        // NOT from `outcome.value.audit`. `AuditFacts` has no member for this, so the handler
+        // — the only code that has seen a resolved row — cannot supply or override it.
+        actorBusinessIds,
         changedFieldNames: outcome.value.audit.changedFieldNames,
         requestId: envelope.requestId,
         correlationId: envelope.correlationId,

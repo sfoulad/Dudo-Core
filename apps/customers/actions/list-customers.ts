@@ -61,6 +61,10 @@ export function createListCustomersAction(dependencies: {
     sensitivity: 'read',
     idempotent: false,
     audit: false,
+    // Stated rather than defaulted, because the default is the thing under review. The user's
+    // 2026-09-02 ruling named GetCustomer; extending it to the collections is open (CD-15),
+    // and a defaulted `false` would read as nobody having considered it.
+    auditOnDenial: false,
     exposure: ['internal', 'public'],
     parseInput(raw: unknown): Result<CollectionInput> {
       const validated = validateObject(raw, LIST_CUSTOMERS_RULE);

@@ -19,7 +19,7 @@
  */
 
 import type { AuditEntry, AuditSink } from './audit.ts';
-import { AUDIT_TABLE, assertChangedFieldNames } from './audit.ts';
+import { AUDIT_TABLE, assertActorBusinessContext, assertChangedFieldNames } from './audit.ts';
 import type { TenantScopedStore, WriteOperation } from '../storage/store.ts';
 import type { Result } from '../kernel/result.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
@@ -30,6 +30,10 @@ export function createStoreAuditSink(
 ): AuditSink {
   function toOperation(entry: AuditEntry): WriteOperation {
     assertChangedFieldNames(entry.changedFieldNames);
+    // The runtime half of the actor-context guard. This repository has no type-check step, so
+    // the nominal type alone would be a comment; here an actor context assembled from anything
+    // other than the authenticated principal stops the write instead of being stored.
+    assertActorBusinessContext(entry.actorBusinessIds);
     return {
       kind: 'insert',
       spec: {
@@ -49,6 +53,9 @@ export function createStoreAuditSink(
           target_resource_id: entry.targetResourceId,
           target_unresolved: entry.targetUnresolved ? 1 : 0,
           related_business_ids: JSON.stringify(entry.relatedBusinessIds),
+          // The brand is a non-enumerable symbol property, so it does not serialise: what
+          // lands in the column is a plain JSON array of the caller's own Business ids.
+          actor_business_ids: JSON.stringify(entry.actorBusinessIds),
           changed_field_names: JSON.stringify(entry.changedFieldNames),
           request_id: entry.requestId,
           correlation_id: entry.correlationId,

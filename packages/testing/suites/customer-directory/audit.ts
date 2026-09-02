@@ -210,26 +210,33 @@ export function buildAuditSuite(makeWorld: MakeWorld): Suite {
     }
   });
 
-  suite.test('READS WRITE NO AUDIT RECORD — asserted positively, against a sink proven to be working', async () => {
+  suite.test('SUCCESSFUL READS WRITE NO AUDIT RECORD — asserted positively, against a sink proven to be working', async () => {
     const world = await makeWorld();
     try {
+      // NARROWED, NOT DELETED, on the user's 2026-09-02 ruling: "Keep successful customer
+      // reads unaudited." The tripwire is unchanged in value — it is what stops success-path
+      // read auditing being added later without anyone noticing, on the busiest read path in
+      // the product, on a single-threaded shared D1. Only its scope moved: DENIED GetCustomer
+      // reads are now audited and are verified in the denied-read-audit suite.
+      //
       // First prove the sink writes at all in this world. Without this, "zero records" would
-      // be evidence of a broken harness rather than of the CD-1 exception.
+      // be evidence of a broken harness rather than of the exception being honoured.
       expectOk('a mutating Action writes a record', await world.invoke(world.actions.archive, world.ownerA, { customer_id: CUST_A_ANNA }));
       const baseline = world.auditRows().length;
       assertEqual('the sink is working', baseline, 1);
 
-      expectOk('GetCustomer', await world.invoke(world.actions.get, world.ownerA, { customer_id: CUST_A_ANNA }));
-      expectOk('ListCustomers', await world.invoke(world.actions.list, world.ownerA, {}));
-      expectOk('SearchCustomers', await world.invoke(world.actions.search, world.ownerA, { query: 'anna' }));
-      assertEqual('the three reads wrote nothing', world.auditRows().length, baseline);
+      expectOk('a successful GetCustomer', await world.invoke(world.actions.get, world.ownerA, { customer_id: CUST_A_ANNA }));
+      expectOk('a successful ListCustomers', await world.invoke(world.actions.list, world.ownerA, {}));
+      expectOk('a successful SearchCustomers', await world.invoke(world.actions.search, world.ownerA, { query: 'anna' }));
+      assertEqual('the three successful reads wrote nothing', world.auditRows().length, baseline);
 
-      // A DENIED read is also unaudited, because `audit: false` governs the Action and not the
-      // outcome. Recorded here because it is the half of the CD-1 exception that is easiest to
-      // overlook: a run of refused reads leaves no trace either.
-      expectError('a denied read', await world.invoke(world.actions.get, world.unprivilegedA, { customer_id: CUST_A_ANNA }), EXPECTED_FORBIDDEN);
-      expectError('a cross-tenant read', await world.invoke(world.actions.get, world.ownerA, { customer_id: CUST_B_ANNA }), EXPECTED_NOT_FOUND);
-      assertEqual('denied and cross-tenant reads are unaudited too', world.auditRows().length, baseline);
+      // The success path stays silent even when the same Action's denial path is loud. This is
+      // the assertion that would catch "audit both for symmetry", which the contract calls out
+      // by name as implementing a different decision from the one the user made.
+      expectError('a denied read of the same Action', await world.invoke(world.actions.get, world.unprivilegedA, { customer_id: CUST_A_ANNA }), EXPECTED_FORBIDDEN);
+      assertEqual('the denial DID write one', world.auditRows().length, baseline + 1);
+      expectOk('and a success immediately after still writes nothing', await world.invoke(world.actions.get, world.ownerA, { customer_id: CUST_A_ANNA }));
+      assertEqual('still one denial record and no success record', world.auditRows().length, baseline + 1);
     } finally {
       world.close();
     }

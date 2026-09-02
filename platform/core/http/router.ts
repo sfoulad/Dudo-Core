@@ -35,6 +35,7 @@
  */
 
 import type { AnyActionDefinition } from '../action/action.ts';
+import { assertAuditPolicy } from '../action/action.ts';
 
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -121,6 +122,11 @@ export function createRouter(routes: readonly Route[]): Router {
   for (const route of routes) {
     if (route.kind === 'action' && deferredIds.has(route.action.id)) {
       throw new DeferredActionWiredError(route.action.id);
+    }
+    if (route.kind === 'action') {
+      // Same reason as above, one gate along: an Action that audits its successes and hides
+      // its denials must stop the build, not show up as an absence in an incident review.
+      assertAuditPolicy(route.action);
     }
   }
 

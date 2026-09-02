@@ -138,6 +138,13 @@ export async function createCoreRuntime(
       ids: createRandomIdGenerator(),
       cursors: await createCursorCodec(new TextEncoder().encode(signingKeyText)),
       principals,
+      // NO `auditFailureReporter`, DELIBERATELY, AND ITS ABSENCE SUPPRESSES NOTHING.
+      // `announceAuditFailure` emits to a last-resort channel unconditionally, before any
+      // supplied reporter, and that channel is not injectable (audit/audit-failure.ts). So an
+      // audit record that cannot be written is announced here today. Wiring a structured
+      // reporter is worth doing when there is somewhere approved to send it; choosing a
+      // destination now would mean selecting an unrecorded service to carry security
+      // evidence, and the notice would still have to reach the floor anyway.
     },
     businesses: createStoreBusinessDirectory(),
   };

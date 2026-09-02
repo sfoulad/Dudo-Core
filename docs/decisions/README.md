@@ -118,6 +118,38 @@ and SwiftUI is not approving any package or third-party dependency.
    right moment to revisit is when `TS1` lands and there is a real validator story rather
    than two hand-rolled modules. Until then the six fixtures stand as **NOT RUN**
    conformance cases, which is honest. Revisit at `TS1`.
+10. **A bound on denied-read audit writes — BLOCKING on AZ2, not optional.** D2 makes every
+    denied read a D1 write. Nothing rate-limits an authenticated caller, so sustained probing
+    forces unbounded writes into a **single-threaded shared database** — a latency event for
+    every other Organization, and a metered spend event against `0008`'s USD 0 ceiling. **The
+    probe-detection control is itself an amplification path**, which is the same shape as the
+    audit-log oracle it was designed around: the control becoming the vulnerability. Not
+    exploitable today only because production ships a deny-all principal resolver and the
+    slice is unreachable. **It must be bounded before AZ2 makes it reachable** — a per-actor
+    write ceiling, coarse aggregation of repeated identical denials, or both. Do not close
+    AZ2 without closing this.
+9. **A Core-wide `AuditDenialReason` taxonomy** — deferred, and deliberately not done as a
+   side effect. The D2 denied-read control raised whether denial reasons should carry
+   security-specific tokens (`unresolved_identifier`, `permission_denied`,
+   `business_not_authorized`) rather than mirroring `ErrorCode`. **Left as is**, because
+   `denial_reason` is a Core-wide column: one Action emitting `unresolved_identifier` while
+   another emits `not_found` **for the identical condition** would make the column
+   polymorphic and break the requirement that every audit record be readable by the same
+   query. The proposed tokens also have no home for `conflict`, `failed_precondition` or
+   `quota_exceeded`. **The security property is already met without them** — `not_found` is
+   unsplit, and a cross-tenant probe and a fabricated identifier differ in no column a tenant
+   can read. Revisit as its own record, because it touches every Action.
+
+    **What the current taxonomy costs, established by `qa-agent` and worth keeping:**
+    `forbidden` is emitted at **two** denial paths — no permission at all (step 3) and wrong
+    Business inside the right Organization (step 5b) — and no other field separates them:
+    `target_unresolved` is 0 on both, `related_business_ids` empty on both, same
+    `permission_id` and `scope`. So an operator **cannot distinguish "this principal holds no
+    grant" from "this principal is probing across Businesses inside its own Organization"** —
+    and the second is the in-tenant directory-mapping probe. That is real detection value
+    lost, it involves **no cross-tenant disclosure** (both principals are in one
+    Organization), and it is the strongest argument for revisiting. The security-critical
+    half is unaffected: `not_found` stays unsplit and the oracle stays closed.
 8. **Audit-write ordering for irreversible destruction.** Every Action writes its audit
    record *after* the operation succeeds — except a purge, which must write *before*
    destroying the data, because after the purge there is nothing left to reconstruct the
@@ -135,6 +167,31 @@ and SwiftUI is not approving any package or third-party dependency.
 *Tenancy was item 4 here. It is now decided — see `0006`.*
 
 ### Open user decisions
+
+**Decided 2026-09-02, binding, recorded here because they govern work not yet written:**
+
+- **D2 — denied reads are audited.** Every **denied** `GetCustomer` attempt, cross-tenant
+  probing included, writes an audit record. **Successful reads stay unaudited.** This is the
+  probe-detection control and it does not introduce auditing for successful reads. The record
+  carries actor id, actor Organization/business context, action, timestamp, the *requested*
+  customer identifier, denial reason and correlation id — and **no foreign customer personal
+  data**, because resolving the foreign row to enrich the record would be the cross-tenant
+  read the control exists to detect. The external response is unchanged: missing and
+  inaccessible remain indistinguishable, so no existence oracle is created. **The audit event
+  must not fail open** — inability to record the evidence is surfaced internally while the
+  caller still receives the same `not_found`.
+- **D1 — the minimal Business table is built next**, in its own focused PR. `Customer.business_id`
+  requires it, and without it three of the eight in-scope Actions cannot be fully exercised.
+- **Apple deployment target — iOS/iPadOS 18 minimum.** iOS 26 features, Liquid Glass included,
+  are reached through **availability checks**, never by raising the floor. The `appiconset`
+  stays the shipping path.
+- **App icon — the current 57.7% content inset is accepted.** The icon design is **not**
+  reopened.
+- **C5 (billing guardrails) is required before the first staging deployment**, and not before.
+  It is a deployment gate, not a development one.
+- **Authentication / AZ2 is the next architecture decision**, after the Core slice and the
+  Business table. Until it lands, production ships a deny-all principal resolver and the
+  slice is deliberately unreachable.
 
 - ~~**Software license**~~ — **decided 2026-09-01: Apache License 2.0** for both
   `Dudo-Core` and `Dudo-Apple`. Unmodified upstream text, no custom clauses. The

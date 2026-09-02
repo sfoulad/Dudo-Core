@@ -45,8 +45,99 @@
 import type { Scope } from '../authorization/scope.ts';
 import type { Result } from '../kernel/result.ts';
 import type { WriteOperation } from '../storage/store.ts';
+import type { AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
 
 export const AUDIT_TABLE = 'audit_event';
+
+/**
+ * =============================================================================================
+ * THE ACTOR'S BUSINESS CONTEXT — and why it is a nominal type rather than a `string[]`.
+ * =============================================================================================
+ *
+ * D2 requirement 2 asks the denied-read record to carry the ACTOR'S Organization AND BUSINESS
+ * CONTEXT. The Organization is the row's `tenant_id`, set by the storage boundary from the
+ * authenticated handle. The business context is this: THE BUSINESSES THE CALLER WAS AUTHORIZED
+ * OVER WHEN IT MADE THE ATTEMPT.
+ *
+ * IT IS NOT `relatedBusinessIds`, AND CONFLATING THE TWO WOULD REBUILD A DISCLOSURE THIS
+ * CONTRACT SPENT EFFORT CLOSING. The two fields answer opposite questions:
+ *
+ *   relatedBusinessIds   the RECORD's Businesses. Forced empty on every denial, because
+ *                        "telling the log which Business the caller was refused turns the
+ *                        audit trail into the disclosure the refusal withheld."
+ *   actorBusinessIds     the CALLER's own authorized set. Data the tenant already holds about
+ *                        itself, which is why it carries no cross-tenant risk at all.
+ *
+ * A field that could be populated from the resolved target would undo the first rule while
+ * looking like it was implementing the second. So it is made hard to do by accident:
+ *
+ *   1. `ActorBusinessContext` IS A NOMINAL TYPE. A plain `string[]` — say, one built from a
+ *      row's `business_id` — is not assignable to it. The only value that satisfies it comes
+ *      from `deriveActorBusinessContext`, whose ONLY PARAMETER IS AN `AuthenticatedPrincipal`.
+ *      A resolved row is not an authenticated principal and cannot be passed as one.
+ *   2. THE BRAND IS ENFORCED AT RUNTIME, not only in the type system. `store-audit-sink.ts`
+ *      asserts it before writing. This repository has no type-check step in its build, so a
+ *      type-only brand would be documentation; this one throws.
+ *   3. `AuditFacts` HAS NO MEMBER FOR IT (action.ts). A handler — the only code that ever sees
+ *      a resolved row — has no channel through which to supply, override or influence it.
+ *   4. THE PIPELINE DERIVES IT BEFORE ANY RECORD EXISTS. It is computed at the top of
+ *      `invokeAction`, before the store is resolved and long before the handler runs, so at
+ *      the moment of derivation there is no target in scope to copy from.
+ *
+ * WHAT THAT DOES NOT CLAIM. Rules 1 and 2 stop an ARRAY of foreign values; they cannot stop
+ * code that deliberately fabricates an object shaped like a principal in order to launder one
+ * through. Nothing short of not having the field prevents that, and it would be a deliberate
+ * act visible in review, not the accident these guards are aimed at.
+ */
+const ACTOR_BUSINESS_CONTEXT_BRAND: unique symbol = Symbol('dudo.audit.actorBusinessContext');
+
+export type ActorBusinessContext = readonly string[] & {
+  readonly [ACTOR_BUSINESS_CONTEXT_BRAND]: true;
+};
+
+/**
+ * The ONLY constructor. Takes the authenticated principal and reads one field off it.
+ *
+ * The array is COPIED and FROZEN so that the entry cannot be mutated after the fact by
+ * whatever still holds a reference to the principal's own array.
+ */
+export function deriveActorBusinessContext(
+  principal: AuthenticatedPrincipal,
+): ActorBusinessContext {
+  const derived: string[] = [...principal.authorizedBusinessIds];
+  Object.defineProperty(derived, ACTOR_BUSINESS_CONTEXT_BRAND, {
+    value: true,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return Object.freeze(derived) as unknown as ActorBusinessContext;
+}
+
+/**
+ * Thrown, not returned, for the same reason as `AuditValueLeakError`: an unbranded value here
+ * means some code path assembled an actor context out of something that was not the
+ * authenticated principal, and the whole point is that it must not be written and noticed
+ * afterwards.
+ */
+export class ActorContextNotDerivedError extends Error {
+  constructor() {
+    super(
+      'An audit entry carried an actorBusinessIds value that did not come from ' +
+        'deriveActorBusinessContext. The actor business context is read from the ' +
+        "AUTHENTICATED PRINCIPAL and from nothing else — never from a resolved record, whose " +
+        'Business a denial record may not name.',
+    );
+    this.name = 'ActorContextNotDerivedError';
+  }
+}
+
+export function assertActorBusinessContext(value: readonly string[]): void {
+  const branded = value as unknown as Record<symbol, unknown>;
+  if (branded[ACTOR_BUSINESS_CONTEXT_BRAND] !== true) {
+    throw new ActorContextNotDerivedError();
+  }
+}
 
 /** Matches a wire field name (snake_case). Deliberately too narrow to admit a value. */
 const FIELD_NAME_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
@@ -103,6 +194,19 @@ export type AuditEntry = {
    * anyone who can read the log at a narrower scope than the record."
    */
   readonly relatedBusinessIds: readonly string[];
+  /**
+   * THE ACTOR'S OWN authorized Business set, from the authenticated context. D2 requirement 2.
+   *
+   * Deliberately NOT `readonly string[]`: see `ActorBusinessContext` above for why the nominal
+   * type, the runtime brand and the absence of any handler-facing channel are what keep this
+   * field from ever carrying the TARGET's Business — which is the disclosure
+   * `relatedBusinessIds` is forced empty to prevent.
+   *
+   * It is populated identically on a denial and on a success, and identically whether the
+   * requested identifier belongs to another Organization or to nobody, because it is derived
+   * from the caller and never from what the caller was reaching for.
+   */
+  readonly actorBusinessIds: ActorBusinessContext;
   /** FIELD NAMES ONLY. Never values, never a diff. */
   readonly changedFieldNames: readonly string[];
   readonly requestId: string;

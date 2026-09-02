@@ -291,6 +291,17 @@ export type WorldOptions = {
   readonly resolverMode?: ResolverMode;
   /** Adds an Organization B customer filed under one of Organization A's business ids. */
   readonly withSharedBusinessIdCollision?: boolean;
+  /**
+   * NEGATIVE CONTROL 4: D2 reverted. `customers.GetCustomer` is rebuilt with
+   * `auditOnDenial: false`, which is exactly what it was before the user's 2026-09-02 ruling.
+   *
+   * This is the sensitivity check the probe-detection suite needs, and the storage controls
+   * cannot provide it — they break isolation, not auditing. It is a legal Action shape
+   * (`assertAuditPolicy` refuses only `audit: true` with `auditOnDenial: false`), so no guard
+   * is bypassed to construct it, and no production file is edited: the flag is overridden on a
+   * copy of the real Action object.
+   */
+  readonly revertD2?: boolean;
 };
 
 export type World = {
@@ -468,7 +479,11 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   });
 
   const businesses = createStoreBusinessDirectory();
-  const actions = createCustomerActions({ businesses });
+  const built = createCustomerActions({ businesses });
+  const actions =
+    options.revertD2 === true
+      ? { ...built, get: { ...built.get, auditOnDenial: false } }
+      : built;
 
   const dependencies: PipelineDependencies = {
     resolver,

@@ -7,8 +7,13 @@
   unchanged.
 - **Revised:** 2026-09-01, for the CD-8 (retention) and CD-2 (business scope) user decisions
   and the CD-1 (read auditing) Team Lead ruling. **2026-09-02:** permissions registered, ADR
-  `0011` applied, and the CD-13 ruling that `DeleteCustomer` and `RestoreDeletedCustomer` are
-  contracted but **out of scope for the MVP implementation** (§11.1). See §0.
+  `0011` applied, the CD-13 ruling that `DeleteCustomer` and `RestoreDeletedCustomer` are
+  contracted but **out of scope for the MVP implementation** (§11.1), and — later the same
+  day — the **user ruling that narrows CD-1**: denied `GetCustomer` reads, cross-tenant
+  probing included, are now **audited**; successful reads stay unaudited. See §0 and §10.1.
+  Two follow-on Team Lead rulings the same day: the proposed denial-reason vocabulary was
+  **refused** (§10.3), and `core-agent`'s **write-amplification** finding is recorded as
+  **CD-17**, *blocking on AZ2* (§10.4).
 - **App id:** `customers` · **Contract version:** 1 · **Public API version:** `v1`
 - **Artifacts, all three normative together:**
   - `customer-directory-v1.schema.json` — every request and response shape
@@ -48,13 +53,14 @@ Organization and is **not** a second tenant boundary. The six original permissio
 `[organization, business]`, the three new ones stay `[organization]`, and moving a customer
 between Businesses is its own audited Action rather than a field on `UpdateCustomer`.
 
-**CD-1 — read auditing. Ruled on by the Team Lead.** Reads stay unaudited, as a
-**documented, time-bounded exception** to `AUTHORIZATION_STANDARD.md` §6 — and **the
-standard is not edited to agree**. The deletion path is audited without exception, and the
-purge audit record is written **before** the personal data is destroyed. The enumeration gap
-— a `list`-only principal can page the whole Organization untraced — is an **accepted risk**
-on the user's explicit instruction, not an omission, with a named future obligation:
-coarse-grained enumeration auditing, not per-read auditing. §10.1.
+**CD-1 — read auditing. Ruled on by the Team Lead on 2026-09-01, and NARROWED BY THE USER on
+2026-09-02.** Read §10.1 for the current position; the summary is that **successful** reads
+stay unaudited as a **documented, time-bounded exception** to `AUTHORIZATION_STANDARD.md` §6
+— and **the standard is not edited to agree** — while **every denied `GetCustomer`,
+cross-tenant probing included, is now audited**. The deletion path is audited without
+exception, and the purge audit record is written **before** the personal data is destroyed.
+The risk that remains accepted is a **different and smaller** one than the risk this contract
+previously said was accepted, and the difference is not a wording change: **§10.1**.
 
 **CD-13 — deletion scope. Ruled on by the Team Lead, 2026-09-02.** All nine permissions are
 now **registered**, so the registration blocker is gone. `DeleteCustomer` and
@@ -63,6 +69,17 @@ is `critical` and the platform confirmation mechanism does not exist — and tha
 **acceptable, not a blocker**: both are **contracted but out of scope for the MVP
 implementation**, along with the purge job. **§11.1** is binding and should be read before
 implementing anything.
+
+**CD-1 narrowed — denied reads are now audited. User ruling, 2026-09-02.** In the user's
+words: *"Audit every denied `GetCustomer` read attempt, including cross-tenant probing. Keep
+successful customer reads unaudited."* This closed **half** of the CD-1 exception. It was
+made because **`qa-agent`'s independent verification found this contract's own statement of
+the accepted risk to be false** — not stale, false as written: the contract said the whole of
+the risk sat on `list`, and it did not. A cross-tenant probing campaign run entirely through
+`GetCustomer` produced **zero** audit records, while the same campaign through
+`ArchiveCustomer` produced one per attempt. **§10.1** carries the ruling, the eight binding
+requirements, the trap in requirement 3, and the record of the correction — kept in the past
+tense, because that record is why the ruling exists.
 
 **The manifest problem CD-8 exposed is now closed too, by ADR `0011`.** The App manifest's
 `lifecycle.retentionDays` could not express the decided model — it means "how long tenant
@@ -282,9 +299,11 @@ Three classification decisions are worth stating because they are not obvious:
   need to remember. A field cannot be classified by hope.
 
 **Consequence, flagged.** `SECURITY_STANDARD.md` §3 says sensitive-personal requires
-"explicit permission, plus audit on read where the tenant requires it." Read-audit is a
-tenant policy toggle that does not exist in this slice and is deliberately not built —
-see open question **CD-1**.
+"explicit permission, plus audit on read where the tenant requires it." That tenant policy
+toggle does not exist in this slice and is deliberately not built, so **successful** reads of
+these fields are unaudited — see **CD-1** and §10.1. **Denied** `GetCustomer` reads are
+audited as of the 2026-09-02 ruling, which is a different control and does not stand in for
+this one: it records attempts that were refused, never the reads that succeeded.
 
 **No field is classified `secret`,** and none may be. `financial-instrument` does not
 appear either: this slice records no bank details, no IBAN and no card data, which is what
@@ -608,7 +627,7 @@ case.
 
 | # | Question | What was assumed here | Who decides |
 |---|---|---|---|
-| **CD-1** | ~~Read auditing conflicts with `AUTHORIZATION_STANDARD.md` §6.~~ **RULED ON by the Team Lead, 2026-09-01.** | **Decided: reads stay unaudited**, as a documented, time-bounded exception to §6 — **the standard is not edited to match**. The deletion path is audited without exception, and the purge audit record is written *before* the data is destroyed. The enumeration gap is an **accepted risk**, not an omission. Full statement in **§10.1** below. | **Closed** |
+| **CD-1** | ~~Read auditing conflicts with `AUTHORIZATION_STANDARD.md` §6.~~ **RULED ON by the Team Lead, 2026-09-01; NARROWED BY THE USER, 2026-09-02.** | **Decided: *successful* reads stay unaudited**, as a documented, time-bounded exception to §6 — **the standard is not edited to match**. **Denied `GetCustomer` reads, cross-tenant probing included, are audited.** The deletion path is audited without exception, and the purge audit record is written *before* the data is destroyed. What remains an **accepted risk** is a different, smaller risk than the one this table previously named. Full statement in **§10.1** below. | **Closed** |
 | **CD-2** | ~~No business-scope role can hold any customer permission.~~ **RESOLVED by the user, 2026-09-01.** | **Decided:** `Customer` carries a required `business_id`; `organization_id` remains the sole tenant boundary. The six original permissions are `[organization, business]`, the three new ones `[organization]`, and the six Actions are **evaluated at `scope: business`** so that a business-scope grant can actually satisfy them. `business-admin` and `member` are now *eligible* — eligibility, not a grant: nothing is granted until the Team Lead registers the permissions and decides role membership. See §3.1, §3.2. | **Closed** |
 | **CD-3** | **No optimistic-concurrency token.** Two staff editing one customer at once: last write wins, silently. | Not added — it is outside the agreed field set. The contract is shaped so adding an optional `version` request field plus a `version` response field later is **additive**; making it required is breaking. | Team Lead |
 | **CD-4** | **`CreateCustomer` is `idempotent: false`**, so an `Idempotency-Key` is accepted but not required, and no duplicate detection exists on `display_name` or `email`. A retried create after a network failure produces a second customer. | Accepted. The worst outcome is a duplicate row, not duplicated money or a duplicated message, which is the class `API_STANDARD.md` §9 makes mandatory. | Team Lead |
@@ -622,57 +641,357 @@ case.
 | **CD-12** | **Must a customer be archived before it can be deleted?** The decision fixed the retention policy, not the entry state. | **Assumed yes:** `DeleteCustomer` from `active` is `failed_precondition`. Deletion becomes a deliberate two-step act and a mis-click on a live customer cannot start a destruction clock. The alternative — deletion straight from `active` — is a one-line change to the state machine now and a **breaking** one once either client ships. | Team Lead / user |
 | **CD-13** | **`DeleteCustomer` is `critical` and needs a platform confirmation mechanism that does not exist. RULED ON by the Team Lead, 2026-09-02.** | **Ruled: acceptable, and not a blocker for this slice.** `DeleteCustomer` and `RestoreDeletedCustomer` are **out of scope for the MVP implementation** — contracted, not built (**§11.1**). This is now the **only** thing holding them; the permission-registration blocker is gone. No confirmation field is invented in the request schema, and sensitivity is not downgraded to route around it. | **Closed for this slice**; the mechanism itself remains a Team Lead item |
 | **CD-14** | **What happens to customers when a Business is deleted?** `Business` lifecycle is Core's, and a customer whose `business_id` names a Business that no longer exists is unreachable at business scope and orphaned at organization scope. | **Assumed:** Core must not permit deleting a Business that still has customers; `MoveCustomerToBusiness` is the mechanism for emptying it first. This contract provides the move and states the dependency; it cannot enforce a rule in Core's own lifecycle. | Team Lead, with Core |
+| **CD-15** | **Are denied `ListCustomers` and `SearchCustomers` the same case as denied `GetCustomer`?** The user's 2026-09-02 ruling named `GetCustomer` specifically. Collections filter *silently* rather than denying, so they may genuinely differ. | **Not applied, and recommended.** `auditOnDenial` is `false` on both. **Assumed in the meantime: denied collection reads write nothing** — a live gap, stated rather than inferred. `architecture-agent` **recommends** auditing the **explicit-denial paths only** — a caller without `customers.customer.list`, and a caller that explicitly names an unauthorized `business_id` — and **recommends against** auditing the silent-filter path, which is not a denial and whose auditing would be success-path read auditing arriving through a side door. Reasoning in **§10.2**. | **User**, relayed by the Team Lead |
+| **CD-16** | **The App manifest cannot express "audited on denial, not on success".** `app-manifest.schema.json` declares `actions[].audit` as a single boolean with `additionalProperties: false`. After the CD-1 narrowing, neither `true` nor `false` is a true statement about `GetCustomer`. | **Not worked around.** `manifest.json` still says `"audit": false` and was **not edited**; `false` understates the control and `true` would assert success-path auditing the ruling forbids, in the one document `APP_STANDARD.md` §9 requires to be true to the tenant. Writing either would be the same move as `retentionDays: 30` (`0011`) and `{customer-id}` (`0012`), declined for the third time on the same grounds. The contract carries **two** flags — `audit` and `auditOnDenial` — and is the authority; the manifest's single flag is a **known, recorded** lossy projection. Precedent says a registry that cannot express a decided policy is a **schema defect needing its own decision record**. | **Team Lead** — registries and `manifest.json` are not `architecture-agent`'s files (§13) |
+| **CD-17** | **The probe-detection control is itself a write-amplification path. Reported by `core-agent`, 2026-09-02.** D2 makes every denied read a D1 write; nothing rate-limits an authenticated caller; sustained probing forces unbounded writes into a single-threaded shared database — latency for every other Organization, and metered spend against `0008`'s USD 0 ceiling. | **Recorded, not mitigated.** Not exploitable **today** only because production ships a **deny-all principal resolver** — a deployment accident standing in for a control, which expires the moment AZ2 lands. **It must be bounded before AZ2 makes the slice reachable.** Candidates: a per-actor write ceiling, coarse aggregation of repeated identical denials, or both — none chosen here. Whatever is chosen **must not reintroduce fail-open**: a ceiling that silently stops recording is an attacker's off switch. Reasoning in **§10.4**. | **Team Lead**, with Core — scheduled item 10, **BLOCKING on AZ2** |
 
 ---
 
-### 10.1 CD-1 in full: unaudited reads, and the risk that is accepted rather than missed
+### 10.1 CD-1 in full: denied reads are audited, successful reads are not
 
-Ruled on by the Team Lead, 2026-09-01. Three parts, all binding.
+Ruled on by the Team Lead on 2026-09-01, and **narrowed by the user on 2026-09-02**. All of
+it is binding. The contract half is `customer-directory-v1.contract.yaml` →
+`audit.readAuditException` and `audit.deniedReadAudit`.
 
-**1. Reads stay unaudited — and the standard is not edited to agree.**
-`GetCustomer`, `ListCustomers` and `SearchCustomers` write no audit record.
-`AUTHORIZATION_STANDARD.md` §6 says access to customer information maps to `sensitive` at
-minimum, and `sensitive` requires an audit event; read literally, that would audit every
-read. **The standard stands as written.** This contract takes a documented, time-bounded
-exception to it, bounded by the MVP slice, extending to no other App, Action or entity by
-precedent. Editing the standard to make the conflict disappear would be the inverse of
-honest documentation: a document quietly amended to agree with an implementation has stopped
-being a standard and become a description of what was built. The exception is recorded in
-the artifact taking it — here, and in `customer-directory-v1.contract.yaml` →
-`audit.readAuditException`.
+**The ruling, in the user's words:**
 
-**2. The deletion path is audited without exception.**
-The deletion request, the recovery within the 30-day window, and the final purge. None of
-the three is subject to this read exception, to a tenant policy toggle, to sampling, to a
-rate limit, or to any later change made to reduce audit volume. **The purge audit record is
-written *before* the personal data is destroyed** — see §6.1, where the ordering and its
-failure analysis live.
+> *"Audit every denied `GetCustomer` read attempt, including cross-tenant probing. Keep
+> successful customer reads unaudited."*
 
-**3. The enumeration gap is an ACCEPTED RISK, not an omission.**
+Recorded by the Team Lead as **`D2`** in `docs/decisions/README.md` → "Open user decisions"
+(**Decided 2026-09-02, binding**). This contract calls it *the CD-1 narrowing*, because CD-1
+is the exception it modifies. **`D2` and the CD-1 narrowing are the same ruling under two
+names**, and neither document is a summary of the other.
 
-> A principal holding only `customers.customer.list` can page the **entire customer base of
-> their Organization** and leave **no audit trail**. With no `export` permission declared,
-> the whole of that risk sits on `list`. This is **accepted for the MVP slice on the user's
-> explicit instruction**, and it is **not a finding to be rediscovered later**.
+#### The position, in one table
 
-This revision widens it slightly, and that is stated rather than absorbed: a business-scope
-principal's reads are equally untraced, and `list` now also enumerates the pending-deletion
-queue.
+| | Audited? |
+|---|---|
+| **Denied `GetCustomer` — cross-tenant probe** (`not_found`) | **Yes.** This is the case the ruling exists for |
+| **Denied `GetCustomer` — unauthorized Business, same Organization** (`forbidden`) | **Yes** |
+| **Denied `GetCustomer` — no permission at all** (`forbidden`) | **Yes** |
+| **Denied `GetCustomer` — malformed identifier** (`invalid_argument`) | **Yes.** Added 2026-09-02 after `core-agent` reported auditing it and this section was silent on it |
+| **Successful `GetCustomer`** | **No — deliberately** |
+| **Successful `ListCustomers` / `SearchCustomers`** | **No — deliberately** |
+| **Denied `ListCustomers` / `SearchCustomers`** | **No.** Recommended, **not applied** — open question **CD-15**, §10.2 |
+| Every mutating Action, success and denial | **Yes**, unchanged |
+| The deletion path — request, cancellation, purge | **Yes, without exception**, unchanged |
 
-**The future obligation, named concretely so the cheap control is not lost behind the
-expensive one:** *coarse-grained enumeration auditing* — **who** enumerated, **when**, and
-**how many results** — and deliberately **not** an audit record per individual record read.
+#### 1. What is now audited
 
-The distinction is the whole point:
+**Every denied `GetCustomer`**, whatever the denial path, **cross-tenant probing included**.
+
+**Four denial paths, not three.** An earlier revision of this section enumerated three and was
+incomplete; `core-agent` reported that it audits the fourth. The contract was corrected to
+match what is built, rather than the behaviour removed to match the contract:
+
+| Step | Emits | Condition |
+|---|---|---|
+| 3 | `forbidden` | The principal does not hold `customers.customer.read` at a satisfying scope. Record-independent |
+| 4 | `invalid_argument` | **The identifier is malformed** and fails input validation before any lookup |
+| 5 | `not_found` | The identifier did not resolve inside the tenant — **the cross-tenant case** |
+| 5b | `forbidden` | The customer is in this Organization, in a Business outside the authorized set |
+
+So GetCustomer denials emit **four error codes across four paths**, `forbidden` at two of
+them. **Why step 4 is included:** a caller sending malformed identifiers in a loop is a
+probing signature, and dropping those records would leave a gap in exactly the pattern this
+control exists to detect — the most attractive gap available, because reaching it needs no
+valid identifier at all. It is also **the cheapest denial to produce**, which matters twice:
+see **CD-17**.
+
+The eight binding requirements the user set:
+
+1. **The same external response** for missing and inaccessible customers — **no existence
+   oracle.** Unchanged from before the ruling and not weakened by it: `not_found` is
+   byte-identical for a foreign-Organization identifier and one that exists nowhere.
+2. **The record carries:** actor id · actor Organization and business context · action ·
+   timestamp · the requested customer identifier · denial reason · correlation id.
+3. **No foreign customer personal data** in the record. See the trap below — it is the most
+   important sentence in this section.
+4. **Cross-tenant details and internal denial reasons must not appear in tenant-visible
+   logs.**
+5. **Repeated attempts must support security alerting and coarse aggregation.**
+6. **The audit event must not fail open.** An inability to create the required security
+   evidence is surfaced internally.
+7. **This is the probe-detection control.** It does **not** introduce auditing for successful
+   reads.
+8. **It applies to denied `GetCustomer`, cross-tenant included.**
+
+**Requirement 3, and the trap in it.** *Recording the requested identifier is not the same as
+recording the record.* The identifier is a string the caller authored and already holds;
+writing it into the caller's own tenant's audit trail teaches the caller nothing it did not
+bring with it. That is the whole of what may be written.
+
+> **Resolving the foreign row to enrich the audit entry would itself be the cross-tenant read
+> this control exists to detect.** To put the probed customer's name or Business into the
+> record, an implementation must first look the row up — and by then the storage boundary has
+> *already* applied the tenant predicate and found nothing, so the only way to obtain those
+> values is a second query **without** the tenant predicate. Under `0006` Option A that query
+> succeeds and returns another Organization's customer. The security control becomes the
+> vulnerability, in the one code path guaranteed to be exercised by an attacker, and it looks
+> like diligence in review.
+
+**Requirement 4 is sharper than it looks, because a tenant can read its own audit log**
+(`SECURITY_STANDARD.md` §6). A denial reason that distinguished "exists in another
+Organization" from "exists nowhere" would hand the tenant, in writing, the exact fact the
+`not_found` withheld — the existence oracle closed at the API and reopened in the audit
+trail, at a slower speed and with a permanent record. A probing campaign would then not need
+to read the responses at all; it would read its own audit log afterwards.
+
+**The denial reason is the Action's `ErrorCode`**, from the closed platform taxonomy — no
+App-local synonym. Requirement 4 is met because **`not_found` is unsplit**: one value covers
+a foreign-Organization identifier and a nonexistent one, exactly as the external response
+does. `core-agent`'s column-by-column diff over the full record table confirmed the only
+differences between the two cases are the per-request identifiers and the caller's own
+authored string — measured, not asserted. **The unsplittability is the binding part**, and it
+holds regardless of what the value is called.
+
+> **A three-token vocabulary was proposed here and ruled against.** `architecture-agent`
+> proposed `permission_denied` · `business_not_authorized` · `unresolved_identifier`; the
+> Team Lead **refused it**, 2026-09-02. Recorded so the next reader does not find the
+> proposal and implement it. The reasoning is in §10.3 — the short version is that
+> `denial_reason` is a **Core-wide column**, and the security requirement was never the token
+> names.
+
+**Requirement 6, and what it implies.** *The caller still receives the same `not_found`.*
+Fail-closed here cannot mean "refuse the request" — the request is already being refused.
+Nor may the response become `internal` when the audit write fails: that would make the
+external answer depend on the state of the audit subsystem, handing a prober a way to detect
+that the subsystem is down and a window in which to probe unrecorded. **Fail-closed on
+evidence, unchanged externally** — the failure is loud internally and invisible to the
+caller.
+
+#### 2. What remains unaudited — deliberately
+
+**Successful reads.** The user's ruling says so in terms. An implementation that adds
+success-path read auditing is not being cautious; it is implementing a different decision,
+on the busiest read path in the product, on a single-threaded shared D1. `AUTHORIZATION_STANDARD.md`
+§6 says access to customer information maps to `sensitive` at minimum and `sensitive`
+requires an audit event; read literally, that would audit every read. **The standard stands
+as written and is still not edited to agree.** The exception is documented and time-bounded
+by the MVP slice, and extends to no other App, Action or entity by precedent.
+
+The exception is now **smaller**: what it covers is the success path, plus the denial paths
+of `ListCustomers` and `SearchCustomers` (CD-15). The denial path of `GetCustomer` has left
+it. That direction matters — `SECURITY_STANDARD.md` §6 requires denial auditing for
+`sensitive` and `critical` Actions, and `GetCustomer` is `read`, so auditing its denials puts
+Dudo **above** the standard's minimum on the one Action where probing is possible.
+
+**The deletion path is audited without exception**, unchanged: the deletion request, the
+recovery within the 30-day window, and the final purge, none of them subject to this
+exception, a tenant policy toggle, sampling, a rate limit, or any later change made to reduce
+audit volume. The purge audit record is written *before* the personal data is destroyed — §6.1.
+
+#### 3. The risk that REMAINS accepted
+
+> A principal **legitimately authorized over a Business** can still page and read that
+> Business's customers **leaving no trace**. Every one of those calls succeeds, and success is
+> what is not recorded.
+
+**This is the volume argument the user accepted, and it is a genuinely different risk from
+undetectable cross-tenant probing.** Different actor, different reachable data, different
+detection story:
+
+| | The insider (**still accepted**) | The prober (**now closed for `GetCustomer`**) |
+|---|---|---|
+| Entitled to the records? | **Yes**, to every one it reads | **No**, to none of what it reaches for |
+| Bounded by | Its authorized business set | Only the identifiers it can obtain |
+| What it looks like | A long run of **successes** | A long run of **denials** |
+| Nature | A **volume** problem inside a boundary | A **boundary** problem |
+
+Accepting the first was never the same act as accepting the second. It is **still accepted**
+for the MVP slice on the user's explicit instruction, and it is still **not a finding to be
+rediscovered**.
+
+#### 4. What the exception originally was, and why it was narrowed
+
+*Past tense, kept deliberately.* The 2026-09-01 ruling made all three read Actions unaudited
+on all paths, and this contract stated its accepted risk as:
+
+> *"A principal holding only `customers.customer.list` can page the entire customer base of
+> their Organization and leave no audit trail. With no `export` permission declared, **the
+> whole of that risk sits on `list`**."*
+
+**That statement was not stale. It was false as written, and `qa-agent`'s independent
+verification is what established the true size.** The risk did not sit on `list`. It also
+covered `GetCustomer`, where **denied** and **cross-tenant** reads were equally unaudited. A
+cross-tenant probing campaign run entirely through `GetCustomer` produced **zero** audit
+records, while the same campaign through `ArchiveCustomer` produced **one per attempt** — the
+same identifiers, the same tenant boundary, the same refusals, and a complete difference in
+what survived.
+
+That asymmetry is what turned an accepted risk into a decision the user needed to take again
+with the true shape in front of them. On 2026-09-02 they took it.
+
+**Why this record is kept rather than overwritten.** An exception whose stated risk was wrong
+is a specific kind of defect: it was reviewed, accepted, and re-read as settled, and its
+wrongness was invisible *because* it had been accepted. Deleting the sentence would leave the
+ruling looking like a change of mind. It was not. It was a correction, found by verification
+that did not take the contract's own word for it, and the practice that found it is worth
+more than the sentence it fixed.
+
+#### 5. The future obligation is not discharged by this ruling
+
+*Coarse-grained enumeration auditing* — **who** enumerated, **when**, and **how many
+results** — and deliberately **not** an audit record per individual record read:
 
 | | Per-read auditing | Enumeration auditing |
 |---|---|---|
 | Cost | An audit write on every detail view, on the busiest read path in the product, on a single-threaded shared D1 | One record per `list` or `search` call — not per row |
 | Value | Low. Produces a log nobody can read | High. Bulk exfiltration **is** enumeration, so this is the thing that would actually catch it |
 
-**We are deferring the cheap, useful one — not the expensive one.** That is the honest
-description of what this exception costs, and it is why the obligation is written down as a
-specific mechanism rather than as "audit reads one day".
+**We are deferring the cheap, useful one — not the expensive one.**
+
+**Denial auditing does not replace it, and must not be reported as having done so.** The two
+catch different things: denial auditing catches a principal reaching for what it may not
+have; enumeration auditing catches a principal taking everything it **may** have. The insider
+in part 3 triggers **no denials at all** — every one of its reads succeeds — so the new
+control is silent on exactly the risk that is still accepted. Both are owed; one now exists.
+
+---
+
+### 10.2 CD-15: are the collections the same case?
+
+**Open. Recommended, not applied.** `auditOnDenial` is `false` on `ListCustomers` and
+`SearchCustomers`, and the assumption operating in the meantime is stated plainly: **denied
+collection reads write nothing.**
+
+The user named `GetCustomer`. These two Actions have **two different denial shapes**, and the
+honest answer is that one of them is the same case and one is not:
+
+**The silent-filter path is genuinely different, and should *not* be audited.** An unfiltered
+`ListCustomers` or `SearchCustomers` asserts no scope and names no identifier; rows the caller
+may not reach are simply absent, with no error, no count and no cursor gap (§3.2). There is
+no denial, no refused attempt, and nothing an attacker learned — so there is no event to
+record. Auditing it would mean writing a record on **every ordinary successful listing**,
+which is success-path read auditing arriving through a side door and is exactly what
+requirement 7 forbids.
+
+**The explicit-denial paths are the same case as `GetCustomer`.** Two of them: a caller that
+does not hold `customers.customer.list` at a satisfying scope, and — the one that matters — a
+caller that **explicitly names** a `business_id` it is not authorized over, which returns
+`not_found` for a Business of another Organization and `forbidden` for an unauthorized
+Business of its own. That second one is structurally identical to the `GetCustomer` probe: an
+identifier the caller supplied, an answer that partitions the identifier space, and no record
+left behind. The object probed is a **Business** rather than a **customer**, which makes it
+**worse, not better** — a successful probe yields a *page of customers* rather than one
+record.
+
+**Recommendation:** set `auditOnDenial: true` on `ListCustomers` and `SearchCustomers` for the
+**explicit-denial paths only**, with the same `ErrorCode` denial reason, the same prohibition
+on resolving anything to enrich the record, and the same fail-closed rule.
+
+**The coherence argument that decides it.** After the ruling, the collections are **the only
+unwatched `business_id` probe left in this App**. `CreateCustomer` and `MoveCustomerToBusiness`
+both take a `business_id` and both are `audit: true`, so their denials — including a foreign
+`business_id` — already produce records. `GetCustomer` is now watched. That leaves
+`ListCustomers` and `SearchCustomers` as the one door with no camera on it, reachable with a
+plain `GET`. A control that covers every entrance but one is not a partial control; it is a
+redirection.
+
+**Why it is not applied here.** Because the user ruled on `GetCustomer`, and silently widening
+a ruling is how a ruling stops meaning what it said. The case is also not identical — the
+silent-filter half genuinely differs — and half of a widening applied without being asked is
+still a widening.
+
+---
+
+### 10.3 The denial-reason vocabulary that was proposed and refused
+
+**Team Lead ruling, 2026-09-02. Binding.** `architecture-agent` proposed a fixed three-token
+vocabulary — `permission_denied` · `business_not_authorized` · `unresolved_identifier`. **It
+was ruled against.** Both the proposal and the refusal are recorded, because a reader who
+found only the proposal would implement it.
+
+**What is built instead:** the denial reason is the Action's **`ErrorCode`**, from the closed
+platform taxonomy declared in the Action's own `errors` list. On `GetCustomer`: `forbidden`
+(steps 3 and 5b), `invalid_argument` (step 4), `not_found` (step 5).
+
+**The security requirement is met, and it was never about the token names.** Requirement 4
+asks for one property: that a cross-tenant probe and a fabricated identifier be
+indistinguishable in a tenant-readable record. `not_found` is **unsplit**, so it is. The
+property comes from the value being unsplit, not from the value being called something
+particular — and `core-agent` verified it by diffing the full record table column by column
+rather than arguing it.
+
+**Why the rename was refused — the deciding point.** `denial_reason` is a **Core-wide
+column**, not this App's field. `GetCustomer` emitting `unresolved_identifier` while
+`ArchiveCustomer` emits `not_found` **for the identical condition** would make that column
+**polymorphic** — its meaning depending on which Action wrote the row. That breaks this
+contract's own requirement that a denied-read record be *the same shape as every other audit
+record and readable by the same query*. **A vocabulary that works for one Action is not a
+vocabulary.** The proposed tokens also had **no home** for `conflict`,
+`failed_precondition` or `quota_exceeded` — denial conditions that exist elsewhere in this
+very contract. And it did not even cover four paths once step 4 was counted.
+
+**Why `business_not_authorized` was *specifically* not adopted.** Steps 3 and 5b both emit
+`forbidden`; the tokens would have **split** them, so that a durable tenant-readable record
+newly distinguished "you hold no permission" from "this record exists in a Business you may
+not reach". That is **not a new leak** — the HTTP `forbidden` already discloses it, and §3.2
+rules deliberately that in-tenant existence disclosure is acceptable. But **a widening of
+what a durable tenant-readable record distinguishes must be a decision, never a side effect
+of a rename.** Arriving at it through a naming change is how a security-relevant property
+gets extended without anyone deciding to extend it — the exact failure mode this whole
+revision exists because of.
+
+**The protection that actually matters at step 5b is unchanged:** the record does **not** name
+the customer's actual `business_id`.
+
+**Whether Dudo wants a denial-reason taxonomy finer than `ErrorCode` is a Core-wide
+question**, recorded as **scheduled item 9** in `docs/decisions/README.md`. It is not this
+App's to answer and this contract does not answer it. What this contract binds is the
+**property**, not the naming: `not_found` stays unsplit, and no foreign row is resolved to
+enrich a record.
+
+---
+
+### 10.4 CD-17: the probe-detection control is itself an amplification path
+
+**Open risk. Reported by `core-agent`, 2026-09-02. Recorded by the Team Lead as scheduled
+item 10 in `docs/decisions/README.md` and marked BLOCKING on AZ2.**
+
+> **D2 makes every denied read a D1 write, and nothing rate-limits an authenticated caller.**
+> Sustained probing therefore forces **unbounded writes** into a **single-threaded shared
+> database** (`0006` Option A) — **latency for every other Organization**, and **metered
+> spend** against the USD 0 ceiling `0008` makes binding.
+
+**This is the same shape as the audit-log oracle in §10.3: the control becoming the
+vulnerability.** An attacker who cannot read a single foreign customer can still make the
+platform write once per attempt, at a rate they choose, in a database everyone shares. It
+converts cheap attacker effort into expensive platform work, and the cost lands on parties who
+did nothing. That two instances of this shape were found in one feature is the argument for
+looking for the third.
+
+**The step 4 path is the cheapest one to abuse.** A malformed identifier needs no valid
+`customer_id`, no knowledge of any tenant and no reconnaissance — it is a string. So the
+denial path that costs the *attacker* least is one that costs the *platform* a write. That is
+why §10.1's fourth path and this section belong in one document rather than two that never
+meet.
+
+**It is not exploitable today — and that is not a fix.** Production ships a **deny-all
+principal resolver**, so no principal authenticates and no caller reaches an authorization
+decision to be denied at. **That is a deployment accident standing in for a control**, and it
+expires the moment AZ2 lands. The risk is **dormant, not absent**.
+
+**It must be bounded before AZ2 makes the slice reachable.** Binding sequencing, not a
+recommendation. An authentication mechanism landing while this is unbounded turns a dormant
+risk into a live one on the same day, with no further change and nothing to notice.
+
+**Candidate mitigations** — not chosen here; the mechanism is Core's and the decision is the
+Team Lead's:
+
+- a **per-actor write ceiling**;
+- **coarse aggregation of repeated identical denials**;
+- or both.
+
+**Whatever is chosen must not reintroduce fail-open.** Aggregation is a read-side property,
+and a ceiling that silently stops recording is **an attacker's off switch** — it would make
+the loudest attack the one that disappears from the log fastest. A ceiling that is *reached*
+must itself be an alertable, internally-surfaced event, so the evidence of suppression exists
+even when the suppressed records do not. The other half of the answer stays where it was:
+refusing attempts **at the rate limiter**, before they reach an authorization decision,
+produces no denial to audit and therefore no write — a mitigation at the door rather than at
+the log, and the one that trades no evidence away.
 
 ---
 
@@ -947,9 +1266,74 @@ report them as coverage.
   volume control exists or is later added, `DeleteCustomer`, `RestoreDeletedCustomer` and
   the purge still write their records. Assert this against the configuration surface, not
   against a default.
-- **Reads write no audit record** — `GetCustomer`, `ListCustomers`, `SearchCustomers`.
-  Asserted positively, so that the CD-1 exception is a tested decision rather than an
-  absence nobody checked, and so that adding per-read auditing later is a visible change.
+
+**Read auditing — IN SCOPE NOW, and not deferred with anything.** These belong to
+`GetCustomer`, `ListCustomers` and `SearchCustomers`, all three of which are built in this
+slice (§11.1). *The positive "reads write no audit record" assertion previously sat inside
+the deferred deletion block above, where it would have been skipped along with the purge
+tests. It was never deferrable and it is stated here instead, narrowed to successful reads by
+the 2026-09-02 ruling.*
+
+- **A denied `GetCustomer` writes exactly one audit record**, with every required field
+  present: actor id, the **actor's** Organization and business context, action id, timestamp,
+  the requested customer identifier **as supplied**, the denial reason, and the correlation
+  id. Run for **all four denial paths** — no permission (`forbidden`), **malformed identifier
+  (`invalid_argument`)**, the cross-tenant identifier (`not_found`), and unauthorized Business
+  in the same Organization (`forbidden`). *Exactly one*: assert the count, so that neither a
+  missing record nor a duplicate passes.
+- **The denial reason is the Action's `ErrorCode`, not an App-local synonym.** Assert the
+  written value is one of `forbidden` · `invalid_argument` · `not_found`, and assert
+  specifically that `GetCustomer`'s not-found denial and `ArchiveCustomer`'s not-found denial
+  write **the same value** for the same condition. That is what keeps `denial_reason` a single
+  Core-wide column readable by one query, and it is the property §10.3's ruling protects.
+- **That record contains no foreign customer personal data — asserted positively against the
+  fixture values.** Seed Organization B's customer with known `display_name`, `email`,
+  `phone`, `country`, `address` and `notes`; probe it from Organization A; then scan the
+  written record for **each of those exact fixture strings** and assert every one is absent.
+  Also assert the record carries **no** `business_id` or `organization_id` belonging to the
+  probed row. A test that only checks the fields it expects to be present cannot catch an
+  implementation that helpfully added one more.
+- **A successful `GetCustomer` still writes none**, and neither does a successful
+  `ListCustomers` or `SearchCustomers`. Asserted **positively**, so that what survives of the
+  CD-1 exception is a tested decision rather than an absence nobody checked, and so that
+  adding success-path read auditing later is a **visible** change. This is the existing
+  assertion, narrowed to successful reads — it must survive, not be replaced.
+- **The external response is unchanged and still byte-identical** between a cross-tenant
+  identifier and a nonexistent one: same status code, error code, message string, details
+  array, response-size class and headers, with only `request_id` differing. Assert this
+  **with denial auditing enabled**, so that the test proves the new control did not open the
+  existence oracle it was added to close.
+- **The two audit records are themselves near-identical.** A cross-tenant probe and a probe
+  for a fabricated identifier must produce records differing only in the supplied identifier,
+  the timestamp and the correlation id — **same denial reason** (`not_found`, unsplit),
+  because splitting that reason would reopen the oracle inside the audit trail that a tenant
+  can read. Assert this **column by column over the whole record**, not field by field over
+  the fields the test expects: an added column is exactly how the split would arrive.
+- **Steps 3 and 5b remain indistinguishable in the record.** Both write `forbidden`. Assert
+  the two records do not differ in any column that names *why* — §10.3 refused adding that
+  distinction, and a test is what stops it being reintroduced as a convenience.
+- **Denied `ListCustomers` and `SearchCustomers` write nothing** in this revision. Assert it,
+  so that CD-15 is a recorded gap with a test naming it rather than an unexamined absence,
+  and so that applying the recommendation later is a visible change in both directions.
+- **The audit write does not fail open.** Force the audit write to fail on a denied
+  `GetCustomer` and assert two things: the caller receives the **same** `not_found`,
+  unchanged, and the failure is surfaced internally rather than swallowed. Assert
+  specifically that the response does **not** become `internal` — that would make the external
+  answer depend on the state of the audit subsystem.
+- **No volume control sits between the authorization decision and the audit write.** A run of
+  denials produces one record per denial: no sampling, no coalescing of "N similar attempts",
+  no suppression after a threshold. Aggregation is a read-side property and never a licence to
+  drop records. **This assertion is deliberately in tension with CD-17** and must not be
+  quietly relaxed to make a mitigation pass: when a per-actor ceiling or coarse aggregation is
+  chosen, this test is **rewritten as part of that decision** — with the ceiling's own
+  alertable, internally-surfaced event asserted in its place — and never weakened first so
+  that a mitigation lands green.
+- **Write amplification is measured, not assumed — CD-17.** Assert the write count for a run
+  of *N* denied `GetCustomer` calls from one authenticated actor, and record the number.
+  Include the **`invalid_argument`** path specifically, since a malformed identifier is the
+  cheapest denial to generate and therefore the one an attacker reaches for. This test does not
+  *fix* CD-17; it makes the amplification factor a recorded figure rather than a guess, so that
+  whatever bound is chosen before AZ2 is chosen against a measurement.
 
 **Authorization matrix, per Action** (`TESTING_STANDARD.md` §6): unauthenticated →
 `unauthenticated`; authenticated without the permission → `forbidden`; correct permission
@@ -982,7 +1366,10 @@ customer about to be destroyed.
   restore, move — **and for their denials**, including the wrong-Business denial, and
   contain **no** field values, field names only. The wrong-Business denial record does
   **not** contain the record's actual `business_id`. The same obligation covers delete and
-  cancel-deletion when they are built.
+  cancel-deletion when they are built. **The denial reason is the Action's `ErrorCode`, the
+  same way the read denials record it** — so `not_found` on a mutating Action and `not_found`
+  on `GetCustomer` are the same value for the same condition, and `not_found` must not be
+  split into "another Organization" and "nowhere" on a mutating Action either. §10.3.
 - The purge writes an audit record in the purged customer's own Organization. Deferred with
   the purge (§11.1).
 - **`DeleteCustomer` and `RestoreDeletedCustomer` are unroutable in this slice.** Assert it

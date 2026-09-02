@@ -41,6 +41,13 @@ export type Exposure = 'internal' | 'public' | 'mcp';
 /**
  * What an audited Action contributes to its own audit record. Identifiers only; there is
  * no field here that can hold a value, matching `AuditEntry`.
+ *
+ * THERE IS DELIBERATELY NO `actorBusinessIds` MEMBER, AND ITS ABSENCE IS A CONTROL. A handler
+ * is the only code that ever holds a RESOLVED ROW; giving it a channel to the actor's business
+ * context would be giving it a channel through which the TARGET's Business could arrive in the
+ * audit record, which is exactly what `relatedBusinessIds` being forced empty on a denial
+ * exists to prevent. The pipeline derives that field from the authenticated principal before
+ * the handler runs. See `ActorBusinessContext` in platform/core/audit/audit.ts.
  */
 export type AuditFacts = {
   readonly targetResourceId: string | null;
@@ -78,7 +85,32 @@ export type ActionDefinition<I, O> = {
   readonly scope: Scope;
   readonly sensitivity: Sensitivity;
   readonly idempotent: boolean;
+  /**
+   * The Action's audit policy for BOTH outcomes: an allowed invocation writes a record, and
+   * so does a denied one. `auditOnDenial` narrows that to denials only; nothing widens it.
+   */
   readonly audit: boolean;
+  /**
+   * Audit DENIED invocations, independently of `audit`.
+   *
+   * Defaults to `audit`, so an Action that says nothing behaves exactly as it did before this
+   * field existed. It is here for one shape that `audit` alone cannot express: an Action
+   * whose SUCCESSES are deliberately unaudited but whose DENIALS must be recorded.
+   *
+   * That shape is `customers.GetCustomer`, and it exists because of what the CD-1 read
+   * exception turned out to cost. A cross-tenant probing campaign run entirely through
+   * GetCustomer produced ZERO audit records, while the same campaign through ArchiveCustomer
+   * produced one per attempt — so the cheapest enumeration path was also the only silent one.
+   * The user ruled on 2026-09-02: "Audit every denied GetCustomer read attempt, including
+   * cross-tenant probing. Keep successful customer reads unaudited."
+   *
+   * IT MAY ONLY STRENGTHEN, NEVER WEAKEN. `audit: true` with `auditOnDenial: false` — an
+   * Action that records its successes and hides its failures — is refused at construction
+   * (`assertAuditPolicy`), because it is the exact shape an audit trail must never have:
+   * "An attack looks like a long run of failures, and a log containing only successes cannot
+   * show one."
+   */
+  readonly auditOnDenial?: boolean;
   readonly exposure: readonly Exposure[];
   /** Schema validation. Unknown fields rejected. */
   readonly parseInput: (raw: unknown) => Result<I>;
@@ -96,6 +128,52 @@ export type ActionDefinition<I, O> = {
 
 /** An Action of unknown input and output type, for registries and routing tables. */
 export type AnyActionDefinition = ActionDefinition<unknown, unknown>;
+
+/** The two audit fields, so the helpers below can be used on anything Action-shaped. */
+export type AuditPolicySource = {
+  readonly id: string;
+  readonly audit: boolean;
+  readonly auditOnDenial?: boolean;
+};
+
+/**
+ * Does a DENIED invocation of this Action write an audit record?
+ *
+ * One function, called by the pipeline, so the default is stated once rather than repeated
+ * at each branch that needs it. Absent `auditOnDenial` means "whatever `audit` says", which
+ * is exactly the behaviour every Action had before the field existed.
+ */
+export function auditsOnDenial(action: AuditPolicySource): boolean {
+  return action.auditOnDenial ?? action.audit;
+}
+
+/** Does an ALLOWED invocation write one? Always `audit`; `auditOnDenial` cannot reach this. */
+export function auditsSuccesses(action: AuditPolicySource): boolean {
+  return action.audit;
+}
+
+/**
+ * Thrown at construction. An Action that records its successes and hides its failures is a
+ * defect in Dudo's code, and it must stop the build rather than produce a plausible-looking
+ * audit trail that cannot show an attack.
+ */
+export class AuditPolicyError extends Error {
+  constructor(actionId: string) {
+    super(
+      `${actionId} declares audit: true with auditOnDenial: false. An audited Action may not ` +
+        'suppress its denial records. An attack looks like a long run of failures, and a log ' +
+        'containing only successes cannot show one. auditOnDenial exists to ADD denial ' +
+        'auditing to an unaudited Action, never to remove it from an audited one.',
+    );
+    this.name = 'AuditPolicyError';
+  }
+}
+
+export function assertAuditPolicy(action: AuditPolicySource): void {
+  if (action.audit && action.auditOnDenial === false) {
+    throw new AuditPolicyError(action.id);
+  }
+}
 
 export function asAnyAction<I, O>(definition: ActionDefinition<I, O>): AnyActionDefinition {
   return definition as unknown as AnyActionDefinition;

@@ -39,6 +39,7 @@ import { buildStoragePathSuite } from './suites/customer-directory/storage-paths
 import { buildCarrierSuite } from './suites/customer-directory/carriers.ts';
 import { buildAuthorizationSuite } from './suites/customer-directory/authorization.ts';
 import { buildAuditSuite } from './suites/customer-directory/audit.ts';
+import { buildDeniedReadAuditSuite } from './suites/customer-directory/denied-read-audit.ts';
 import { buildHttpAndDeferralSuite } from './suites/customer-directory/http-and-deferral.ts';
 import { buildSearchAndCollectionSuite } from './suites/customer-directory/search-and-collections.ts';
 import { buildStateAndValidationSuite } from './suites/customer-directory/state-and-validation.ts';
@@ -106,6 +107,7 @@ async function main(): Promise<void> {
     buildResolverSuite(make),
     buildAuthorizationSuite(make),
     buildAuditSuite(make),
+    buildDeniedReadAuditSuite(make),
     buildStateAndValidationSuite(make),
     buildSearchAndCollectionSuite(make),
     buildHttpAndDeferralSuite(make),
@@ -131,6 +133,17 @@ async function main(): Promise<void> {
   classify(
     'THE BOUNDARY — the query path reaches the engine without the Core-owned port (read paths only)',
     await runAll([buildStoragePathSuite(boundaryBypassed, true)]),
+  );
+
+  // ---- Negative control 4: the probe-detection control itself -----------------
+  // The three storage controls break ISOLATION; none of them breaks AUDITING, so none of them
+  // can tell us whether the denied-read suite would notice if D2 were removed. This one puts
+  // `customers.GetCustomer` back to `auditOnDenial: false` — its shape before the user's
+  // 2026-09-02 ruling — and the suite must go red.
+  const d2Reverted: MakeWorld = (options) => realWorld({ ...options, revertD2: true });
+  classify(
+    "D2 REVERTED — customers.GetCustomer back to auditOnDenial: false, its shape before the 2026-09-02 ruling",
+    await runAll([buildDeniedReadAuditSuite(d2Reverted)]),
   );
 
   const counts = tally(primary);

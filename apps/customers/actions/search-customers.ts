@@ -21,8 +21,17 @@
  * still leak through page counts and cursor behaviour — the same failure the exclusion of
  * `notes` prevents, one scope level up.
  *
- * `audit: false`, under the same CD-1 exception as the other two reads. See
- * get-customer.ts for the full statement of what that costs.
+ * `audit: false`, under the CD-1 read exception. See get-customer.ts for the full statement
+ * of what that costs.
+ *
+ * IT IS NO LONGER THE SAME POLICY AS GetCustomer, AND THAT IS A SCOPE DECISION, NOT AN
+ * OVERSIGHT. The user's 2026-09-02 ruling named GetCustomer specifically, so GetCustomer
+ * carries `auditOnDenial: true` and this Action does not: a denied search still writes nothing.
+ * The Team Lead has been asked to rule on extending it here and to ListCustomers. The gap
+ * while that is open is narrow but real — a run of refused searches, which is what credential
+ * testing against a stolen session looks like, leaves no record — and it is narrower than
+ * GetCustomer's was, because a collection endpoint has no identifier to probe with and so
+ * cannot answer "does this specific record exist" for another Organization at all.
  */
 
 import type { ActionDefinition } from '../../../platform/core/action/action.ts';
@@ -67,6 +76,8 @@ export function createSearchCustomersAction(dependencies: {
     sensitivity: 'read',
     idempotent: false,
     audit: false,
+    // Explicit for the same reason as ListCustomers: CD-15 is open, not overlooked.
+    auditOnDenial: false,
     exposure: ['internal', 'public'],
     parseInput(raw: unknown): Result<SearchInput> {
       const validated = validateObject(raw, SEARCH_CUSTOMERS_RULE);

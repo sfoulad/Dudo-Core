@@ -53,12 +53,13 @@
 #     the tenant-isolation boundary; business_id controls access INSIDE the Organization
 #     and is NOT a second tenant boundary. Six permissions widen to
 #     scopes [organization, business]; the three new ones stay [organization] only.
-#   CD-1 READ AUDITING, ruled on by the Team Lead. Reads stay UNAUDITED, as a DOCUMENTED,
-#     TIME-BOUNDED EXCEPTION to AUTHORIZATION_STANDARD.md §6 — the standard is NOT edited
-#     to agree with this contract. The deletion path is audited without exception, and the
-#     purge audit record is written BEFORE the personal data is destroyed. The enumeration
-#     gap is an ACCEPTED RISK, not an omission. See audit.readAuditException and
-#     audit.deletionPathAudit.
+#   CD-1 READ AUDITING. NARROWED BY A USER RULING ON 2026-09-02 — read the current
+#     statement in audit.readAuditException, not this summary line. SUCCESSFUL reads stay
+#     UNAUDITED, as a DOCUMENTED, TIME-BOUNDED EXCEPTION to AUTHORIZATION_STANDARD.md §6 —
+#     the standard is NOT edited to agree with this contract. DENIED GetCustomer reads,
+#     CROSS-TENANT ONES INCLUDED, ARE NOW AUDITED. The deletion path is audited without
+#     exception, and the purge audit record is written BEFORE the personal data is
+#     destroyed. See audit.readAuditException and audit.deletionPathAudit.
 # CD-8 IS NOW CLOSED IN BOTH HALVES. The policy is the user's decision above; its manifest
 # expression is docs/decisions/0011-manifest-lifecycle-indefinite-retention.md (Accepted,
 # 2026-09-01), which redefined onUninstall 'retain' to mean INDEFINITE and FORBADE
@@ -69,7 +70,7 @@ contractVersion: 1
 apiVersion: v1
 appId: customers
 status: proposed
-updated: "2026-09-01"
+updated: "2026-09-02"
 
 # ---------------------------------------------------------------------------
 # tenancy — applies to every Action below, without exception
@@ -218,6 +219,11 @@ authorizationModel:
       is not an Action: the platform PURGE writes its audit record BEFORE destroying the
       personal data, because nothing survives afterwards to reconstruct the record from. See
       audit.deletionPathAudit.ordering. No Action inverts this step.
+      A DENIAL AT STEPS 3, 5, 5b OR 5c NEVER REACHES THIS STEP AND IS NOT AN EXCEPTION TO IT.
+      No operation was performed, so there is no commit to order an audit write against; the
+      record is written as the request is refused. This is where the denied-GetCustomer audit
+      record comes from (audit.deniedReadAudit), and it is why that control needs no
+      inversion of this step and must not be described as one.
   notFoundVersusForbidden:
     rule: >-
       Outside the tenant boundary a caller must NOT be able to distinguish 'exists but is
@@ -669,19 +675,35 @@ actions:
     sensitivity: read
     idempotent: false
     audit: false
+    auditOnDenial: true
     exposure: [internal, public]
     httpStatusOnSuccess: 200
     notes: >-
-      audit false. CD-1 IS NOW RULED ON by the Team Lead, 2026-09-01: reads stay unaudited,
-      as a DOCUMENTED, TIME-BOUNDED EXCEPTION to AUTHORIZATION_STANDARD.md §6, which stands
-      as written and has not been edited to match. The accepted risk and the future
-      obligation — coarse-grained enumeration auditing, not per-read auditing — are recorded
-      in audit.readAuditException and README.md §10 CD-1. It is a decision, not an omission,
-      and not a finding to be rediscovered.
+      TWO FLAGS, AND THE PAIR IS THE POINT. 'audit: false' HERE MEANS ON THE SUCCESS PATH
+      ONLY — a successful GetCustomer writes no audit record. 'auditOnDenial: true' means
+      EVERY DENIED GetCustomer WRITES ONE, cross-tenant probes included. Before the user's
+      2026-09-02 ruling a single 'audit: false' covered both, and it was read — correctly,
+      given what it said — as 'this Action never writes an audit record'. It no longer does.
+      DO NOT COLLAPSE THE TWO BACK INTO ONE FLAG in either direction: 'audit: true' would
+      assert that successful reads are audited, which the ruling explicitly does not
+      introduce, and dropping 'auditOnDenial' would silently remove the probe-detection
+      control. The full statement, including what the manifest can and cannot express, is
+      audit.readAuditException and README.md §10.1.
+      WHAT REMAINS EXCEPTED from AUTHORIZATION_STANDARD.md §6 is now only the SUCCESS path,
+      and the standard still stands as written and is still not edited to match.
       A customer in this Organization but in an unauthorized Business returns forbidden; a
       customer in another Organization, or nowhere, returns not_found. Both cases are
       reachable from this Action and they are deliberately different answers — see
-      authorizationModel.notFoundVersusForbidden.wrongBusiness.
+      authorizationModel.notFoundVersusForbidden.wrongBusiness. BOTH ARE NOW AUDITED, and so
+      are the malformed-identifier and no-permission denials — FOUR denial paths in all. The
+      recorded denial reason is the Action's ErrorCode and nothing App-local; see
+      audit.deniedReadAudit.appliesTo and audit.deniedReadAudit.denialReason for which
+      distinctions may be recorded and which one must never be.
+      THE EXTERNAL RESPONSE IS UNCHANGED BY THIS RULING. Same status codes, same error
+      codes, same fixed message strings, same byte-identical not_found for a
+      foreign-Organization identifier and one that exists nowhere. Nothing in the request or
+      response schema changes, and customer-directory-v1.schema.json was not edited: the
+      control is entirely server-side and is invisible to both clients.
 
   - id: customers.ListCustomers
     title: "List customers"
@@ -698,6 +720,7 @@ actions:
     sensitivity: read
     idempotent: false
     audit: false
+    auditOnDenial: false
     exposure: [internal, public]
     httpStatusOnSuccess: 200
     notes: >-
@@ -708,6 +731,14 @@ actions:
       over, respectively. Rows in unauthorized Businesses are filtered out silently, with
       no count and no placeholder; the caller asserted no scope, so it gets no error.
       Ordering is fixed — README.md §8.
+      auditOnDenial IS false HERE AND true ON GetCustomer, AND THAT ASYMMETRY IS NOT
+      SETTLED. The user's 2026-09-02 ruling named GetCustomer specifically; it has not been
+      widened to the collections by this contract, because widening a ruling nobody made is
+      how a ruling stops meaning what it said. architecture-agent RECOMMENDS that the
+      EXPLICIT-DENIAL paths on this Action be audited too, and does NOT recommend auditing
+      the silent-filter path. The reasoning, the exact split, and why the recommendation is
+      not applied are in audit.deniedReadAudit.collectionsRecommendation and README.md
+      §10 CD-15. Awaiting the user.
 
   - id: customers.SearchCustomers
     title: "Search customers"
@@ -723,9 +754,15 @@ actions:
     sensitivity: read
     idempotent: false
     audit: false
+    auditOnDenial: false
     exposure: [internal, public]
     httpStatusOnSuccess: 200
     notes: >-
+      auditOnDenial false, identically to ListCustomers and for the identical reason — the
+      ruling named GetCustomer, and the same recommendation and the same open question CD-15
+      cover this Action. Whatever is decided for ListCustomers applies here unchanged: these
+      two share a permission because search IS enumeration, and giving them different
+      denial-audit behaviour would be a second door with a different camera on it.
       Shares customers.customer.list with ListCustomers deliberately. Matching semantics
       are fixed by README.md §7 and are NOT selectable by the caller. No relevance score is
       returned: no ranking function is defined, an undefined order makes cursor pagination
@@ -944,6 +981,13 @@ manifest:
     SearchCustomers deliberately share customers.customer.list, because search IS
     enumeration and a second permission would be a second door to the same information.
     Everything restated is a drift surface. See apis.driftIsTheRisk.
+    ONE RESTATED FLAG IS NOW KNOWINGLY LOSSY, AND IT IS RECORDED RATHER THAN RECONCILED.
+    manifest.json declares "audit": false for customers.GetCustomer. This contract declares
+    audit false AND auditOnDenial true on that Action, and the manifest schema — a single
+    boolean, additionalProperties false — has no way to say the second half. The manifest was
+    NOT edited to agree, in either direction, because neither available value is true. This is
+    a known divergence with a named cause, not drift discovered later: see
+    audit.deniedReadAudit.manifestExpressibility and README.md §10 CD-16.
   apis:
     status: >-
       DECLARED, 2026-09-02, after ADR 0012 removed the block. The manifest's 'apis' array
@@ -1239,18 +1283,62 @@ audit:
       make every failed mutation leave an audit record saying it happened, which is the
       failure README.md §6 refuses when it rejects permissive archive transitions.
 
-  unauditedActions: [customers.GetCustomer, customers.ListCustomers, customers.SearchCustomers]
+  # auditedActions above are audited on BOTH paths — the operation and its denial. The three
+  # read Actions are not on that list and are not simply 'unaudited' either, which is why the
+  # flat list that used to sit here has been replaced by the two keys below. A reader who
+  # takes only one of them away has the wrong picture.
+  unauditedOnSuccess:
+    actions: [customers.GetCustomer, customers.ListCustomers, customers.SearchCustomers]
+    meaning: >-
+      A SUCCESSFUL read writes no audit record. This is what survives of the CD-1 exception
+      after the user's 2026-09-02 ruling, and it is deliberate — see
+      audit.readAuditException.whatRemainsUnaudited.
+  auditedOnDenialOnly:
+    actions: [customers.GetCustomer]
+    meaning: >-
+      A DENIED read writes an audit record; a successful one does not. GetCustomer is the
+      only Action in this contract with that shape, and it exists because of the user's
+      2026-09-02 ruling. Requirements, fields, traps and the fail-closed rule are in
+      audit.deniedReadAudit.
+    notYetIncluded: >-
+      customers.ListCustomers and customers.SearchCustomers. RECOMMENDED for the
+      explicit-denial paths and NOT applied — open question CD-15. See
+      audit.deniedReadAudit.collectionsRecommendation.
 
   # -------------------------------------------------------------------------
-  # readAuditException — Team Lead ruling on CD-1, 2026-09-01. Binding.
+  # readAuditException — NARROWED BY A USER RULING, 2026-09-02. Binding.
   #
   # A DOCUMENTED, TIME-BOUNDED EXCEPTION taken by this contract. NOT a reinterpretation of
   # the standard, and the standard has NOT been edited to match.
+  #
+  # THE EXCEPTION IS NOW SMALLER THAN IT WAS, AND ITS REMAINING SHAPE IS DIFFERENT — not
+  # just narrower. Read whatIsNowAudited, whatRemainsUnaudited and theRiskThatRemains
+  # together; any one of them alone misstates the position.
   # -------------------------------------------------------------------------
   readAuditException:
     decision: >-
-      Reads stay UNAUDITED in this slice, as the user scoped and the Team Lead ruled on
-      2026-09-01. GetCustomer, ListCustomers and SearchCustomers write no audit record.
+      SUCCESSFUL reads stay UNAUDITED in this slice. DENIED GetCustomer reads, CROSS-TENANT
+      PROBING INCLUDED, ARE AUDITED, on the user's ruling of 2026-09-02. ListCustomers and
+      SearchCustomers write no audit record on any path in this revision — see
+      audit.deniedReadAudit.collectionsRecommendation and CD-15.
+    whatIsNowAudited: >-
+      EVERY DENIED customers.GetCustomer. ALL FOUR denial paths: no permission at all
+      (evaluationOrder step 3, forbidden), a MALFORMED IDENTIFIER (step 4, invalid_argument),
+      an identifier that does not resolve inside the tenant (step 5, not_found) — WHICH IS THE
+      CROSS-TENANT CASE AND IS THE ONE THIS CONTROL EXISTS FOR — and an in-tenant customer in
+      a Business outside the principal's authorized set (step 5b, forbidden). The full
+      enumeration, and why step 4 belongs in it, is audit.deniedReadAudit.appliesTo.
+    whatRemainsUnaudited: >-
+      SUCCESSFUL READS, DELIBERATELY. A GetCustomer that returns a record, a ListCustomers
+      that returns a page and a SearchCustomers that returns matches each write nothing. The
+      user's ruling states this in terms — 'Keep successful customer reads unaudited' — so
+      it is a decision that was made, not a part that was not reached. An implementation that
+      adds success-path read auditing is not being cautious; it is departing from the ruling,
+      and it puts an audit write on the busiest read path in the product on a single-threaded
+      shared D1.
+      ALSO STILL UNAUDITED: every path of ListCustomers and SearchCustomers, including their
+      denials. That is the CD-15 gap, and it is stated here rather than left to be inferred
+      from the absence of a list entry.
     conflictItIsAnExceptionTo: >-
       AUTHORIZATION_STANDARD.md §6 states that explicit access to customer information maps
       to 'sensitive' at minimum, and 'sensitive' requires an audit event. Read literally,
@@ -1260,16 +1348,70 @@ audit:
       becomes a description of what was built. The exception is recorded here, in the
       artifact taking it, which is where an exception belongs and where a reader of this
       contract will actually find it.
+      WHAT THE EXCEPTION NOW COVERS IS SMALLER: the SUCCESS path of the three read Actions,
+      and the denial paths of ListCustomers and SearchCustomers. The denial path of
+      GetCustomer has LEFT the exception. That direction matters — SECURITY_STANDARD.md §6
+      requires denial auditing for 'sensitive' and 'critical' Actions and GetCustomer is
+      'read', so auditing its denials is Dudo applying a control ABOVE the standard's
+      minimum on the one Action where probing is possible. The 2026-09-02 ruling therefore
+      STRENGTHENS the position rather than trading one gap for another.
     boundedBy: >-
       The MVP slice. It expires when the slice is superseded and it extends to no other App,
       Action or entity by precedent. An agent citing this block to justify unaudited reads
       elsewhere is citing it wrongly.
-    acceptedRisk: >-
-      A principal holding only customers.customer.list can page the ENTIRE customer base of
-      their Organization and leave NO AUDIT TRAIL. With no export permission declared, the
-      whole of that risk sits on 'list'. ACCEPTED for the MVP slice on the user's explicit
-      instruction. Recorded so it is not rediscovered later and reported as a finding: it is
-      a decision, not an oversight. Full statement in README.md §10 CD-1.
+
+    # -----------------------------------------------------------------------
+    # theRiskThatRemains — REPLACES the block that used to be called 'acceptedRisk'.
+    # The rename is not cosmetic: the risk that is accepted now is a DIFFERENT RISK from
+    # the one that was accepted on 2026-09-01, and reusing the key would have let the two
+    # be mistaken for one another.
+    # -----------------------------------------------------------------------
+    theRiskThatRemains: >-
+      A PRINCIPAL LEGITIMATELY AUTHORIZED OVER A BUSINESS CAN STILL PAGE AND READ THAT
+      BUSINESS'S CUSTOMERS LEAVING NO TRACE. Every one of those calls succeeds, and success
+      is what is not recorded. The risk is therefore INSIDER VOLUME: a principal who is
+      supposed to see these records reading far more of them than any legitimate task needs,
+      and nothing in the audit trail able to show it afterwards.
+      THAT IS THE VOLUME ARGUMENT THE USER ACCEPTED, AND IT IS GENUINELY A DIFFERENT RISK
+      FROM UNDETECTABLE CROSS-TENANT PROBING — different actor, different reachable data,
+      different detection story. The insider is already entitled to each record it reads and
+      is bounded by its authorized business set; the prober is entitled to none of what it is
+      reaching for and is bounded by nothing but the identifiers it can obtain. The first is
+      a volume problem inside a boundary. The second was a boundary problem, and it is the
+      one the ruling closed. Accepting the first was never the same act as accepting the
+      second, which is precisely why the earlier statement of this exception was wrong to
+      present them as one.
+      STILL ACCEPTED, for the MVP slice, on the user's explicit instruction, and still not a
+      finding to be rediscovered. Full statement in README.md §10.1.
+    theRiskThatWasClosed: >-
+      UNDETECTABLE CROSS-TENANT PROBING THROUGH GetCustomer. A principal in Organization A
+      putting identifiers it should not hold to GetCustomer, learning from the answers, and
+      leaving nothing behind. It is closed for GetCustomer by the ruling above; it is NOT
+      closed for ListCustomers and SearchCustomers, where a caller can still name a foreign
+      business_id and be refused without a record being written. See CD-15.
+    historyOfThisException: >-
+      PAST TENSE, KEPT DELIBERATELY, because it is why the ruling exists and because the
+      correction it records is one a later reader would otherwise make again.
+      WHAT THIS EXCEPTION ORIGINALLY WAS. Ruled on 2026-09-01: all three read Actions
+      unaudited on all paths, as the user scoped it. Its accepted risk was stated in this
+      contract as 'a principal holding only customers.customer.list can page the ENTIRE
+      customer base of their Organization and leave no audit trail. With no export permission
+      declared, THE WHOLE OF THAT RISK SITS ON LIST.'
+      WHY IT WAS NARROWED, AND WHAT ESTABLISHED THE TRUE SIZE. That statement was not stale;
+      IT WAS FALSE AS WRITTEN, and qa-agent's INDEPENDENT VERIFICATION is what established
+      it. The risk did not sit on 'list'. It also covered GetCustomer, where DENIED and
+      CROSS-TENANT reads were equally unaudited. qa-agent ran a cross-tenant probing campaign
+      entirely through GetCustomer and it produced ZERO audit records, while the same campaign
+      run through ArchiveCustomer produced one per attempt — the same identifiers, the same
+      tenant boundary, the same refusals, and a complete difference in what survived. That
+      asymmetry is what turned an accepted risk into a decision the user needed to take again
+      with the true shape in front of them, and on 2026-09-02 they took it.
+      WHY THE RECORD IS KEPT RATHER THAN OVERWRITTEN. An exception whose stated risk was
+      wrong is a specific kind of defect: it was reviewed, accepted, and re-read as settled,
+      and its wrongness was invisible precisely because it had been accepted. Deleting the
+      sentence would leave the ruling looking like a change of mind. It was not. It was a
+      correction, found by verification that did not take the contract's own word for it, and
+      the practice that found it is worth more than the sentence it fixed.
     futureObligation: >-
       COARSE-GRAINED ENUMERATION AUDITING — who enumerated, when, and how many results — and
       deliberately NOT an audit record per individual record read.
@@ -1282,6 +1424,364 @@ audit:
       WE ARE DEFERRING THE CHEAP, USEFUL ONE, NOT THE EXPENSIVE ONE. That is the honest
       description of what this exception costs, and it is why the obligation is named
       concretely here rather than left as 'audit reads one day'.
+      THE 2026-09-02 RULING DOES NOT DISCHARGE THIS OBLIGATION AND MUST NOT BE READ AS
+      HAVING DONE SO. Denial auditing and enumeration auditing catch different things:
+      denial auditing catches a principal reaching for what it may not have, and enumeration
+      auditing catches a principal taking everything it MAY have. The insider in
+      theRiskThatRemains triggers no denials at all — every one of its reads succeeds — so
+      the new control is silent on exactly the risk that is still accepted. Both are owed;
+      one now exists.
+
+  # -------------------------------------------------------------------------
+  # deniedReadAudit — USER RULING, 2026-09-02, relayed by the Team Lead. BINDING.
+  #
+  # THIS IS THE PROBE-DETECTION CONTROL. It is what closed the half of the CD-1 exception
+  # that qa-agent's independent verification showed had been stated falsely. Read it with
+  # readAuditException.historyOfThisException, which is why it exists.
+  # -------------------------------------------------------------------------
+  deniedReadAudit:
+    ruling: >-
+      THE USER'S WORDS, VERBATIM: "Audit every denied GetCustomer read attempt, including
+      cross-tenant probing. Keep successful customer reads unaudited."
+      RECORDED BY THE TEAM LEAD AS 'D2' in docs/decisions/README.md, 'Open user decisions',
+      Decided 2026-09-02, binding. This contract calls it the CD-1 NARROWING because that is
+      the exception it modifies; D2 and the CD-1 narrowing are the same ruling under two
+      names, and neither document is the other's summary.
+    appliesTo: >-
+      customers.GetCustomer, and EVERY denied invocation of it, whatever the denial path.
+      FOUR PATHS, NOT THREE — the earlier revision of this block enumerated three and was
+      incomplete:
+        step 3  -> forbidden          — the principal does not hold customers.customer.read
+                                        at a satisfying scope. Record-independent.
+        step 4  -> invalid_argument   — THE IDENTIFIER IS MALFORMED and fails input
+                                        validation before any lookup is attempted.
+        step 5  -> not_found          — the identifier did not resolve inside the tenant.
+                                        THE CROSS-TENANT CASE, and the centre of this ruling
+                                        rather than an edge of it.
+        step 5b -> forbidden          — the customer is in this Organization, in a Business
+                                        outside the principal's authorized set.
+      SO GetCustomer DENIALS EMIT FOUR ERROR CODES ACROSS FOUR PATHS, and 'forbidden' is
+      emitted at two of them. Anything that counts three is counting the version of this
+      block that predates 2026-09-02 and is wrong about what is built.
+      It does NOT extend to ListCustomers or SearchCustomers in this revision — see
+      collectionsRecommendation.
+    whyStep4IsIncluded: >-
+      ADDED AFTER core-agent REPORTED AUDITING IT AND FOUND THIS BLOCK SILENT ON IT. The
+      contract was corrected to match what is built rather than the behaviour being removed
+      to match the contract, and the Team Lead ruled that way deliberately.
+      A CALLER SENDING MALFORMED IDENTIFIERS IN A LOOP IS A PROBING SIGNATURE. Dropping those
+      records would leave a gap in exactly the pattern this control exists to detect — and it
+      would be the most attractive gap available, because reaching it requires no valid
+      identifier at all. A prober who learns that well-formed probes are recorded and
+      malformed ones are not has been handed the shape of the blind spot.
+      IT IS ALSO THE CHEAPEST DENIAL TO PRODUCE, which is why it matters twice: see
+      README.md §10 CD-17 on write amplification, where step 4 is the path an attacker
+      reaches for precisely because it costs them nothing to generate.
+    doesNotIntroduceSuccessAuditing: >-
+      REQUIREMENT 7, AND IT IS A LIMIT ON THE CONTROL, NOT A NOTE ABOUT IT. A successful
+      GetCustomer writes NOTHING. An implementation that audits both paths 'for symmetry' has
+      not been thorough; it has implemented a different decision from the one the user made,
+      on the busiest read path in the product, on a single-threaded shared D1. The
+      success-path silence is load-bearing and is asserted positively in the tests
+      (README.md §12).
+    externalResponseUnchanged: >-
+      REQUIREMENT 1. THE EXISTENCE ORACLE STAYS CLOSED, AND THIS CONTROL DOES NOT OPEN IT.
+      A missing customer and an inaccessible one produce the SAME EXTERNAL RESPONSE they
+      produced before this ruling: not_found, byte-identical in status code, error code,
+      message string, details array, response-size class and headers, with request_id the
+      only permitted difference (notFoundVersusForbidden.indistinguishability, unchanged).
+      The audit record is written on the server and is never reflected to the caller — not in
+      a field, not in a header, not in a timing difference the implementation introduces by
+      writing on one path and not another in a way the caller can measure. Nothing in
+      customer-directory-v1.schema.json changes, and neither client sees this control at all.
+      The in-tenant wrong-Business case still returns forbidden, as
+      notFoundVersusForbidden.wrongBusiness rules; that difference is between IN-TENANT and
+      EVERYTHING ELSE, and this ruling does not disturb it.
+    recordFields: >-
+      REQUIREMENT 2. The denied-read record carries: the ACTOR'S principal type and id; the
+      ACTOR'S Organization and its business context — the authenticated context's own
+      Organization and authorized business set, NEVER the target's; the action id
+      (customers.GetCustomer); the timestamp; THE REQUESTED CUSTOMER IDENTIFIER AS THE CALLER
+      SUPPLIED IT; the denial reason, which is the Action's ErrorCode — see denialReason
+      below, and note that the three-token vocabulary once proposed here was RULED AGAINST;
+      and the correlation id.
+      Also the ordinary record fields — app id, and the permission and scope actually
+      evaluated — so that this record is the same shape as every other audit record and can
+      be read by the same query. See audit.record.fields.
+      THE ACTOR'S CONTEXT, NEVER THE TARGET'S. On a cross-tenant probe the target has no
+      context the caller is entitled to, and there is nothing resolved to take one from. A
+      record naming the target's Organization or Business would be the disclosure the refusal
+      withheld, written down.
+    noForeignPersonalData: >-
+      REQUIREMENT 3, AND THE TRAP IN IT IS THE MOST IMPORTANT SENTENCE IN THIS BLOCK.
+      NO FOREIGN CUSTOMER'S PERSONAL DATA GOES INTO THE AUDIT RECORD. No display_name, no
+      email, no phone, no address, no notes, no country — and no business_id or
+      organization_id belonging to the record either.
+      RECORDING THE REQUESTED IDENTIFIER IS NOT THE SAME AS RECORDING THE RECORD. The
+      identifier is a string the CALLER authored and already holds; echoing it back into the
+      caller's own tenant's audit trail teaches the caller nothing it did not bring with it.
+      That is the whole of what may be written.
+      THE TRAP, STATED SO NOBODY WALKS INTO IT WHILE TRYING TO BE HELPFUL: RESOLVING THE
+      FOREIGN ROW TO ENRICH THE AUDIT ENTRY WOULD ITSELF BE THE CROSS-TENANT READ THIS
+      CONTROL EXISTS TO DETECT. To put the probed customer's name or Business into the record,
+      an implementation must first look the row up — and under evaluationOrder step 5 the
+      storage boundary has ALREADY applied the tenant predicate and found nothing, so the only
+      way to obtain those values is to run a second query WITHOUT the tenant predicate. Under
+      0006 Option A that query succeeds and returns another Organization's customer. The
+      security control would become the vulnerability, in the one code path guaranteed to be
+      exercised by an attacker, and it would look like diligence in review. There is nothing
+      to copy at step 5 because nothing was resolved; that is the correct state and it must
+      be left alone.
+    # -----------------------------------------------------------------------
+    # denialReason — TEAM LEAD RULING, 2026-09-02. BINDING.
+    #
+    # architecture-agent PROPOSED a fixed three-token vocabulary here
+    # (permission_denied / business_not_authorized / unresolved_identifier). THE TEAM LEAD
+    # RULED AGAINST ADOPTING IT. The proposal and the refusal are both recorded, because a
+    # reader who found only the proposal would implement it.
+    # -----------------------------------------------------------------------
+    denialReason:
+      rule: >-
+        THE DENIAL REASON IS THE ACTION'S ErrorCode, DRAWN FROM THE CLOSED PLATFORM TAXONOMY
+        DECLARED IN THIS ACTION'S 'errors' LIST. It is never free text, and never a value
+        derived from a lookup. On GetCustomer that is: forbidden (steps 3 and 5b),
+        invalid_argument (step 4), not_found (step 5). No App-local synonym is minted for any
+        of them.
+      theSecurityREQUIREMENTIsMetByThis: >-
+        AND IT WAS NEVER ABOUT THE TOKEN NAMES. Requirement 4 asks for exactly one property:
+        that a CROSS-TENANT PROBE and a FABRICATED IDENTIFIER be INDISTINGUISHABLE in a
+        tenant-readable record. The ErrorCode taxonomy satisfies it, because 'not_found' IS
+        UNSPLIT — the same single value covers an identifier belonging to another Organization
+        and one that exists nowhere, exactly as the external response does. That is the whole
+        of what the requirement needs, and it needs it from the VALUE being unsplit, not from
+        the value being called something particular.
+        VERIFIED RATHER THAN ASSERTED: core-agent's column-by-column diff over the full record
+        table found the only differences between the two cases are the per-request identifiers
+        and the caller's own authored string. The property is measured, not argued.
+        THE UNSPLITTABILITY IS THE BINDING PART AND IT SURVIVES THIS RULING UNCHANGED.
+        'not_found' must never be subdivided into 'another Organization' and 'nowhere' in any
+        tenant-readable record. SECURITY_STANDARD.md §6 states a tenant can read its OWN audit
+        log, so such a split would hand the tenant, in writing, the exact fact the not_found
+        response was shaped to withhold — the existence oracle closed at the API and reopened
+        in the audit trail, at a slower speed and with a permanent record. A probing campaign
+        would then not need to read the responses at all; it would read its own audit log
+        afterwards. Cross-tenant details and internal denial reasons DO NOT APPEAR IN
+        TENANT-VISIBLE RECORDS. If a finer internal classification is ever wanted for platform
+        security telemetry it lives on a platform-internal surface no tenant can read, and
+        THIS CONTRACT DOES NOT DEFINE THAT SURFACE.
+      whyTheProposedRENAMEWasRefused: >-
+        THE DECIDING POINT IS THAT denial_reason IS A CORE-WIDE COLUMN, NOT THIS APP'S FIELD.
+        GetCustomer emitting 'unresolved_identifier' while ArchiveCustomer emits 'not_found'
+        FOR THE IDENTICAL CONDITION would make that column POLYMORPHIC — its meaning depending
+        on which Action wrote the row. That breaks this contract's own requirement, stated in
+        deniedReadAudit.recordFields, that a denied-read record be THE SAME SHAPE as every
+        other audit record and READABLE BY THE SAME QUERY. A vocabulary that works for one
+        Action is not a vocabulary.
+        THE PROPOSED TOKENS ALSO HAD NO HOME for conflict, failed_precondition or
+        quota_exceeded — denial conditions that exist elsewhere in this very contract. A
+        three-token set that cannot name the denials of the Actions beside it was never a
+        taxonomy; it was three labels for one Action's three paths, and it did not even cover
+        four once step 4 was counted.
+      whyBusinessNotAuthorizedWasSPECIFICALLYNotAdopted: >-
+        BECAUSE IT WOULD HAVE ADDED A DISTINCTION THE RECORD DOES NOT CURRENTLY MAKE. Steps 3
+        and 5b both emit 'forbidden'; the proposed tokens would have SPLIT them, so that a
+        durable tenant-readable record newly distinguished 'you hold no permission' from 'this
+        record exists in a Business you may not reach'.
+        THAT IS NOT A NEW LEAK — the HTTP forbidden already discloses it, and
+        notFoundVersusForbidden.wrongBusiness rules deliberately that in-tenant existence
+        disclosure is acceptable. BUT A WIDENING OF WHAT A DURABLE TENANT-READABLE RECORD
+        DISTINGUISHES MUST BE A DECISION, NEVER A SIDE EFFECT OF A RENAME. Arriving at it
+        through a naming change is how a security-relevant property gets extended without
+        anyone deciding to extend it, which is the failure mode this whole revision exists
+        because of.
+        THE EXISTING PROTECTION IS UNCHANGED AND IS THE ONE THAT MATTERS AT 5b: the record
+        does NOT name the customer's actual business_id. audit.record's wrong-Business rule
+        applies exactly as written.
+      coreWideTaxonomyIsScheduledNotSETTLED: >-
+        Whether Dudo wants a denial-reason taxonomy finer than ErrorCode is a CORE-WIDE
+        question, and it is recorded as SCHEDULED ITEM 9 in docs/decisions/README.md. It is
+        not this App's to answer, and this contract does not answer it. What this contract
+        binds is the property, not the naming: not_found stays unsplit, and no foreign row is
+        resolved to enrich a record.
+      consistencyWithCD5: >-
+        Unchanged by the ruling. audit.record already requires, for a not_found on a MUTATING
+        Action, 'the identifier AS SUPPLIED BY THE CALLER, marked unresolved, and NOTHING
+        derived from any record'. GetCustomer follows that rule rather than a new one — which
+        is now literally true in the data as well as in the prose, since both write the same
+        'not_found'. CD-5 remains the open question behind both; this ruling does not close
+        it.
+    failClosedOnEvidence:
+      rule: >-
+        REQUIREMENT 6. THE AUDIT EVENT MUST NOT FAIL OPEN. An inability to create the required
+        security evidence is SURFACED INTERNALLY — as an error and as an alertable condition —
+        and is never swallowed, never best-effort, never fire-and-forget, and never dropped
+        because the request was going to fail anyway.
+      whatTheCallerSees: >-
+        THE SAME not_found, UNCHANGED. Fail-closed here cannot mean 'refuse the request',
+        because the request is ALREADY being refused — that is what makes this different from
+        an ordinary fail-closed control, and it is why the rule needs stating rather than
+        being left to the reflex.
+        NOR MAY THE RESPONSE CHANGE TO 'internal' WHEN THE AUDIT WRITE FAILS. That would make
+        the external answer depend on the state of the audit subsystem, which hands a prober a
+        way to detect that the subsystem is down and a window in which to probe unrecorded —
+        it converts an evidence failure into an attacker's signal. External behaviour is fixed;
+        the failure is visible internally, to the operator, and nowhere else.
+      relationshipToThePurgeOrdering: >-
+        DELIBERATELY NOT THE SAME RULE, and the difference is worth reading. The purge inverts
+        evaluationOrder step 7 and writes its audit record BEFORE destroying data, because
+        after a purge nothing survives to reconstruct the record from
+        (deletionPathAudit.ordering). A denied read destroys nothing and changes nothing, so
+        there is no state to order the write against and no inversion to make. What is owed
+        here is only that the failure to record is LOUD internally rather than silent.
+    alertingAndAggregation: >-
+      REQUIREMENT 5. Repeated attempts must support SECURITY ALERTING and COARSE AGGREGATION —
+      a run of denials from one principal, or against one tenant, must be countable and
+      alertable without an operator reading records one at a time. That is a property of the
+      record shape, and it is why the fields above are fixed rather than free-form: actor,
+      action, reason and time are the four the aggregation groups by, and correlation id is
+      what ties a campaign together across Actions.
+      AGGREGATION IS A READ-SIDE PROPERTY AND IS NEVER A LICENCE TO DROP RECORDS. Every denied
+      attempt produces its own record. Sampling, coalescing 'N similar attempts' into one row,
+      or suppressing after a threshold would each delete exactly the evidence a campaign
+      consists of, and would do it fastest precisely when an attack is loudest.
+      ONE INTERACTION TO BE DELIBERATE ABOUT RATHER THAN TO DISCOVER: rate_limited is a
+      declared error on GetCustomer. A request rejected by the rate limiter BEFORE any
+      authorization decision is made has produced no denial to audit, and writing one would be
+      recording a decision that was never taken. A request that REACHES an authorization
+      decision and is denied writes its record, and no volume control may be placed between
+      the decision and the write. Where the rate limiter sits relative to authorization is
+      Core's design and is not settled here; that it must not become a way to make denials
+      unrecorded IS settled here.
+    collectionsRecommendation:
+      question: >-
+        The user named GetCustomer. Are denied ListCustomers and SearchCustomers the same
+        case? OPEN — README.md §10 CD-15. NOT APPLIED, and auditOnDenial is false on both.
+      answer: >-
+        PARTLY, AND THE PART THAT IS THE SAME IS THE PART WORTH AUDITING. These Actions have
+        two different denial shapes and they should not be treated alike:
+          THE SILENT-FILTER PATH IS GENUINELY DIFFERENT AND SHOULD NOT BE AUDITED. An
+          unfiltered ListCustomers or SearchCustomers asserts no scope and names no identifier;
+          rows the caller may not reach are simply absent
+          (notFoundVersusForbidden.collections). There is no denial, no refused attempt and
+          nothing an attacker learned — so there is no event to record, and auditing it would
+          mean writing a record on every ordinary successful listing, which is success-path
+          read auditing arriving through a side door and is exactly what requirement 7
+          forbids.
+          THE EXPLICIT-DENIAL PATHS ARE THE SAME CASE AS GetCustomer. Two of them: a caller
+          that does not hold customers.customer.list at a satisfying scope (step 3), and — the
+          one that matters — a caller that EXPLICITLY NAMES a business_id it is not authorized
+          over (step 5c), which returns not_found for a Business of another Organization and
+          forbidden for an unauthorized Business of its own. That second one is structurally
+          identical to the GetCustomer probe: an identifier the caller supplied, an answer that
+          partitions the identifier space, and no record left behind. The object probed is a
+          BUSINESS rather than a CUSTOMER, which makes it worse and not better — a successful
+          probe yields a page of customers rather than one record.
+      recommendation: >-
+        RECOMMENDED: set auditOnDenial true on customers.ListCustomers and
+        customers.SearchCustomers for the EXPLICIT-DENIAL PATHS ONLY — step 3 and step 5c —
+        and explicitly NOT for the silent-filter path. Same ErrorCode denial reason, same
+        prohibition on resolving anything to enrich the record, same fail-closed rule.
+      theCoherenceArgumentThatDECIDESIT: >-
+        AFTER THE RULING, THE ONLY UNWATCHED business_id PROBE LEFT IN THIS APP IS THE
+        COLLECTIONS ONE. CreateCustomer and MoveCustomerToBusiness both take a business_id and
+        both are audit true, so their denials — including a foreign business_id — already
+        produce records. GetCustomer is now watched. That leaves ListCustomers and
+        SearchCustomers as the one door with no camera on it, reachable with a plain GET, and
+        an attacker enumerating foreign Business identifiers would simply use it. A control
+        that covers every entrance but one is not a partial control; it is a redirection.
+      whyItIsNOTAPPLIEDHERE: >-
+        BECAUSE THE USER RULED ON GetCustomer AND SILENTLY WIDENING A RULING IS HOW A RULING
+        STOPS MEANING WHAT IT SAID. The Team Lead's instruction was explicit that this be
+        recommended and flagged, not assumed. The collections case is also NOT identical — the
+        silent-filter half genuinely differs, and half of a widening applied without being
+        asked is still a widening. The assumption operating in the meantime is stated plainly:
+        denied collection reads write NOTHING, and that gap is live until the user rules.
+    manifestExpressibility: >-
+      A REGISTRY GAP, FLAGGED AND NOT WORKED AROUND — README.md §10 CD-16.
+      app-manifest.schema.json declares actions[].audit as a single BOOLEAN with
+      additionalProperties FALSE on the Action object. It can express 'audited' and
+      'not audited' and it has no way to express 'audited on denial, not on success'. So
+      packages/contracts/apps/customers/manifest.json says "audit": false for
+      customers.GetCustomer, and after this ruling that is no longer the whole truth.
+      NEITHER AVAILABLE VALUE IS TRUE. 'false' understates the control and would let a reviewer
+      conclude the probe-detection audit does not exist; 'true' would assert that successful
+      reads are audited, which is the thing requirement 7 forbids, in the document
+      APP_STANDARD.md §9 requires to be true to the tenant. Writing either to make the manifest
+      agree with the contract would be the same move as writing retentionDays = 30 to satisfy
+      the schema (0011) or {customer-id} to satisfy the path pattern (0012) — a field bent to
+      carry a value the author knows to be wrong — and it is declined for the third time on the
+      same grounds.
+      NOT FIXED HERE, AND DELIBERATELY SO. app-manifest.schema.json is a registry and
+      manifest.json is the Team Lead's file (README.md §13); architecture-agent authored
+      neither in this revision and did not edit them now. The finding is reported. The
+      precedent 0011 and 0012 set is that a registry that cannot express a decided policy is a
+      SCHEMA DEFECT needing its own decision record, not something the taking artifact
+      quietly works around.
+      MEANWHILE THE CONTRACT IS THE AUTHORITY. This file carries 'audit' and 'auditOnDenial'
+      as two flags on each read Action, which states the position exactly; manifest.json's
+      single 'audit' flag is a lossy projection of it. That is a KNOWN, RECORDED divergence in
+      a document that manifest.derivation already names as a drift surface — it is not a
+      contract defect discovered later, and it must not be 'reconciled' by changing the
+      contract to match what the manifest can say.
+    freeTierImpact: >-
+      NEGLIGIBLE IN NORMAL OPERATION. This adds at most one audit write per DENIED
+      GetCustomer. Denials are rare on a healthy system, so the success path — the busy one,
+      and the reason the read exception exists at all — takes no new write and the
+      queryBudget figures above are unchanged for it. A denied Get costs 1 read attempt + 1
+      audit write, still far inside the 50-queries-per-invocation limit. No new Cloudflare
+      service, no new product, USD 0 / BD 0 at rest.
+      NOT NEGLIGIBLE UNDER ATTACK. See writeAmplification below, which is an OPEN RISK and
+      not a cost note; the earlier revision of this passage treated it as one and understated
+      it.
+
+    # -----------------------------------------------------------------------
+    # writeAmplification — OPEN RISK. Reported by core-agent, 2026-09-02. Recorded as
+    # SCHEDULED ITEM 10 in docs/decisions/README.md and marked BLOCKING ON AZ2 by the
+    # Team Lead. README.md §10 CD-17.
+    # -----------------------------------------------------------------------
+    writeAmplification:
+      risk: >-
+        D2 MAKES EVERY DENIED READ A D1 WRITE, AND NOTHING RATE-LIMITS AN AUTHENTICATED
+        CALLER. Sustained probing therefore forces UNBOUNDED WRITES into a SINGLE-THREADED
+        SHARED DATABASE (0006 Option A). Two consequences, both landing on parties who did
+        nothing: LATENCY FOR EVERY OTHER ORGANIZATION in the shared database, and METERED
+        SPEND against the USD 0 ceiling that 0008 makes binding.
+      whyThisIsTheSAMESHAPEASTheOracle: >-
+        THE PROBE-DETECTION CONTROL IS ITSELF AN AMPLIFICATION PATH. An attacker who cannot
+        read a single foreign customer can still make the platform write once per attempt, at
+        a rate they choose, in a database everyone shares. The control converts cheap
+        attacker effort into expensive platform work — which is the same shape as the
+        audit-log oracle recorded in denialReason: THE CONTROL BECOMING THE VULNERABILITY.
+        That both were found in one feature is the argument for looking for the third.
+        THE STEP 4 PATH IS THE CHEAPEST ONE TO ABUSE. A malformed identifier needs no valid
+        customer_id, no knowledge of any tenant and no reconnaissance — it is a string. So the
+        denial path that costs the attacker least is the one that costs the platform a write,
+        and the two facts sit together deliberately in this contract rather than in two
+        documents that never meet.
+      notExploitableTODAYAndWhyThatIsNotAFIX: >-
+        IT IS NOT EXPLOITABLE TODAY ONLY BECAUSE PRODUCTION SHIPS A DENY-ALL PRINCIPAL
+        RESOLVER: no principal authenticates, so no caller reaches an authorization decision
+        to be denied at. THAT IS A DEPLOYMENT ACCIDENT STANDING IN FOR A CONTROL, and it
+        expires the moment AZ2 lands. The risk is dormant, not absent, and the distinction is
+        the whole reason it is written here rather than deferred.
+      mustBeBoundedBeforeAZ2: >-
+        BINDING SEQUENCING, NOT A RECOMMENDATION. THIS MUST BE BOUNDED BEFORE AZ2 MAKES THE
+        SLICE REACHABLE. The Team Lead has marked scheduled item 10 BLOCKING ON AZ2. An
+        authentication mechanism that lands while this is unbounded turns a dormant risk into
+        a live one on the same day, with no further change and nothing to notice.
+      candidateMitigations: >-
+        A PER-ACTOR WRITE CEILING, COARSE AGGREGATION OF REPEATED IDENTICAL DENIALS, OR BOTH.
+        Not chosen here — the mechanism is Core's and the decision is the Team Lead's.
+        WHATEVER IS CHOSEN MUST NOT REINTRODUCE FAIL-OPEN. alertingAndAggregation stands:
+        aggregation is a read-side property, and a ceiling that silently stops recording is
+        an attacker's off switch — it would make the loudest attack the one that disappears
+        from the log fastest. A ceiling that is REACHED must itself be an alertable,
+        internally-surfaced event, so that the evidence of suppression exists even when the
+        suppressed records do not.
+        THE OTHER HALF OF THE ANSWER STAYS WHERE IT WAS: refusing attempts at the rate limiter,
+        BEFORE they reach an authorization decision, produces no denial to audit and therefore
+        no write. That is a mitigation at the door rather than at the log, and it is the one
+        that does not trade evidence away.
   record:
     fields: >-
       timestamp, tenant, principal type and id, acting-on-behalf-of where applicable, app
@@ -1291,6 +1791,13 @@ audit:
       MoveCustomerToBusiness both the source and the destination business_id — identifiers
       inside the caller's own tenant, never business data, and the move record is
       meaningless without both ends.
+      ON A DENIED CALL 'the decision' CARRIES A DENIAL REASON WHICH IS THE ACTION'S ErrorCode
+      — the closed platform taxonomy, not an App-local synonym — and 'target resource
+      identifier' is the identifier AS THE CALLER SUPPLIED IT with nothing resolved from it.
+      THAT IS WHY EVERY AUDITED ACTION HERE RECORDS DENIALS THE SAME WAY: GetCustomer's
+      not_found and ArchiveCustomer's not_found are the SAME VALUE for the same condition, so
+      denial_reason stays a single Core-wide column readable by one query. See
+      deniedReadAudit.denialReason for the ruling that settled this and for what it refused.
     rules:
       - "Append-only. Never updated, never deleted by application code."
       - >-
@@ -1375,6 +1882,16 @@ freeTierImpact:
     write + 1 audit write, Delete 1 read + 1 write + 1 audit write, RestoreDeleted the
     same. No total-count query exists, which is one of the reasons the collection envelope
     has no total.
+    A DENIED GetCustomer NOW COSTS 1 AUDIT WRITE in addition to the resolution attempt, under
+    the 2026-09-02 ruling. The SUCCESS path — the busy one — takes no new write and the
+    figures above are unchanged for it.
+    THE FIGURES ABOVE ASSUME A HEALTHY SYSTEM AND DO NOT BOUND AN ATTACKED ONE. Every denied
+    read is a write into the shared single-threaded database, nothing rate-limits an
+    authenticated caller, and the projection has no term for a probing campaign because the
+    campaign's size is the attacker's choice rather than a usage estimate. This is an OPEN
+    RISK that MUST BE BOUNDED BEFORE AZ2 — audit.deniedReadAudit.writeAmplification and
+    README.md §10 CD-17. It is not costed here because a number would imply a ceiling that
+    does not currently exist.
     THE AUTHORIZED BUSINESS SET IS NOT A PER-ACTION QUERY. It belongs to the authorization
     decision and arrives with the authenticated context. If Core must instead read it per
     invocation that is +1 query on every Action in this App — still far below 50, but it is
@@ -1431,6 +1948,16 @@ versioning:
     API_STANDARD.md §6 calls out, and it would have required /api/v2 for a decision that
     costs nothing today. This is the concrete form of the CD-7 timing argument: decide
     contract shape before either client is written.
+  auditRulingIsNotAWireChange: >-
+    THE 2026-09-02 DENIED-READ AUDIT RULING CHANGES NO SHAPE AND IS NOT EVEN ADDITIVE ON THE
+    WIRE — it is invisible there. No request field, no response field, no status code, no
+    error code and no message string changes; customer-directory-v1.schema.json was not
+    edited; neither client is affected and no client-side work follows from it. It is a
+    server-side control, and requirement 1 of the ruling is precisely that the external
+    surface stay identical.
+    THAT IS ALSO WHY IT COULD BE MADE NOW AND COULD BE MADE LATER. Unlike CD-2 and CD-8, this
+    one would not have been breaking after either client shipped. It was made now because the
+    contract's statement of the accepted risk was FALSE, not because the window was closing.
   futureBreaking: >-
     Additionally breaking once either client ships, from this revision's additions:
     changing customerDeletionRetentionDays from 30 (it changes a legally meaningful
