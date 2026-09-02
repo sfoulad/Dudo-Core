@@ -101,6 +101,41 @@ Ten binding controls, decided by the user on 2026-09-02.
   by an implementing agent declining to accept a value or a limit at face value, and none was
   found by review.
 
+## Two documented exceptions to `CLOUDFLARE_STANDARD.md` §7 rule 3
+
+§7 rule 3 requires that **a Durable Object instance belongs to exactly one tenant.** This
+design takes two deliberate exceptions to it, recorded here rather than by amending the
+standard — the standard is right in general and stands as written.
+
+**1. The `SourceCounterShard` is cross-tenant by necessity.** A source address is not a
+tenant-scoped fact. The whole reason the third rate-limit level exists is to see what the
+actor and Organization levels cannot: one address operating across many Organizations. A
+per-tenant shard could not observe that, and the first implementation proved it — the level
+was unreachable precisely because its state was partitioned per Organization. Deployed as 256
+instances named by the first byte of the address hash.
+
+**2. The platform-wide daily summary-write ceiling is cross-tenant by necessity.** It exists
+to stop denial evidence exhausting an **account-wide** D1 allowance. A per-tenant ceiling
+cannot bound an account-wide resource.
+
+**What makes both acceptable, and it is the same argument:** neither holds tenant data. The
+shard holds a hashed address, a window, and an integer — no Organization identifier, no
+principal, no record, and no column any of those could occupy. It cannot leak which
+Organizations an address touched, because it is never told.
+
+**What they do create, named rather than dismissed:** an **availability coupling** between
+Organizations sharing a source address — traffic from one consumes budget another draws on.
+That is inherent to address-based limiting, and it is why this level carries the loosest
+threshold and sits **last** in the refusal order. The weak inference a refused caller gains is
+*"roughly 600 requests came from my address this minute, some possibly not mine"* — a
+statement about an address, not a tenant. It names no other Organization and confirms none
+exists.
+
+**An unreachable shard does not block.** The actor and Organization levels still bound every
+request, so the level degrades to two-level behaviour rather than refusing every user behind a
+NAT on no evidence. That is deliberately **not** the `begin()` failure path, which degrades to
+read-only.
+
 ## Approval
 
 Decided by the user in writing on 2026-09-02, in twelve numbered points including the
