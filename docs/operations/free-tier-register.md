@@ -37,6 +37,8 @@ official source, not the date usage was measured.
 | **D1 — size per database** | same | **500 MB** | **Production shared tenant-data database: 500 MB ceiling.** One shared database holds every Organization's business data (`0006` §0.1). Files and large exports go to R2, never here | 0 | 350 MB (70%) | 425 MB (85%) stop onboarding new Organizations; 450 MB (90%) emergency gate — essential existing-customer operations only. **Never delete financial, audit, or customer data to stay free** | core-agent | 2026-09-01 |
 | **D1 — total storage** | same | **5 GB** | Sum of the 4 allocated databases; production shared DB is the dominant consumer | 0 | 3.5 GB | Block further growth, notify user | core-agent | 2026-09-01 |
 | D1 — queries per invocation | same | 50 | < 50 by design | 0 | 35 | Fail the request, do not batch around it | core-agent | 2026-09-01 |
+| **D1 — rows READ per day** | `developers.cloudflare.com/d1/platform/pricing/` | **5,000,000 / day** | Point lookups and bounded pages by design | 0 | 3.5M | **Queries FAIL account-wide — not billed.** See the warning below | core-agent | **2026-09-02** |
+| **D1 — rows WRITTEN per day** | same | **100,000 / day** | Mutations, plus **one write per denied read** under D2 | 0 | 70,000 | **Queries FAIL account-wide — not billed.** This is the tightest enforced ceiling Dudo has, and the one an attacker can drive | core-agent | **2026-09-02** |
 | D1 — Time Travel | same | 7 days | 7 days | 0 | n/a | Recovery window is 7 days, not more | core-agent | 2026-09-01 |
 | **Workers — requests** | `developers.cloudflare.com/workers/platform/limits/` | **100,000 / day** | Core API + web backend | 0 | 70,000 | **Exceeding returns Error 1027 — requests rejected, NO automatic charge.** The route's behaviour is **configurable**, fail-open or fail-closed, and **fail-closed is NOT the Cloudflare default — Dudo must set it explicitly on every route.** Until it is set, the route falls back to Cloudflare's default behaviour, which is not the behaviour this register assumes | core-agent | 2026-09-01 |
 | **Workers — CPU / memory / count / subrequests** | same | **10 ms per request · 128 MB per isolate · 100 Workers · 50 subrequests per invocation** | 10 ms is an architectural constraint, not a tuning target | 0 | n/a | Invocation terminated; stream rather than buffer; bound fan-out | core-agent | 2026-09-01 |
@@ -49,6 +51,34 @@ official source, not the date usage was measured.
 | **CodeRabbit** | `coderabbit.ai/pricing` | **PUBLISHED OFFER ONLY:** published as free for public repositories; verified against the pricing page on 2026-09-01. **Subject to provider terms and to separate account-level verification.** This is the advertised offer, **not** evidence about Dudo's account | Automated PR review on `Dudo-Core`. **Active**: real reviews completed on `c09693f`, `477753f`, `1b8e2fa`, `685b99e`, `3cc5018` | active — **account plan UNVERIFIED** | n/a | Rate limiting only, which is **acceptable and must never trigger an upgrade**. **Dudo's own plan, billing status, paid add-ons and spending configuration remain UNVERIFIED** — C5 / B-CodeRabbit, blocked on user dashboard evidence | Team Lead | Offer 2026-09-01; **account state not verified** |
 | **GitHub Packages** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not publish packages. Not verified in detail because it is prohibited, not merely unused | Team Lead | 2026-09-01 (prohibited) |
 | **GitHub Codespaces** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not use. Prohibited by `0008` | Team Lead | 2026-09-01 (prohibited) |
+
+> ## ⚠ D1 DAILY ROW LIMITS ARE ENFORCED, AND EXCEEDING THEM IS AN OUTAGE — NOT A BILL
+>
+> Verified 2026-09-02 against `d1/platform/pricing/`. **These limits are not on the `limits/`
+> page**, which is why this register missed them until `core-agent` found the gap while
+> building the Business table.
+>
+> **5,000,000 rows read/day · 100,000 rows written/day**, and Cloudflare's own words on what
+> happens: *"When your account hits the daily read and/or write limits, you will not be able
+> to run queries against D1. D1 API will return errors to your client indicating that your
+> daily limits have been exceeded."*
+>
+> **This is ACCOUNT-WIDE, not per-database and not per-tenant.** One Organization exhausting
+> the daily write allowance takes D1 down for **every** Organization.
+>
+> **It interacts directly with D2 and raises that risk from cost to availability.** D2 makes
+> every *denied read* a database write. An authenticated caller who probes 100,000 times in a
+> day exhausts the account's entire write allowance and halts D1 for the whole platform. The
+> probe-detection control becomes a platform-wide denial-of-service lever, and the attacker
+> needs no valid identifier — a malformed one is audited too, and is the cheapest denial to
+> produce.
+>
+> **Dormant only because production ships a deny-all principal resolver.** That is a
+> deployment accident standing in for a control, and it expires the day AZ2 lands.
+> `docs/decisions/README.md` scheduled item 10 is **blocking on AZ2** for this reason.
+>
+> Consistent with `0008`: the failure mode is fail-closed, so no charge is created. An outage
+> is not a billing event — but it is not an acceptable one either.
 
 > ## ⚠ R2 OVERAGE BEHAVIOUR IS UNDOCUMENTED — the one real cost risk in this register
 >

@@ -17,15 +17,28 @@
  * become one by accident, because there is no handle available here that reaches outside
  * the tenant.
  *
- * WHAT DOES NOT EXIST YET, STATED RATHER THAN ASSUMED. `Business` is a Core object
- * (core-object-registry.yaml, phase 1, status `proposed` — not built). Core's
- * organization-structure schema is a separate Core slice and is NOT authored here: its
- * shape is not settled by any contract, and inventing it to unblock this one would be
- * deciding Core's identity data model as a side effect of an App. The port and its
- * store-backed implementation are here; the table is not. Composition therefore fails
- * closed — a runtime without that table cannot serve `CreateCustomer` or
- * `MoveCustomerToBusiness`, which is the correct behaviour and is reported as a blocker
- * rather than papered over with a permissive default.
+ * WHAT EXISTS AND WHAT STILL DOES NOT, STATED RATHER THAN ASSUMED.
+ *
+ * The table now exists: `platform/core/migrations/0002_business.sql`, two columns, primary
+ * key `(tenant_id, business_id)`. It was authored as the MINIMUM that makes this one
+ * question answerable, because without it the query below failed and the contract's step 5c
+ * — the whole not_found/forbidden distinction for a caller-supplied Business — collapsed
+ * into a single `unavailable`.
+ *
+ * What still does not exist is the organization-structure slice: no Business name, no
+ * lifecycle, no Branch, no membership, no Organization table, and NOTHING THAT WRITES A ROW
+ * HERE. So in a deployed runtime the table is empty, every lookup that reaches storage
+ * answers "no", and `authorizeSuppliedBusiness` returns `not_found` for anything outside the
+ * principal's authorized set. That is fail-closed and correct; it also means the `forbidden`
+ * branch of step 5c is not reachable in production until something populates the table, and
+ * that is a gap in reachability, not in this file.
+ *
+ * WHEN BUSINESS GAINS A LIFECYCLE, THIS FUNCTION ACQUIRES A DECISION IT DOES NOT HAVE TODAY:
+ * whether an archived or suspended Business still "exists in the tenant" for step 5c. Today
+ * there is no such state and no column for one, so the question cannot be answered wrongly
+ * by accident. It must be answered deliberately by the slice that introduces the state — a
+ * lifecycle column added without revisiting this line would silently change which Actions
+ * return `not_found`.
  */
 
 import type { TenantScopedStore } from '../storage/store.ts';

@@ -28,9 +28,13 @@
  *         Organization mappings fail closed. No fallback binding, no default database, no
  *         'probably the shared one'."
  *
- * Core's organization-structure schema is missing too, so `BusinessDirectory` has no
- * `business` table to read; `CreateCustomer` and `MoveCustomerToBusiness` cannot validate a
- * destination until it exists.
+ * A THIRD GAP HAS NARROWED BUT HAS NOT CLOSED. `BusinessDirectory` now has a `business`
+ * table to read (`platform/core/migrations/0002_business.sql`), so `CreateCustomer`,
+ * `MoveCustomerToBusiness` and a business-filtered listing can produce the contract's step-5c
+ * answers instead of failing on a missing table. But nothing in this repository WRITES a
+ * Business — Business CRUD belongs to the organization-structure slice — so in a deployed
+ * runtime the table is empty and every one of those lookups answers `not_found`. Fail-closed,
+ * and consistent with the two gaps above: this Worker still serves nothing.
  *
  * FAIL-CLOSED IS THE POINT. A platform with no identity layer that answered requests would
  * be worse than one that answers none. When the identity slice lands, it supplies a
