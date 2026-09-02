@@ -153,8 +153,8 @@
           },
           "path": {
             "type": "string",
-            "pattern": "^/[a-z0-9\\-/{}]*$",
-            "description": "Path relative to the App's allocated namespace. See API_STANDARD.md §5."
+            "pattern": "^/[a-z0-9_\\-/{}]*$",
+            "description": "Path relative to the App's allocated namespace. See API_STANDARD.md §5. THE UNDERSCORE IS IN THE CHARACTER CLASS DELIBERATELY (ADR 0012): §5 requires snake_case on the wire consistently and everywhere, and its own worked example is /api/v1/orders/{order_id}, which the previous pattern REJECTED. A grammar that accepts only the paths the standard forbids trains App authors to write non-conforming paths, because the cheapest way past a red light is the wrong one. Path parameters are snake_case, matching the field names they carry; do not rewrite one as {order-id} to satisfy a validator."
           }
         }
       }
@@ -254,17 +254,17 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["onUninstall", "rollbackSupported"],
-      "description": "Data must never disappear unexpectedly (APP_STANDARD.md §9).",
+      "description": "Data must never disappear unexpectedly (APP_STANDARD.md §9). This block is read by the tenant on the uninstall screen, immediately before an irreversible act, so it is held to a higher standard than documentation: it must be TRUE, not merely well-formed.",
       "properties": {
         "onUninstall": {
           "type": "string",
           "enum": ["retain", "export", "archive", "delete"],
-          "description": "What happens to tenant data on uninstall. The tenant is told before it proceeds, and this is what actually happens."
+          "description": "What happens to tenant data on uninstall. The tenant is told before it proceeds, and this is what actually happens. 'retain' means held INDEFINITELY — removed only by an explicit authorized action, never by elapsed time, a quota, inactivity or a background job (ADR 0011). 'archive' means held for a BOUNDED period stated in retentionDays and then disposed of. 'export' hands the data to the tenant. 'delete' destroys it on uninstall. An App that must never lose tenant data declares 'retain'; an App that wants a bounded hold declares 'archive' and says how long."
         },
         "retentionDays": {
           "type": "integer",
           "minimum": 0,
-          "description": "Required when onUninstall is 'retain' or 'archive'."
+          "description": "How long tenant data is held AFTER THE APP IS UNINSTALLED, before it is disposed of. REQUIRED when onUninstall is 'archive' — a bounded hold that does not say how long is not bounded. FORBIDDEN when onUninstall is 'retain', because 'retain' means indefinitely and no integer expresses that (ADR 0011): a value here would assert that the tenant's data is disposed of on a timer, which is the opposite of what 'retain' promises, and 0 is worse rather than a workaround because it reads as 'retain for zero days'. This field is a property of the APP'S UNINSTALL, never of a record's lifecycle. A per-record recovery window — how long an explicit deletion of ONE record can be undone — is a different trigger, a different subject and an opposite outcome at the end of the clock; it belongs in the App's own contract and it must not be written here."
         },
         "rollbackSupported": {
           "type": "boolean",
@@ -273,13 +273,24 @@
       },
       "allOf": [
         {
+          "$comment": "ADR 0011, clause 1. 'archive' is a BOUNDED hold, so it must say how long. Absent retentionDays under 'archive' fails validation rather than defaulting: a default here would silently choose a disposal date for another company's data.",
           "if": {
             "properties": {
-              "onUninstall": { "enum": ["retain", "archive"] }
+              "onUninstall": { "const": "archive" }
             },
             "required": ["onUninstall"]
           },
           "then": { "required": ["retentionDays"] }
+        },
+        {
+          "$comment": "ADR 0011, clause 2. Under 'retain' the field is PROHIBITED, not optional. Optional would let two manifests declaring the same disposition mean different things, and would leave the reading 'retain for N days' available to anyone who supplies N — which is the exact false statement 0011 removed. A manifest declaring both FAILS VALIDATION and the App does not install; it is never accepted and then evaluated as though the number were advisory. Absence is not a gap to be filled at install time: under 'retain' there is nothing further to say, which is the whole point of the word.",
+          "if": {
+            "properties": {
+              "onUninstall": { "const": "retain" }
+            },
+            "required": ["onUninstall"]
+          },
+          "then": { "not": { "required": ["retentionDays"] } }
         }
       ]
     }

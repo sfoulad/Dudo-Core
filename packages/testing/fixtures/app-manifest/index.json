@@ -1,5 +1,15 @@
 {
-  "fixtureSetVersion": 1,
+  "fixtureSetVersion": 2,
+  "fixtureSetVersionHistory": [
+    {
+      "version": 1,
+      "contents": "The az7 set alone — 19 active cases. This is the version the AZ7 measurement recorded under openQuestions in packages/contracts/registries/permission-catalog.yaml was taken against (2026-09-01, 16 PASS / 0 FAIL / 3 NOT RUN at the relation-validator layer). That measurement is still true OF THE AZ7 SET; the version number is bumped rather than left alone so the phrase 'the 19 active cases enumerated in index.json' pins to v1 and is not silently re-read against a file that now enumerates 25."
+    },
+    {
+      "version": 2,
+      "contents": "Adds the adr0011 set (4 cases) and the adr0012 set (2 cases), for 25 cases total. Both new sets are enforcedBy 'schema' and NONE OF THE SIX HAS BEEN EXECUTED — see each set's notRunReason. No az7 case was added, removed, or altered, and no recorded az7 result is affected."
+    }
+  ],
   "description": "Index of App-manifest validation fixtures. Each entry points at a case file; the CASE FILE is the single source of truth for that case's expected outcome, and this index deliberately does not repeat it. A runner enumerates 'cases', loads each file, and reads expectedOutcome and enforcedBy from the file itself.",
   "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
   "caseFileShape": {
@@ -78,6 +88,71 @@
         }
       ],
       "excludedFromTotalsHistory": "az7-q1 and az7-q2 were authored as UNDECIDED open questions and excluded from totals. Both were subsequently decided by AUTHORIZATION_STANDARD.md §4.1 VALIDATOR-AZ7 — item 5 for az7-q1, item 3 for az7-q2 — and now carry expectedOutcome REJECT at the validator layer. Their case files keep the provenance."
+    },
+    {
+      "set": "adr0011",
+      "directory": "adr0011/",
+      "subject": "ADR 0011 — 'retain' means INDEFINITE. lifecycle.retentionDays is FORBIDDEN under onUninstall 'retain' and REQUIRED under onUninstall 'archive'.",
+      "raisedBy": [
+        "architecture-agent, on finding that apps/customers/manifest.json could not be authored truthfully under the previous conditional",
+        "Team Lead, on finding that all 16 pre-existing manifest fixtures declare onUninstall 'delete', so neither branch of the new conditional was exercised by anything in the set"
+      ],
+      "governedBy": [
+        "docs/decisions/0011-manifest-lifecycle-indefinite-retention.md (Accepted)",
+        "docs/architecture/standards/APP_STANDARD.md §9",
+        "packages/contracts/registries/app-manifest.schema.json — lifecycle.allOf"
+      ],
+      "cases": [
+        { "caseId": "adr0011-p1", "file": "adr0011/adr0011-p1-retain-without-retention-days.json" },
+        { "caseId": "adr0011-n1", "file": "adr0011/adr0011-n1-retain-with-retention-days.json" },
+        { "caseId": "adr0011-p2", "file": "adr0011/adr0011-p2-archive-with-retention-days.json" },
+        { "caseId": "adr0011-n2", "file": "adr0011/adr0011-n2-archive-without-retention-days.json" }
+      ],
+      "pairsThatMustBeReportedTogether": [
+        {
+          "pair": ["adr0011-p1", "adr0011-n1"],
+          "reason": "The same disposition 'retain', without and with retentionDays. p1 must be ACCEPTED and n1 must be REJECTED. Both rejected means the validator bans 'retain' outright instead of enforcing ADR 0011 clause 2 — which removes the only truthful way to promise indefinite retention and pushes App authors straight back to writing a disposal date they do not mean. Both accepted means clause 2 is unimplemented and 'retain for N days' is still expressible, which is the exact false statement 0011 removed. Neither failure is visible from n1 alone."
+        },
+        {
+          "pair": ["adr0011-p2", "adr0011-n2"],
+          "reason": "The same disposition 'archive', with and without retentionDays. p2 must be ACCEPTED and n2 must be REJECTED. Both rejected means the validator bans 'archive' outright rather than requiring the bound; both accepted means clause 1 is unimplemented and a bounded hold need never say what its bound is. Proves the rejection in n2 comes from the missing bound and not from 'archive' itself."
+        },
+        {
+          "pair": ["adr0011-n1", "adr0011-p2"],
+          "reason": "Both carry a retentionDays and differ in the disposition it sits under. n1 must be REJECTED and p2 must be ACCEPTED. Accepting both means retentionDays was implemented as unconditionally permitted rather than conditional on onUninstall, which passes every other case in this set while leaving clause 2 unenforced. This is the cross-pair; the two same-disposition pairs above cannot detect that failure."
+        }
+      ],
+      "excludedFromTotals": [],
+      "retiredCaseIds": [],
+      "notRunReason": "All four cases are enforcedBy 'schema' and NONE HAS BEEN EXECUTED. No JSON Schema implementation exists in this repository and ADR 0009 bars installing one, so these are conformance cases carried against the day a validator exists — exactly as the az7 r-series is carried against a runtime. They must NOT be run through packages/contracts/validation/app-manifest-relations.mjs and reported as covered: that validator decides AZ7 entity relations and knows nothing about lifecycle, so it would return no errors for all four including the two that must be REJECTED, and 'no errors' would be a false green of precisely the kind az7-r3 exists to warn about."
+    },
+    {
+      "set": "adr0012",
+      "directory": "adr0012/",
+      "subject": "ADR 0012 — the apis[].path character class admits '_', so snake_case path parameters are expressible; nothing else about the grammar changed.",
+      "raisedBy": [
+        "architecture-agent, on finding that API_STANDARD.md §5's own worked example /api/v1/orders/{order_id} was rejected by the schema, and declining the {order-id} workaround",
+        "docs/decisions/0012 §Consequences, which records the fixture coverage as owed to qa-agent"
+      ],
+      "governedBy": [
+        "docs/decisions/0012-manifest-api-path-underscore.md (Accepted)",
+        "docs/architecture/standards/API_STANDARD.md §5",
+        "packages/contracts/registries/app-manifest.schema.json — apis.items.properties.path.pattern"
+      ],
+      "cases": [
+        { "caseId": "adr0012-p1", "file": "adr0012/adr0012-p1-api-path-snake-case-parameter.json" },
+        { "caseId": "adr0012-n1", "file": "adr0012/adr0012-n1-api-path-uppercase-segment.json" }
+      ],
+      "pairsThatMustBeReportedTogether": [
+        {
+          "pair": ["adr0012-p1", "adr0012-n1"],
+          "reason": "The same route, differing only in the apis[0].path string. p1 must be ACCEPTED and n1 must be REJECTED. Both rejected means the underscore is still banned and ADR 0012 is unimplemented — the state in which the standard's own example fails its own registry. Both accepted means the path grammar is not enforced at all, which p1 alone cannot detect because a pattern loosened to accept anything passes it. READ THE REJECTION REASON FOR n1, not just its outcome: n1's sole violation is the uppercase segment and its parameter is deliberately the legal snake_case {order_id}, because a case that rejected on an underscore would go green precisely when ADR 0012 had been reverted."
+        }
+      ],
+      "excludedFromTotals": [],
+      "retiredCaseIds": [],
+      "knownGaps": "apis[].path is exercised at two points only. A path containing a space, and a path not rooted at '/', are equally rejectable under the same pattern and have NO case. They were left out rather than folded into adr0012-n1 because a fixture carrying two violations cannot show which one caused the rejection. apis[].method, apis[].surface, and the consistency between a 'public' apis surface and the referenced Action's 'exposure' are untested by this set; the last of those is not schema-enforced at all.",
+      "notRunReason": "Both cases are enforcedBy 'schema' and NEITHER HAS BEEN EXECUTED, for the same reason as the adr0011 set: no JSON Schema implementation is present and ADR 0009 bars installing one. app-manifest-relations.mjs decides AZ7 entity relations and does not inspect apis[] at all, so running these through it and observing no errors would be a false green, not coverage."
     }
   ]
 }

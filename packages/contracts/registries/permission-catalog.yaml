@@ -10,17 +10,24 @@
 # Owner:       architecture-agent authors; Team Lead accepts.
 #
 # STATUS OF THIS FILE
-# Every entry is status "proposed". No code exists. These are the permissions entailed by
+# Every entry is status "proposed". No code exists. Most are the permissions entailed by
 # Core's declared responsibilities (CORE_BOUNDARIES.md §3) and the App lifecycle
 # (APP_STANDARD.md §9), so that Phase 1 and Phase 2 build against a reviewed set rather
 # than accreting one.
+#
+# THE CATALOG IS NOT A CORE-ONLY FILE. As of 2026-09-02 it also holds the nine
+# 'customers.*' permissions of the Customer Directory App. That is what "a permission
+# string that does not appear here does not exist" requires: an App's permissions are
+# registered centrally and enforced by Core, while the App's LOGIC stays outside Core.
+# Registering a permission here does not accept the contract that requests it, does not
+# grant it to anyone, and does not make its Action reachable on its own.
 #
 # AUTHORIZATION_STANDARD.md §1-§10 constitutes the "logical permission model" that
 # docs/decisions/0001 requires as its own decision record BEFORE implementation. That
 # record does not exist yet. Nothing implements against this catalog until it does.
 
 catalogVersion: 1
-updated: "2026-09-01"
+updated: "2026-09-02"
 
 # ---------------------------------------------------------------------------
 # model
@@ -609,6 +616,122 @@ permissions:
     status: proposed
     phase: 6
 
+  # --- customers App: Customer Directory (Phase 1) ------------------------------
+  #
+  # THE FIRST NON-'core' NAMESPACE IN THIS CATALOG. These nine belong to the 'customers'
+  # App, not to Core: no customer entity, status, retention constant or query path enters
+  # platform/core/**. They are registered here because a permission that is not in this
+  # catalog does not exist (0007 rule 4), so registration is what makes the Customer
+  # Directory Actions reachable at all.
+  #
+  # Contract:  packages/contracts/apps/customers/customer-directory-v1.contract.yaml
+  #            (status: proposed — registration here does not accept that contract)
+  #
+  # THE SCOPE SPLIT IS LOAD-BEARING AND IS NOT A STYLE CHOICE. The first six are declared
+  # [organization, business] because the Customer entity carries a required business_id, so
+  # a business-scope grant has a real predicate to narrow against. The last three are
+  # [organization] ONLY: a move spans TWO Businesses and a business-scope grant is authority
+  # over ONE, so declaring move at business scope would let the holder of one side reach
+  # across the boundary it is standing on. Permanent deletion and its reversal are
+  # irreversible data governance over the Organization's own records.
+  #
+  # customers.customer.export is DELIBERATELY ABSENT and must stay absent. This slice has no
+  # export Action; §3.2 keeps export separate from read, and the way to keep it separate is
+  # not to declare it until an export Action exists. Adding it here would create a grantable
+  # permission over a capability nothing implements.
+  - id: customers.customer.create
+    group: customer
+    description: "Create a customer in a named Business of the Organization's directory."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: customers.customer.read
+    group: customer
+    description: >-
+      View one customer's full record, including its address and notes. Separate from list:
+      the list projection deliberately omits both sensitive-personal free-text fields, so
+      reading a whole record is a distinct disclosure.
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: customers.customer.list
+    group: customer
+    description: >-
+      Enumerate and search customers. Separate from read because enumeration is its own
+      disclosure. Search SHARES this permission rather than having its own — search IS
+      enumeration, and a separate customers.customer.search would let a role reach the same
+      information through a second door.
+    sensitivity: read
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: customers.customer.update
+    group: customer
+    description: >-
+      Modify a customer's details. Cannot change status — archiving is its own permission —
+      and cannot change business_id, which is customers.customer.move.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: customers.customer.archive
+    group: customer
+    description: >-
+      Withdraw a customer from active use. Data is retained INDEFINITELY; this is not a
+      delete and it starts no countdown to one.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: customers.customer.restore
+    group: customer
+    description: >-
+      Return an archived customer to active use. Separate from archive: reinstating a record
+      puts it back into every list and search the Organization can see, and a role that may
+      tidy the directory is not automatically a role that may reinstate from it.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 1
+  - id: customers.customer.move
+    group: customer
+    description: >-
+      Move a customer from one Business to another within the same Organization. Never at
+      business scope: a move spans two Businesses and a business-scope grant is authority
+      over one, so granting it there would let the holder of one side reach across the
+      boundary it is standing on.
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: customers.customer.delete
+    group: customer
+    description: >-
+      Permanently delete a customer. Starts an explicit 30-day recovery window, after which
+      the customer's personal data is purged and cannot be recovered. Reachable only from
+      'archived'. CRITICAL, not sensitive: §6 classes irreversible data destruction as
+      critical, which adds a mandatory explicit confirmation collected by the platform from
+      the human — never a request field. That mechanism does not exist, so the Action this
+      permission guards is unreachable even once granted, which is the correct fail-closed
+      state for the one Action in this App that destroys tenant data.
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 1
+  - id: customers.customer.restore-deleted
+    group: customer
+    description: >-
+      Cancel a pending deletion within the 30-day window, returning the customer to
+      'archived'. Separate from customers.customer.restore, which returns an ARCHIVED
+      customer to active use: the authority to tidy a directory is not the authority to
+      countermand a deletion an organization-level principal ordered.
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 1
+
 # ---------------------------------------------------------------------------
 # defaultRoles — SEED DATA ONLY
 #
@@ -659,7 +782,7 @@ defaultRoles:
     permissions: [core.developer.register, core.marketplace.submit, core.app.read]
   # Every permission below declares 'organization' among its own 'scopes'. This is the
   # former "core.*" expanded and then intersected with the role's scope: 59 of the 62
-  # catalogued permissions. The three omitted, and why:
+  # CORE permissions. The three core permissions omitted, and why:
   #   core.principal.grant-platform-scope  scopes: [platform] — CRITICAL escalation. A
   #                                        tenant role must never reach platform scope.
   #   core.marketplace.moderate            scopes: [platform] — same reason.
@@ -667,6 +790,16 @@ defaultRoles:
   #                                        'organization'. Reading one's own
   #                                        notifications is not an organization-scope
   #                                        power; see the note in openQuestions AZ5.
+  #
+  # PLUS ALL NINE customers.* PERMISSIONS, added on 2026-09-02 on the Team Lead's accepted
+  # seed-role ruling. Every one of the nine declares 'organization' among its own scopes, so
+  # the intersection rule admits all nine at this role's scope — including
+  # customers.customer.delete, which is CRITICAL. This is the deliberate outcome: the
+  # Organization's owner is the party that owns the customer data and answers for it, and
+  # somebody must be able to authorize an erasure request. Holding the permission is still
+  # not sufficient to invoke the Action — the confirmation mechanism §7 requires for a
+  # critical Action does not exist, so DeleteCustomer remains unreachable.
+  # Total for this role: 68 of the 71 catalogued permissions.
   - id: business-owner
     scope: organization
     status: proposed
@@ -731,6 +864,21 @@ defaultRoles:
       - core.mcp.configure-external
       - core.developer.register
       - core.marketplace.submit
+      - customers.customer.create
+      - customers.customer.read
+      - customers.customer.list
+      - customers.customer.update
+      - customers.customer.archive
+      - customers.customer.restore
+      - customers.customer.move
+      - customers.customer.delete
+      - customers.customer.restore-deleted
+  # The six customers.* permissions declared [organization, business] are held here; the
+  # three declared [organization] only — move, delete, restore-deleted — are NOT, and the
+  # intersection rule makes them impossible for a business-scope role to hold at all. That
+  # is the intended outcome and not a gap to repair by widening their declared scopes: a
+  # business-scope principal that could move a customer would be reaching across a boundary
+  # it holds one side of, and one that could delete would be countermanding nobody.
   - id: business-admin
     scope: business
     status: proposed
@@ -760,10 +908,24 @@ defaultRoles:
       - core.notification.send
       - core.app.read
       - core.app.configure
+      - customers.customer.create
+      - customers.customer.read
+      - customers.customer.list
+      - customers.customer.update
+      - customers.customer.archive
+      - customers.customer.restore
+  # HOLDS NONE OF THE NINE customers.* PERMISSIONS, and the omission is the decision rather
+  # than an oversight. The user's CD-2 ruling states that member reaches customers only
+  # through explicitly registered permissions; granting nothing by default is the
+  # fail-closed reading, and a member who needs directory access gets a custom role. Note
+  # that member is ELIGIBLE for the six at business scope — eligibility is not a grant, and
+  # nothing here grants it. 'developer', 'platform-admin' and 'marketplace-moderator'
+  # likewise hold none: all nine are tenant-scoped, and a platform-scope role holding one is
+  # the escalation removed from marketplace-moderator above.
   - id: member
     scope: business
     status: proposed
-    description: "An ordinary user. Deliberately narrow — default = deny."
+    description: "An ordinary user. Deliberately narrow — default = deny. Holds no customers.* permission."
     permissions:
       - core.user.read
       - core.business.read

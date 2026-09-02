@@ -1,0 +1,1440 @@
+---
+# Customer Directory — Action contract, version 1
+#
+# The machine-readable half of the contract. Shapes live in
+# customer-directory-v1.schema.json; the reasoning, the state machine and the search
+# semantics live in README.md. All three are normative together, and a change to one that
+# is not reflected in the others is a contract defect.
+#
+# Governed by: docs/architecture/standards/API_STANDARD.md (the Action definition, §1)
+#              docs/architecture/standards/AUTHORIZATION_STANDARD.md
+#              docs/architecture/standards/MULTITENANCY_STANDARD.md
+#              docs/decisions/0006-tenancy-model.md (Accepted)
+#              docs/decisions/0007-logical-permission-model.md (Accepted)
+#              docs/decisions/0011-manifest-lifecycle-indefinite-retention.md (Accepted)
+#              docs/decisions/0012-manifest-api-path-underscore.md (Accepted)
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS
+# status: proposed. NOT YET APPROVED and NOT YET BUILT. No code exists. Per
+# .claude/rules/workflow.md §3 the Team Lead reviews and agrees this contract before any
+# consumer implements against it; architecture-agent does not accept its own contracts.
+#
+# THREE THINGS THIS CONTRACT DEPENDS ON THAT ARE NOT DECIDED. They are listed here rather
+# than only in README.md because an implementing agent reads this file first:
+#   1. AS1 — the executable form and transport of a Dudo contract. This file follows the
+#      precedent already set in packages/contracts/ (JSON Schema draft 2020-12 plus YAML
+#      registries) rather than selecting a new one. Nothing here selects a framework,
+#      library, ORM or npm package, and nothing may be installed to consume it.
+#   2. AP2 / SE2 — the App runtime and isolation mechanism. See README.md §11.
+#   3. The platform elevation/confirmation mechanism for 'critical' Actions
+#      (AUTHORIZATION_STANDARD.md §7) does not exist. customers.DeleteCustomer is critical
+#      and is therefore unreachable until it does. This is now the ONLY blocker on that
+#      Action, and it is why DeleteCustomer and RestoreDeletedCustomer are ruled OUT OF
+#      SCOPE FOR THE MVP IMPLEMENTATION — see 'mvpImplementationScope' below, and CD-13.
+#
+# NO LONGER OUTSTANDING — the previous revision listed this as item 2 and it is now closed:
+# ALL NINE PERMISSIONS ARE REGISTERED in packages/contracts/registries/permission-catalog.yaml
+# as of 2026-09-02, group 'customer', phase 1, status proposed, at exactly the scopes
+# declared below. business-owner seeds with all nine; business-admin with the six declared
+# [organization, business]; member, developer and platform-admin with none. Registration
+# does NOT accept this contract and does NOT make any Action reachable on its own — the
+# contract is still 'proposed', and the item 3 confirmation gate still stands.
+#
+# WHAT CHANGED IN THIS REVISION — two user decisions relayed by the Team Lead on
+# 2026-09-01, applied here in full:
+#   CD-8 RETENTION, decided. Archived customers are retained INDEFINITELY. Archive is not
+#     a countdown. Permanent deletion is explicit, authorized, and has a 30-day recovery
+#     window, after which personal data is purged; audit keeps identifiers and action
+#     metadata only. See the 'retention' block below. The consequence is three new
+#     Actions and three new permissions, including customers.customer.delete, which the
+#     previous revision deliberately withheld so that nobody could hold it.
+#   CD-2 SCOPE, decided. Customer gains a REQUIRED business_id. organization_id remains
+#     the tenant-isolation boundary; business_id controls access INSIDE the Organization
+#     and is NOT a second tenant boundary. Six permissions widen to
+#     scopes [organization, business]; the three new ones stay [organization] only.
+#   CD-1 READ AUDITING, ruled on by the Team Lead. Reads stay UNAUDITED, as a DOCUMENTED,
+#     TIME-BOUNDED EXCEPTION to AUTHORIZATION_STANDARD.md §6 — the standard is NOT edited
+#     to agree with this contract. The deletion path is audited without exception, and the
+#     purge audit record is written BEFORE the personal data is destroyed. The enumeration
+#     gap is an ACCEPTED RISK, not an omission. See audit.readAuditException and
+#     audit.deletionPathAudit.
+# CD-8 IS NOW CLOSED IN BOTH HALVES. The policy is the user's decision above; its manifest
+# expression is docs/decisions/0011-manifest-lifecycle-indefinite-retention.md (Accepted,
+# 2026-09-01), which redefined onUninstall 'retain' to mean INDEFINITE and FORBADE
+# retentionDays under it. apps/customers/manifest.json is therefore authorable truthfully:
+# retain, and no retentionDays field. See 'retention.manifestExpressibility'.
+
+contractVersion: 1
+apiVersion: v1
+appId: customers
+status: proposed
+updated: "2026-09-01"
+
+# ---------------------------------------------------------------------------
+# tenancy — applies to every Action below, without exception
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: >-
+    MULTITENANCY_STANDARD.md §2. The Organization is the isolation boundary. A Customer
+    belongs to an Organization; within it, the Customer also names a Business, which is an
+    AUTHORIZATION SCOPE and not a second isolation boundary. §2 states that Businesses
+    inside an Organization routinely need to share customers, and that sharing is what a
+    Business-scoped GRANT regulates — it is not something an isolation boundary would have
+    to be crossed to do.
+  businessScope: >-
+    DECIDED BY THE USER, 2026-09-01, relayed by the Team Lead. The rules, in force over
+    every Action below:
+      1. organization_id REMAINS the tenant-isolation boundary. business_id does not
+         become a second one, is never described as one, and never substitutes for one.
+      2. business_id controls access INSIDE the Organization.
+      3. Core derives and validates BOTH from the authenticated context. The Organization
+         is derived and is never accepted from any input. The principal's AUTHORIZED
+         BUSINESS SET is likewise derived from the authenticated context; where an input
+         carries a business_id it can only SELECT within that set, never widen it, and a
+         value outside it is refused rather than trimmed to fit.
+      4. A client-provided organization_id is NEVER trusted, accepted, defaulted or
+         merged. No input schema in this contract has such a property, and
+         additionalProperties false makes supplying one a rejected request.
+      5. business-owner may reach customers across the Businesses it is authorized over
+         within its Organization. business-admin may reach customers ONLY in its assigned
+         Business. member reaches nothing except through explicitly registered
+         permissions — the seed 'member' role is proposed to hold none of these nine.
+      6. Moving a customer between Businesses is a SEPARATE AUTHORIZED ACTION with its own
+         audit entry (customers.MoveCustomerToBusiness). It is never a field update on
+         UpdateCustomer, and business_id is not a property of updateCustomerInput.
+  twoLevelCheck: >-
+    THE ORDER IS ORGANIZATION, THEN BUSINESS, ALWAYS, AND THE SECOND NEVER STANDS IN FOR
+    THE FIRST. The tenant predicate is applied centrally by the storage boundary before any
+    row is visible to the Action; the business predicate is applied afterwards, to rows
+    already proven to be inside the tenant. A query that carries business_id and has lost
+    organization_id CROSSES TENANTS: Business identifiers are unique platform-wide, so such
+    a query does not fail and does not return empty — it returns another Organization's
+    customer, exactly as a query missing the tenant predicate always would. Uniqueness
+    prevents collision; it has never prevented reachability. A business predicate is
+    therefore an ADDITIONAL narrowing and never a SUBSTITUTE, and any code path, index,
+    cursor or cache key that treats business_id as sufficient identification is a critical
+    defect.
+  model: >-
+    docs/decisions/0006, Accepted — Option A, ONE SHARED PRODUCTION D1 DATABASE holding
+    every Organization's rows, with mandatory TenantStoreResolver indirection. There is no
+    infrastructure boundary underneath this contract: a query missing its tenant predicate
+    does not fail and does not return empty, it returns another Organization's customer.
+  rules:
+    - >-
+      Tenant identity is derived from the authenticated server-side context on EVERY call.
+      Never from a request body field, path segment, query string, header, cookie, cursor,
+      SDK argument, hostname, unverified token claim, or ambient default.
+    - >-
+      No Action in this contract has a tenant parameter, and none may be added. A request
+      carrying one is rejected by the input schema (additionalProperties false) as a
+      malformed request — and that rejection proves input validation, NOT isolation. See
+      packages/testing/fixtures/app-manifest/az7/az7-r3-cross-tenant-invocation.json, whose
+      isolation-proving vector is a perfectly schema-valid request whose only cross-tenant
+      element is the record identifier itself.
+    - >-
+      Every read and write reaches storage through the Core-owned storage port, whose
+      handle is obtained through TenantStoreResolver. The tenant predicate is applied
+      CENTRALLY by that boundary and is never hand-written per query. A query path that
+      bypasses the boundary is a critical defect.
+    - >-
+      An unknown, unmapped, suspended or malformed Organization mapping FAILS CLOSED. No
+      fallback binding, no default database, no 'probably the shared one'.
+    - >-
+      A Customer record's tenant is assigned at creation from context and is immutable.
+      There is no operation in this contract, and none may be added, that moves a Customer
+      between Organizations. MoveCustomerToBusiness is NOT such an operation: it moves a
+      record between authorization scopes inside one tenant, its destination is validated
+      to be a Business of the authenticated Organization, and a destination outside that
+      Organization is not_found — indistinguishable from a Business that does not exist.
+    - >-
+      Cache keys are prefixed t:<tenant_id>:. This slice defines no cache; if one is added
+      it inherits this rule and a new tenant-isolation obligation.
+
+# ---------------------------------------------------------------------------
+# authorizationModel — applies to every Action below
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: >-
+    Core, and only Core, at every entry point, on every call (0007 rule 1, D8). No client,
+    App, SDK or Connector decides authorization. UI hiding is presentation, never security.
+  default: deny
+  scopeRationale: >-
+    REVISED under the user's CD-2 decision. The six original permissions are declared at
+    scopes [organization, business]; the three added by the CD-8 decision are declared at
+    [organization] ONLY. Business scope is now coherent for the six because the Customer
+    entity carries a required business_id — there is a real predicate to evaluate against,
+    so a business-scoped grant genuinely narrows rather than granting the whole
+    Organization while presenting as narrower. That was the objection in the previous
+    revision and the decision removed it, rather than the objection being waived.
+    Consequence under 0007 D6's intersection rule: 'business-admin' and 'member' are now
+    ELIGIBLE to hold the six at business scope, which closes the open half of CD-2 —
+    eligibility, not a grant. Nothing is granted until the Team Lead registers these
+    permissions and decides role membership.
+  organizationOnlyRationale: >-
+    WHY MOVE, DELETE AND RESTORE-DELETED ARE [organization] AND NOT [organization,
+    business]. A move spans TWO Businesses, and a business-scope grant is authority over
+    ONE by definition. Declared at business scope it would let the holder of a grant over
+    Business A pull a customer out of Business B, or push one into Business B — reaching
+    across a boundary while holding one side of it. Permanent deletion and its reversal are
+    irreversible-by-design data governance over the Organization's own records, and the
+    Organization is the party that owns the data and answers for it. Even at organization
+    scope, Core still validates that BOTH the source and the destination Business belong to
+    the authenticated Organization and to the principal's authorized set — the scope
+    declaration is the floor, not the whole check.
+  evaluationOrder:
+    - "1. Authenticate the principal. Failure -> unauthenticated."
+    - >-
+      2. Derive the tenant from the authenticated context, and derive the principal's
+      AUTHORIZED BUSINESS SET within that tenant from the same context. Neither comes from
+      the request. The authorized set is part of the authorization decision, not a
+      per-Action lookup the Action may skip.
+    - >-
+      3. Authorize the Action's declared permission at its declared scope, WITHOUT
+      reference to any record. Failure -> forbidden. This step remains record-independent,
+      so this forbidden can never be correlated with a record's existence.
+    - "4. Validate the input schema. Unknown fields rejected. Failure -> invalid_argument."
+    - >-
+      5. Resolve the record WITHIN THE TENANT through the storage boundary, with the tenant
+      predicate already applied. Not present in this tenant -> not_found, identically
+      whether it exists in another Organization or nowhere at all. THIS STEP IS TERMINAL
+      FOR CROSS-TENANT: nothing below it ever runs on a foreign row, so no later step can
+      turn a cross-tenant miss into a distinguishable answer.
+    - >-
+      5b. NEW. Authorize the resolved row's business_id against the authorized business
+      set. In this Organization but outside the set -> forbidden. This is the one
+      record-dependent authorization decision in the contract, it exists only INSIDE the
+      tenant, and it is reachable only after step 5 has already proved the row is the
+      caller's Organization's own data. See notFoundVersusForbidden.wrongBusiness for why
+      that difference is the whole justification.
+    - >-
+      5c. For inputs naming a Business (create, move, and the list/search filter), validate
+      that Business the same way and in the same order: not a Business of this Organization
+      -> not_found; a Business of this Organization outside the authorized set -> forbidden.
+    - "6. Evaluate the state precondition. Failure -> failed_precondition."
+    - >-
+      7. Perform the operation, commit, then write the audit record. ONE EXCEPTION, and it
+      is not an Action: the platform PURGE writes its audit record BEFORE destroying the
+      personal data, because nothing survives afterwards to reconstruct the record from. See
+      audit.deletionPathAudit.ordering. No Action inverts this step.
+  notFoundVersusForbidden:
+    rule: >-
+      Outside the tenant boundary a caller must NOT be able to distinguish 'exists but is
+      not yours' from 'does not exist'. Cross-tenant access returns not_found, never
+      forbidden, and that is not negotiable and not weakened by anything below.
+    basis: "API_STANDARD.md §8; MULTITENANCY_STANDARD.md §5; az7-r3 requiredOutcome."
+    wrongBusiness:
+      ruling: >-
+        FORBIDDEN. A customer that exists in the authenticated Organization, in a Business
+        the principal is not authorized over, returns forbidden — not not_found.
+      reasoning: >-
+        The rule that cross-tenant must be not_found exists to stop one company learning a
+        fact about ANOTHER company's data. Inside one Organization there is no second
+        party: the Organization owns every one of these records, signed up for them, and is
+        the party in a data-protection complaint about them (MULTITENANCY_STANDARD.md §2).
+        The existence of a customer row in a sibling Business is the Organization's own
+        information, and 'this record exists and you may not see it' discloses nothing to
+        anyone outside it. Neither API_STANDARD.md §8 nor MULTITENANCY_STANDARD.md §5
+        requires not_found here; both scope the requirement to the tenant boundary, and
+        copying the tenant rule downward by reflex would be applying a control where its
+        justification does not reach.
+        THE OPERATIONAL ARGUMENT IS THE DECIDING ONE, AND IT RUNS THE OTHER WAY FROM
+        HABIT. Told not_found, a business-admin concludes the customer is not in the system
+        and has staff re-enter it — producing a duplicate customer inside the same
+        Organization, in a different Business, with a divergent address, a divergent phone
+        number and its own future invoices. That is silent data corruption of the tenant's
+        own directory, caused by the platform lying to it about its own data, and this
+        contract has no duplicate detection to catch it. Told forbidden, the same person
+        asks an owner for access or for a move — which is exactly what
+        MoveCustomerToBusiness exists for. The failure mode of not_found here is
+        corruption; the failure mode of forbidden here is an in-tenant existence
+        disclosure that the tenant is already entitled to.
+        THE RESIDUAL RISK, STATED. A principal inside Organization A holding a
+        customer_id it should not have can learn that the record exists somewhere in
+        Organization A. It learns nothing else — no field, no Business identifier, no
+        name — because the forbidden response carries no record data. And it cannot
+        enumerate: customer_id is opaque, non-sequential and unguessable (README.md §5),
+        so an identifier can only have come from inside the tenant in the first place.
+      crossTenantUnaffected: >-
+        CHECK THIS PROPERTY, BECAUSE IT IS THE ONE THIS RULING COULD HAVE BROKEN. forbidden
+        at step 5b is returned ONLY for rows already resolved inside the caller's own
+        Organization. Every identifier that is not in the caller's Organization — a foreign
+        Organization's customer, a purged customer, a fabricated string — terminates at
+        step 5 with the same not_found. The caller therefore cannot use the
+        forbidden/not_found difference to distinguish 'exists in another Organization' from
+        'exists nowhere': both are not_found, byte-identical. The new answer partitions
+        in-tenant from everything else, never one tenant from another.
+    indistinguishability: >-
+      The not_found response for a foreign-Organization identifier and the not_found
+      response for an identifier that exists nowhere must be identical in status code,
+      error code, message string, details array, response-size class and headers. The only
+      permitted difference is request_id. Error messages are fixed strings that do not vary
+      with the data involved. The same applies to a foreign-Organization business_id
+      supplied to create, move, list or search: not_found, identical to a business_id that
+      exists nowhere.
+    collections: >-
+      LIST AND SEARCH NEVER RETURN forbidden FOR A ROW. A collection is filtered, not
+      refused: customers in Businesses outside the authorized set are simply absent, with
+      no count, no placeholder and no gap in the cursor. forbidden on a collection is
+      returned only when the caller EXPLICITLY names a business_id it is not authorized
+      over — because there the caller asserted a scope and deserves a straight answer,
+      whereas an unfiltered listing asserted nothing.
+
+# ---------------------------------------------------------------------------
+# permissions — REGISTERED as of 2026-09-02.
+#
+# All NINE now exist in packages/contracts/registries/permission-catalog.yaml, group
+# 'customer', phase 1, status proposed, at exactly the scopes stated below. The catalog is
+# the single registry; this block is the contract's statement of what the App requires, and
+# THE TWO MUST NOT DRIFT — a scope changed in one and not the other is a contract defect,
+# and the one that would matter is a permission silently widened to 'business' here after
+# being registered [organization] there.
+#
+# REGISTRATION IS NOT APPROVAL AND NOT A GRANT. This contract is still 'proposed'. Under
+# 0007 rule 4 registration is NECESSARY for an Action to be reachable; it has never been
+# SUFFICIENT — customers.DeleteCustomer stays unreachable behind the §7 confirmation gate
+# regardless of who holds customers.customer.delete.
+#
+# The first six are declared [organization, business] under the user's CD-2 decision. The
+# last three are declared [organization] ONLY — see authorizationModel.
+# ---------------------------------------------------------------------------
+permissionsRequested:
+  - id: customers.customer.create
+    group: customer
+    description: "Create a customer in a named Business of the Organization's directory."
+    sensitivity: sensitive
+    scopes: [organization, business]
+    phase: 1
+  - id: customers.customer.read
+    group: customer
+    description: >-
+      View one customer's full record, including its address and notes. Separate from
+      list: the list projection deliberately omits both sensitive-personal free-text
+      fields, so reading a whole record is a distinct disclosure.
+    sensitivity: read
+    scopes: [organization, business]
+    phase: 1
+  - id: customers.customer.list
+    group: customer
+    description: >-
+      Enumerate and search customers. Separate from read because enumeration is its own
+      disclosure: the identifiers and the shape of the customer base are information even
+      when the full records are not readable. Search shares this permission rather than
+      having its own — search IS enumeration, and a separate customers.customer.search
+      would let a role reach the same information through a second door.
+    sensitivity: read
+    scopes: [organization, business]
+    phase: 1
+  - id: customers.customer.update
+    group: customer
+    description: >-
+      Modify a customer's details. Cannot change status — archiving is its own permission —
+      and cannot change business_id, which is customers.customer.move.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    phase: 1
+  - id: customers.customer.archive
+    group: customer
+    description: >-
+      Withdraw a customer from active use. Data is retained INDEFINITELY; this is not a
+      delete and it starts no countdown to one.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    phase: 1
+  - id: customers.customer.restore
+    group: customer
+    description: >-
+      Return an archived customer to active use. Separate from archive: reinstating a
+      record puts it back into every list and search the Organization can see, and a role
+      that may tidy the directory is not automatically a role that may reinstate from it.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    phase: 1
+
+  # --- added by the CD-2 decision -------------------------------------------
+  - id: customers.customer.move
+    group: customer
+    description: >-
+      Move a customer from one Business to another within the same Organization. Never at
+      business scope: a move spans two Businesses and a business-scope grant is authority
+      over one, so granting it there would let the holder of one side reach across the
+      boundary it is standing on.
+    sensitivity: sensitive
+    scopes: [organization]
+    phase: 1
+
+  # --- added by the CD-8 decision -------------------------------------------
+  # customers.customer.delete was DELIBERATELY WITHHELD in the previous revision so that
+  # nobody could hold it. The user has now authorised permanent deletion by an authorized
+  # user, so the capability must exist and is declared here rather than left implicit.
+  - id: customers.customer.delete
+    group: customer
+    description: >-
+      Permanently delete a customer. Starts an explicit 30-day recovery window, after which
+      the customer's personal data is purged and cannot be recovered. Reachable only from
+      'archived'. Sensitivity is CRITICAL, not sensitive: AUTHORIZATION_STANDARD.md §6
+      classes irreversible data destruction as critical, which adds a mandatory explicit
+      confirmation collected by the platform from the human — never a request field.
+    sensitivity: critical
+    scopes: [organization]
+    phase: 1
+  - id: customers.customer.restore-deleted
+    group: customer
+    description: >-
+      Cancel a pending deletion within the 30-day window, returning the customer to
+      'archived'. Separate from customers.customer.restore, which returns an ARCHIVED
+      customer to active use: reversing a destruction order and reinstating a withdrawn
+      record are different acts, and the authority to tidy a directory is not the authority
+      to countermand a deletion an organization-level principal ordered.
+    sensitivity: sensitive
+    scopes: [organization]
+    phase: 1
+
+# Deliberately NOT declared, so that nobody can hold it:
+#   customers.customer.export  — this slice has no export. AUTHORIZATION_STANDARD.md §3.2
+#                                requires export to be separate from read, and the way to
+#                                keep it separate is to not declare it until an export
+#                                Action exists.
+permissionsDeliberatelyNotDeclared: [customers.customer.export]
+
+# Seed-role membership was the Team Lead's decision, not this contract's. The
+# recommendation below was ACCEPTED IN FULL and APPLIED to permission-catalog.yaml on
+# 2026-09-02; it is retained as the reasoning behind the seed data rather than as an open
+# proposal. Under 0007 D6's intersection rule a role may hold a permission only where the
+# permission's own declared scopes include the role's scope, which does most of this
+# automatically.
+seedRoleRecommendationAcceptedAndApplied:
+  business-owner:   "organization scope — all NINE. It is the Organization's owner."
+  business-admin:   "business scope — the SIX at [organization, business], and no more. The intersection rule already makes move, delete and restore-deleted impossible for it to hold, which is the intended outcome and not a gap to repair."
+  member:           "NONE. The user's decision states member reaches customers only through explicitly registered permissions. Granting nothing by default is the fail-closed reading, and a member that needs access gets a custom role."
+  developer:        "NONE."
+  platform-admin:   "NONE. Every one of these nine is tenant-scoped; a platform-scope role holding one is the escalation AUTHORIZATION_STANDARD.md §4 removed from marketplace-moderator."
+
+# ---------------------------------------------------------------------------
+# retention — DECIDED BY THE USER, 2026-09-01, relayed by the Team Lead. This closes the
+# policy half of CD-8. Recorded here, in the contract, because this is the file an
+# implementing agent reads first and because the number below has legal weight.
+# ---------------------------------------------------------------------------
+retention:
+  customerDeletionRetentionDays: 30
+
+  model:
+    - >-
+      ARCHIVED CUSTOMERS ARE RETAINED INDEFINITELY, until an authorized user requests
+      permanent deletion. ARCHIVE IS NOT A COUNTDOWN TO DELETION. No elapsed time, no
+      quota, no inactivity and no background job moves a record out of 'archived'.
+    - >-
+      PERMANENT DELETION IS EXPLICIT AND AUTHORIZED. It happens only when a principal
+      holding customers.customer.delete invokes customers.DeleteCustomer on an archived
+      customer, and it is confirmed and audited.
+    - >-
+      DELETION HAS A 30-DAY RECOVERY PERIOD. The record moves to 'pending_deletion',
+      deletion_scheduled_at is set to the moment of the request plus 30 days, and until
+      that moment customers.RestoreDeletedCustomer reverses it in full.
+    - >-
+      AFTER 30 DAYS THE CUSTOMER'S PERSONAL DATA IS PURGED. Purge is implemented as
+      deletion of the Customer row in its entirety — display_name, email, phone, country,
+      address and notes all go. Erasing only the fields classified sensitive-personal and
+      keeping a husk would leave business-confidential data behind under the name of a
+      purge; deleting the row satisfies the decision strictly rather than approximately.
+    - >-
+      AUDIT SURVIVES THE PURGE; THE PERSONAL DATA DOES NOT. Audit records MAY retain the
+      customer_id and action metadata and MUST NOT retain deleted personal details. This
+      costs nothing to honour here because the audit rules below already forbid audit
+      records from carrying field VALUES at all — the purge does not have to reach into the
+      audit trail to scrub anything, because nothing scrubbable was ever written there.
+    - >-
+      NO AUTOMATIC PURGE MAY EVER REMOVE AN ACTIVE OR MERELY ARCHIVED CUSTOMER. The purge
+      job's predicate is exactly: tenant scope, AND status = 'pending_deletion', AND
+      deletion_scheduled_at <= now. It has no other form, it never falls back to a date
+      comparison alone, and 'active' and 'archived' rows are not candidates under any
+      condition. This is a mandatory test obligation, not a code comment — see README.md
+      §12.
+
+  purgeJob:
+    tenancy: >-
+      MULTITENANCY_STANDARD.md §4 carrier 6: a scheduled job runs per tenant, or iterates
+      tenants explicitly one at a time. A purge that queries every Organization's rows in
+      one statement is a cross-tenant read, and one whose predicate is wrong is a
+      cross-tenant DELETE — the most destructive form the failure can take. Under 0006
+      Option A there is no infrastructure boundary to catch it.
+    audit: >-
+      Each purge writes an audit record in the purged customer's own Organization, naming
+      the platform as principal, the customer_id, and the deletion request it completes.
+      A destruction nobody recorded is indistinguishable afterwards from data that was
+      never there. THE RECORD IS WRITTEN BEFORE THE DATA IS DESTROYED — the ordering is
+      binding and its reasoning is in audit.deletionPathAudit.ordering.
+    ownership: >-
+      The mechanism is Core's to design and is deliberately NOT specified here — this
+      contract states the obligation and the predicate, not the scheduler.
+
+  manifestExpressibility:
+    status: >-
+      RESOLVED BY docs/decisions/0011-manifest-lifecycle-indefinite-retention.md (Accepted,
+      2026-09-01). CD-8 is CLOSED in both halves — the policy and its expression. The
+      finding below is retained as the RECORD OF WHY 0011 EXISTS, in the past tense. It is
+      not an outstanding problem and must not be read as one.
+    manifestValue: >-
+      lifecycle.onUninstall = retain, AND NO retentionDays FIELD AT ALL. Under 0011,
+      'retain' means the data is retained INDEFINITELY by definition, and retentionDays is
+      FORBIDDEN under it — not optional, not zero, not thirty. That is exactly the decided
+      policy: archived customers retained indefinitely, removed only by an explicit
+      authorized deletion.
+      An App wanting a BOUNDED hold declares 'archive' and says how long. This App must
+      never lose tenant data on a timer, so it declares 'retain' and says nothing further,
+      because under 0011 there is nothing further to say.
+    findingThatProducedIt: >-
+      HISTORY, RESOLVED — kept so that 0011 does not read as an arbitrary schema preference.
+      Before 0011, app-manifest.schema.json's lifecycle block required retentionDays
+      alongside BOTH 'retain' and 'archive'. retentionDays means how long tenant data is
+      held WHEN THE APP IS UNINSTALLED. The decided 30 is a different quantity in every
+      respect — a different trigger (an authorized user deleting ONE customer, versus the
+      Organization removing the App), a different subject (one record, versus the whole
+      directory), and a different meaning (a window during which the act can be UNDONE,
+      versus a period after which data is DISPOSED OF).
+      lifecycle.retentionDays = 30 would therefore have asserted that thirty days after
+      uninstall the Organization's entire customer directory is disposed of — the exact
+      opposite of the decision, and a false statement shown to the tenant on the uninstall
+      screen, which is the one place APP_STANDARD.md §9 requires the manifest to be true.
+      retentionDays = 0 was worse, not a workaround: the natural reading is 'retain for zero
+      days', which is deletion on uninstall wearing the word retain.
+      So the manifest could not be authored truthfully at all, and the slice was blocked on a
+      SCHEMA DEFECT rather than on a missing number. architecture-agent refused to write the
+      number and reported it rather than making the manifest validate and lie.
+    howItWasResolved: >-
+      0011 rejected a sentinel value (a magic number in an integer field is a comment
+      pretending to be data) and a second agreeing field (two fields that must agree is a
+      new way to be inconsistent), and instead REDEFINED 'retain' to mean indefinite, with
+      retentionDays forbidden under it and required only under 'archive'. The word already
+      carried that meaning in English; the schema was contradicting it.
+      The schema change itself is in packages/contracts/registries/app-manifest.schema.json,
+      whose lifecycle allOf now carries the two 0011 clauses as separate conditionals:
+      retentionDays REQUIRED when onUninstall is 'archive', and PROHIBITED when it is
+      'retain'. Applied on 2026-09-02.
+    whereTheNumberLives: >-
+      retention.customerDeletionRetentionDays = 30, in this contract, where it is true. It
+      is a PER-CUSTOMER DELETION RECOVERY WINDOW and it is not a lifecycle property of the
+      App. 0011 says so explicitly. The two quantities were never the same number in two
+      places; they were two different quantities that one field would have conflated.
+
+# ---------------------------------------------------------------------------
+# actions — API_STANDARD.md §1. One definition per operation; the internal API, public
+# API, OpenAPI schema, SDK method, MCP tool and documentation all derive from it.
+#
+# schemaRef values resolve into customer-directory-v1.schema.json.
+#
+# EACH ACTION'S 'scope' IS THE LEVEL ITS PERMISSION IS EVALUATED AT, AND IT IS A SINGLE
+# VALUE — not the list of scopes the permission may be declared at. The two are different
+# things and confusing them is the escalation AUTHORIZATION_STANDARD.md §4 warns about:
+# "evaluating at the wrong level is a silent privilege escalation".
+#
+# The six record-level Actions declare scope 'business', NOT 'organization', and that is
+# the whole mechanism by which the CD-2 decision reaches business-admin. A grant at a level
+# implies the levels beneath it and never above it (§4), so:
+#   - business-owner, holding the permission at 'organization', satisfies a 'business'
+#     evaluation for every Business in its Organization. It loses nothing.
+#   - business-admin, holding it at 'business', satisfies it for its assigned Business and
+#     for no other.
+# Had these Actions declared scope 'organization', a business-scope grant could never
+# satisfy them, business-admin would still be locked out, and the decision would have been
+# recorded in the permission catalog while changing nothing at the entry point.
+# Move, delete and restore-deleted declare 'organization' deliberately — see
+# authorizationModel.organizationOnlyRationale.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# mvpImplementationScope — TEAM LEAD RULING ON CD-13, 2026-09-02. BINDING.
+#
+# READ THIS BEFORE IMPLEMENTING ANYTHING BELOW.
+# ---------------------------------------------------------------------------
+mvpImplementationScope:
+  inScope:
+    - customers.CreateCustomer
+    - customers.GetCustomer
+    - customers.ListCustomers
+    - customers.SearchCustomers
+    - customers.UpdateCustomer
+    - customers.ArchiveCustomer
+    - customers.RestoreCustomer
+    - customers.MoveCustomerToBusiness
+  outOfScopeForTheMvp:
+    - customers.DeleteCustomer
+    - customers.RestoreDeletedCustomer
+  ruling: >-
+    customers.DeleteCustomer AND customers.RestoreDeletedCustomer ARE OUT OF SCOPE FOR THE
+    MVP IMPLEMENTATION. They are fully contracted here — shapes, errors, permissions,
+    scopes, transitions, audit obligations, HTTP binding — and they are NOT to be built in
+    this slice. No implementing agent writes a handler, a route, a client screen, an SDK
+    method or a test assertion that exercises either one, and no reviewer reads their
+    absence from the implementation as an oversight.
+  whyTheyAreContractedAnyway: >-
+    CONTRACTING THEM IS NOT THE SAME AS SCHEDULING THEM, AND THE DISTINCTION IS THE WHOLE
+    POINT. The user's MVP scope is create, list, search, view, edit, archive, restore.
+    Deletion arrived only as a CONSEQUENCE of the CD-8 retention decision: once 'archived'
+    means 'kept indefinitely', something must eventually be able to end that, or the
+    directory becomes unerasable and the retention policy is a promise the product cannot
+    keep. So the capability has to EXIST in the contract, with its permission declared and
+    registered, or the model is incomplete. What it does not have to do is ship now.
+    Contracting them now is also the cheap moment: adding an Action later is additive, but
+    adding two lifecycle states, a nullable deadline field and a new statusFilter member
+    AFTER either client ships is breaking under API_STANDARD.md §6. The shapes are settled
+    while settling them still costs nothing.
+  whatBlocksThem: >-
+    THE PLATFORM CONFIRMATION MECHANISM (CD-13). customers.DeleteCustomer is sensitivity
+    'critical', and AUTHORIZATION_STANDARD.md §7 requires permission + audit + an EXPLICIT
+    CONFIRMATION collected by the platform from the human. That mechanism does not exist,
+    has no decision record, and is not built by this slice. Until it does, DeleteCustomer is
+    unreachable — which is fail-closed and correct for the one Action in this App that
+    destroys a tenant's data.
+    RestoreDeletedCustomer is not blocked by the confirmation mechanism itself; it is
+    blocked by having nothing to act on. Its only legal entry state is 'pending_deletion',
+    and nothing can reach that state while DeleteCustomer is unreachable. Building it alone
+    would produce an Action that can only ever return failed_precondition.
+  whatMustNotBeDoneToUNBLOCKThem: >-
+    NO IMPLEMENTING AGENT MAY INVENT THE CONFIRMATION. Not a 'confirm' boolean on the
+    request, not a typed-name field, not a client-minted token, not a second call that sets
+    a flag, and not an SDK argument. Every one of those replaces a platform control with a
+    request parameter that an SDK caller or an AI principal can set for itself, which is
+    precisely the control §7 exists to be. DELETE /customers/{customer_id} carries no
+    request body and no confirmation parameter — see httpBinding.notes.
+    Nor may the block be worked around by downgrading sensitivity from 'critical' to
+    'sensitive'. The classification follows from the Action destroying data irreversibly
+    (§6); changing the label does not change what the Action does, it only removes the
+    control.
+  whatIsStillOwedInThisSlice: >-
+    THE PERMISSIONS ARE REGISTERED AND THE SEED GRANT IS REAL. customers.customer.delete
+    and customers.customer.restore-deleted are in permission-catalog.yaml and business-owner
+    holds both. That is deliberate: registration is what makes the model complete and
+    reviewable. Holding the permission is NOT sufficient to invoke the Action, because the
+    confirmation gate is a separate requirement, so nothing becomes reachable by being
+    granted.
+    THE PURGE JOB IS ALSO OUT OF SCOPE, for the same reason: nothing can enter
+    'pending_deletion', so there is nothing to purge. Its predicate and its
+    audit-before-destroy ordering stay specified in retention.purgeJob so that whoever
+    builds it later builds the right thing.
+    WHAT IS NOT DEFERRED: the 'pending_deletion' status value, the nullable
+    deletion_scheduled_at field, and the 'pending_deletion' and 'all' members of
+    statusFilter are IN SCOPE and must be implemented in the data model and the wire
+    shapes now. They are the parts that are breaking to add later. A client must tolerate a
+    status it will never see in this slice rather than crash on it.
+
+actions:
+
+  - id: customers.CreateCustomer
+    title: "Create customer"
+    description: >-
+      Add a new customer to a named Business in this Organization's directory. Use when a
+      person or company the Organization does business with is to be recorded for the first
+      time. The Business must be stated; the new customer starts active. Does not check for
+      duplicates.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/createCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/createCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, conflict, quota_exceeded, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.create
+    scope: business
+    sensitivity: sensitive
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 201
+    notes: >-
+      idempotent false means an Idempotency-Key header is ACCEPTED and honoured but not
+      REQUIRED (API_STANDARD.md §9). Requiring one on every directory create puts the
+      burden on both clients for a failure whose worst outcome is a duplicate row rather
+      than duplicated money or a duplicated message. The cost is stated: without a key, a
+      retried create after a network failure produces a second customer, and this contract
+      does NOT deduplicate on display_name or email — two customers may legitimately share
+      either. 'conflict' is returned only for an Idempotency-Key replayed with different
+      input. Open question CD-4.
+      not_found is NEW on this Action and it is about the BUSINESS, not the customer: a
+      business_id that is not a Business of the authenticated Organization returns
+      not_found, identically to one that exists nowhere, because distinguishing them would
+      make CreateCustomer a probe for the existence of other Organizations' Businesses. A
+      business_id inside this Organization that the principal is not authorized over
+      returns forbidden.
+
+  - id: customers.GetCustomer
+    title: "View customer"
+    description: >-
+      Retrieve one customer's full record, including address and notes. Use when showing a
+      customer's detail view. Returns archived and pending-deletion customers as well as
+      active ones — a withdrawn record is still readable by identifier; it is only withheld
+      from the default listing.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/getCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/getCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.read
+    scope: business
+    sensitivity: read
+    idempotent: false
+    audit: false
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      audit false. CD-1 IS NOW RULED ON by the Team Lead, 2026-09-01: reads stay unaudited,
+      as a DOCUMENTED, TIME-BOUNDED EXCEPTION to AUTHORIZATION_STANDARD.md §6, which stands
+      as written and has not been edited to match. The accepted risk and the future
+      obligation — coarse-grained enumeration auditing, not per-read auditing — are recorded
+      in audit.readAuditException and README.md §10 CD-1. It is a decision, not an omission,
+      and not a finding to be rediscovered.
+      A customer in this Organization but in an unauthorized Business returns forbidden; a
+      customer in another Organization, or nowhere, returns not_found. Both cases are
+      reachable from this Action and they are deliberately different answers — see
+      authorizationModel.notFoundVersusForbidden.wrongBusiness.
+
+  - id: customers.ListCustomers
+    title: "List customers"
+    description: >-
+      Return a page of customers in a stable order, active ones by default, from every
+      Business the caller is authorized over — or from one named Business. Use for the
+      directory view and for paging through it. Does not accept a search term — use
+      SearchCustomers for that.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/listCustomersInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/listCustomersOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.list
+    scope: business
+    sensitivity: read
+    idempotent: false
+    audit: false
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      A collection endpoint never 404s FOR ITS CONTENTS: no customers, and a filter that
+      matches none, both return an empty data array with next_cursor null. not_found and
+      forbidden appear here only for an EXPLICIT business_id parameter — not a Business of
+      this Organization, and a Business of this Organization the caller is not authorized
+      over, respectively. Rows in unauthorized Businesses are filtered out silently, with
+      no count and no placeholder; the caller asserted no scope, so it gets no error.
+      Ordering is fixed — README.md §8.
+
+  - id: customers.SearchCustomers
+    title: "Search customers"
+    description: >-
+      Find customers whose name, email address or telephone number matches a term. Use
+      when a person is looking for a specific customer rather than browsing. Matches on
+      display name, email and phone only — never on notes or address.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/searchCustomersInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/searchCustomersOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.list
+    scope: business
+    sensitivity: read
+    idempotent: false
+    audit: false
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      Shares customers.customer.list with ListCustomers deliberately. Matching semantics
+      are fixed by README.md §7 and are NOT selectable by the caller. No relevance score is
+      returned: no ranking function is defined, an undefined order makes cursor pagination
+      unstable, and two clients would order the same result set differently.
+      Business bounding is identical to ListCustomers, and it must be applied to the
+      CANDIDATE SET before matching rather than to the results after it. A search that
+      matched across Businesses the caller cannot list and then filtered the output would
+      still leak through page counts and cursor behaviour.
+
+  - id: customers.UpdateCustomer
+    title: "Edit customer"
+    description: >-
+      Change a customer's recorded details. Use to correct or complete a record. Only the
+      fields supplied are changed. Cannot change the customer's status — archive and
+      restore are separate operations — cannot change which Business the customer belongs
+      to, which is MoveCustomerToBusiness, and cannot be applied to an archived or
+      pending-deletion customer.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/updateCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/updateCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, conflict, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.update
+    scope: business
+    sensitivity: sensitive
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      failed_precondition when the customer's status is 'archived' or 'pending_deletion'.
+      A record whose destruction has been ordered must not be quietly edited during the
+      recovery window: what an authorized principal would then restore is not what it
+      chose to keep. LAST WRITE WINS: this
+      contract carries no optimistic-concurrency token, so two staff editing one customer
+      at once silently lose one set of changes. That is a real data-loss path and it is
+      recorded as open question CD-3 rather than closed by inventing a field the feature
+      scope excluded. Adding an optional 'version' request field plus a 'version' response
+      field later is ADDITIVE under API_STANDARD.md §6; making it required is breaking.
+
+  - id: customers.ArchiveCustomer
+    title: "Archive customer"
+    description: >-
+      Withdraw a customer from active use while keeping the record. Use when an
+      Organization stops doing business with a customer. The record remains readable by
+      identifier and restorable; it is removed from the default listing and the default
+      search. THIS NEVER DELETES DATA AND STARTS NO CLOCK: an archived customer is retained
+      indefinitely, and only an explicit DeleteCustomer ever ends that.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/archiveCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/archiveCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.archive
+    scope: business
+    sensitivity: sensitive
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      Archiving a pending-deletion customer returns failed_precondition: cancel the
+      deletion first, which returns the record to 'archived' anyway.
+      Archiving an already-archived customer returns failed_precondition rather than
+      succeeding as a no-op. The trade is stated: a strict transition means a retried
+      archive after a network failure returns an error the client must treat as success,
+      but a permissive one writes an audit record saying a customer was archived when
+      nothing changed, and an audit trail that records operations that did not happen is
+      worse than one that is occasionally awkward to retry against. See README.md §6.
+
+  - id: customers.RestoreCustomer
+    title: "Restore customer"
+    description: >-
+      Return an archived customer to active use. Use when an Organization resumes business
+      with a customer that was archived. The record reappears in the default listing and
+      the default search.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/restoreCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/restoreCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.restore
+    scope: business
+    sensitivity: sensitive
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      Restoring an already-active customer returns failed_precondition, symmetrically with
+      archive. Restoring a PENDING-DELETION customer also returns failed_precondition, and
+      that is not symmetry — it is deliberate separation. Cancelling a deletion is
+      RestoreDeletedCustomer under customers.customer.restore-deleted at organization
+      scope; if this Action accepted 'pending_deletion' it would let a business-scope
+      principal countermand an organization-level destruction order through the tidy-up
+      permission.
+
+  # --- added by the CD-2 decision -------------------------------------------
+
+  - id: customers.MoveCustomerToBusiness
+    title: "Move customer to another business"
+    description: >-
+      Move one customer from the Business it is in to another Business in the same
+      Organization. Use when a customer is served by a different part of the Organization
+      than the one that recorded it. The customer's details and lifecycle state are
+      unchanged; only which Business it belongs to changes.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/moveCustomerToBusinessInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/moveCustomerToBusinessOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.move
+    scope: organization
+    sensitivity: sensitive
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      THIS ACTION EXISTS BECAUSE THE DECISION REQUIRES THE MOVE TO BE SEPARATE AND AUDITED.
+      A business_id on updateCustomerInput would have been the same capability without a
+      permission of its own, without an audit entry naming both Businesses, and reachable
+      by a business-scope principal.
+      Scope is 'organization' and not 'business': a move spans two Businesses and a
+      business-scope grant is authority over one. Core still validates BOTH ends —
+      destination not a Business of the authenticated Organization -> not_found (identical
+      to a Business that exists nowhere, so this is not a probe for other Organizations'
+      structure); destination inside this Organization but outside the principal's
+      authorized set -> forbidden; source customer outside the tenant -> not_found.
+      failed_precondition when the destination Business is the one the customer is already
+      in. A move that moves nothing still writes an audit record saying a customer changed
+      Business, and an audit trail that records operations which did not happen is the
+      thing §6 of README.md refuses elsewhere; the reasoning is the same here.
+      Moving a pending-deletion customer is failed_precondition. Moving an archived
+      customer is ALLOWED — reorganising the Organization's own structure should not be
+      blocked by a record being withdrawn from use, and an archived customer in a Business
+      that no longer serves it is exactly a record someone will need to move.
+
+  # --- added by the CD-8 decision -------------------------------------------
+
+  - id: customers.DeleteCustomer
+    title: "Delete customer permanently"
+    description: >-
+      Request the permanent deletion of an archived customer. Use when the Organization
+      must genuinely erase a customer's records rather than withdraw them. THIS IS NOT
+      ARCHIVE. The record moves to 'pending_deletion' and, after 30 days, the customer's
+      data is permanently purged and cannot be recovered by anyone. Within those 30 days
+      the deletion can be cancelled.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/deleteCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/deleteCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.delete
+    scope: organization
+    sensitivity: critical
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      sensitivity 'critical', not 'sensitive'. AUTHORIZATION_STANDARD.md §6 classes
+      irreversible data destruction as critical, which requires permission + audit +
+      EXPLICIT CONFIRMATION collected by the platform from the human (§7). That mechanism
+      does not exist and has no decision record, so THIS ACTION IS UNREACHABLE until it
+      does — on top of the permission-registration blocker that holds every Action here.
+      That is fail-closed and correct: the one Action in this App that can destroy a
+      tenant's data is the one that must not become reachable by accident. README.md CD-13.
+      REACHABLE ONLY FROM 'archived'. Deleting an active customer returns
+      failed_precondition, not a silent archive-then-delete. Deletion is then a deliberate
+      two-step act by a principal who has already withdrawn the record from use, and a
+      mis-click on a live customer cannot start a destruction clock. This is an
+      INTERPRETATION of the decision, which fixed the policy and not the entry state; the
+      alternative — allowing deletion straight from 'active' — is stated as CD-12 rather
+      than assumed to be wrong.
+      Deleting an already-pending-deletion customer returns failed_precondition; a second
+      request does not extend, restart or shorten the window.
+      httpStatusOnSuccess is 200 and the full record is returned, because nothing has been
+      destroyed yet. A 204 would tell the caller the data is gone when the whole point of
+      the design is that for 30 days it is not.
+
+  - id: customers.RestoreDeletedCustomer
+    title: "Cancel deletion"
+    description: >-
+      Cancel a pending permanent deletion and keep the customer. Use within the 30-day
+      recovery window when a deletion was requested in error or is no longer wanted. The
+      customer returns to 'archived' — the state it was in when the deletion was ordered.
+    input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/restoreDeletedCustomerInput" }
+    output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/restoreDeletedCustomerOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    permission: customers.customer.restore-deleted
+    scope: organization
+    sensitivity: sensitive
+    idempotent: false
+    audit: true
+    exposure: [internal, public]
+    httpStatusOnSuccess: 200
+    notes: >-
+      failed_precondition on any status other than 'pending_deletion'.
+      AFTER THE PURGE THERE IS NOTHING TO NAME. Once the row is gone the identifier
+      resolves to nothing and this Action returns not_found — the same not_found as a
+      foreign-Organization identifier and as an identifier that never existed, byte for
+      byte. A distinct 'already purged' answer would turn every purged customer into a
+      permanent, queryable record of the fact that the Organization once held one, which is
+      the opposite of what a purge is for.
+      Returns to 'archived' rather than 'active' by design: see the output schema. Making
+      the customer active again requires customers.customer.restore, separately.
+
+# ---------------------------------------------------------------------------
+# manifest — the App declaration derived from this contract. Authored 2026-09-02.
+# ---------------------------------------------------------------------------
+manifest:
+  path: packages/contracts/apps/customers/manifest.json
+  lifecycle: >-
+    onUninstall 'retain', with NO retentionDays, valid and TRUE under ADR 0011. The
+    uninstall screen tells the tenant its customer directory is kept, and nothing in the
+    platform disposes of it on a timer. See retention.manifestExpressibility.
+  derivation: >-
+    THE MANIFEST COPIES NO SHAPE. Its Actions carry $ref pointers into
+    urn:dudo:schema:customer-directory:1 rather than duplicates of the request and response
+    schemas, so the two cannot drift apart by one being edited and the other not.
+    It does RESTATE the flat declarations, because the schema has no reference form for
+    them: its NINE permissions, TEN Actions, evaluation scopes, sensitivities, error sets,
+    audit flags, exposures and TEN routes are the ones declared in this contract, unchanged.
+    Ten Actions against nine permissions is correct and not a miscount — ListCustomers and
+    SearchCustomers deliberately share customers.customer.list, because search IS
+    enumeration and a second permission would be a second door to the same information.
+    Everything restated is a drift surface. See apis.driftIsTheRisk.
+  apis:
+    status: >-
+      DECLARED, 2026-09-02, after ADR 0012 removed the block. The manifest's 'apis' array
+      carries all TEN routes, mirroring httpBinding below one for one: same Action, same
+      method, same path, same 'public' surface.
+    whyDeclareRatherThanLeaveThemInHttpBindingAlone: >-
+      Because 'public' without an address is half a declaration. An Action's 'exposure' says
+      it MAY be surfaced publicly; only 'apis' says at which method and path, and the
+      manifest is the machine-readable document that an admission path, a namespace-collision
+      check and a generated OpenAPI surface actually read. Leaving the routes in this YAML
+      alone would keep them true and keep them unreadable by anything.
+    driftIsTheRisk: >-
+      apis and httpBinding now state the same ten facts in two files, so they CAN disagree,
+      and they must not. HTTPBINDING BELOW IS THE AUTHORED SOURCE; manifest.apis mirrors it.
+      A route added, removed, renamed or re-methoded in one and not the other is a contract
+      defect of the same class as cross-client contract drift, and catching it is a qa-agent
+      check rather than a reviewer's good intentions. This duplication is already accepted
+      for permissions, scopes, sensitivities and error sets; the request and response shapes
+      escape it by $ref, and routes have no equivalent.
+    theTwoDeferredActionsAreDeclaredToo: >-
+      DeleteCustomer and RestoreDeletedCustomer have routes here even though
+      mvpImplementationScope rules both OUT OF SCOPE FOR THE MVP IMPLEMENTATION, and that is
+      deliberate. The manifest describes the CONTRACT's surface, not the build plan. Eight
+      routes here against ten in httpBinding would create precisely the two-document
+      discrepancy the paragraph above forbids, and would smear the deferral across two files
+      instead of stating it once. The deferral lives in ONE authoritative place —
+      mvpImplementationScope — with its reason and its blocker. A declared route is not a
+      live route: nothing installs this App, and the §7 confirmation gate keeps
+      DeleteCustomer unreachable whatever address it carries.
+    historyThatProduced0012: >-
+      RESOLVED BY docs/decisions/0012-manifest-api-path-underscore.md (Accepted,
+      2026-09-02). THE BLOCK ON DECLARING 'apis' TRUTHFULLY IS GONE. The account below is
+      kept in the PAST TENSE as the record of why 0012 exists; it is not an outstanding
+      problem.
+      WHAT WAS WRONG: app-manifest.schema.json constrained apis[].path to ^/[a-z0-9\-/{}]*$,
+      which EXCLUDED THE UNDERSCORE, so /customers/{customer_id} could not be expressed.
+      API_STANDARD.md §5 mandates snake_case on the wire and its own worked example is
+      /api/v1/orders/{order_id} — which the pattern REJECTED. The registry contradicted the
+      standard it exists to encode, and the only paths it accepted were ones the standard
+      forbids.
+      WHAT WAS REFUSED: {customer-id} validates. Writing it would have made the manifest pass
+      at the cost of putting a kebab-case parameter on the wire in a platform that mandates
+      snake_case — the same move as writing retentionDays = 30 to satisfy 0011, a field bent
+      to accept a value the author knows to be wrong. It was declined, and the optional
+      'apis' array was omitted instead, leaving the routes in httpBinding where they are
+      expressed truthfully. Each Action still declares its 'public' exposure, so nothing was
+      surfaced undeclared.
+      WHAT 0012 DECIDED: add '_' to the character class — ^/[a-z0-9_\-/{}]*$. Nothing else
+      changes; paths stay lowercase, stay rooted at '/', and still admit only segment
+      characters, braces and hyphens. No existing manifest is invalidated, because the change
+      only widens what is accepted.
+      WHERE IT STANDS NOW: applied. app-manifest.schema.json carries the widened pattern as
+      of 2026-09-02, and the manifest declares all ten routes with snake_case parameters.
+      httpBinding below remains the authored source; manifest.apis mirrors it.
+      FIXTURE COVERAGE IS OWED (0012): no fixture exercises apis[].path in either form, so
+      the grammar is asserted and inspected, never executed — and there is no JSON Schema
+      implementation in this repository to execute it with (ADR 0009). qa-agent adds a
+      snake_case accepting case and a rejecting case (uppercase, or a space).
+  deliberateOmissions:
+    quotas: >-
+      THE 'quotas' BLOCK IS ABSENT because freeTierImpact.atTheLimit states that the
+      per-Organization customer count quota is REQUIRED before external Organizations are
+      admitted but that its VALUE is a product decision NOT made — 10,000 is a
+      recommendation, not a decision. Writing a number into the manifest would set that
+      decision by side effect, in the file the platform reads to enforce it.
+  assumptionsStated:
+    platformMinimumVersion: >-
+      Declared '0.1.0'. platform.minimumVersion is REQUIRED by the schema and no platform
+      versioning scheme has been recorded, so any value is a guess. 0.1.0 was chosen because
+      it is the honest description of a platform with no released version — '1.0.0' would
+      assert a release that does not exist and would make the App uninstallable against
+      every build there will ever be before it. Revisit when platform versioning is decided.
+    rollbackSupported: >-
+      Declared true. This is v1.0.0 with no predecessor and no migration has run, so there
+      is nothing to roll back and the claim is satisfiable today. It is also an OBLIGATION
+      going forward, not a formality: APP_STANDARD.md §6 requires every migration to be
+      forward-only with a stated rollback path, and this flag is the manifest asserting that
+      obligation is met. 'false' would additionally bar the App from the marketplace.
+    permissionRequestScope: >-
+      ALL NINE ARE REQUESTED AT 'organization' SCOPE IN THE MANIFEST, INCLUDING THE SIX
+      WHOSE ACTIONS EVALUATE AT 'business'. That is not a contradiction, and the reason is
+      the ruling recorded immediately below.
+
+  # -------------------------------------------------------------------------
+  # manifestScopeVersusActionScope — TEAM LEAD RULING, 2026-09-02.
+  #
+  # An INTERPRETATION of docs/decisions/0007 rule 5, NOT a separate accepted record. It is
+  # written here, in full, rather than folded into a sentence, because a reader who gets
+  # this wrong gets a privilege-escalation wrong. If it later needs its own ADR, it should
+  # be findable, not buried.
+  # -------------------------------------------------------------------------
+  manifestScopeVersusActionScope:
+    ruling: >-
+      THE MANIFEST SCOPE IS THE CEILING. THE ACTION SCOPE IS THE EVALUATION LEVEL. They
+      answer different questions, they are set at different times, and THEY NEVER ADD.
+    governingText: >-
+      docs/decisions/0007 rule 5, Accepted: "Requested scope cannot exceed the user, role,
+      tenant or App scope. The effective scope is the INTERSECTION, NEVER THE UNION." Rule 5
+      is also the rule 0007 identifies as the one whose absence allowed CRIT-1, so reading
+      it as a union is not a small error.
+    atInstallTime: >-
+      An App is installed INTO AN ORGANIZATION. core.app.install is declared scopes
+      [organization], so the installation names no Business and there is nothing for a
+      business-scope App grant to be scoped to. The manifest therefore requests at
+      'organization' scope, and all nine here do.
+    atCallTime: >-
+      The Action is evaluated at ITS OWN declared scope against THE CALLING PRINCIPAL's
+      grant. business-admin, holding customers.customer.read at 'business', satisfies a
+      business-scoped Action for its assigned Business and for no other. The App's
+      organization-level installation does not enter that comparison as a grant.
+    theErrorThisPrevents: >-
+      READING THE APP'S SCOPE AS A FLOOR. It is a ceiling, never a floor. An App installed
+      organization-wide does NOT give a business-admin organization-wide reach; it gives
+      that principal their own business scope, through an App that is permitted to operate
+      anywhere in the Organization. The union reading would silently promote every
+      business-scope principal in the tenant to organization scope the moment an App was
+      installed — a privilege escalation with no grant, no audit entry and no visible cause,
+      triggered by an administrative act nobody would associate with permissions.
+    consequenceForThisContract: >-
+      NOTHING IN authorizationModel.evaluationOrder CHANGES. Steps 3, 5, 5b and 5c stand
+      exactly as written: the tenant is derived from context, the permission is authorized
+      at the Action's declared scope without reference to a record, the row is resolved
+      inside the tenant, and only then is its business_id checked against the principal's
+      authorized business set. The organization-scope manifest request widens none of that.
+      The App is the envelope; Core is still the authority, on every call.
+    statusOfThisReading: >-
+      AN INTERPRETATION OF 0007 RULE 5, ruled by the Team Lead on 2026-09-02 and recorded
+      here rather than presented as settled law. It is NOT its own accepted decision record.
+      If the App-scope-versus-principal-scope relationship turns out to need one — most
+      likely when the App runtime is designed under AP2/SE2 and something has to actually
+      enforce the ceiling — this block is what that record supersedes.
+
+# ---------------------------------------------------------------------------
+# httpBinding — API_STANDARD.md §5.
+#
+# 'customers' is NOT an allocated segment in core-object-registry.yaml's
+# reservedApiPathSegments, so this App is served under the App namespace, which is valid
+# by construction and needs no allocation. See README.md §9: allocating the flat segment
+# is a Team Lead decision that is CHEAP NOW and BREAKING LATER.
+# ---------------------------------------------------------------------------
+httpBinding:
+  basePath: "/api/v1/apps/customers"
+
+  # EVERY 'path' BELOW IS QUOTED, AND THE QUOTES ARE LOAD-BEARING RATHER THAN COSMETIC.
+  # Each route is a YAML FLOW MAPPING — the outer { ... }. Inside a flow mapping an
+  # unquoted '{' opens a NESTED flow mapping, so an unquoted /customers/{customer_id}
+  # terminates the plain scalar at '/customers/' and the parser then fails with
+  # "expected ',' or '}', but got '{'". The file does not parse at all: not the route, the
+  # WHOLE FILE, including every tenancy, authorization and audit rule above it.
+  # This is why the paths are quoted and why they stay quoted. The unbraced ones —
+  # /customers and /customers/search — are legal either way and are quoted for uniformity,
+  # so that adding a braced path by copying the line above cannot reintroduce the defect.
+  # DO NOT 'tidy' these quotes away.
+  routes:
+    - { action: customers.CreateCustomer,          method: POST,   path: "/customers",                                surface: public }
+    - { action: customers.ListCustomers,           method: GET,    path: "/customers",                                surface: public }
+    - { action: customers.SearchCustomers,         method: GET,    path: "/customers/search",                         surface: public }
+    - { action: customers.GetCustomer,             method: GET,    path: "/customers/{customer_id}",                  surface: public }
+    - { action: customers.UpdateCustomer,          method: PATCH,  path: "/customers/{customer_id}",                  surface: public }
+    - { action: customers.ArchiveCustomer,         method: POST,   path: "/customers/{customer_id}/archive",          surface: public }
+    - { action: customers.RestoreCustomer,         method: POST,   path: "/customers/{customer_id}/restore",          surface: public }
+    - { action: customers.MoveCustomerToBusiness,  method: POST,   path: "/customers/{customer_id}/move",             surface: public }
+    - { action: customers.DeleteCustomer,          method: DELETE, path: "/customers/{customer_id}",                  surface: public }
+    - { action: customers.RestoreDeletedCustomer,  method: POST,   path: "/customers/{customer_id}/cancel-deletion",  surface: public }
+  notes:
+    - >-
+      /customers/search is a sub-resource read, not a verb in a path. Archive, restore,
+      move and cancel-deletion are sub-resource actions on a record, which API_STANDARD.md
+      §5 permits explicitly for operations that are not CRUD-shaped; each still maps to
+      exactly one Action.
+    - >-
+      DELETE /customers/{customer_id} carries NO request body and no confirmation
+      parameter. The confirmation that sensitivity 'critical' requires travels through the
+      platform's elevation mechanism, which does not exist yet, and NOT through this route.
+      Any implementation that invents a body field — a 'confirm' flag, a typed-name field,
+      a token the client mints — has replaced a platform control with a request parameter
+      an SDK caller or an AI principal can set for itself.
+    - >-
+      There is no route that changes business_id by any means other than
+      POST /customers/{customer_id}/move. In particular PATCH /customers/{customer_id}
+      rejects business_id as an unknown field, at the schema, before any handler sees it.
+    - >-
+      Every route is served by the same Action definition that the internal API and the SDK
+      use. There is no route handler containing logic — an operation with a handler but no
+      Action has no permission, no schema, no audit and no AI surface.
+
+# ---------------------------------------------------------------------------
+# events — NONE in this slice, stated explicitly rather than omitted
+# ---------------------------------------------------------------------------
+events:
+  published: []
+  consumed: []
+  rationale: >-
+    No event is published and none is consumed. EVENT_STANDARD.md §1: a publisher that
+    would be broken by having no consumers needs an API call, not an event — and nothing
+    else exists in Dudo to consume a customer event. Adding a new event type later is
+    ADDITIVE (EVENT_STANDARD.md §7), so deferring costs nothing, while publishing now costs
+    something real: a business-confidential payload sitting on a queue whose topology (EV1)
+    and retention (EV2) are both undecided ADRs.
+  reservedNames: >-
+    So that a future App does not invent a second name for the same fact
+    (EVENT_STANDARD.md §8), these names are RESERVED for this App and this entity and
+    should be registered when a consumer first exists: customers.CustomerCreated,
+    customers.CustomerUpdated, customers.CustomerArchived, customers.CustomerRestored,
+    customers.CustomerMovedToBusiness, customers.CustomerDeletionRequested,
+    customers.CustomerDeletionCancelled and customers.CustomerPurged, each at version 1.
+    Reserving the last four now matters more than reserving the first four did: a second
+    App that invents 'CustomerDeleted' for the deletion REQUEST while this App means the
+    PURGE by it would put two irreconcilable meanings behind one name, on the one operation
+    in this contract that destroys data. The envelope for any of them carries tenant_id and
+    business_id (EVENT_STANDARD.md §3) and never the customer's personal data — a purge
+    event that carried the record it purged would outlive the purge. They are NOT
+    registered in event-catalog.yaml by this task, because
+    registering an event nothing publishes makes the catalog aspirational, which is the one
+    property that file is supposed not to have.
+
+# ---------------------------------------------------------------------------
+# mcp — NONE in this slice
+# ---------------------------------------------------------------------------
+mcp:
+  tools: []
+  rationale: >-
+    No Action declares 'mcp' in its exposure. Exposure is opt-in and nothing becomes an AI
+    tool by default or by accident (API_STANDARD.md §1). AI and MCP are Phase 8, and
+    exposing a directory of named people and their contact details to an AI principal is a
+    data-processing decision (core.ai.configure is classified critical for exactly this
+    reason), not a contract detail. Every Action here is already shaped for it: one
+    definition, one permission, one scope, human- and model-readable descriptions.
+    ONE ACTION IS FLAGGED IN ADVANCE. customers.DeleteCustomer destroys tenant data and is
+    sensitivity 'critical', so adding 'mcp' to its exposure is not the ordinary additive
+    change adding 'mcp' to a read Action would be. It must not be done in the same breath
+    as the others, and its confirmation must be collected by the platform from the human —
+    a model asserting the user agreed is not a confirmation (MCP_STANDARD.md §5).
+
+# ---------------------------------------------------------------------------
+# audit — AUTHORIZATION_STANDARD.md §11, 0007 D14, SECURITY_STANDARD.md §6
+# ---------------------------------------------------------------------------
+audit:
+  auditedActions:
+    - customers.CreateCustomer
+    - customers.UpdateCustomer
+    - customers.ArchiveCustomer
+    - customers.RestoreCustomer
+    - customers.MoveCustomerToBusiness
+    - customers.DeleteCustomer
+    - customers.RestoreDeletedCustomer
+  auditedSystemOperations:
+    - >-
+      THE PURGE. Performed by the platform, not by a principal, and audited in the purged
+      customer's own Organization: platform principal, customer_id, the deletion request it
+      completes, and the time. A destruction nobody recorded is indistinguishable
+      afterwards from data that was never there, and this is the record the decision means
+      when it says audit MAY retain the customer ID and action metadata.
+
+  # -------------------------------------------------------------------------
+  # deletionPathAudit — Team Lead ruling on CD-1, 2026-09-01. Binding.
+  # -------------------------------------------------------------------------
+  deletionPathAudit:
+    rule: >-
+      THE DELETION PATH IS AUDITED WITHOUT EXCEPTION: the deletion request
+      (customers.DeleteCustomer), the recovery within the window
+      (customers.RestoreDeletedCustomer), and the final purge. None of the three is subject
+      to the read-audit exception below, to any tenant policy toggle, to sampling, to a rate
+      limit, or to any later change made to reduce audit volume. There is no configuration
+      under which one of them is not written.
+    ordering: >-
+      THE PURGE AUDIT RECORD IS WRITTEN BEFORE THE PERSONAL DATA IS DESTROYED, NOT AFTER.
+      This INVERTS evaluationOrder step 7 — 'perform the operation, commit, then write the
+      audit record' — and the inversion is deliberate and applies to the purge alone.
+      WHY: after a purge there is nothing left to reconstruct the record from. The purge
+      audit record is the only remaining evidence that the customer ever existed, so a purge
+      that destroys the data and then fails to write its audit line leaves no trace of
+      itself at all — unrecoverable by construction, silent, and indistinguishable
+      afterwards from a customer that was never created.
+      ORDER THE FAILURE MODES RATHER THAN HOPING NEITHER HAPPENS. Audit-then-delete fails as
+      an audit record for a purge that did not complete: the row still exists, the predicate
+      still matches, the job retries, and the discrepancy is VISIBLE and reconcilable.
+      Delete-then-audit fails as data destroyed with no record: INVISIBLE and
+      unreconcilable. The first is a discrepancy. The second is a hole.
+    atomicity: >-
+      WHERE THE STORAGE BOUNDARY CAN MAKE THE AUDIT WRITE AND THE ROW DELETION ATOMIC, IT
+      MUST. Ordering only decides anything when the two can fail independently, and one
+      transaction removes the question entirely.
+      Where atomicity is not available the order above is mandatory, not a preference, and
+      the cost of a retry is stated rather than hidden: if the audit write commits and the
+      deletion does not, the retry writes a SECOND audit record for the same customer_id.
+      Duplicate purge lines for one customer are acceptable and expected — append-only means
+      they are never edited away — and a missing line is not. Duplicates can be reconciled;
+      an unrecorded destruction cannot be reconstructed.
+    scope: >-
+      THIS APPLIES TO THE PURGE ONLY. Every other Action in this contract keeps
+      evaluationOrder step 7: operate, commit, then audit. Generalising the inversion would
+      make every failed mutation leave an audit record saying it happened, which is the
+      failure README.md §6 refuses when it rejects permissive archive transitions.
+
+  unauditedActions: [customers.GetCustomer, customers.ListCustomers, customers.SearchCustomers]
+
+  # -------------------------------------------------------------------------
+  # readAuditException — Team Lead ruling on CD-1, 2026-09-01. Binding.
+  #
+  # A DOCUMENTED, TIME-BOUNDED EXCEPTION taken by this contract. NOT a reinterpretation of
+  # the standard, and the standard has NOT been edited to match.
+  # -------------------------------------------------------------------------
+  readAuditException:
+    decision: >-
+      Reads stay UNAUDITED in this slice, as the user scoped and the Team Lead ruled on
+      2026-09-01. GetCustomer, ListCustomers and SearchCustomers write no audit record.
+    conflictItIsAnExceptionTo: >-
+      AUTHORIZATION_STANDARD.md §6 states that explicit access to customer information maps
+      to 'sensitive' at minimum, and 'sensitive' requires an audit event. Read literally,
+      that makes every customer read audited.
+      THE STANDARD STANDS AS WRITTEN AND HAS NOT BEEN EDITED TO REMOVE THIS CONFLICT. A
+      document quietly amended to agree with an implementation stops being a standard and
+      becomes a description of what was built. The exception is recorded here, in the
+      artifact taking it, which is where an exception belongs and where a reader of this
+      contract will actually find it.
+    boundedBy: >-
+      The MVP slice. It expires when the slice is superseded and it extends to no other App,
+      Action or entity by precedent. An agent citing this block to justify unaudited reads
+      elsewhere is citing it wrongly.
+    acceptedRisk: >-
+      A principal holding only customers.customer.list can page the ENTIRE customer base of
+      their Organization and leave NO AUDIT TRAIL. With no export permission declared, the
+      whole of that risk sits on 'list'. ACCEPTED for the MVP slice on the user's explicit
+      instruction. Recorded so it is not rediscovered later and reported as a finding: it is
+      a decision, not an oversight. Full statement in README.md §10 CD-1.
+    futureObligation: >-
+      COARSE-GRAINED ENUMERATION AUDITING — who enumerated, when, and how many results — and
+      deliberately NOT an audit record per individual record read.
+      The distinction is the point, and it is stated so the cheap control is not lost behind
+      the expensive one. Auditing individual GetCustomer calls is expensive and low-value: it
+      puts an audit write on the busiest read path in the product, on a single-threaded
+      shared D1, and produces a log nobody can read. Auditing that an enumeration OCCURRED is
+      cheap — one record per list or search call, not one per row — and it is the control
+      that would actually catch bulk exfiltration, because bulk exfiltration IS enumeration.
+      WE ARE DEFERRING THE CHEAP, USEFUL ONE, NOT THE EXPENSIVE ONE. That is the honest
+      description of what this exception costs, and it is why the obligation is named
+      concretely here rather than left as 'audit reads one day'.
+  record:
+    fields: >-
+      timestamp, tenant, principal type and id, acting-on-behalf-of where applicable, app
+      id, action id, the permission and scope actually evaluated, target resource
+      identifier, the decision, and correlation id. For every audited Action here the
+      target resource identifiers include the customer's business_id, and for
+      MoveCustomerToBusiness both the source and the destination business_id — identifiers
+      inside the caller's own tenant, never business data, and the move record is
+      meaningless without both ends.
+    rules:
+      - "Append-only. Never updated, never deleted by application code."
+      - >-
+        IDENTIFIERS AND DECISIONS, NEVER BUSINESS DATA. An UpdateCustomer audit record
+        names WHICH FIELDS CHANGED — the field names — and never the old or new values. A
+        CreateCustomer audit record carries the customer_id and never the display_name. An
+        audit log that accumulates customer names and addresses is a second copy of the
+        business data with different access rules.
+      - >-
+        FAILURES ARE AUDITED, NOT ONLY SUCCESSES. A denied create, update, archive,
+        restore, move, delete or cancel-deletion produces an audit record. An attack looks
+        like a long run of failures, and a log containing only successes cannot show one.
+        THE WRONG-BUSINESS DENIAL IS AUDITED SPECIFICALLY. It is the one authorization
+        failure in this contract that depends on a record, so it is the one that a run of
+        attempts can use to map the Organization's own directory across Businesses. The
+        record names the caller-supplied customer_id and the permission and scope
+        evaluated. It does NOT name the record's actual business_id: telling the log which
+        Business the caller was refused turns the audit trail into the disclosure the
+        refusal withheld, for anyone who can read the log at a narrower scope than the
+        record.
+      - >-
+        THE AUDIT TRAIL SURVIVES THE PURGE AND NEEDS NO SCRUBBING TO DO SO. Because audit
+        records carry identifiers and decisions and never field values, a purged customer's
+        audit history already contains no personal data — nothing has to reach into an
+        append-only log to erase anything, which is fortunate, because an append-only log
+        that application code edits is neither append-only nor a log. This is what makes
+        the user's 'audit MAY retain the customer ID and action metadata, but NOT deleted
+        personal details' satisfiable at the same time as 'never updated, never deleted'.
+        IT IS ALSO A STANDING OBLIGATION, NOT A ONE-OFF CHECK: any future change that puts
+        a field VALUE into an audit record — a display_name 'for readability', a diff, an
+        error message quoting input — silently creates a copy of the personal data that the
+        purge cannot reach, and turns a compliant purge into a partial one.
+      - >-
+        For a not_found on a mutating Action, the record carries the identifier AS SUPPLIED
+        BY THE CALLER, marked unresolved, and NOTHING derived from any record — not whether
+        one exists elsewhere, not a foreign tenant id, not a foreign principal id. This is
+        an INTERPRETATION of az7-r3's requirement that the attempt be audited in the
+        caller's tenant without disclosing the other tenant's data, and it is flagged as
+        open question CD-5 rather than assumed correct.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — .claude/rules/architecture.md §6a requires this before the feature is
+# built. Figures are the D1 FREE-tier limits recorded in MULTITENANCY_STANDARD.md §7.3.
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-queries-per-invocation, worker-invocations, cron-triggers]
+  recomputedFor: >-
+    RE-RUN ON 2026-09-01 for the CD-2 and CD-8 changes: business_id adds a column and an
+    index, and deletion_scheduled_at adds a column. The previous revision's headline
+    figures mixed conventions — the typical projection carried an index/page overhead
+    allowance and the worst case did not — so the arithmetic below states BASE ROWS and
+    INDEX separately and adds them, rather than restating a number whose basis was
+    inconsistent. The new totals are larger partly because of this change and partly
+    because the previous ones were understated at the worst case.
+  rowSize:
+    typical: "~424 bytes — the previous ~400, plus ~24 for business_id. deletion_scheduled_at is null in every state except pending_deletion and costs nothing typical."
+    worstCase: >-
+      ~3.15 KB — display_name 200 + email 254 + phone 32 + country 2 + address 500 + notes
+      2000, plus identifiers, business_id and timestamps, before index overhead. The
+      2000-character notes field is still where the worst case lives; business_id moves it
+      by well under 1%.
+  newIndex: >-
+    The two-level check needs (organization_id, business_id, display_name, customer_id) to
+    be servable without a scan — the tenant predicate first, the business predicate second,
+    then the fixed sort order of README.md §8. Key size ~90 bytes typical, ~270 bytes at a
+    200-character display_name.
+  projection: >-
+    A closed beta of at most 10 Organizations (MULTITENANCY_STANDARD.md §7.5) at 5,000
+    customers each = 50,000 rows.
+      TYPICAL:    424 B x 50,000  = ~21.2 MB base, plus ~4.5 MB for the new index = ~26 MB.
+      WORST CASE: 3,150 B x 50,000 = ~157.5 MB base, plus ~13.5 MB for the new index
+                  = ~171 MB.
+    That is ~5% and ~34% of the 500 MB shared production ceiling from this one feature,
+    against ~4% and ~31% before this revision — so the CD-2 change costs roughly 5 MB
+    typical and 15 MB at the worst case, most of it the index rather than the column. Both
+    figures exclude the pre-existing indexes and the audit table. The worst case is the
+    number that matters, because the ceiling is shared with every other Organization and
+    every other feature.
+  queryBudget: >-
+    Well within the 50-queries-per-Worker-invocation limit: Get 1, List 1, Search 1, Create
+    1 insert + 1 audit write, Update 1 read + 1 write + 1 audit write, Move 1 read + 1
+    write + 1 audit write, Delete 1 read + 1 write + 1 audit write, RestoreDeleted the
+    same. No total-count query exists, which is one of the reasons the collection envelope
+    has no total.
+    THE AUTHORIZED BUSINESS SET IS NOT A PER-ACTION QUERY. It belongs to the authorization
+    decision and arrives with the authenticated context. If Core must instead read it per
+    invocation that is +1 query on every Action in this App — still far below 50, but it is
+    a per-request cost on the busiest path in the product and it should be a deliberate
+    choice rather than something discovered in profiling.
+  purgeJobBudget: >-
+    NEW COST, NEW ALLOWANCE. The 30-day purge needs a scheduled Worker (Cloudflare cron
+    triggers, part of the approved Workers service — no new product). It runs per tenant
+    and its predicate is indexed on (status, deletion_scheduled_at) within the tenant, so
+    it reads a queue that is empty on almost every run. Empty runs are the normal case and
+    cost one query per tenant per run; a daily schedule at 10 Organizations is ~300 Worker
+    invocations a month against the free daily allowance, which is negligible. What is NOT
+    negligible is the failure mode: a purge job whose predicate is wrong deletes rows, and
+    under 0006 Option A there is no infrastructure boundary to stop it doing so across
+    Organizations.
+  atTheLimit: >-
+    A per-Organization customer count quota is REQUIRED before external Organizations are
+    admitted, so that reaching it returns quota_exceeded — a first-class declared error on
+    CreateCustomer — rather than silently consuming the shared ceiling. The VALUE of that
+    quota is a product decision and is NOT set here; 10,000 per Organization is the
+    recommendation. At 85% of the 500 MB ceiling, onboarding of new Organizations stops
+    (§7.5).
+    CUSTOMER DATA IS NEVER DELETED TO STAY WITHIN A FREE TIER, AND THE CD-8 DECISION MAKES
+    THAT SHARPER RATHER THAN SOFTER. Now that a purge mechanism exists, the temptation to
+    reach for it under storage pressure exists too. It must not be: the only path to purge
+    is an explicit authorized deletion followed by 30 days, and running out of free storage
+    is a reason to stop onboarding, never a reason to schedule a deletion nobody requested.
+  cost: "USD 0 / BD 0 per month. No new service, no new product, no paid feature. Cron triggers are part of the already-approved Workers service."
+
+# ---------------------------------------------------------------------------
+# versioning
+# ---------------------------------------------------------------------------
+versioning:
+  contractVersion: 1
+  apiVersion: v1
+  changeClass: additive
+  note: >-
+    This is the first version of a contract with no consumers, so it is additive by
+    definition. Changes that would be BREAKING once either client ships: moving the base
+    path to the flat namespace, changing the default status filter, changing the sort or
+    pagination semantics, narrowing customer_type, making an optional field required,
+    changing an Action's permission or scope, and adding a required version token to
+    UpdateCustomer. Changes that remain additive: a new optional request field, a new
+    response field, a new Action, a new error code for a NEW condition, and adding 'mcp' to
+    an Action's exposure.
+  thisRevision: >-
+    STILL v1 AND STILL ADDITIVE, BECAUSE NOTHING CONSUMES IT YET — and that window is
+    exactly why both decisions were worth making now. Had either client shipped first,
+    EVERY ONE of these would have been breaking under API_STANDARD.md §6: a new required
+    request field (business_id on create), a new required response field on two shapes, two
+    new members in the customerStatus enumeration that a client switching on status would
+    not handle, a new member in statusFilter, and a change to every Action's evaluated
+    scope from 'organization' to 'business'. The scope change alone is the kind
+    API_STANDARD.md §6 calls out, and it would have required /api/v2 for a decision that
+    costs nothing today. This is the concrete form of the CD-7 timing argument: decide
+    contract shape before either client is written.
+  futureBreaking: >-
+    Additionally breaking once either client ships, from this revision's additions:
+    changing customerDeletionRetentionDays from 30 (it changes a legally meaningful
+    deadline both clients display), returning RestoreDeletedCustomer to 'active' instead of
+    'archived', allowing DeleteCustomer directly from 'active', and making business_id
+    optional on create with a server-side default. Additive: a per-Business quota, an
+    optional business_id filter on further Actions, and a PurgeScheduled event.

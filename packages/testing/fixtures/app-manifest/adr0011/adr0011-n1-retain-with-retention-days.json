@@ -1,0 +1,71 @@
+{
+  "caseId": "adr0011-n1",
+  "kind": "manifest",
+  "title": "onUninstall 'retain' carrying a retentionDays — the false statement ADR 0011 removed",
+  "coversRequirement": "ADR 0011 clause 2 — retentionDays is FORBIDDEN under 'retain', not optional",
+  "target": "lifecycle.onUninstall = 'retain' / lifecycle.retentionDays present",
+  "relatedFindings": ["ADR 0011"],
+  "expectedOutcome": "REJECT",
+  "enforcedBy": "schema",
+  "why": "This is the case that matters in the set. The manifest promises the tenant, on the uninstall screen, that its data is retained — and then names a day on which the platform disposes of it. Those are opposite statements about another company's business data, and the tenant reads only the word. ADR 0011 chose 'forbidden' over 'optional' precisely so this document cannot exist: optional would let two manifests declaring the same disposition mean different things, and would leave the reading 'retain for N days' available to anyone who supplies N. The App must FAIL VALIDATION and not install. It must never be accepted with the number treated as advisory, ignored, or silently normalised away — an accepted manifest whose retentionDays is quietly dropped is worse than a rejected one, because the App author still believes the number is in force.",
+  "notes": "MUST BE REJECTED. Report side by side with adr0011-p1: rejecting BOTH means the validator bans 'retain' outright rather than enforcing ADR 0011, and accepting BOTH means the clause is not implemented at all. Also report against adr0011-p2 — n1 and p2 differ only in their lifecycle block and BOTH carry a retentionDays, so accepting both means retentionDays was made unconditionally permitted rather than conditional on the disposition. Their day counts differ (30 here, 90 there) and neither number is load-bearing; the disposition is what the pair turns on. Decidable by the schema alone: draft 2020-12 expresses this as if/then with 'not: { required: [retentionDays] }', which is present in the lifecycle allOf. This is NOT a validator-layer case, so a schema run that accepts it is a real schema defect and is reported as such — unlike the AZ7 validator cases, where an accept is expected. Byte-identical to adr0011-p1 apart from the lifecycle block, and it declares no Action at scope 'own', so no rejection here can be attributed to VAL-OWN or AZ7. The value 30 is used deliberately: it is the number ADR 0011 records an agent nearly wrote into this field, where it would have meant the tenant's whole directory is disposed of thirty days after uninstall, rather than the per-customer deletion recovery window it actually describes.",
+  "manifestSchema": "packages/contracts/registries/app-manifest.schema.json",
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "adr0011-fixture-app",
+    "name": "ADR 0011 Lifecycle Fixture App",
+    "version": "1.0.0",
+    "publisher": {
+      "id": "dudo-qa-fixtures",
+      "name": "Dudo QA synthetic fixture publisher"
+    },
+    "description": "Synthetic fixture App used only to exercise the ADR 0011 lifecycle retention grammar. Holds no real data.",
+    "platform": { "minimumVersion": "1.0.0" },
+    "permissions": [
+      {
+        "id": "adr0011-fixture-app.record.read",
+        "scope": "organization",
+        "reason": "Reads synthetic fixture records. Fixture use only."
+      }
+    ],
+    "capabilitiesRequired": [],
+    "entities": [
+      {
+        "name": "Record",
+        "description": "A synthetic record that exists only to give the lifecycle block something to describe.",
+        "tenantScoped": true,
+        "fields": [
+          { "name": "label", "type": "string", "classification": "internal", "required": true }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "adr0011-fixture-app.ReadRecord",
+        "title": "Read Record",
+        "description": "Reads a synthetic fixture record. Present so the manifest is realistic; not the subject of this case.",
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["record_id"],
+          "properties": { "record_id": { "type": "string" } }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "label": { "type": "string" } }
+        },
+        "errors": ["not_found"],
+        "permission": "adr0011-fixture-app.record.read",
+        "scope": "organization",
+        "sensitivity": "read",
+        "idempotent": true,
+        "audit": false
+      }
+    ],
+    "eventsPublished": [],
+    "eventsConsumed": [],
+    "externalNetworkAccess": [],
+    "lifecycle": { "onUninstall": "retain", "retentionDays": 30, "rollbackSupported": true }
+  }
+}

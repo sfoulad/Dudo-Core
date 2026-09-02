@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:customer-directory:1",
+  "title": "Customer Directory — contract v1",
+  "description": "Every request and response shape of the Customer Directory App (app id 'customers'), contract version 1. This file defines SHAPES ONLY. A type alone is not a contract: the authorization expectation, the tenant scoping, the state machine, the search semantics and the error conditions are in customer-directory-v1.contract.yaml and README.md in this directory, and all three are normative together.\n\nONE CONTRACT SET, TWO CLIENTS. The responsive web client and the Apple client consume these shapes unchanged. A shape one client has and the other does not is a contract defect, not a client-local workaround.\n\nNOT EXECUTED. No JSON Schema implementation exists in this repository — there is no package.json, no node_modules, AS1 (the contract's executable form) is undecided and TS1 (the test framework) is undecided. These schemas are normative and hand-checked. Nothing in the repository validates against them yet, and no report may describe them as validated.\n\nCROSS-FILE $ref. References to urn:dudo:schema:pagination:1 and urn:dudo:schema:error-envelope:1 require a schema registry that resolves URNs. No such resolver exists yet; see AS1 in API_STANDARD.md §13.",
+  "$defs": {
+
+    "customerId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "The opaque identifier of a Customer. OPAQUE AND NON-SEQUENTIAL (API_STANDARD.md §5, MULTITENANCY_STANDARD.md §5): possession of one id must not imply the ability to guess another, because in a multi-tenant product enumeration is a data-exposure test anyone can run. The client never parses it, never orders by it, and never infers anything from it. The generation scheme is a Core decision and is deliberately not fixed here; whatever is chosen must be unguessable, and the minimum length of 8 exists so that a short scheme cannot be adopted silently. The identifier is unique across the platform, not merely within a tenant — see README.md §5 for why that does not weaken isolation."
+    },
+
+    "principalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "The principal that performed an operation. Opaque. Always a principal of the same tenant — a Customer record never references a principal of another Organization."
+    },
+
+    "businessId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "The Business/Workspace inside the Organization that this Customer belongs to. Opaque, non-sequential, and always a Business of the SAME Organization.\n\nBUSINESS IS AN AUTHORIZATION SCOPE, NOT A SECOND TENANT BOUNDARY (MULTITENANCY_STANDARD.md §2). organization_id remains the isolation boundary and is never on the wire. business_id controls access INSIDE one Organization and IS on the wire, because a client must be able to say which Business a new customer belongs to and must be able to show which Business an existing one belongs to.\n\nTHE TWO ARE NEVER INTERCHANGEABLE AND ARE NEVER EVALUATED ALONE. Core derives the Organization from the authenticated context and applies its predicate FIRST; the business predicate is applied SECOND, on a row already proven to be inside the tenant. A query that carries business_id and has lost organization_id crosses tenants — business identifiers are unique platform-wide, but uniqueness prevents collision, not reachability. See customer-directory-v1.contract.yaml -> authorizationModel.evaluationOrder.\n\nA CLIENT-SUPPLIED business_id SELECTS; IT NEVER WIDENS. Where an input accepts one, Core validates it against the set of Businesses the authenticated principal is authorized over within the authenticated Organization, and rejects anything outside that set. A value naming a Business of another Organization is indistinguishable from a value naming no Business at all: both are not_found. There is no equivalent input for organization_id anywhere in this contract, and none may be added."
+    },
+
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "RFC 3339, UTC, with an explicit offset (API_STANDARD.md §7). Never a bare local time. The pattern is stated as well as the format keyword because 'format' is annotation-only in draft 2020-12 unless a validator opts into assertion."
+    },
+
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "description": "The name the customer is known by — a person's name or a company's name. Required. Leading and trailing whitespace is trimmed by the server before storage and before matching; a value that is empty after trimming is rejected as invalid_argument, which is what the \\S pattern asserts. Classification: business-confidential."
+    },
+
+    "customerType": {
+      "type": "string",
+      "enum": ["person", "company"],
+      "description": "Whether this customer is a natural person or an organisation. Lowercase string enumeration, never an integer (API_STANDARD.md §7). Narrowing this enumeration later is a BREAKING change; adding a member is breaking too for any client that switches on it, so a third member requires review, not a patch release. Classification: business-confidential."
+    },
+
+    "email": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 254,
+      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+      "description": "A contact email address. Optional. The pattern is deliberately permissive: it rejects the obviously malformed and nothing else. Dudo does NOT fully validate RFC 5322, does NOT verify that the domain resolves, and does NOT verify deliverability — a contract that implies otherwise would be lying to both clients. Uniqueness is NOT enforced: two customers may legitimately share an address. Classification: sensitive-personal (see README.md §4 for why a field that is business contact data for a company customer is still classified at the highest class it can hold)."
+    },
+
+    "phone": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "allOf": [
+        {
+          "pattern": "^[0-9+()\\-. ]+$",
+          "$comment": "Character set only: digits, plus, parentheses, hyphen, dot, space."
+        },
+        {
+          "pattern": "([0-9][^0-9]*){3,}",
+          "$comment": "At least three digits somewhere in the value. A value of '()-' is well-formed against the character set and is not a phone number."
+        }
+      ],
+      "description": "A contact telephone number, as the tenant chose to record it. Optional. E.164 is NOT required, deliberately: requiring it would reject the majority of real imported directory data on the first day. The consequence is stated rather than hidden — this field is NOT dial-safe and no code may assume it is parseable into a callable number. Search normalises it (see README.md §7). Classification: sensitive-personal."
+    },
+
+    "country": {
+      "type": "string",
+      "pattern": "^[A-Z]{2}$",
+      "description": "ISO 3166-1 alpha-2, uppercase. Optional. WELL-FORMEDNESS ONLY: no code list is validated against, because no such list exists in this repository and adding one is a dependency decision nobody has made. A well-formed but unassigned code such as 'ZZ' is therefore accepted and stored. Classification: business-confidential — a country alone is coarse enough not to be sensitive-personal, unlike the full address."
+    },
+
+    "address": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "\\S",
+      "description": "The customer's address as a single free-text value, newlines permitted. Optional. UNSTRUCTURED BY DECISION, and the cost is stated: an unstructured address cannot later be used for tax jurisdiction, shipping, or address validation without introducing a structured replacement, and replacing it is a breaking change. This slice has no invoicing, shipping or tax scope, so the structure is not invented in advance. Classification: sensitive-personal — SECURITY_STANDARD.md §3 lists addresses explicitly."
+    },
+
+    "notes": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Free-text notes the tenant's staff keep about this customer. Optional. Because it is free text it may contain anything a member of staff types, so it is classified at the highest class it can hold rather than at the class it is expected to hold — classification drives logging, export and AI-provider rules, and a field cannot be classified by hope. Deliberately NOT searchable (README.md §7). Classification: sensitive-personal."
+    },
+
+    "customerStatus": {
+      "type": "string",
+      "enum": ["active", "archived", "pending_deletion"],
+      "description": "The lifecycle state. SERVER-CONTROLLED: it is never accepted on create or update. It moves only through the ArchiveCustomer, RestoreCustomer, DeleteCustomer and RestoreDeletedCustomer Actions, which is what makes every transition permissioned and audited. A client that could set status directly would have an unaudited, unpermissioned archive — and now an unaudited, unpermissioned delete.\n\n'pending_deletion' means an authorized principal has explicitly requested permanent deletion and the 30-day recovery window is running. It is NOT what archiving produces, and nothing reaches it except DeleteCustomer. ARCHIVED IS NOT A COUNTDOWN: an archived customer is retained indefinitely and no elapsed time moves it out of 'archived'. See README.md §6."
+    },
+
+    "deletionScheduledAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the record's data will be permanently purged. Non-null if and only if status is 'pending_deletion'; null in every other state, including 'archived'.\n\nIT IS RETURNED RATHER THAN COMPUTED BY THE CLIENT. The deadline is derivable as updated_at + customerDeletionRetentionDays, and letting each client do that arithmetic is exactly the cross-client divergence the one-contract rule exists to prevent — two clients would show two dates for one legally meaningful deadline the day the window changed."
+    },
+
+    "customer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "customer_id",
+        "business_id",
+        "display_name",
+        "customer_type",
+        "email",
+        "phone",
+        "country",
+        "address",
+        "notes",
+        "status",
+        "deletion_scheduled_at",
+        "created_at",
+        "created_by_principal_id",
+        "updated_at",
+        "updated_by_principal_id"
+      ],
+      "description": "The full wire representation of a Customer, returned by CreateCustomer, GetCustomer, UpdateCustomer, ArchiveCustomer, RestoreCustomer, MoveCustomerToBusiness, DeleteCustomer and RestoreDeletedCustomer.\n\nEVERY FIELD IS PRESENT ON EVERY RESPONSE. An optional field the tenant has not filled in is present and null, never absent. Absent-versus-null is a distinction two clients will resolve differently, and 'the web app shows a blank and the iPhone app shows nothing' is exactly the cross-client divergence the one-contract rule exists to prevent.\n\nNO tenant_id, BUT business_id IS PRESENT, and the asymmetry is the point. The Organization is the isolation boundary: it is never accepted on input, never returned, and derived from the authenticated server-side context on every call, so no client ever learns a tenant identifier it could be tempted to send back. The Business is an authorization scope INSIDE that boundary: a client must be able to say which Business a customer belongs to and show which Business it is in, and the worst case for a wrong business_id is bounded inside one Organization's own data. Returning business_id is therefore safe in a way returning tenant_id would never be — and it is not a licence to accept an organization_id anywhere.\n\nNO ownershipField is declared for this entity anywhere in this contract, and created_by_principal_id is metadata rather than an ownership relation. business_id is NOT an ownership relation either: it names a Business, not a principal, and 'own' scope means records the principal created or is assigned to (AUTHORIZATION_STANDARD.md §4). No Action in this contract uses scope 'own'. That is deliberate and load-bearing: if 'own' scope is added later, VAL-OWN's manifest-level check will FAIL CLOSED rather than silently borrowing created_by_principal_id — or now business_id — as an ownership relation nobody designed (the az7-n4 / az7-n8 fixture pair).",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" },
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "customer_type": { "$ref": "#/$defs/customerType" },
+        "email": { "oneOf": [{ "$ref": "#/$defs/email" }, { "type": "null" }] },
+        "phone": { "oneOf": [{ "$ref": "#/$defs/phone" }, { "type": "null" }] },
+        "country": { "oneOf": [{ "$ref": "#/$defs/country" }, { "type": "null" }] },
+        "address": { "oneOf": [{ "$ref": "#/$defs/address" }, { "type": "null" }] },
+        "notes": { "oneOf": [{ "$ref": "#/$defs/notes" }, { "type": "null" }] },
+        "status": { "$ref": "#/$defs/customerStatus" },
+        "deletion_scheduled_at": { "oneOf": [{ "$ref": "#/$defs/deletionScheduledAt" }, { "type": "null" }] },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "created_by_principal_id": { "$ref": "#/$defs/principalId" },
+        "updated_at": { "$ref": "#/$defs/timestamp" },
+        "updated_by_principal_id": { "$ref": "#/$defs/principalId" }
+      }
+    },
+
+    "customerSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "customer_id",
+        "business_id",
+        "display_name",
+        "customer_type",
+        "email",
+        "phone",
+        "country",
+        "status",
+        "deletion_scheduled_at",
+        "updated_at"
+      ],
+      "description": "The projection returned by ListCustomers and SearchCustomers — one row of a directory.\n\nIT DELIBERATELY EXCLUDES 'address' AND 'notes', the two sensitive-personal free-text fields. This is the point of 'list' being a separate permission from 'read' (AUTHORIZATION_STANDARD.md §3.2): enumeration and record disclosure are different risks, and if the list returned the whole record they would be the same risk behind two permission names. Reaching a customer's address or notes therefore requires GetCustomer, one record at a time, under customers.customer.read.\n\nemail and phone ARE included, because a contact directory whose list cannot show a phone number is not a directory. The line drawn is: contact-lookup fields in, free-text and location fields out. That line is a judgement, it is recorded here rather than left implicit, and moving it is a contract change.\n\nbusiness_id IS included. A principal authorized over several Businesses gets one merged directory, and a row that does not say which Business it belongs to is a row that will be acted on in the wrong one. It is an identifier inside the caller's own Organization, so it discloses nothing the caller may not already read.\n\ndeletion_scheduled_at IS included, so that a listing filtered to 'pending_deletion' can show each deadline without one GetCustomer per row — which would otherwise turn a recovery screen into an N-call read of full records under a permission the caller may not hold.",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" },
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "customer_type": { "$ref": "#/$defs/customerType" },
+        "email": { "oneOf": [{ "$ref": "#/$defs/email" }, { "type": "null" }] },
+        "phone": { "oneOf": [{ "$ref": "#/$defs/phone" }, { "type": "null" }] },
+        "country": { "oneOf": [{ "$ref": "#/$defs/country" }, { "type": "null" }] },
+        "status": { "$ref": "#/$defs/customerStatus" },
+        "deletion_scheduled_at": { "oneOf": [{ "$ref": "#/$defs/deletionScheduledAt" }, { "type": "null" }] },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+
+    "statusFilter": {
+      "type": "string",
+      "enum": ["active", "archived", "pending_deletion", "all"],
+      "default": "active",
+      "description": "Which lifecycle states a listing or a search returns. DEFAULTS TO 'active': archiving a customer means withdrawing it from normal use, and a default that keeps showing archived records defeats the operation the user performed. Changing this default later is a BREAKING change (API_STANDARD.md §6 — changing default behaviour when a field is omitted).\n\n'pending_deletion' is filterable under customers.customer.list rather than under the delete permission. A record scheduled for destruction that nobody can find is a record nobody will recover in time, and the 30-day window is only real if the queue is visible. Enumerating it is the same disclosure as enumerating the rest of the directory — the same identifiers, the same projection — so it takes the same permission. Ordering and reversing that deletion still take customers.customer.delete and customers.customer.restore-deleted.\n\n'all' includes 'pending_deletion'."
+    },
+
+    "searchQuery": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 128,
+      "pattern": "\\S",
+      "description": "The search term. Trimmed and normalised by the server before matching. Minimum 2 characters after trimming: a one-character query matches a large fraction of any directory and costs a scan to say so on a single-threaded shared database.\n\n'%' AND '_' ARE LITERAL CHARACTERS, never wildcards, and no other wildcard, glob or regular-expression syntax is honoured. A client cannot inject a matching pattern. Matching semantics are fixed by the contract (README.md §7), never chosen by the caller."
+    },
+
+    "createCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "display_name", "customer_type"],
+      "description": "Unknown fields are REJECTED with invalid_argument, not ignored (API_STANDARD.md §7). This is what makes 'tenant_id', 'organization_id', 'status', 'customer_id', 'deletion_scheduled_at' and 'created_by_principal_id' unsettable rather than merely undocumented: they are not properties here, and additionalProperties is false, so supplying one fails the request. An optional field may be omitted or supplied as null; both mean 'not recorded'.\n\nbusiness_id IS REQUIRED, AND IT IS REQUIRED RATHER THAN DEFAULTED. A principal may be authorized over several Businesses, so there is no single Business the server can infer, and inferring one from an 'active Business' in the session would be the ambient default MULTITENANCY_STANDARD.md §3 forbids one level up — 'the last value seen' filing a customer into the wrong Business silently. Making the caller state it means the wrong answer is a visible wrong answer.\n\nIt selects, it never widens: Core validates the supplied value against the Businesses the authenticated principal is authorized over WITHIN the authenticated Organization. A Business of another Organization and a Business that does not exist both return not_found, identically. A Business inside this Organization that the principal is not authorized over returns forbidden. See customer-directory-v1.contract.yaml -> authorizationModel.notFoundVersusForbidden.",
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "customer_type": { "$ref": "#/$defs/customerType" },
+        "email": { "oneOf": [{ "$ref": "#/$defs/email" }, { "type": "null" }] },
+        "phone": { "oneOf": [{ "$ref": "#/$defs/phone" }, { "type": "null" }] },
+        "country": { "oneOf": [{ "$ref": "#/$defs/country" }, { "type": "null" }] },
+        "address": { "oneOf": [{ "$ref": "#/$defs/address" }, { "type": "null" }] },
+        "notes": { "oneOf": [{ "$ref": "#/$defs/notes" }, { "type": "null" }] }
+      }
+    },
+
+    "createCustomerOutput": { "$ref": "#/$defs/customer" },
+
+    "getCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id"],
+      "description": "The identifier is the ONLY input. There is no tenant parameter, and adding one would not be honoured: see the az7-r3 fixture, whose isolation-proving vector is a schema-valid request whose only cross-tenant element is the record identifier itself.",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" }
+      }
+    },
+
+    "getCustomerOutput": { "$ref": "#/$defs/customer" },
+
+    "listCustomersInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "description": "All parameters are optional. Supplying 'cursor' together with a 'status', 'business_id' or 'page_size' that differs from the values the cursor was issued under is rejected with invalid_argument — a page 2 under different filters is not page 2.\n\nOMITTING business_id DOES NOT MEAN 'the whole Organization'. It means every Business the authenticated principal is authorized over, which for a business-scope principal is exactly one. The listing is never wider than the caller's authorization, so the default is safe for the narrowest principal and useful for the broadest — a business-owner gets one merged directory, a business-admin gets their own Business, and neither had to know which case they were in.\n\nSupplying a business_id inside this Organization that the principal is not authorized over returns forbidden, not an empty page: silently returning zero rows would read as 'this Business has no customers', which is a false statement about the caller's own Organization.",
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "status": { "$ref": "#/$defs/statusFilter" },
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      }
+    },
+
+    "listCustomersOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "description": "The standard collection envelope. No total count — see urn:dudo:schema:pagination:1#/$defs/collectionEnvelope for why, and note that the reason is a tenant-isolation reason, not a performance one.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/customerSummary" }
+        },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      }
+    },
+
+    "searchCustomersInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query"],
+      "description": "Same paging and filtering as ListCustomers, including the business_id filter and its meaning when omitted, plus a required query. The set of searchable fields is fixed by the contract and is NOT selectable by the caller: letting a caller choose the field would let it probe 'notes', which is exactly what README.md §7 excludes.\n\nSearch is bounded by the caller's authorized Businesses exactly as listing is. A search that matched across Businesses the caller cannot list would hand back through the search box what the listing withholds — the same failure the exclusion of 'notes' exists to prevent, one scope level up.",
+      "properties": {
+        "query": { "$ref": "#/$defs/searchQuery" },
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "status": { "$ref": "#/$defs/statusFilter" },
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      }
+    },
+
+    "searchCustomersOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "description": "Identical in shape to listCustomersOutput. Deliberately so: the two Actions differ in how the candidate set is chosen, never in what a row looks like, and no relevance score is returned because no ranking function is defined (README.md §7).",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/customerSummary" }
+        },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      }
+    },
+
+    "updateCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id"],
+      "minProperties": 2,
+      "description": "PARTIAL UPDATE, and the three-way distinction is normative:\n  - field ABSENT  -> unchanged\n  - field PRESENT with a value -> set to that value\n  - field PRESENT and null -> cleared (optional fields only)\nThis is stated because 'absent means clear' and 'null means unchanged' are both plausible readings, two clients will pick differently, and the failure is silent data loss in a customer's records.\n\n'display_name' and 'customer_type' are required on the record and therefore may be present-with-a-value or absent, never null. 'status' is not a property here: archiving is ArchiveCustomer.\n\n'business_id' IS NOT A PROPERTY HERE AND MAY NOT BE ADDED. Moving a customer between Businesses is MoveCustomerToBusiness — its own Action, its own permission at organization scope only, and its own audit record. As a field on a partial update it would be an unaudited re-assignment of a customer's authorization scope, performed under customers.customer.update, which a business-scope principal may hold; that principal could then push a customer into a Business it does not control, or pull one out of a Business it does. additionalProperties false is what makes that a rejected request rather than a documented prohibition.\n\nminProperties: 2 requires at least one field besides customer_id. An update that changes nothing still writes an audit record and moves updated_at, so it is rejected as invalid_argument rather than accepted as a no-op that pollutes the audit trail.",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" },
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "customer_type": { "$ref": "#/$defs/customerType" },
+        "email": { "oneOf": [{ "$ref": "#/$defs/email" }, { "type": "null" }] },
+        "phone": { "oneOf": [{ "$ref": "#/$defs/phone" }, { "type": "null" }] },
+        "country": { "oneOf": [{ "$ref": "#/$defs/country" }, { "type": "null" }] },
+        "address": { "oneOf": [{ "$ref": "#/$defs/address" }, { "type": "null" }] },
+        "notes": { "oneOf": [{ "$ref": "#/$defs/notes" }, { "type": "null" }] }
+      }
+    },
+
+    "updateCustomerOutput": { "$ref": "#/$defs/customer" },
+
+    "archiveCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id"],
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" }
+      }
+    },
+
+    "archiveCustomerOutput": {
+      "$ref": "#/$defs/customer",
+      "description": "The customer as it now stands, with status 'archived'. The record is returned rather than an empty body so neither client needs a second call to refresh what it is displaying — and so both clients refresh it the same way."
+    },
+
+    "restoreCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id"],
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" }
+      }
+    },
+
+    "restoreCustomerOutput": {
+      "$ref": "#/$defs/customer",
+      "description": "The customer as it now stands, with status 'active'."
+    },
+
+    "moveCustomerToBusinessInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id", "business_id"],
+      "description": "Move one customer from the Business it is in to another Business in the SAME Organization.\n\nThere is no source Business parameter, deliberately. The source is whatever the record currently says, read inside the tenant; accepting one would let a caller assert a state it does not know and would make the audit record a copy of the caller's claim rather than of what happened.\n\nA move ACROSS Organizations does not exist and may never be added. A Customer's Organization is assigned at creation from context and is immutable (MULTITENANCY_STANDARD.md §6). This Action moves a record between authorization scopes inside one tenant; it is not a tenant transfer with a narrower name.",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" },
+        "business_id": { "$ref": "#/$defs/businessId" }
+      }
+    },
+
+    "moveCustomerToBusinessOutput": {
+      "$ref": "#/$defs/customer",
+      "description": "The customer as it now stands, with business_id set to the destination. Status is unchanged: a move is not a lifecycle transition."
+    },
+
+    "deleteCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id"],
+      "description": "Request permanent deletion of one customer. This starts the 30-day recovery window; it does not destroy anything now.\n\nNO CONFIRMATION FIELD, AND NONE MAY BE ADDED. This Action is sensitivity 'critical', which requires explicit confirmation (AUTHORIZATION_STANDARD.md §6 and §7), and that confirmation is collected by the PLATFORM from the human — never carried as a request field an SDK caller or an AI principal can set. A boolean named 'confirm' in a request body is a field, not a confirmation. The platform elevation mechanism does not exist yet, so this Action is unreachable until it does; see README.md open question CD-13.",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" }
+      }
+    },
+
+    "deleteCustomerOutput": {
+      "$ref": "#/$defs/customer",
+      "description": "The customer as it now stands, with status 'pending_deletion' and deletion_scheduled_at set. THE RECORD IS RETURNED IN FULL because it still exists in full — the response is what the caller may still recover, not a receipt for something already gone."
+    },
+
+    "restoreDeletedCustomerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customer_id"],
+      "description": "Cancel a pending deletion within the recovery window. Valid only while status is 'pending_deletion'; after the purge there is no record to name and the identifier returns not_found like any other.",
+      "properties": {
+        "customer_id": { "$ref": "#/$defs/customerId" }
+      }
+    },
+
+    "restoreDeletedCustomerOutput": {
+      "$ref": "#/$defs/customer",
+      "description": "The customer as it now stands, with status 'archived' and deletion_scheduled_at null.\n\nIT RETURNS TO 'archived', NOT TO 'active'. Deletion is only reachable from 'archived' (README.md §6), so this is the state the record was in when deletion was ordered, and restoring it to 'active' would use one recovery to perform two reinstatements — putting a customer back into every list and search the Organization can see without anyone holding customers.customer.restore. Making it active again is RestoreCustomer, separately permissioned and separately audited."
+    }
+  }
+}

@@ -77,6 +77,9 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 | `0007-logical-permission-model.md` | **Accepted** | The logical permission model `0001` requires. **Accepted 2026-09-01 subject to ten binding rules:** Core is the only authorization authority; deny by default; no wildcards; explicit registration; requested scope cannot exceed user/role/tenant/App scope; Apps request but never grant; unknown/malformed/reserved fail closed; every `own`-scoped Action identifies target Entity and ownership relation; permission changes are audited; third-party Apps get least-privilege revocable tenant-scoped grants. |
 | `0008-zero-cost-mvp-infrastructure.md` | **Accepted** | Cloudflare and GitHub cost must remain **USD 0 / BD 0 per month**. Free allowances only; Workers Paid and Workers for Platforms prohibited. No agent may approve paid usage. |
 | `0009-phase-0-zero-dependency-contract-relation-validator.md` | **Accepted** | A narrow Phase 0 exception: one zero-dependency Node module enforcing the AZ7 referential rule JSON Schema cannot express, closing CWE-863. **Foundation Gate tooling, not product runtime.** Approves no toolchain, no dependency, and no Phase 1 work. |
+| `0010-admin-interface-frontend-stack.md` | **Accepted, not on `main`** | The admin interface stack — React, TypeScript, Vite, Tailwind, shadcn-admin, at `admin.dudo.work`. **Lives on branch `decision/admin-frontend` and has not been merged**, which is why the numbering jumps here. It is not lost and `0010` is not free. |
+| `0011-manifest-lifecycle-indefinite-retention.md` | **Accepted** | **`onUninstall: retain` means retained INDEFINITELY**, and `retentionDays` is **forbidden** under it, **required** under `archive`. The schema previously required a duration alongside `retain`, so the customer-retention decision could not be stated truthfully in a manifest. Decided while nothing consumes the schema — no SDK, no Studio, no published manifest. |
+| `0012-manifest-api-path-underscore.md` | **Accepted** | `apis[].path` widens to `^/[a-z0-9_\-/{}]*$` so **`snake_case` path parameters are expressible**. `API_STANDARD.md` §5 mandates `snake_case`, yet the schema rejected the standard's own example `/api/v1/orders/{order_id}`. Widening only; no existing manifest is invalidated. |
 
 ### Technology stack status
 
@@ -105,6 +108,26 @@ and SwiftUI is not approving any package or third-party dependency.
 5. Break-glass platform-operator access (AZ3) — `platform-admin` was correctly narrowed by
    the CRIT-2 fix and is not operable for support until this exists.
 6. How a principal comes to hold an `own`-scope permission (AZ5).
+7. **Whether the dependency-free validator extends beyond AZ7 — DEFERRED, not rejected.**
+   `qa-agent` observed that both `0011` clauses and the `0012` path grammar are decidable
+   without a JSON Schema engine — the lifecycle rule is two-branch key logic and the path
+   rule is one regex that can be read from the schema at runtime so it cannot drift. Roughly
+   thirty lines. **Deferred deliberately.** `0009` approved *one* module for *one* rule
+   family and said in terms that the precedent "cannot grow into a toolchain without a new
+   decision"; accreting a second ad-hoc validator is exactly the growth it forbids, and the
+   right moment to revisit is when `TS1` lands and there is a real validator story rather
+   than two hand-rolled modules. Until then the six fixtures stand as **NOT RUN**
+   conformance cases, which is honest. Revisit at `TS1`.
+8. **Audit-write ordering for irreversible destruction.** Every Action writes its audit
+   record *after* the operation succeeds — except a purge, which must write *before*
+   destroying the data, because after the purge there is nothing left to reconstruct the
+   record from. It currently lives as a narrowly scoped clause in the Customer Directory
+   contract (`packages/contracts/apps/customers/`), which is the right place while it has
+   one consumer. **Promote it to a record when either happens:** a second App needs the same
+   inversion, or Core implements the audit primitive — because at that point the ordering
+   stops being one App's rule and becomes a platform property the audit writer must know.
+   Do **not** generalise the inversion before then: applied broadly it would make every
+   failed mutation leave an audit record saying it succeeded.
 7. ~~Wildcard expansion semantics (`0007` D6)~~ — **closed by `0007`'s acceptance.** Binding
    rule 3 prohibits wildcard permissions outright, so there are no expansion semantics to
    define. Rule 5 states the intersection rule whose absence caused CRIT-1.

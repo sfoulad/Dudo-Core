@@ -26,7 +26,7 @@ So this directory contains **only `.json` fixtures and this README**:
 - nothing that presumes Vitest, Jest, `node:test`, or any runner
 
 The fixtures are plain JSON with their expectations recorded **inside the data**. When
-TS1 is decided, a runner is roughly twenty lines (§5) and **no fixture changes**. That is
+TS1 is decided, a runner is roughly twenty lines (§6) and **no fixture changes**. That is
 the point of the format: the framework decision cannot invalidate the fixtures, and the
 fixtures cannot pre-empt the framework decision.
 
@@ -38,12 +38,29 @@ fixtures cannot pre-empt the framework decision.
 packages/testing/fixtures/app-manifest/
 ├── README.md      this file
 ├── index.json     the case index and the case-file shape
-└── az7/           AZ7 — own-scope Actions must name the Entity they operate on
-    ├── az7-n1 … az7-n8    negatives, each must be REJECTED — there is NO az7-n7
-    ├── az7-p1 … az7-p4    positives, each must be ACCEPTED
-    ├── az7-r1 … az7-r3    invocation-time obligations (runtime, not manifest)
-    └── az7-q1, az7-q2     OPEN QUESTIONS — expectedOutcome is UNDECIDED
+├── az7/           AZ7 — own-scope Actions must name the Entity they operate on
+│   ├── az7-n1 … az7-n8    negatives, each must be REJECTED — there is NO az7-n7
+│   ├── az7-p1 … az7-p4    positives, each must be ACCEPTED
+│   ├── az7-r1 … az7-r3    invocation-time obligations (runtime, not manifest)
+│   └── az7-q1, az7-q2     OPEN QUESTIONS — expectedOutcome is UNDECIDED
+├── adr0011/       ADR 0011 — 'retain' means indefinite; retentionDays forbidden under
+│                   'retain', required under 'archive'
+│   ├── adr0011-p1, adr0011-p2   positives, each must be ACCEPTED
+│   └── adr0011-n1, adr0011-n2   negatives, each must be REJECTED
+└── adr0012/       ADR 0012 — apis[].path admits '_', so snake_case path parameters
+                    are expressible
+    ├── adr0012-p1               positive, must be ACCEPTED
+    └── adr0012-n1               negative, must be REJECTED
 ```
+
+**Set naming.** `az7` is named for the open question in `AUTHORIZATION_STANDARD.md` §4
+that raised it. The two newer sets have no such question id — each exists because an
+**accepted ADR** changed the schema — so they are named for the decision record that
+governs them, which is the identifier this repository already uses in prose ("ADR 0011")
+and the one thing about them that cannot be renumbered. **The series letters carry the
+same meaning in every set:** `p` positive/ACCEPT, `n` negative/REJECT, `r` invocation-time
+runtime obligation, `q` UNDECIDED open question. `adr0011` and `adr0012` use only `p` and
+`n`; they have no runtime or undecided cases.
 
 **There is no `az7-n7`, and the gap is deliberate.** That id named the cross-tenant
 invocation case, which is `kind: "invocation"` and belonged in the r-series by this set's
@@ -85,6 +102,13 @@ Cases **az7-n2, az7-n4, az7-n5a, az7-n5d, az7-n8, az7-q1 and az7-q2 are `validat
 schema run will **ACCEPT** all seven. **That accept is correct and expected.** Report it as
 `NOT-DECIDABLE-BY-SCHEMA`, never as `FAIL`, and never as a defect in
 `app-manifest.schema.json`.
+
+**All six `adr0011` and `adr0012` cases are `schema`, and the distinction cuts the other
+way for them.** Their conditionals live inside a single object, or are a plain grammar
+check on one string, so no cross-array join is involved and JSON Schema decides them
+completely. A schema run that disagrees with one of those `expectedOutcome` values is a
+**real defect in `app-manifest.schema.json`**, reported against `core-agent` — not a
+NOT-DECIDABLE-BY-SCHEMA result. Nothing has run them yet; see §5.
 
 `AUTHORIZATION_STANDARD.md` §4.1 says the same thing normatively, and says it about
 itself: the table of what the schema enforces is followed by "That is clauses 1 and 2, in
@@ -157,7 +181,73 @@ recommends both; nothing here depends on it.
 
 ---
 
-## 5. How to run these
+## 5. What ADR 0011 and ADR 0012 require
+
+Two **accepted** decision records changed `app-manifest.schema.json`, and until these six
+cases existed **nothing in this directory exercised either change**. All sixteen manifest
+fixtures in the `az7` set declare `onUninstall: "delete"`, so neither branch of the new
+lifecycle conditional was touched by anything, and no fixture referenced `apis[].path` at
+all. Both clauses were asserted and inspected; neither was exercised.
+
+### ADR 0011 — `retain` means indefinite
+
+`docs/decisions/0011-manifest-lifecycle-indefinite-retention.md`.
+
+| `onUninstall` | Meaning | `retentionDays` | Case |
+|---|---|---|---|
+| `retain` | Held **indefinitely**, removed only by an explicit authorized action | **Forbidden** | `adr0011-p1` accepts without it, `adr0011-n1` rejects with it |
+| `archive` | Held for a **bounded** period, then disposed of | **Required** | `adr0011-p2` accepts with it, `adr0011-n2` rejects without it |
+
+`adr0011-n1` is the case that matters. `retain` **with** a `retentionDays` is a manifest
+that promises the tenant its data is kept and then names the day the platform destroys
+it — opposite statements about another company's business data, on the screen the tenant
+reads immediately before an irreversible act (`APP_STANDARD.md` §9). ADR 0011 chose
+**forbidden** over optional exactly so that document cannot exist, and the App must fail
+validation rather than install with the number treated as advisory.
+
+All three of this set's pairs are load-bearing and `index.json` registers each one. The
+cross-pair `adr0011-n1` / `adr0011-p2` is the non-obvious one: both carry a
+`retentionDays` and differ in the disposition it sits under, so accepting **both** means
+the field was implemented as unconditionally permitted rather than conditional — a
+failure that passes every same-disposition pair in the set.
+
+### ADR 0012 — `snake_case` path parameters
+
+`docs/decisions/0012-manifest-api-path-underscore.md`. The `apis[].path` class widened
+from `^/[a-z0-9\-/{}]*$` to `^/[a-z0-9_\-/{}]*$`. Nothing else changed.
+
+- `adr0012-p1` — `/orders/{order_id}`, the form of `API_STANDARD.md` §5's own worked
+  example, which the previous pattern **rejected**. A registry that accepts only the
+  paths its own standard forbids trains App authors to write non-conforming paths,
+  because the cheapest way past a red light is the wrong one.
+- `adr0012-n1` — `/Orders/{order_id}`. **Its only violation is the uppercase segment.**
+  The parameter is deliberately left as the legal `{order_id}`: a case that rejected on
+  an underscore would go green precisely when ADR 0012 had been **reverted**, and a
+  fixture that rejects for the wrong reason is worse than no fixture. When reporting a
+  REJECT here, confirm it is attributed to the case and not to the underscore.
+
+**Not covered, and recorded as gaps rather than folded in:** a path containing a space,
+and a path not rooted at `/`. Both are rejectable under the same pattern and each needs
+its own single-violation case, because a fixture carrying two violations cannot show
+which one caused the rejection.
+
+### Neither set has been executed
+
+**All six cases are `enforcedBy: "schema"`, and the schema layer has never been run** —
+there is no JSON Schema implementation in this repository, TS1 is undecided, and ADR
+`0009` bars installing one. They are conformance cases carried against the day a
+validator exists, in exactly the sense the `az7` `r`-series is carried against a runtime.
+Report them **NOT RUN, with that reason.**
+
+**Do not run them through `app-manifest-relations.mjs` and call the result coverage.**
+That validator decides AZ7 entity relations; it does not read `lifecycle` and does not
+read `apis`. It returns no errors for all six — including the three that must be
+REJECTED — and "no errors" would be read as a pass. That is the false green `az7-r3`
+exists to warn about, and §6 step 6 excludes these sets from that step for this reason.
+
+---
+
+## 6. How to run these
 
 The fixtures are already runnable data. A runner needs to:
 
@@ -174,8 +264,16 @@ The fixtures are already runnable data. A runner needs to:
      report **PASS** or **FAIL**.
    - `enforcedBy` is `validator` → report **NOT-DECIDABLE-BY-SCHEMA**, and record the
      schema's actual answer for information only. **Never PASS/FAIL these on the schema.**
-6. Run every `manifest` case through the registry-aware relation validator too, and
-   report `validator` and `schema+validator` cases as PASS/FAIL against that layer. That
+6. Run **the `az7` set's** `manifest` cases through the registry-aware relation validator
+   too, and report `validator` and `schema+validator` cases as PASS/FAIL against that
+   layer.
+
+   **The `adr0011` and `adr0012` sets are excluded from this step.** All six of their
+   cases are `enforcedBy: "schema"`; the relation validator reads neither `lifecycle` nor
+   `apis`, so it returns no errors for every one of them — including the three that must
+   be REJECTED. Passing them through it and recording "no errors" produces a false green
+   rather than coverage. They are **NOT RUN** until a JSON Schema implementation exists
+   (§5). That
    validator **exists and has been executed against these fixtures**:
    `packages/contracts/validation/app-manifest-relations.mjs`, approved by ADR `0009`.
    It is dependency-free, so this step needs no framework — import
@@ -203,8 +301,13 @@ The fixtures are already runnable data. A runner needs to:
    - The `runtime` cases — `az7-r1`, `az7-r2`, `az7-r3` — are **NOT RUN** by this step
      and no static validator can decide them. Runtime tenant isolation has been executed
      by nothing in this directory.
+   - The six `adr0011` and `adr0012` cases are **NOT RUN** by this step **or by step 5**,
+     and are excluded from every PASS/FAIL total. A report covering this directory states
+     them as NOT RUN with their reason; it does not omit them, and it does not let a
+     validator that cannot see `lifecycle` or `apis` stand in for one that can.
 7. Report the pairs listed in `index.json` under `pairsThatMustBeReportedTogether`
-   **side by side**. `az7-n4` alone can be made green by refusing every `own`-scope
+   **side by side** — in **every** set, including the three registered by `adr0011` and
+   the one registered by `adr0012`. `az7-n4` alone can be made green by refusing every `own`-scope
    Action; only `az7-n4` **and** `az7-p2` together show the rule is enforced rather than
    the feature banned. **`az7-n8` has exactly the same property** and the same control:
    it too goes green under a validator that refuses every `own`-scope Action, so it is
@@ -218,7 +321,7 @@ runtime barely matters; for everything that follows in this directory it will.
 
 ---
 
-## 6. Rules for anyone adding a case here
+## 7. Rules for anyone adding a case here
 
 - **Synthetic data only.** Never real customer data. No credentials, tokens, or keys —
   not expired ones, and not "obviously fake" ones that pattern-match a real format and
@@ -238,7 +341,7 @@ runtime barely matters; for everything that follows in this directory it will.
 
 ---
 
-## 7. Provenance
+## 8. Provenance
 
 - **CWE-863 (Major)** — raised by CodeRabbit on `app-manifest.schema.json`: `$defs/action`
   carried no entity reference, so VAL-OWN was satisfiable by *any* entity declaring an
