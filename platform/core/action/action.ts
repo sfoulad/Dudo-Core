@@ -117,10 +117,19 @@ export type ActionDefinition<I, O> = {
   /**
    * The caller-supplied resource identifier, read from the RAW request before validation.
    *
-   * It is read from the raw input because a denial audit record is owed even when the
-   * request failed validation, and because CD-5 requires a `not_found` on a mutating Action
-   * to record "the identifier AS SUPPLIED BY THE CALLER, marked unresolved, plus nothing
-   * derived from any record". Returning null is correct for an Action that names no record.
+   * It is read from the raw input because a denial audit record was owed even when the request
+   * failed validation, and because CD-5 requires a `not_found` on a mutating Action to record
+   * "the identifier AS SUPPLIED BY THE CALLER, marked unresolved, plus nothing derived from any
+   * record". Returning null is correct for an Action that names no record.
+   *
+   * **THE PIPELINE NO LONGER CALLS THIS ON THE DENIAL PATH** (docs/decisions/0013 control 5).
+   * A denial is now counted against a bounded grouping that deliberately EXCLUDES the requested
+   * identifier, because the attacker controls that value and grouping by it would mint
+   * unlimited groups — restoring per-attempt writes under another name and undoing the whole
+   * decision while appearing implemented. So this is currently reached only by an Action's own
+   * code, and CD-5's obligation is not met for denials. It is kept rather than deleted because
+   * the obligation itself is unresolved: 0013 supersedes it, and whether it returns in some
+   * bounded form is a CONTRACT question, reported to the Team Lead and not decided here.
    */
   readonly targetIdentifier: (raw: unknown) => string | null;
   readonly handle: ActionHandler<I, O>;

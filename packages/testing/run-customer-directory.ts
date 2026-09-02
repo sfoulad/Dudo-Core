@@ -40,6 +40,7 @@ import { buildCarrierSuite } from './suites/customer-directory/carriers.ts';
 import { buildAuthorizationSuite } from './suites/customer-directory/authorization.ts';
 import { buildAuditSuite } from './suites/customer-directory/audit.ts';
 import { buildDeniedReadAuditSuite } from './suites/customer-directory/denied-read-audit.ts';
+import { buildBoundedDenialAuditingSuite } from './suites/customer-directory/bounded-denial-auditing.ts';
 import { buildHttpAndDeferralSuite } from './suites/customer-directory/http-and-deferral.ts';
 import { buildSearchAndCollectionSuite } from './suites/customer-directory/search-and-collections.ts';
 import { buildStateAndValidationSuite } from './suites/customer-directory/state-and-validation.ts';
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
     buildAuthorizationSuite(make),
     buildAuditSuite(make),
     buildDeniedReadAuditSuite(make),
+    buildBoundedDenialAuditingSuite(make),
     buildStateAndValidationSuite(make),
     buildSearchAndCollectionSuite(make),
     buildHttpAndDeferralSuite(make),
@@ -144,6 +146,19 @@ async function main(): Promise<void> {
   classify(
     "D2 REVERTED — customers.GetCustomer back to auditOnDenial: false, its shape before the 2026-09-02 ruling",
     await runAll([buildDeniedReadAuditSuite(d2Reverted)]),
+  );
+
+  // ---- Negative control 5: the identifier is back in the denial group key -----
+  //
+  // `docs/decisions/0013` control 5 is the constraint that makes the aggregation bounded, and
+  // the oracle and timing properties both fall out of it. Nothing in the previous four controls
+  // touches the grouping, so none of them can tell us whether the denied-read suite would
+  // notice if the identifier were added back. This one adds it — through a wrapper around the
+  // SHIPPED coordinator, with no production file edited — and the suite must go red.
+  const identifierKeyed: MakeWorld = (options) => realWorld({ ...options, identifierInGroupKey: true });
+  classify(
+    'THE GROUP KEY — the requested customer identifier is BACK in it, which 0013 control 5 forbids',
+    await runAll([buildDeniedReadAuditSuite(identifierKeyed)]),
   );
 
   const counts = tally(primary);

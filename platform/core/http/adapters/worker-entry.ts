@@ -50,6 +50,11 @@
  *   DB_TENANT              the shared tenant-data database (docs/decisions/0006 §0.3, #2)
  *   CURSOR_SIGNING_KEY     a Worker SECRET, not a variable. Nothing in the repository holds
  *                          its value, and nothing may.
+ *   COORDINATION           the SQLite-backed Durable Object namespace that counts rate limits
+ *                          and denials (docs/decisions/0013 control 2). It needs a
+ *                          `new_sqlite_classes` migration in the Worker configuration — Team
+ *                          Lead's to author, and named here so it is not discovered at deploy.
+ *                          KV-BACKED IS PROHIBITED: it requires a paid plan (0008).
  *
  * `"remote": true` MUST NOT BE SET IN LOCAL OR CI CONFIGURATION (CLOUDFLARE_STANDARD.md
  * §4.1). A remote binding is a deliberate, reviewed act in a deployed environment, and a CI
@@ -62,6 +67,8 @@
 
 import type { D1Database } from '../../storage/adapters/d1/d1-store.ts';
 import { createD1TenantStore } from '../../storage/adapters/d1/d1-store.ts';
+import type { DurableObjectNamespace } from '../../protection/adapters/durable-objects/coordinator-object.ts';
+import { createDurableObjectRequestCoordinator } from '../../protection/adapters/durable-objects/coordinator-object.ts';
 import type { TenantStoreMapping } from '../../tenancy/tenant-store-resolver.ts';
 import { createStaticTenantStoreResolver } from '../../tenancy/tenant-store-resolver.ts';
 import { createStoreBusinessDirectory } from '../../tenancy/business-directory.ts';
@@ -84,6 +91,14 @@ export type Env = {
   readonly DB_TENANT: D1Database;
   /** A Worker secret binding. Never a configuration variable, never in a file. */
   readonly CURSOR_SIGNING_KEY?: string;
+  /**
+   * The coordination Durable Object namespace (docs/decisions/0013).
+   *
+   * OPTIONAL IN THE TYPE, MANDATORY IN BEHAVIOUR: `createCoreRuntime` refuses to start without
+   * it. It is optional here only so that a missing binding is a clear runtime refusal with an
+   * explanation, rather than a property access on `undefined` somewhere further in.
+   */
+  readonly COORDINATION?: DurableObjectNamespace;
 };
 
 const TENANT_BINDING = 'DB_TENANT';
@@ -130,6 +145,29 @@ export async function createCoreRuntime(
     );
   }
 
+  // ===========================================================================================
+  // NO COORDINATOR, NO WORKER. docs/decisions/0013, and the refusal is the control.
+  // ===========================================================================================
+  //
+  // Without this binding there is no rate limit and denials are not bounded, which is exactly
+  // the state that made the probe-detection control a platform-wide denial-of-service lever:
+  // one authenticated caller, 100,000 malformed requests, and D1 stops answering for EVERY
+  // Organization. Starting anyway "for now" would be shipping that state on purpose.
+  //
+  // AND IT MUST NOT FALL BACK TO THE IN-PROCESS COORDINATOR. That one counts per isolate, and a
+  // rate limit divided by a number nobody controls is not a rate limit — it is a limit that
+  // looks present in review and is absent in production, which is worse than none.
+  const coordinationNamespace = env.COORDINATION;
+  if (coordinationNamespace === undefined) {
+    throw new Error(
+      'COORDINATION is not bound. It is the SQLite-backed Durable Object namespace that ' +
+        'enforces rate limits and bounds denial auditing (docs/decisions/0013). Without it a ' +
+        'single authenticated caller can exhaust the account-wide D1 daily write allowance and ' +
+        'stop D1 answering for every Organization, so the Worker refuses to start rather than ' +
+        'serve requests with the control absent.',
+    );
+  }
+
   return {
     dependencies: {
       resolver: createStaticTenantStoreResolver(tenantMappings(), (bindingName, organizationId) =>
@@ -142,6 +180,9 @@ export async function createCoreRuntime(
       ids: createRandomIdGenerator(),
       cursors: await createCursorCodec(new TextEncoder().encode(signingKeyText)),
       principals,
+      coordinator: createDurableObjectRequestCoordinator(coordinationNamespace),
+      // NO `coordinationFailureReporter`, and its absence suppresses nothing — same argument
+      // as `auditFailureReporter` below.
       // NO `auditFailureReporter`, DELIBERATELY, AND ITS ABSENCE SUPPRESSES NOTHING.
       // `announceAuditFailure` emits to a last-resort channel unconditionally, before any
       // supplied reporter, and that channel is not injectable (audit/audit-failure.ts). So an
@@ -162,6 +203,42 @@ export async function createCoreRuntime(
  * deployment entry point that names both is the Team Lead's to compose, alongside the
  * Worker configuration this file deliberately does not author.
  */
+/**
+ * The third rate-limit level's input, and the one thing only the transport knows.
+ *
+ * `CF-Connecting-IP` IS THE EDGE'S HEADER, NOT THE CALLER'S. Cloudflare sets it on every
+ * request that reaches a Worker and overwrites anything a client sent under that name, which is
+ * what makes it usable at all — a header the caller controls would let an attacker mint a fresh
+ * bucket per request and the level would count nothing. THAT TRUST IS A CLOUDFLARE PROPERTY,
+ * which is exactly why reading it lives in this adapter and nowhere else: if Dudo ever runs
+ * behind something else, this line is the whole of what has to change.
+ *
+ * IT IS HASHED BEFORE IT CROSSES INTO CORE. The limiter needs equality and nothing more, and an
+ * address stored or logged is personal data about a tenant's staff. Truncated to 128 bits,
+ * which is far past the point where collisions matter for a counter.
+ *
+ * ABSENT MEANS NULL MEANS THE SHARED BUCKET, never "skip this level" — the fail-closed
+ * direction, so a missing header throttles harder rather than exempting.
+ */
+async function readSourceAddressHash(request: Request): Promise<string | null> {
+  const address = request.headers.get('cf-connecting-ip');
+  if (address === null || address.length === 0) {
+    return null;
+  }
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(address));
+    const bytes = new Uint8Array(digest).subarray(0, 16);
+    let hex = '';
+    for (const byte of bytes) {
+      hex += byte.toString(16).padStart(2, '0');
+    }
+    return hex;
+  } catch {
+    // A hash that cannot be computed must not silently disable the level.
+    return null;
+  }
+}
+
 export async function fetchHandler(
   request: Request,
   env: Env,
@@ -171,7 +248,9 @@ export async function fetchHandler(
 ): Promise<Response> {
   try {
     const runtime = await createCoreRuntime(env, createDenyAllPrincipalResolver());
-    return await handleRequest(runtime.dependencies, router, app, basePath, request);
+    return await handleRequest(runtime.dependencies, router, app, basePath, request, {
+      sourceAddressHash: await readSourceAddressHash(request),
+    });
   } catch (cause) {
     // Nothing about the failure reaches the caller. A misconfigured secret, a missing
     // binding and an unexpected defect are one answer, because the difference between them

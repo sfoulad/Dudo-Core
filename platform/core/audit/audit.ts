@@ -150,6 +150,15 @@ export type AuditDecision = 'allowed' | 'denied';
  * `not_found` appears here because CD-5 requires a failed cross-tenant lookup to be
  * audited IN THE CALLER'S TENANT: an enumeration run that produced only silence is
  * indistinguishable from noise, which defeats the reason for auditing it.
+ *
+ * `rate_limited` WAS MISSING AND ITS ABSENCE WAS A HOLE, found by running the controls rather
+ * than by reading them. Nothing produced a `rate_limited` denial until `docs/decisions/0013`
+ * built a limiter, so the omission cost nothing and was invisible. The moment the limiter
+ * existed it meant that a THROTTLED caller — which is what a probing campaign looks like once
+ * these controls are working — fell through the recording path and produced no evidence at
+ * all. That is the same silence D2 was decided to end, arriving through the fix for it. It sits
+ * beside `quota_exceeded` because the two are siblings: one means slow down, the other means
+ * upgrade or stop, and both are refusals a caller earned.
  */
 export type AuditDenialReason =
   | 'unauthenticated'
@@ -158,6 +167,7 @@ export type AuditDenialReason =
   | 'invalid_argument'
   | 'failed_precondition'
   | 'conflict'
+  | 'rate_limited'
   | 'quota_exceeded';
 
 export type AuditEntry = {

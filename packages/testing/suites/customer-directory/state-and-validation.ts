@@ -54,14 +54,22 @@ export function buildStateAndValidationSuite(makeWorld: MakeWorld): Suite {
         await world.invoke(world.actions.archive, world.ownerA, { customer_id: CUST_A_ANNA }),
         EXPECTED_FAILED_PRECONDITION,
       );
-      // The refused transition IS audited, as a DENIAL. The contract requires it — "failures
+      // The refused transition IS recorded, as a DENIAL. The contract requires it — "failures
       // are audited, not only successes … an attack looks like a long run of failures" — and
       // it is the opposite of the thing the strict transition exists to avoid, which is an
       // ALLOWED record for an operation that did not happen.
+      //
+      // REWRITTEN FOR docs/decisions/0013: the two records now live in two tables. The
+      // ALLOWED transition is still one `audit_event` row; the refused one is a counted
+      // denial in `denial_summary`. Both halves of the original claim are still asserted —
+      // the refusal is recorded, and nothing claims a second archive succeeded.
       const rows = world.auditRows();
-      assertEqual('two audit records: one allowed, one denied', rows.length, 2);
-      assertEqual('the first records the transition that happened', `${rows[0].decision}|${rows[0].denial_reason}`, 'allowed|null');
-      assertEqual('the second records a denial, not a second archive', `${rows[1].decision}|${rows[1].denial_reason}`, 'denied|failed_precondition');
+      assertEqual('exactly one audit_event row: the transition that happened', rows.length, 1);
+      assertEqual('and it is an allowed decision', `${rows[0].decision}|${rows[0].denial_reason}`, 'allowed|null');
+      const summaries = world.denialSummaryRows();
+      assertEqual('the refusal is recorded as a denial summary', summaries.length, 1);
+      assertEqual('with the taxonomy reason, not a sentence', summaries[0].denial_reason, 'failed_precondition');
+      assertEqual('and the Action that refused', summaries[0].action_id, 'customers.ArchiveCustomer');
       assertTrue(
         'no audit record claims a second archive succeeded',
         rows.filter((row) => row.decision === 'allowed').length === 1,
@@ -200,15 +208,20 @@ export function buildStateAndValidationSuite(makeWorld: MakeWorld): Suite {
         await world.invoke(world.actions.update, world.ownerA, { customer_id: CUST_A_ANNA }),
         invalid('', 'too_few_properties'),
       );
-      // The rejection is audited as a denial — not as an update. `updated_at` must not move
+      // The rejection is recorded as a denial — not as an update. `updated_at` must not move
       // and no `allowed` record may exist, which is the property the rejection protects.
-      const rows = world.auditRows();
-      assertEqual('the rejection is audited as a denial', `${rows.length}|${rows[0]?.decision}|${rows[0]?.denial_reason}`, '1|denied|invalid_argument');
+      //
+      // REWRITTEN FOR docs/decisions/0013: a denial is counted into `denial_summary`. The
+      // invariant that matters here — nothing anywhere claims the update happened — is
+      // asserted against BOTH tables, which is what the split now requires.
+      assertEqual('no allowed record was written', world.auditRows().length, 0);
+      const summaries = world.denialSummaryRows();
       assertEqual(
-        'no allowed record was written',
-        rows.filter((row) => row.decision === 'allowed').length,
-        0,
+        'the rejection is recorded as a denial summary carrying the taxonomy reason',
+        `${summaries.length}|${summaries[0]?.denial_reason}|${summaries[0]?.attempt_count}`,
+        '1|invalid_argument|1',
       );
+      assertEqual('attributed to the Action that refused', summaries[0]?.action_id, 'customers.UpdateCustomer');
       const row = world.customerRows(ORG_A).find((entry) => entry.customer_id === CUST_A_ANNA);
       assertEqual('and updated_at did not move', row?.updated_by_principal_id, 'seed_principal');
     } finally {
