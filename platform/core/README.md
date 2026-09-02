@@ -26,4 +26,34 @@ Boundaries: `docs/architecture/boundaries.md` · Stack:
 `docs/decisions/0003-technology-stack-typescript-on-cloudflare.md` · Contributing:
 `CONTRIBUTING.md`
 
-*Empty placeholder. No application code exists yet; the Core platform is Phase 1.*
+## What exists
+
+The Phase 1 platform primitives the first vertical slice needed, and nothing else. Every
+one passes the four-question inclusion test in `docs/architecture/standards/CORE_BOUNDARIES.md`
+§2; **no industry noun appears in any of them.**
+
+| Path | Primitive |
+|---|---|
+| `kernel/` | Result, the closed error taxonomy, opaque identifiers, the clock |
+| `tenancy/` | Request and Action context, `TenantStoreResolver`, the Business directory port |
+| `storage/` | The storage port, the predicate language, and the adapters |
+| `authorization/` | The scope ladder, the authorizer, and the Business-scope decisions |
+| `audit/` | The audit record, the sink port, and its store-backed writer |
+| `action/` | The Action definition and the pipeline that enforces the evaluation order |
+| `validation/` | A zero-dependency input validator |
+| `pagination/` | Signed, tenant-bound cursors |
+| `http/` | The router, the response envelope, and the Worker adapter |
+| `migrations/` | `audit_event`. **Reviewed, not applied** — there is no migration runner |
+
+**Two files may name a Cloudflare type** (`CLOUDFLARE_STANDARD.md` §2):
+`storage/adapters/d1/d1-store.ts` and `http/adapters/worker-entry.ts`. A grep for
+`D1Database`, `R2Bucket`, `Queue`, `DurableObjectNamespace`, `Fetcher`,
+`WorkflowEntrypoint`, `ExecutionContext` or `Env` anywhere else must come back empty.
+
+**The runtime serves nothing, and that is correct.** No authentication mechanism is
+recorded (AZ2) and `TenantDirectoryEntry` is not built, so a deny-all principal resolver
+and an empty tenant mapping are wired deliberately. Both fail closed. See
+`http/adapters/worker-entry.ts`.
+
+**Not authored here:** the Worker configuration file, which is shared configuration and
+belongs to the Team Lead.
