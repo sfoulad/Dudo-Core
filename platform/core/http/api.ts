@@ -8,14 +8,26 @@
  * HTTP — turning a request into an Action input, and turning a result into a response —
  * and nothing else. There is no business rule here and no place to put one.
  *
+ * RATE LIMITING NOW EXISTS, and it is not here. `docs/decisions/0013` puts it in
+ * `action/pipeline.ts` at `ARCHITECTURE.md` §3's stage 5, counted by a SQLite-backed Durable
+ * Object, per authenticated actor, per Organization and per source address. This file's only
+ * part in it is the one thing HTTP knows and the pipeline cannot: the caller's source address,
+ * which arrives already HASHED from the transport adapter and is passed through untouched.
+ * Core never sees the address itself — a raw address is personal data about a tenant's staff,
+ * and the counter needs only equality.
+ *
  * WHAT IS NOT BUILT, NAMED SO IT IS NOT MISTAKEN FOR AN OVERSIGHT:
  *
- *   - RATE LIMITING. API_STANDARD.md §10 requires limits per tenant AND per principal.
- *     None exists. `rate_limited` is a declared error on every Customer Directory Action,
- *     so the shape is ready, but nothing produces it. A rate limiter needs somewhere to
- *     count, and the obvious home — KV — is not approved (CLOUDFLARE_STANDARD.md CF2).
- *     Counting in D1 puts a write on every request of a single-threaded shared database,
- *     which is a decision, not an implementation detail. Reported, not invented.
+ *   - `Retry-After` ON A `rate_limited` RESPONSE. API_STANDARD.md §10 requires it, the
+ *     coordinator computes the value, and it is NOT returned: `CoreError` has no channel for a
+ *     header, and giving it one changes the shape of the error envelope, which is contract
+ *     surface and not this agent's to author. Reported to the Team Lead as owed.
+ *   - PRE-AUTHENTICATION RATE LIMITING. The limiter needs a coordinator instance, and the
+ *     instance is named from the AUTHENTICATED Organization, so an unauthenticated flood is
+ *     not counted. It costs nothing today — production ships a deny-all principal resolver and
+ *     an unauthenticated request reaches no storage — but the day AZ2 lands, authentication
+ *     itself will do a lookup and that lookup will be unprotected. It belongs with AZ2, and
+ *     the port is already shaped to serve it.
  *   - IDEMPOTENCY. §9 says every unsafe operation ACCEPTS an `Idempotency-Key` and that
  *     Actions marked `idempotent: true` REQUIRE one. Every Customer Directory Action is
  *     `idempotent: false`, so none requires one; the key store that would honour an offered
@@ -57,12 +69,29 @@ function readCorrelationId(request: Request, ids: IdGenerator): string {
   return ids.generate();
 }
 
+/**
+ * What the transport knows about where a request came from.
+ *
+ * `sourceAddressHash` is ALREADY HASHED by the adapter that read it. Passing a hash rather than
+ * an address is not a nicety: the rate limiter needs only equality, and an address stored or
+ * logged anywhere is personal data about a tenant's staff that nothing in this design requires.
+ *
+ * NULL IS NOT AN EXEMPTION — every unknown source shares one bucket, so an adapter that omits
+ * it throttles harder rather than switching the level off. That is why this parameter has no
+ * default: a caller has to decide, and the fail-closed direction is the one that costs nothing
+ * to choose.
+ */
+export type RequestOrigin = {
+  readonly sourceAddressHash: string | null;
+};
+
 export async function handleRequest(
   dependencies: ApiDependencies,
   router: Router,
   app: AppPermissionEnvelope,
   basePath: string,
   request: Request,
+  origin: RequestOrigin = { sourceAddressHash: null },
 ): Promise<Response> {
   const requestId = dependencies.ids.generate();
   const correlationId = readCorrelationId(request, dependencies.ids);
@@ -166,6 +195,7 @@ export async function handleRequest(
       app,
       requestId,
       correlationId,
+      sourceAddressHash: origin.sourceAddressHash,
     },
     merged,
   );

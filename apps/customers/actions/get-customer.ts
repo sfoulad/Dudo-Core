@@ -32,7 +32,7 @@
  *
  * So this is a PROBE-DETECTION CONTROL and nothing wider. A successful GetCustomer still
  * writes no audit record — `auditOnDenial` narrows the denial path and cannot reach step 7
- * (platform/core/action/pipeline.ts). Every denial writes exactly one:
+ * (platform/core/action/pipeline.ts). Every denial is recorded:
  *
  *   forbidden        the permission was refused, or the row's Business is outside the
  *                    principal's authorized set
@@ -40,40 +40,52 @@
  *   invalid_argument the identifier failed schema validation, which is what a fuzzing run
  *                    looks like from here
  *
- * THE TWO `not_found` RECORDS ARE THE SAME RECORD. A foreign identifier and an identifier
- * that exists nowhere take the identical path — the storage boundary filters, `findById`
- * returns null, `resolveAuthorizedCustomer` answers `notFound()` — so they produce records
- * differing only in the identifier the caller typed. Auditing therefore adds no oracle: the
- * work done, the response bytes and the response length are unchanged and still equal between
- * the two. That property is the reason the audit record is written from the DENIAL, using the
- * caller's own supplied string, and NOT from any attempt to look the foreign row up. Resolving
- * it to enrich the record would be the cross-tenant read this control exists to detect.
+ * THE TWO `not_found` DENIALS ARE THE SAME DENIAL. A foreign identifier and an identifier that
+ * exists nowhere take the identical path — the storage boundary filters, `findById` returns
+ * null, `resolveAuthorizedCustomer` answers `notFound()` — so they are indistinguishable to the
+ * recording layer. Recording therefore adds no oracle: the work done, the response bytes and
+ * the response length are unchanged and still equal between the two, and nothing is ever
+ * resolved from the probed row, because resolving it to enrich a record would be the
+ * cross-tenant read this control exists to detect.
  *
- * WHAT THE RECORD CARRIES: the actor, the actor's Organization (the audit row's `tenant_id`,
- * set by the storage boundary from the authenticated handle), the action, the timestamp, the
- * REQUESTED customer identifier marked `target_unresolved`, the denial reason, and the
- * correlation id. WHAT IT DOES NOT CARRY: anything read from the customer. `AuditEntry` has no
- * field that can hold a value, and `relatedBusinessIds` is forced empty on every denial so a
- * wrong-Business refusal cannot name the Business it refused.
+ * ===========================================================================================
+ * AMENDED BY docs/decisions/0013 — A DENIAL IS NOW COUNTED, NOT WRITTEN
+ * ===========================================================================================
  *
- * WHAT THIS CONTROL COSTS, STATED RATHER THAN DISCOVERED IN AN INCIDENT. A denied read now
- * performs a D1 WRITE, and an attacker choosing the request rate chooses the write rate. Two
- * consequences, neither of which is a reason not to do it, and both of which are somebody's
- * to own:
+ * WHAT THIS CONTROL COST, AND IT WAS FOUND BEFORE AN INCIDENT RATHER THAN DURING ONE. A denied
+ * read performed a D1 WRITE, and an attacker choosing the request rate chose the write rate.
+ * D1 Free enforces 100,000 rows written per day ACCOUNT-WIDE — enforcement began 2026-09-01 —
+ * and exceeding it means D1 stops answering for EVERY Organization. So this probe-detection
+ * control was a platform-wide denial-of-service lever, and the cheapest denial to produce
+ * needed no valid identifier at all.
  *
- *   - There is NO RATE LIMITING (platform/core/http/api.ts says so and says why). An
- *     authenticated principal can therefore drive one audit insert per request against a
- *     single-threaded database that also serves every other Organization. Authentication is
- *     the floor here — an unauthenticated request writes nothing, because there is no tenant
- *     to write it in — so this needs a valid session, not merely a network path.
- *   - Those writes consume the D1 free-tier row allowance
- *     (docs/decisions/0008; docs/operations/free-tier-register.md). A sustained probing run
- *     is now also a spend event.
+ * The user decided on 2026-09-02 (`0013`, ten controls). What changes for this Action:
  *
- * The right answer to both is a rate limiter, which does not exist and cannot be invented
- * here. Reported to the Team Lead rather than mitigated by weakening the control: an audit
- * record that is dropped when the attacker goes fast is an audit record that is absent
- * exactly when it matters.
+ *   - DENIALS ARE AGGREGATED. Attempts are counted by a SQLite-backed Durable Object and one
+ *     summary lands in `denial_summary` per (actor, Organization, App, Action, denial category,
+ *     15-minute window), on a bounded emission ladder. A probing run of 100,000 attempts costs
+ *     at most a handful of rows, not 100,000.
+ *   - THE REQUESTED IDENTIFIER IS NO LONGER RECORDED. It is deliberately absent from the
+ *     grouping (0013 control 5): the attacker controls that value, so grouping by it would mint
+ *     unlimited groups and restore per-attempt writes under another name. THE COST IS REAL AND
+ *     IS OWED TO THE CONTRACT — CD-5 asks a `not_found` to record "the identifier AS SUPPLIED BY
+ *     THE CALLER, marked unresolved", and a summary has nowhere to put it. 0013 is the later,
+ *     Accepted, user decision and supersedes it; the conflict is reported to the Team Lead,
+ *     because contracts are not Core's to author.
+ *   - RATE LIMITS NOW EXIST, per authenticated actor, per Organization and per source address,
+ *     enforced before any Customer query (`platform/core/action/pipeline.ts`).
+ *
+ * WHAT A SUMMARY CARRIES: the actor, the actor's Organization (the row's `tenant_id`, set by
+ * the storage boundary from the authenticated handle), the App and Action, the window's first
+ * and last attempt times, the attempt count, the denial category, and the actor's own
+ * authorized Business set. WHAT IT DOES NOT CARRY: anything read from the customer, the
+ * identifier that was attempted, and anything that could distinguish "in another Organization"
+ * from "nowhere" — both are `not_found` and both increment the SAME counter.
+ *
+ * WHAT IS **NOT** CLAIMED, and 0013 control 11 is explicit about it: none of this is DDoS
+ * resistance. An attacker can still exhaust the Workers Free request allowance of 100,000
+ * requests/day before reaching D1. These controls protect D1 capacity and the integrity of the
+ * audit trail, and nothing wider.
  *
  * WHAT IS STILL DEFERRED, unchanged by this: COARSE-GRAINED ENUMERATION AUDITING of SUCCESSFUL
  * reads — who enumerated, when, and how many results. The accepted risk therefore narrows but

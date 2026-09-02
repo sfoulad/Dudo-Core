@@ -115,16 +115,68 @@ export function buildResolverSuite(makeWorld: MakeWorld): Suite {
       };
       const { invokeAction } = await import('../../../../platform/core/action/pipeline.ts');
       const { asAnyAction } = await import('../../../../platform/core/action/action.ts');
-      await invokeAction(
-        { ...world.dependencies, resolver: spying },
-        asAnyAction(world.actions.get),
-        { principal: world.ownerA, app: world.app, requestId: 'req_spy', correlationId: 'cor_spy' },
-        // A request loudly asserting a different Organization in three places at once.
-        { customer_id: CUST_A_ANNA, tenant_id: ORG_B, organization_id: ORG_B },
+      const dependencies = { ...world.dependencies, resolver: spying };
+
+      // ---- PART 1: an ordinary, well-formed read. The store IS resolved, and the value it is
+      // resolved for comes from the authenticated principal.
+      expectOk(
+        'control: the read succeeds, so a store really was needed',
+        await invokeAction(
+          dependencies,
+          asAnyAction(world.actions.get),
+          { principal: world.ownerA, app: world.app, requestId: 'req_spy_ok', correlationId: 'cor_spy_ok' },
+          { customer_id: CUST_A_ANNA },
+        ),
       );
       assertEqual('the resolver was consulted exactly once', seen.length, 1);
       assertEqual('with the authenticated Organization', seen[0], ORG_A);
-      assertTrue('and never with the one the request named', !seen.includes(ORG_B), 'a caller-supplied Organization reached the resolver');
+
+      // ---- PART 2: a request loudly asserting a different Organization in three places at
+      // once. It is rejected at input validation, and — since docs/decisions/0013 made storage
+      // resolution LAZY (control 7) — the rejection costs no store handle at all.
+      //
+      // WHY THIS HALF IS NOW SPLIT OUT. Before 0013 the store was resolved at the top of the
+      // pipeline, so this request also produced exactly one resolution and the case could make
+      // its point in a single invocation. It no longer does: the assertion "consulted exactly
+      // once" would be measuring the denial-summary write rather than the customer lookup, and
+      // a case that passes for a reason it does not state is the failure mode this suite is
+      // built against.
+      const before = seen.length;
+      expectError(
+        'the contradicting request is refused',
+        await invokeAction(
+          dependencies,
+          asAnyAction(world.actions.get),
+          { principal: world.ownerA, app: world.app, requestId: 'req_spy', correlationId: 'cor_spy' },
+          { customer_id: CUST_A_ANNA, tenant_id: ORG_B, organization_id: ORG_B },
+        ),
+        {
+          code: 'invalid_argument',
+          message: 'The request is not valid.',
+          details: [
+            { field: 'tenant_id', issue: 'unknown_field' },
+            { field: 'organization_id', issue: 'unknown_field' },
+          ],
+        },
+      );
+      assertTrue(
+        'and never with the one the request named — on either invocation',
+        !seen.includes(ORG_B),
+        'a caller-supplied Organization reached the resolver',
+      );
+      assertTrue(
+        'every resolution in this case was for the authenticated Organization',
+        seen.every((entry) => entry === ORG_A),
+        `the resolver saw ${JSON.stringify(seen)}`,
+      );
+      // The one resolution the refusal DID cause is the denial-summary write, which is
+      // tenant-scoped to the caller's own Organization. Named explicitly so the count is not a
+      // mystery to the next reader.
+      assertTrue(
+        'the refusal resolved a store only to write its own denial summary, if at all',
+        seen.length - before <= 1,
+        `a refused request resolved ${seen.length - before} stores`,
+      );
     } finally {
       world.close();
     }

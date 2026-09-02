@@ -51,25 +51,50 @@ used because adopting it would be a TS1 decision that is not QA's to make.
 
 ### What the run prints
 
-A **primary run**, then **three negative-control runs** — predicate, resolver and boundary
-— as `TESTING_STANDARD.md` §5.6 requires each separately. For every control each case is
-classified as *red on an isolation assertion*, *red on another assertion*, or **STILL
-GREEN**. The third is printed as a coverage gap, because under `0006` Option A a case that
-stays green under a deliberately broken control does not test that control, whatever its
-name says.
+A **primary run**, then **five negative-control runs** — predicate, resolver, boundary, D2
+reverted, and the denial group key — as `TESTING_STANDARD.md` §5.6 requires each separately.
+For every control each case is classified as *red on an isolation assertion*, *red on another
+assertion*, or **STILL GREEN**. The third is printed as a coverage gap, because under `0006`
+Option A a case that stays green under a deliberately broken control does not test that
+control, whatever its name says.
+
+The fifth control puts the **requested customer identifier back into the denial group key** —
+the single change `docs/decisions/0013` control 5 forbids. It exists because the oracle and
+the timing properties both fall out of that exclusion, and an assertion about a property
+nobody has broken is a comment.
 
 ### Layout
 
 ```
-harness/runner.ts          the runner, the assertions, and `expectError`
-harness/sqlite-d1.ts       node:sqlite behind the D1 port, recording every statement
-harness/broken-controls.ts the three deliberately broken controls
-harness/world.ts           the two-Organization fixture, all synthetic
-suites/customer-directory/ the suites
-run-customer-directory.ts  the entry point
+harness/runner.ts              the runner, the assertions, and `expectError`
+harness/sqlite-d1.ts           node:sqlite behind the D1 port, recording every statement
+harness/broken-controls.ts     the three deliberately broken storage controls
+harness/broken-coordination.ts the deliberately broken coordination controls (0013)
+harness/world.ts               the two-Organization fixture, all synthetic
+suites/customer-directory/     the suites
+run-customer-directory.ts      the entry point
 ```
 
-**The breaks are never committed as configuration.** `broken-controls.ts` contains no edit
-to `platform/core/**`: the predicate control removes the tenant term from the REAL
-compiler's output, so it cannot drift away from the code it tests, and production code has
-no switch that turns isolation off.
+**The breaks are never committed as configuration.** `broken-controls.ts` and
+`broken-coordination.ts` contain no edit to `platform/core/**`: the predicate control removes
+the tenant term from the REAL compiler's output, the coordination controls wrap the REAL
+`in-process-coordinator.ts`, and production code has no switch that turns any of it off.
+
+### The request coordinator
+
+Since `docs/decisions/0013` the pipeline requires a `RequestCoordinator`, and the harness
+supplies Core's own `platform/core/protection/in-process-coordinator.ts` — which exists for
+exactly this purpose and is marked never-for-deployment. A harness-local coordinator would
+verify the harness's algorithm rather than the shipped one.
+
+**The Durable Object adapter is not executed by anything here** — there is no Worker
+configuration and no runtime — so persistence, eviction and restart of the coordinator are
+**not covered**, and are reported that way rather than implied by a green run.
+
+### Expected red
+
+One case is currently **red on purpose**: `CONTROL 6 — DEFECT: the source-address level can
+NEVER refuse a real request`. It asserts the third rate-limit level `0013` control 6 requires,
+which the implementation cannot reach. It is left failing rather than rewritten, because a
+green suite that asserts the absence of a decided control is worse than a red one. See the
+case's own comment for the diagnosis.

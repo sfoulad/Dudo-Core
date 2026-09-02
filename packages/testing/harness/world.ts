@@ -20,20 +20,24 @@
  *      `sealAuthenticatedPrincipal`, which is Core's own and only constructor. What is being
  *      verified is everything downstream of authentication; authentication itself is NOT
  *      verified by these suites and is reported as not covered.
- *   2. A `business` TABLE. `platform/core/tenancy/business-directory.ts` reads a Core
- *      organization-structure table that DOES NOT EXIST — Core's identity slice has not been
- *      built, and `worker-entry.ts` says so. Its schema is invented here, minimally, as
- *      `(tenant_id, business_id)`, because `BusinessDirectory` selects exactly those two
- *      columns. THIS IS AN ASSUMPTION: if Core later gives `business` a different shape,
- *      these suites must be revisited. Without it, `CreateCustomer`,
- *      `MoveCustomerToBusiness` and any Business-filtered listing cannot be exercised at all.
- *   3. A tenant-directory MAPPING. `worker-entry.ts` supplies an empty one on purpose, so
+ *   2. A tenant-directory MAPPING. `worker-entry.ts` supplies an empty one on purpose, so
  *      production fails closed for every Organization. The harness supplies two active
  *      entries so there is something to isolate.
+ *   3. A `RequestCoordinator`. `docs/decisions/0013` requires a SQLite-backed Durable Object,
+ *      and this repository cannot execute one — no Worker configuration, no runtime. Core
+ *      therefore ships `platform/core/protection/in-process-coordinator.ts` for exactly this
+ *      purpose, marked NEVER-FOR-DEPLOYMENT, and the harness uses THAT rather than writing a
+ *      second implementation: a harness-local coordinator would verify the harness's
+ *      algorithm and not the shipped one. The Durable Object adapter itself
+ *      (`protection/adapters/durable-objects/coordinator-object.ts`) is therefore NOT
+ *      EXERCISED by these suites and is reported as not covered.
  *
- * The customer and audit tables are NOT transcribed — the migration files are read and
- * executed, so a schema change in `apps/customers/data/migrations/` or
- * `platform/core/migrations/` reaches these tests instead of quietly diverging from them.
+ * NO TABLE IS TRANSCRIBED. `customer`, `audit_event`, `business` and `denial_summary` are all
+ * read from their migration files and executed, so a schema change in
+ * `apps/customers/data/migrations/` or `platform/core/migrations/` reaches these tests instead
+ * of quietly diverging from them. `business` used to be invented here because Core had not
+ * authored it; `platform/core/migrations/0002_business.sql` now exists and that assumption is
+ * retired.
  */
 
 import { readFileSync } from 'node:fs';
@@ -65,6 +69,12 @@ import { invokeAction } from '../../../platform/core/action/pipeline.ts';
 import type { AnyActionDefinition } from '../../../platform/core/action/action.ts';
 import { asAnyAction } from '../../../platform/core/action/action.ts';
 import type { Result } from '../../../platform/core/kernel/result.ts';
+import type { RequestCoordinator, SummaryWriteBudget } from '../../../platform/core/protection/coordination.ts';
+import { PLATFORM_DAILY_SUMMARY_WRITES } from '../../../platform/core/protection/coordination.ts';
+import {
+  createInProcessRequestCoordinator,
+  createInProcessSummaryWriteBudget,
+} from '../../../platform/core/protection/in-process-coordinator.ts';
 
 import { createCustomerActions } from '../../../apps/customers/api/routes.ts';
 import { CUSTOMERS_APP_PERMISSIONS } from '../../../apps/customers/app.ts';
@@ -73,6 +83,12 @@ import { displayNameKey, emailKey, phoneKey } from '../../../apps/customers/doma
 import type { SqliteHarness } from './sqlite-d1.ts';
 import { createSqliteDatabase } from './sqlite-d1.ts';
 import { createBoundaryBypassStore, createPredicateBrokenStore } from './broken-controls.ts';
+import {
+  createRejectingCoordinator,
+  createThrowingCoordinator,
+  withBrokenDenialRecording,
+  withIdentifierInGroupKey,
+} from './broken-coordination.ts';
 
 // ---------------------------------------------------------------------------
 // Identifiers. Every one matches the contract's `^[A-Za-z0-9_-]{8,64}$`.
@@ -197,24 +213,17 @@ function grantsAt(scope: PermissionGrant['scope'], ids: readonly string[]): Perm
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const CUSTOMER_MIGRATION = `${HERE}../../../apps/customers/data/migrations/0001_customer.sql`;
 const AUDIT_MIGRATION = `${HERE}../../../platform/core/migrations/0001_audit_event.sql`;
-
 /**
- * Core's organization-structure table, which Core has NOT authored.
+ * Core's `business` table, AS CORE AUTHORED IT.
  *
- * `business-directory.ts` selects `business_id FROM business WHERE tenant_id = ? AND
- * business_id = ?`, so those are the two columns. The primary key is `(tenant_id,
- * business_id)` — which permits the same `business_id` VALUE in two Organizations. That is a
- * harness decision and it is deliberate: nothing in `Dudo-Core` enforces platform-wide
- * uniqueness of Business identifiers today, so the harness must not enforce it either and
- * then claim to have tested the world as it is.
+ * This was an invented DDL in the harness while Core had no such table. It is now read from
+ * the migration, so the harness can no longer disagree with the shape Core ships — including
+ * the deliberate ABSENCE of a global unique constraint on `business_id`, which the migration
+ * explains is what keeps the shared-business-id negative control constructible.
  */
-const BUSINESS_TABLE_DDL = `
-CREATE TABLE IF NOT EXISTS business (
-  tenant_id   TEXT NOT NULL,
-  business_id TEXT NOT NULL,
-  PRIMARY KEY (tenant_id, business_id)
-);
-`;
+const BUSINESS_MIGRATION = `${HERE}../../../platform/core/migrations/0002_business.sql`;
+/** The bounded denial summary table (docs/decisions/0013 control 4). */
+const DENIAL_SUMMARY_MIGRATION = `${HERE}../../../platform/core/migrations/0003_denial_summary.sql`;
 
 export type SeedCustomer = {
   readonly tenantId: string;
@@ -286,6 +295,30 @@ export function seedBusiness(harness: SqliteHarness, tenantId: string, businessI
 export type StoreMode = 'real' | 'predicate-broken' | 'boundary-bypass';
 export type ResolverMode = 'real' | 'always-organization-b';
 
+/**
+ * How the request coordinator behaves (`docs/decisions/0013`).
+ *
+ *   real     the shipped in-process coordinator over the shipped coordination engine.
+ *   absent   NO coordinator at all — `PipelineDependencies.coordinator` is undefined. This is
+ *            the composition-root defect `worker-entry.ts` refuses to start with, and it is
+ *            reproduced here because control 8 is a claim about what happens when the
+ *            coordinator cannot answer, and a claim never exercised is a comment.
+ *   reject   `begin()` returns `unavailable`.
+ *   throw    `begin()` throws.
+ *   record-rejects / record-throws
+ *            admission SUCCEEDS and the DENIAL COUNT fails. This is the other side of the
+ *            tension 0013 has to reconcile: control 8 governs admission (fail closed), D2
+ *            requirement 6 governs evidence (the answer must not change). Only this mode
+ *            reaches requirement 6's path.
+ */
+export type CoordinatorMode =
+  | 'real'
+  | 'absent'
+  | 'reject'
+  | 'throw'
+  | 'record-rejects'
+  | 'record-throws';
+
 export type WorldOptions = {
   readonly storeMode?: StoreMode;
   readonly resolverMode?: ResolverMode;
@@ -302,6 +335,21 @@ export type WorldOptions = {
    * copy of the real Action object.
    */
   readonly revertD2?: boolean;
+  /** See `CoordinatorMode`. Defaults to `real`. */
+  readonly coordinatorMode?: CoordinatorMode;
+  /**
+   * The PLATFORM daily summary-write ceiling (0013 control 9). Defaults to the shipped
+   * `PLATFORM_DAILY_SUMMARY_WRITES`. Lowered by the ceiling suite so the control can actually
+   * be reached: 5,000 emissions is not something a suite should produce, and a ceiling that is
+   * never reached is a ceiling that has never been verified.
+   */
+  readonly summaryCeiling?: number;
+  /**
+   * NEGATIVE CONTROL 5: the requested identifier IS part of the denial group key — the single
+   * change 0013 control 5 forbids. Supplied as a coordinator WRAPPER so that no production
+   * file is edited; see `harness/broken-coordination.ts`.
+   */
+  readonly identifierInGroupKey?: boolean;
 };
 
 export type World = {
@@ -318,14 +366,34 @@ export type World = {
   readonly adminANorth: AuthenticatedPrincipal;
   readonly ownerB: AuthenticatedPrincipal;
   readonly unprivilegedA: AuthenticatedPrincipal;
+  /**
+   * The coordinator these dependencies carry, or null in `absent` mode. Exposed so a suite can
+   * drive admission directly — the source-address level is not reachable end to end with a
+   * two-Organization fixture; see the rate-limit suite for the arithmetic.
+   */
+  readonly coordinator: RequestCoordinator | null;
+  /** The platform daily summary-write budget, for the ceiling assertions (control 9). */
+  readonly budget: SummaryWriteBudget & { readonly usedToday: () => number };
+  /** Written by `withIdentifierInGroupKey`. Null unless that negative control is on. */
+  readonly identifierChannel: { current: string | null } | null;
   storeFor(organizationId: string): Promise<TenantScopedStore>;
   invoke(
     action: AnyActionDefinition | { id: string },
     principal: AuthenticatedPrincipal,
     rawInput: unknown,
+    /**
+     * The third rate-limit level's input (0013 control 6). A HASH, never an address — Core
+     * never sees one. Omitted means null, which is not an exemption: every unknown source
+     * shares one bucket.
+     */
+    sourceAddressHash?: string | null,
   ): Promise<Result<unknown>>;
   auditRows(tenantId?: string): Record<string, unknown>[];
+  /** Rows of `denial_summary` — where a DENIAL lands since 0013. Ordered as written. */
+  denialSummaryRows(tenantId?: string): Record<string, unknown>[];
   customerRows(tenantId?: string): Record<string, unknown>[];
+  /** Statements executed through the storage port whose SQL names the given table. */
+  statementsAgainst(table: string): readonly { readonly sql: string }[];
   close(): void;
 };
 
@@ -333,7 +401,8 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   const harness = createSqliteDatabase();
   harness.raw.exec(readFileSync(AUDIT_MIGRATION, 'utf8'));
   harness.raw.exec(readFileSync(CUSTOMER_MIGRATION, 'utf8'));
-  harness.raw.exec(BUSINESS_TABLE_DDL);
+  harness.raw.exec(readFileSync(BUSINESS_MIGRATION, 'utf8'));
+  harness.raw.exec(readFileSync(DENIAL_SUMMARY_MIGRATION, 'utf8'));
 
   seedBusiness(harness, ORG_A, BIZ_A_NORTH);
   seedBusiness(harness, ORG_A, BIZ_A_SOUTH);
@@ -485,12 +554,55 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       ? { ...built, get: { ...built.get, auditOnDenial: false } }
       : built;
 
+  // ---- The request coordinator (docs/decisions/0013) -------------------------------------
+  //
+  // THE SHIPPED IMPLEMENTATION, NOT A HARNESS ONE. `in-process-coordinator.ts` exists in Core
+  // for exactly this use and is marked never-for-deployment; using it means these suites drive
+  // the shipped `coordination-engine.ts` — the same ladder, the same windows, the same
+  // ceilings — rather than a second algorithm that could agree with the tests and disagree
+  // with production.
+  const budget = createInProcessSummaryWriteBudget(
+    options.summaryCeiling ?? PLATFORM_DAILY_SUMMARY_WRITES,
+  );
+  const coordinatorMode = options.coordinatorMode ?? 'real';
+  const identifierChannel = options.identifierInGroupKey === true ? { current: null } : null;
+
+  function buildCoordinator(): RequestCoordinator | null {
+    if (coordinatorMode === 'absent') {
+      return null;
+    }
+    if (coordinatorMode === 'reject') {
+      return createRejectingCoordinator();
+    }
+    if (coordinatorMode === 'throw') {
+      return createThrowingCoordinator();
+    }
+    let coordinator = createInProcessRequestCoordinator(budget);
+    if (coordinatorMode === 'record-rejects') {
+      coordinator = withBrokenDenialRecording(coordinator, 'reject');
+    }
+    if (coordinatorMode === 'record-throws') {
+      coordinator = withBrokenDenialRecording(coordinator, 'throw');
+    }
+    if (identifierChannel !== null) {
+      coordinator = withIdentifierInGroupKey(coordinator, identifierChannel);
+    }
+    return coordinator;
+  }
+
+  const coordinator = buildCoordinator();
+
   const dependencies: PipelineDependencies = {
     resolver,
     authorizer: createAuthorizer(),
     clock,
     ids,
     cursors,
+    // `absent` deliberately violates the type, because the composition-root defect it models
+    // is exactly "a root that did not supply one". `worker-entry.ts` refuses to start in that
+    // state; the pipeline must still not permit access if it ever happens, and control 8 is
+    // untestable without reaching it.
+    coordinator: coordinator as RequestCoordinator,
   };
 
   const byId = new Map<string, AnyActionDefinition>();
@@ -508,6 +620,9 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     clock,
     ids,
     cursors,
+    coordinator,
+    budget,
+    identifierChannel,
     ownerA: makePrincipal({
       principalId: 'prn_owner_alpha',
       organizationId: ORG_A,
@@ -541,13 +656,21 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       return resolved.value;
     },
 
-    async invoke(action, principal, rawInput): Promise<Result<unknown>> {
+    async invoke(action, principal, rawInput, sourceAddressHash): Promise<Result<unknown>> {
       const resolvedAction =
         'handle' in (action as AnyActionDefinition)
           ? (action as AnyActionDefinition)
           : byId.get((action as { id: string }).id);
       if (resolvedAction === undefined) {
         throw new Error(`no such action in this world: ${(action as { id: string }).id}`);
+      }
+      // NEGATIVE CONTROL 5 only. The pipeline has NO channel for the requested identifier — that
+      // absence is the control being verified — so the harness, which built the request, feeds
+      // it to the wrapper out of band. See `broken-coordination.ts` for why that models "someone
+      // changed the key" and not "the pipeline leaks the identifier".
+      if (identifierChannel !== null) {
+        const supplied = (rawInput as { customer_id?: unknown } | null)?.customer_id;
+        identifierChannel.current = typeof supplied === 'string' ? supplied : null;
       }
       return invokeAction(
         dependencies,
@@ -557,6 +680,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
           app: CUSTOMERS_APP_PERMISSIONS,
           requestId: ids.generate(),
           correlationId: ids.generate(),
+          sourceAddressHash: sourceAddressHash ?? null,
         },
         rawInput,
       );
@@ -571,6 +695,27 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       return (
         tenantId === undefined ? prepared.all() : prepared.all(tenantId)
       ) as Record<string, unknown>[];
+    },
+
+    /**
+     * ORDERED BY `rowid`, NOT by the primary key. `denial_summary_id` is derived from the
+     * grouping and the emission sequence, so sorting by it would interleave two groups' rows
+     * and lose the order they were APPENDED in — which is the order the ladder produced them,
+     * and the thing several assertions are about.
+     */
+    denialSummaryRows(tenantId?: string): Record<string, unknown>[] {
+      const sql =
+        tenantId === undefined
+          ? 'SELECT * FROM denial_summary ORDER BY rowid'
+          : 'SELECT * FROM denial_summary WHERE tenant_id = ? ORDER BY rowid';
+      const prepared = harness.raw.prepare(sql);
+      return (
+        tenantId === undefined ? prepared.all() : prepared.all(tenantId)
+      ) as Record<string, unknown>[];
+    },
+
+    statementsAgainst(table: string): readonly { readonly sql: string }[] {
+      return harness.statements.filter((entry) => entry.sql.includes(table));
     },
 
     customerRows(tenantId?: string): Record<string, unknown>[] {
@@ -613,6 +758,27 @@ export const EXPECTED_FORBIDDEN = {
 export const EXPECTED_FAILED_PRECONDITION = {
   code: 'failed_precondition',
   message: 'The resource is not in a state that permits this operation.',
+};
+
+/**
+ * The refusal `docs/decisions/0013` control 6 introduces. It tells the caller about ITSELF —
+ * "you are going too fast" — and about no record, which is why it can be a distinct code
+ * without reopening anything the `not_found` withholds. That claim is asserted, not assumed.
+ */
+export const EXPECTED_RATE_LIMITED = {
+  code: 'rate_limited',
+  message: 'Too many requests.',
+};
+
+/**
+ * What a degraded coordinator costs a WRITE. Control 8: failure of the coordinator must never
+ * permit access, so with nothing bounding what a caller may spend of an account-wide D1 write
+ * allowance, no write commits. A read the caller was already authorized for is unaffected —
+ * degradation narrows, it never widens.
+ */
+export const EXPECTED_UNAVAILABLE = {
+  code: 'unavailable',
+  message: 'A dependency is unavailable.',
 };
 
 export const EXPECTED_INVALID_CURSOR = {
