@@ -1,0 +1,171 @@
+-- Core migration 0002 — the business table.
+--
+-- Core object: Business (packages/contracts/registries/core-object-registry.yaml, domain
+-- `organization`, tenancy `tenant-scoped`, appAccess `read-via-contract`). Registry
+-- description, and the whole of what this table is for: "A Business/Workspace inside an
+-- Organization. An authorization scope, not an isolation boundary."
+--
+-- ============================================================================
+-- SCOPE. THIS IS NOT THE ORGANIZATION-STRUCTURE SLICE, AND IT MUST NOT GROW INTO ONE.
+-- ============================================================================
+--
+-- It exists for exactly one reason: `platform/core/tenancy/business-directory.ts` asks
+-- "does this Business exist in this tenant", and until now there was no table to ask.
+-- Without it, step 5c of the Customer Directory contract's evaluationOrder — the
+-- not_found/forbidden distinction for a CALLER-SUPPLIED business_id — was unproducible:
+-- the lookup failed, `authorizeSuppliedBusiness` failed closed on the storage error, and
+-- three separate contract outcomes collapsed into one `unavailable`.
+--
+-- So this migration defines the minimum that makes that question answerable and nothing
+-- else. There is deliberately NO Business name, NO lifecycle or status, NO parent, NO
+-- Branch, NO membership, NO settings, and NO Organization table. Each of those is a
+-- decision about Core's identity and organization data model, none of them is settled by
+-- any contract, and adding one here would be deciding Core's shape as a side effect of
+-- unblocking an App. They belong to the organization-structure slice, with its own
+-- contract. Every one of them is an ADDITIVE change to this table when that slice lands.
+--
+-- NOTHING IN THIS REPOSITORY WRITES A ROW HERE, AND THAT IS STATED RATHER THAN DISCOVERED.
+-- No Action creates a Business, because Business CRUD is the slice above. In a deployed
+-- runtime today this table is empty, so every step-5c lookup that reaches storage answers
+-- "no" and returns not_found; the `forbidden` branch — a real Business of this
+-- Organization outside the caller's authorized set — is reachable only once something
+-- populates the table. That is the correct fail-closed state and it is consistent with the
+-- rest of the runtime, which already serves nothing (worker-entry.ts: no authentication
+-- mechanism, no tenant directory).
+--
+-- ============================================================================
+-- NOT APPLIED. There is no migration runner (CLOUDFLARE_STANDARD.md CF5 — "no package is
+-- approved, so migrations have no runner"), and no agent may run a migration against real
+-- data (.claude/rules/security.md §7). This file is the reviewed definition, not a
+-- deployment.
+--
+-- ROLLBACK PATH, required by CLOUDFLARE_STANDARD.md §4 rule 10 and stated rather than
+-- implied: DROP TABLE business. It is safe ONLY while the table is empty, which is its
+-- state for as long as nothing writes to it. Once an Organization's Businesses are in it,
+-- dropping it is not a rollback: every `customer.business_id` becomes a reference to
+-- nothing, so every authorization decision at steps 5b and 5c loses the object it is made
+-- against, and the tenant's own directory becomes unauthorizable rather than merely
+-- unreadable. From that point every migration touching this table must be additive.
+--
+-- FORWARD-ONLY, and designed to run across N databases with partial-failure handling
+-- (CLOUDFLARE_STANDARD.md §4 rule 11). N is 1 today under docs/decisions/0006 Option A.
+-- The statement is idempotent, so a partially-completed run is re-runnable.
+--
+-- ============================================================================
+-- TENANCY. Under docs/decisions/0006 Option A every Organization's Businesses are rows in
+-- this one table, so tenant_id is the only thing separating them. It is the LEADING column
+-- of the primary key, exactly as in `customer` and `audit_event`, and it is written and
+-- filtered exclusively by the storage boundary (platform/core/storage/store.ts), which
+-- rejects any caller spec that so much as names it. No Core module and no App names this
+-- column; `business-directory.ts` selects `business_id` and filters on `business_id`, and
+-- the tenant predicate is added centrally beneath it.
+--
+-- THAT IS WHAT MAKES THE LOOKUP NOT A PROBE. A Business belonging to another Organization
+-- and a Business that exists nowhere both return zero rows, because the tenant predicate
+-- is applied before either could be visible — which is precisely the indistinguishability
+-- the Customer Directory contract requires
+-- (authorizationModel.notFoundVersusForbidden.indistinguishability).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS business (
+  -- The Organization. Set by the storage boundary from the resolved handle, never by a
+  -- caller.
+  tenant_id                   TEXT NOT NULL,
+
+  -- The Business identifier. Opaque, non-sequential, unguessable, 128 bits of base64url
+  -- (platform/core/kernel/ids.ts) — the property the contract's §3.2 `forbidden` ruling
+  -- rests on, because an identifier that cannot be guessed can only have come from inside
+  -- the tenant already.
+  business_id                 TEXT NOT NULL,
+
+  PRIMARY KEY (tenant_id, business_id)
+);
+
+-- ============================================================================
+-- THERE IS NO GLOBAL UNIQUE CONSTRAINT ON business_id, AND ITS ABSENCE IS THE DESIGN.
+--
+-- `kernel/ids.ts` records that Dudo's identifiers are "unique platform-wide rather than
+-- per tenant". That is a property of HOW THEY ARE GENERATED — 128 random bits — and not a
+-- constraint the schema enforces, and the difference is load-bearing in two directions:
+--
+--   1. Uniqueness has never been what makes a row unreachable. Reachability is decided
+--      entirely by the tenant predicate at the storage boundary. A UNIQUE(business_id)
+--      here would add no isolation whatsoever; it would only add the appearance of some,
+--      which is worse than none because it invites a future query to lean on it.
+--
+--   2. It would silently disable the negative control that proves the point. The
+--      verification suite deliberately places the SAME business_id VALUE in two
+--      Organizations, so that a query carrying business_id but having LOST tenant_id
+--      returns both Organizations' rows and the test goes red. A global unique constraint
+--      makes that fixture unconstructible, and the test would then pass for the wrong
+--      reason — not because the predicate is applied, but because the world it was meant
+--      to detect can no longer be built.
+--
+-- `apps/customers/data/migrations/0001_customer.sql` reasons about this in its
+-- `business_id` comment and reaches the same conclusion by the same route; if the two ever
+-- read as though they disagree, THIS is the enforced state: unique by generation, not by
+-- constraint.
+-- ============================================================================
+
+-- ============================================================================
+-- THE ACCESS PATH. NO SEPARATE INDEX, AND THAT IS NOT AN OMISSION.
+--
+-- CLOUDFLARE_STANDARD.md §4 rule 4 requires every query to be indexed for its access path:
+-- on a single-threaded database one unindexed scan is every Organization's latency. There
+-- is exactly one query against this table in the whole repository —
+--
+--   SELECT business_id FROM business WHERE tenant_id = ? AND business_id = ? LIMIT 1
+--
+-- — and it is a point lookup on the full primary key, in primary-key column order. SQLite
+-- serves it from the automatic index the composite PRIMARY KEY already creates, reading at
+-- most one entry. A second index would duplicate that b-tree, cost storage and a write on
+-- every insert, and serve nothing.
+--
+-- The lookup is also on the SLOW PATH ONLY. `authorizeSuppliedBusiness` returns before
+-- touching storage whenever the supplied Business is already in the principal's authorized
+-- set, which is the ordinary case; storage is reached only when the caller named a
+-- Business it does not hold.
+--
+-- WITHOUT ROWID was considered and declined. This table is entirely its own primary key,
+-- which is the textbook case for it, but it would diverge from `customer` and
+-- `audit_event` for a saving measured in kilobytes at the projected scale below, and a
+-- storage-format divergence is worth having only when the numbers ask for it.
+-- ============================================================================
+
+-- ============================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008).
+-- Figures are the D1 FREE-tier limits in MULTITENANCY_STANDARD.md §7.3 and
+-- docs/operations/free-tier-register.md.
+--
+-- ALLOWANCES CONSUMED: d1-storage; d1-rows-read; d1-queries-per-invocation.
+--
+-- STORAGE. A row is two identifiers and nothing else: 22 base64url characters each at the
+-- generated width, ~64 at the contract's maximum. Call it ~64 bytes per row typical and
+-- ~150 at the maximum, plus the primary-key index entry, which for this table is a second
+-- copy of the same two values — so ~130 bytes typical and ~300 worst case, ALL IN.
+--   PROJECTION: the closed beta of at most 10 Organizations (MULTITENANCY_STANDARD.md
+--   §7.5). Businesses per Organization is NOT a recorded figure anywhere — that number
+--   belongs to the organization-structure slice — so this assumes 10, which is generous
+--   for an SME.
+--     10 Organizations x 10 Businesses = 100 rows.
+--     TYPICAL:    ~13 KB.   WORST CASE: ~30 KB.
+--   Against the 500 MB shared production ceiling that is 0.003% and 0.006% — under one
+--   thousandth of one percent either way. For comparison the same projection puts the
+--   `customer` table at ~26 MB typical and ~171 MB worst case. This table is noise, and it
+--   would remain noise at a hundred times the assumed Business count.
+--
+-- ROWS READ. One row at most per step-5c SLOW path — a caller naming a Business outside
+-- its authorized set. Zero on the hot path. Against the free daily row-read allowance this
+-- is not a measurable term.
+--
+-- QUERIES PER INVOCATION. +1 on CreateCustomer, MoveCustomerToBusiness, and a
+-- business-filtered List or Search, and only on the slow path. The contract's queryBudget
+-- puts those Actions at 1–3 queries against a limit of 50.
+--
+-- AT THE LIMIT: nothing to degrade. This table cannot be the thing that reaches a ceiling,
+-- and it has no growth term of its own — it grows only when an Organization gains a
+-- Business, through a mechanism that does not exist yet.
+--
+-- COST: USD 0 / BD 0 per month. No new service, no new product, no new binding, no paid
+-- feature. It is a table in the already-allocated shared tenant-data database.
+-- ============================================================================

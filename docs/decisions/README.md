@@ -128,6 +128,15 @@ and SwiftUI is not approving any package or third-party dependency.
     slice is unreachable. **It must be bounded before AZ2 makes it reachable** — a per-actor
     write ceiling, coarse aggregation of repeated identical denials, or both. Do not close
     AZ2 without closing this.
+
+    **Severity raised 2026-09-02, from cost to availability.** `core-agent` found, and the
+    Team Lead verified against `d1/platform/pricing/`, that D1's free plan enforces
+    **100,000 rows written per day** and that exceeding it means *"you will not be able to run
+    queries against D1"* — **account-wide, not per-database, not per-tenant**. So an
+    authenticated caller who probes 100,000 times in a day does not merely spend money; they
+    **halt D1 for every Organization on the platform**. And the cheapest denial to produce is
+    a malformed identifier, which needs no valid customer id at all. The probe-detection
+    control is a platform-wide denial-of-service lever until it is bounded.
 9. **A Core-wide `AuditDenialReason` taxonomy** — deferred, and deliberately not done as a
    side effect. The D2 denied-read control raised whether denial reasons should carry
    security-specific tokens (`unresolved_identifier`, `permission_denied`,
