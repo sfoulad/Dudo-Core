@@ -35,5 +35,41 @@ Per-App suites colocate with their App under `apps/<name>/tests/` as Apps are bu
 - **Root-level shared test configuration belongs to the Team Lead**, not to QA. QA
   proposes changes to it — see `docs/decisions/0001-governance-and-decision-sequencing.md`.
 
-*Empty placeholder. No test framework has been selected — `0003` approves TypeScript on
-Cloudflare, not a testing framework. Nothing exists to verify yet.*
+## Running the Customer Directory suite
+
+```
+node packages/testing/run-customer-directory.ts
+```
+
+Node 22 runs TypeScript directly by stripping types. There is **no build step, no
+configuration file, no runner package and nothing installed** — `0003` approves TypeScript
+on Cloudflare and **no npm package**, and **TS1, the testing framework, is unresolved**.
+The runner in `harness/runner.ts` is deliberately ~150 disposable lines: when TS1 is
+decided, the suites move and it is deleted. `node:sqlite` and `node:test` are both Node
+built-ins; `node:sqlite` is used because it is a real engine, and `node:test` is **not**
+used because adopting it would be a TS1 decision that is not QA's to make.
+
+### What the run prints
+
+A **primary run**, then **three negative-control runs** — predicate, resolver and boundary
+— as `TESTING_STANDARD.md` §5.6 requires each separately. For every control each case is
+classified as *red on an isolation assertion*, *red on another assertion*, or **STILL
+GREEN**. The third is printed as a coverage gap, because under `0006` Option A a case that
+stays green under a deliberately broken control does not test that control, whatever its
+name says.
+
+### Layout
+
+```
+harness/runner.ts          the runner, the assertions, and `expectError`
+harness/sqlite-d1.ts       node:sqlite behind the D1 port, recording every statement
+harness/broken-controls.ts the three deliberately broken controls
+harness/world.ts           the two-Organization fixture, all synthetic
+suites/customer-directory/ the suites
+run-customer-directory.ts  the entry point
+```
+
+**The breaks are never committed as configuration.** `broken-controls.ts` contains no edit
+to `platform/core/**`: the predicate control removes the tenant term from the REAL
+compiler's output, so it cannot drift away from the code it tests, and production code has
+no switch that turns isolation off.
