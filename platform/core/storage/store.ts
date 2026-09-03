@@ -35,11 +35,31 @@
  * one-line change in a single file: delete the tenant predicate in the compiler and the
  * whole suite must go red. If the predicate were spread across call sites, deleting one
  * would turn one test red and prove nothing.
+ *
+ * ===========================================================================================
+ * A FIFTH PROPERTY, ADDED BY docs/decisions/0014 §A.11: NO WRITE WITHOUT AN ADMISSION.
+ * ===========================================================================================
+ *
+ * "All storage writers must use this admission port. Direct D1 writes outside it are
+ * prohibited." That is made structural here by the same device as the four above rather than
+ * by a rule somebody has to remember:
+ *
+ * 5. `write` TAKES A `WriteReservation`, AND IT IS A REQUIRED PARAMETER. There is no overload
+ *    without one and no default. A writer that has not reserved daily capacity cannot express
+ *    the call, and the adapter checks the reservation's brand, its single use, its
+ *    Organization and its size before it compiles a statement
+ *    (`protection/write-admission.ts`). A reservation is minted only by the coordinator, only
+ *    after the day's counters have already been decremented.
+ *
+ * `select` TAKES NOTHING, AND THAT ASYMMETRY IS §A.10. Reads are never admitted through this
+ * port, so "reads remain available" is not a behaviour that has to hold at exhaustion — there
+ * is no state of the budget in which a read consults it at all.
  */
 
 import type { Predicate, SqlValue } from './predicate.ts';
 import { columnsReferenced } from './predicate.ts';
 import type { Result } from '../kernel/result.ts';
+import type { WriteReservation } from '../protection/write-admission.ts';
 
 /**
  * The physical tenant column. `docs/decisions/0006` §0.1: "`tenant_id` is mandatory on
@@ -121,8 +141,19 @@ export type TenantScopedStore = {
    * write and the row deletion atomic, IT MUST — one transaction removes the ordering
    * question entirely"). Where it cannot, an ordering has to be argued about; here it does
    * not have to be.
+   *
+   * `reservation` IS REQUIRED AND IS THE WHOLE OF docs/decisions/0014 §A.11 AT THIS BOUNDARY.
+   * It is the receipt for daily D1 write capacity that has ALREADY been charged, obtained
+   * from the coordinator before this call. It is spent by this call and cannot be spent
+   * again: one reservation, one batch. Passing a hand-built object, another Organization's
+   * reservation, a reservation smaller than the batch, or one that has been used before is a
+   * THROWN defect, not a returned error — the same treatment, for the same reason, as a spec
+   * that names the tenant column.
    */
-  write(operations: readonly WriteOperation[]): Promise<Result<void>>;
+  write(
+    operations: readonly WriteOperation[],
+    reservation: WriteReservation,
+  ): Promise<Result<void>>;
 };
 
 /**

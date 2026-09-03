@@ -23,6 +23,7 @@ import { AUDIT_TABLE, assertActorBusinessContext, assertChangedFieldNames } from
 import type { TenantScopedStore, WriteOperation } from '../storage/store.ts';
 import type { Result } from '../kernel/result.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
+import type { WriteReservation } from '../protection/write-admission.ts';
 
 export function createStoreAuditSink(
   store: TenantScopedStore,
@@ -68,8 +69,17 @@ export function createStoreAuditSink(
     operation(entry: AuditEntry): WriteOperation {
       return toOperation(entry);
     },
-    async append(entry: AuditEntry): Promise<Result<void>> {
-      return store.write([toOperation(entry)]);
+    /**
+     * The standalone path, for an audited event with no mutation to ride along with. It needs
+     * its own reservation because an audit row is a D1 write like any other — five estimated
+     * row-writes, the most expensive row in the platform (`storage/write-cost.ts`) — and
+     * docs/decisions/0014 §A.11 admits no exception for evidence.
+     *
+     * NOT REACHED FROM `pipeline.ts`, which uses `operation()` so that the audit record commits
+     * in the same transaction as the mutation it describes.
+     */
+    async append(entry: AuditEntry, reservation: WriteReservation): Promise<Result<void>> {
+      return store.write([toOperation(entry)], reservation);
     },
   };
 }

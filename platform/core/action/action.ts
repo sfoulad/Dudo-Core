@@ -132,6 +132,44 @@ export type ActionDefinition<I, O> = {
    * bounded form is a CONTRACT question, reported to the Team Lead and not decided here.
    */
   readonly targetIdentifier: (raw: unknown) => string | null;
+  /**
+   * ===========================================================================================
+   * THE WORST-CASE D1 COST OF ONE SUCCESSFUL INVOCATION, IN ESTIMATED ROW-WRITES, EXCLUDING THE
+   * AUDIT RECORD. `docs/decisions/0014` §A.1 and §A.12.
+   * ===========================================================================================
+   *
+   * ZERO FOR A READ, and zero is the default because it is the answer for every Action that
+   * writes nothing. An Action that declares nothing therefore reserves nothing and — because the
+   * pipeline refuses to commit writes it has not reserved capacity for — cannot write at all.
+   * Forgetting to declare produces an Action that fails loudly on its first mutation, never one
+   * that writes unaccounted rows.
+   *
+   * IT IS NOT THE NUMBER OF STATEMENTS. One INSERT into an indexed table is one table row plus
+   * one row per index (`storage/write-cost.ts`, and Cloudflare's own definition). The Customer
+   * Directory's `customer` table has two indexes counting its composite primary key, so a
+   * single-row insert or update against it costs **three**, not one.
+   *
+   * WORST CASE, NOT TYPICAL. §A.12: "Erring toward over-reserving is the safe direction: the
+   * failure mode of over-reserving is a delayed write, and of under-reserving is a platform
+   * outage." An Action whose statement count varies with its input declares the largest value it
+   * can produce, and an Action whose UPDATE or DELETE predicate is not a primary-key equality
+   * must declare the largest number of ROWS that predicate can match — a broad `DELETE` is one
+   * statement and can be thousands of row-writes. Every mutating Action in this repository
+   * matches exactly one row by primary key, which is why the declared numbers are small.
+   *
+   * THE AUDIT ROW IS NOT DECLARED HERE. The pipeline adds it, from `audit`, because the audit
+   * record is Core's and an App must not be able to price it — or to price it at zero. See
+   * `estimatedRowWriteCost`.
+   *
+   * WHAT IS CHECKED AND WHAT IS NOT. The storage boundary rejects a batch with more STATEMENTS
+   * than row-writes reserved, which catches an Action that emits more operations than it
+   * declared; that is a lower bound and it is exact. What no check can catch is a declaration
+   * that counts the statements correctly and the index rows wrongly, because D1 exposes no
+   * portable way to count a table's indexes through the binding. That half is a review
+   * obligation against the migration, and it is stated as one rather than implied to be
+   * enforced.
+   */
+  readonly maxRowWrites?: number;
   readonly handle: ActionHandler<I, O>;
 };
 
@@ -186,4 +224,73 @@ export function assertAuditPolicy(action: AuditPolicySource): void {
 
 export function asAnyAction<I, O>(definition: ActionDefinition<I, O>): AnyActionDefinition {
   return definition as unknown as AnyActionDefinition;
+}
+
+// =============================================================================================
+// Daily D1 write cost — docs/decisions/0014 §A
+// =============================================================================================
+
+/** The two fields the cost is derived from, so the helper works on anything Action-shaped. */
+export type WriteCostSource = {
+  readonly id: string;
+  readonly audit: boolean;
+  readonly maxRowWrites?: number;
+};
+
+/**
+ * What one successful invocation reserves from the daily budget.
+ *
+ * THE APP DECLARES ITS OWN WRITES AND CORE PRICES THE AUDIT ROW. That split is not tidiness. An
+ * App that could price its audit record could price it at zero, and the audit row is the most
+ * expensive row in the platform — `audit_event` and its four indexes cost five row-writes, more
+ * than the customer row it accompanies. It is also not optional: `pipeline.ts` appends it to the
+ * same transaction, so an audited Action that reserved only for its own write would commit a
+ * row it never accounted for.
+ *
+ * `auditsSuccesses` RATHER THAN `auditsOnDenial` IS THE RIGHT GATE, and the distinction is
+ * `customers.GetCustomer`: its successes write nothing and its DENIALS write summaries. A denial
+ * never reaches this function — it is charged to the `security` allocation by the coordinator,
+ * on the other side of the decision, at the `denial_summary` table's own cost.
+ */
+export function estimatedRowWriteCost(
+  action: WriteCostSource,
+  auditEventRowWrites: number,
+): number {
+  const declared = action.maxRowWrites ?? 0;
+  if (declared === 0) {
+    // A read. It reserves nothing, consults no budget, and is unaffected by exhaustion — which
+    // is `0014` §A.10's "reads remain available", holding by construction rather than by a
+    // branch that has to be got right.
+    return 0;
+  }
+  return declared + (auditsSuccesses(action) ? auditEventRowWrites : 0);
+}
+
+/**
+ * Thrown at invocation, like `AuditPolicyError`, and for the same reason: a malformed cost
+ * declaration is a defect in Dudo's code that no caller can cause and no caller can influence,
+ * and it corrupts an account-wide budget in a way that stays invisible until D1 stops answering
+ * for every Organization.
+ */
+export class WriteCostPolicyError extends Error {
+  constructor(actionId: string, declared: unknown) {
+    super(
+      `${actionId} declares maxRowWrites: ${JSON.stringify(declared)}. It must be a ` +
+        'non-negative integer — zero for an Action that writes nothing, and otherwise the ' +
+        'WORST-CASE number of D1 row-writes one successful invocation performs, counting one ' +
+        'row for the table and one for each index the write touches ' +
+        '(docs/decisions/0014 §A.12, platform/core/storage/write-cost.ts).',
+    );
+    this.name = 'WriteCostPolicyError';
+  }
+}
+
+export function assertWriteCostPolicy(action: WriteCostSource): void {
+  const declared = action.maxRowWrites;
+  if (declared === undefined) {
+    return;
+  }
+  if (!Number.isInteger(declared) || declared < 0) {
+    throw new WriteCostPolicyError(action.id, declared);
+  }
 }

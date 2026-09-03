@@ -62,6 +62,13 @@ export function createArchiveCustomerAction(): ActionDefinition<ArchiveCustomerI
     idempotent: false,
     audit: true,
     exposure: ['internal', 'public'],
+    /**
+     * Three: one primary-key UPDATE against `customer` — the table row plus its two index rows,
+     * and `status` is in `customer_by_tenant_business_status_name`, so the index row genuinely is
+     * rewritten here. Core adds five for the audit record; one archive reserves eight
+     * (docs/decisions/0014 §A.1, create-customer.ts for the arithmetic).
+     */
+    maxRowWrites: 3,
     parseInput(raw: unknown): Result<ArchiveCustomerInput> {
       const validated = validateObject(raw, ARCHIVE_CUSTOMER_RULE);
       if (!validated.ok) {

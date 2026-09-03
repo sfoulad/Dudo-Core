@@ -46,8 +46,27 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{8,64}$",
           "description": "Returned on every response, success or error. It is what makes a support conversation possible without asking a customer to share their data (API_STANDARD.md §11). It is the ONLY identifier an error message carries — never a tenant id, never a resource id (MULTITENANCY_STANDARD.md §4 carrier 11)."
+        },
+        "retry_after_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seconds until the caller may retry. PRESENT ONLY ON 'rate_limited' AND 'quota_exceeded'. On every other code it is ABSENT — not null, not zero, absent — and that is enforced structurally by the 'allOf' below rather than left to be honoured. It is OPTIONAL even on those two codes: a value is not always knowable (a degraded coordinator does not have one), and a required field would be a field someone invents a number for. WHERE IT COMES FROM, AND THIS IS THE WHOLE OF WHY IT IS SAFE: it is derived from a FIXED WINDOW BOUNDARY — the end of the 60-second rate window, or the next 00:00 UTC reset — so it is THE SAME VALUE FOR EVERY CALLER ON THE PLATFORM AT THAT INSTANT, computable from a clock alone, and it carries no information about any Organization. It does not reveal which rate-limit level refused the request, because all levels share one window length. PROHIBITED, AND THIS IS THE CONSTRAINT AN OPTIMISER BREAKS: this value MUST NEVER be derived from observed usage, remaining budget, queue depth, current load, attempt count, or anything else a caller can vary. A retry time that reflects how much budget is left is a side channel on other tenants' activity — the same shape as the evaluation-position oracle closed one level up in customer-directory-v1.contract.yaml authorizationModel.budgetExhaustion, and reachable the same way, by a caller who deliberately drives the input it controls. A retry time that is a function of the calendar discloses nothing; a retry time that is a function of the system's state discloses the system's state. Only the first is permitted. This field also pays the debt API_STANDARD.md §10 records for 'rate_limited', which platform/core/http/api.ts names as owed and unpaid: the HTTP adapter emits the 'Retry-After' header DERIVED FROM THIS FIELD, so the envelope stays the single source of truth and internal, SDK and MCP callers — none of which see HTTP headers — receive the same value."
         }
-      }
+      },
+      "allOf": [
+        {
+          "$comment": "Presence rule for retry_after_seconds, expressed rather than described. Draft 2020-12 can decide this — 'if' with only 'else' is valid — and AUTHORIZATION_STANDARD.md §4 records what it cost the last time an expressible constraint was written up as prose. A retry time appearing beside 'not_found' would be a channel; here it cannot validate. NOT EXECUTED: no JSON Schema implementation exists in this repository (AS1, TS1), so like the rest of this document it is normative and hand-checked, not machine-validated.",
+          "if": {
+            "required": ["code"],
+            "properties": {
+              "code": { "enum": ["rate_limited", "quota_exceeded"] }
+            }
+          },
+          "else": {
+            "not": { "required": ["retry_after_seconds"] }
+          }
+        }
+      ]
     }
   },
   "$defs": {

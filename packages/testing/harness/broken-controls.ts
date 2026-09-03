@@ -46,6 +46,8 @@ import {
   compileUpdate,
 } from '../../../platform/core/storage/adapters/sql/sql-compiler.ts';
 import type { CompiledStatement } from '../../../platform/core/storage/adapters/sql/sql-compiler.ts';
+import { createD1TenantStore } from '../../../platform/core/storage/adapters/d1/d1-store.ts';
+import { mintWriteReservation } from '../../../platform/core/protection/write-admission.ts';
 import type { SqliteHarness } from './sqlite-d1.ts';
 
 const TENANT_TERM_WITH_REST = 'WHERE tenant_id = ? AND ';
@@ -233,6 +235,57 @@ export function createBoundaryBypassStore(harness: SqliteHarness): TenantScopedS
       // The bypass control is only used for reads in these suites; a write form would add a
       // second unscoped path with no additional evidence.
       return ok(undefined);
+    },
+  };
+}
+
+/**
+ * ===========================================================================================
+ * CONTROL 4 — THE WRITE ADMISSION. `docs/decisions/0014` §A.11, deliberately not enforced.
+ * ===========================================================================================
+ *
+ * §A.11 says every storage writer must go through the admission port and that direct D1 writes
+ * outside it are prohibited. `d1-store.ts` makes that structural by refusing to compile a
+ * statement without a valid, unspent, correctly-sized reservation for the tenant the handle
+ * serves — four checks, each closing a different bypass.
+ *
+ * A suite that asserts those four refusals is ceremony until it is shown to go red when the
+ * guard stops guarding, and the same rule applies here as to the other three controls: the
+ * break is never committed and `platform/core/**` is never edited. So this store wraps the REAL
+ * `createD1TenantStore` and quietly REPLACES the caller's reservation with a freshly minted,
+ * valid one before passing it down. The guard still runs; it just never sees anything wrong,
+ * which is precisely what "the guard has stopped enforcing" looks like from outside.
+ *
+ * WHY SUBSTITUTE RATHER THAN REIMPLEMENT THE COMPILER. A hand-written store that skipped the
+ * check would also skip the tenant predicate, the tenant-column guard and every other property
+ * of the real adapter, and a control that breaks four things at once cannot show which one a
+ * case is sensitive to. This one breaks exactly one.
+ *
+ * NOTE THAT `mintWriteReservation` IS BEING CALLED ON A PATH THAT DECREMENTED NO COUNTER, which
+ * its own documentation says in capitals defeats §A.1. That is the point of the control, and it
+ * is the reason this function exists in this file rather than anywhere a production composition
+ * root could reach.
+ */
+export function createAdmissionBypassStore(
+  harness: SqliteHarness,
+  tenantId: string,
+): TenantScopedStore {
+  const real = createD1TenantStore(harness.database, tenantId);
+  return {
+    select(spec: SelectSpec): Promise<Result<readonly Row[]>> {
+      return real.select(spec);
+    },
+    write(operations: readonly WriteOperation[]): Promise<Result<void>> {
+      return real.write(
+        operations,
+        mintWriteReservation({
+          organizationId: tenantId,
+          allocation: 'business',
+          // Always large enough that the size check cannot bind either.
+          estimatedRowWrites: Math.max(1, operations.length),
+          dayStartMs: 0,
+        }),
+      );
     },
   };
 }

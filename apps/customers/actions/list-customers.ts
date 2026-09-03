@@ -66,6 +66,8 @@ export function createListCustomersAction(dependencies: {
     // and a defaulted `false` would read as nobody having considered it.
     auditOnDenial: false,
     exposure: ['internal', 'public'],
+    /** Zero. A collection read writes nothing and never reaches the daily write budget. */
+    maxRowWrites: 0,
     parseInput(raw: unknown): Result<CollectionInput> {
       const validated = validateObject(raw, LIST_CUSTOMERS_RULE);
       if (!validated.ok) {

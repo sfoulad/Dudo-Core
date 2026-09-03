@@ -327,9 +327,12 @@ export function buildAuditSuite(makeWorld: MakeWorld): Suite {
       // an audit record. A CHECK-constraint violation is forced by writing a status the table
       // does not permit, through the same batch path the pipeline uses.
       const store = await world.storeFor(ORG_A);
-      const outcome = await store.write([
-        { kind: 'update', spec: { table: 'customer', set: { status: 'not_a_status' }, where: { kind: 'eq', column: 'customer_id', value: CUST_A_ANNA } } },
-      ]);
+      const outcome = await store.write(
+        [{ kind: 'update', spec: { table: 'customer', set: { status: 'not_a_status' }, where: { kind: 'eq', column: 'customer_id', value: CUST_A_ANNA } } }],
+        // A valid reservation, so the engine's CHECK constraint is what refuses this write and
+        // not the admission guard. See `world.unbudgetedReservationFor`.
+        world.unbudgetedReservationFor(ORG_A, 1),
+      );
       assertEqual('the engine refused the write', outcome.ok, false);
       const after = world.customerRows(ORG_A).find((entry) => entry.customer_id === CUST_A_ANNA);
       assertEqual('the row is unchanged', after?.status, 'archived');

@@ -43,8 +43,19 @@
  * type will fail with an error."*
  *
  * REQUESTS — the tightest of the three that scale with traffic.
- *   allowed request : 1 (admission)
+ *   allowed READ    : 1 (admission). A read reserves nothing, so `0014`'s budget adds nothing
+ *                     to the read path at all — which is the same fact as "reads remain
+ *                     available at exhaustion", seen from the cost side.
+ *   allowed MUTATION: 2 (admission, then the write reservation — docs/decisions/0014 §A.1)
  *   denied request  : 2 (admission, then the denial count)
+ *   deferred write  : 3 (admission, reservation, then the denial count for the 429)
+ *
+ *   THE MUTATION PATH IS SELF-LIMITING and that is worth stating, because "one more round trip
+ *   per mutation" sounds unbounded and is not: mutations are capped by the very budget the second
+ *   call enforces. At the Customer Directory's eight row-writes each, `DAILY_ALLOCATION.business`
+ *   permits 7,500 mutations a day platform-wide, so the write-reservation call adds at most 7,500
+ *   Durable Object requests against a 100,000/day allowance — under 8%, and it cannot grow,
+ *   because growing past it is exactly what it refuses.
  *   plus, amortised : ~0.04 per request for the cross-Organization source report (one on the
  *                     first request of each 60-second window per address, then one per
  *                     SOURCE_REPORT_INTERVAL), and a few hundred a day account-wide for the
@@ -70,6 +81,14 @@
  *                            = <= 4,320/day for one attacking actor.
  *   denial aggregation     : <= 6 rows per group per 15-minute window, which is the same
  *                            emission ladder the D1 summaries follow.
+ *   write admission        : ONE row per attempted mutation, and this is the one place ordinary
+ *                            traffic does persist. The reason is in `SCHEMA` below: an evicted
+ *                            instance that forgot its Organization's daily spend would hand the
+ *                            whole ceiling back on restart. It is bounded by the budget it
+ *                            enforces — 7,500/day account-wide at eight row-writes per mutation,
+ *                            against a 100,000/day allowance — and an Action declaring a smaller
+ *                            cost raises the count proportionally, to a hard maximum of
+ *                            `DAILY_ALLOCATION.business` rows if some future Action cost one.
  *
  * ROWS READ — on cold start only, to rehydrate. Negligible against 5,000,000/day.
  *
@@ -101,25 +120,34 @@ import type {
   DenialRecordOutcome,
   RequestCoordination,
   RequestCoordinator,
-  SummaryWriteBudget,
 } from '../../coordination.ts';
+import { DAY_MS, denialGroupKeyFromText, windowStart } from '../../coordination.ts';
+import type {
+  DayWriteBudget,
+  WriteAdmissionOutcome,
+  WriteAllocation,
+} from '../../write-admission.ts';
 import {
-  DAY_MS,
-  PLATFORM_DAILY_SUMMARY_WRITES,
-  denialGroupKeyFromText,
-  windowStart,
-} from '../../coordination.ts';
+  DAILY_ALLOCATION,
+  mintWriteReservation,
+  nextUtcResetMs,
+  retryAfterSecondsUntilReset,
+} from '../../write-admission.ts';
+import { DENIAL_SUMMARY_ROW_WRITES } from '../../../storage/write-cost.ts';
 import type { CoordinationState, DenialGroupState } from '../../coordination-engine.ts';
 import {
   admit,
+  admitWrite,
   applySourceTotal,
   createCoordinationState,
   creditPermits,
+  creditWritePermits,
   permitsToBuy,
   recordDenial,
   sourceBlocked,
   sourceRetryAfterSeconds,
   sweepClosedWindows,
+  writePermitsToBuy,
 } from '../../coordination-engine.ts';
 import type { Result } from '../../../kernel/result.ts';
 import { err, ok } from '../../../kernel/result.ts';
@@ -164,13 +192,18 @@ export type DurableObjectNamespace = {
  * allowance, because the account total would be the per-tenant number times a tenant count
  * nobody bounds.
  *
- * IT IS NOT A BOTTLENECK. It is consulted only when a block of permits is bought, which is at
- * most `PLATFORM_DAILY_SUMMARY_WRITES / PERMIT_BLOCK` times a day across the whole account —
- * about 156 — plus ONE refusal per Organization per day, because an Organization that is told
- * the budget is spent records that and stops asking (`CoordinationState.
- * platformExhaustedDayStartMs`). Without that last part a broad campaign would turn a spent
+ * IT IS NOT A BOTTLENECK. It is consulted only when a BLOCK of permits is bought, never per
+ * request: at most `DAILY_ALLOCATION.security / PERMIT_BLOCK` times a day for evidence — about
+ * 78 — and `DAILY_ALLOCATION.business / WRITE_PERMIT_BLOCK` for mutations — about 117 — plus ONE
+ * refusal per Organization per allocation per day, because an Organization that is told the
+ * budget is spent records that and stops asking (`CoordinationState.platformExhaustedDayStartMs`
+ * and `writeExhaustedDayStartMs`). Without that last part a broad campaign would turn a spent
  * budget into tens of thousands of extra coordinator requests against an allowance that is
  * itself exhaustible, which would be the control funding its own denial of service.
+ *
+ * IT NOW CARRIES ALL THREE ALLOCATIONS (`docs/decisions/0014` §A.5), not just the summary
+ * ceiling. That is the reconciliation: one ledger, three counters, summing to the platform
+ * ceiling — rather than two independent daily budgets that each believed themselves safe.
  */
 export const LEDGER_INSTANCE = 'platform-summary-write-ledger';
 
@@ -225,6 +258,22 @@ const SCHEMA: readonly string[] = [
   // The SOURCE-SHARD role: cross-Organization counts, keyed by hashed address and window.
   // No tenant identifier, no principal, no address in the clear.
   'CREATE TABLE IF NOT EXISTS source_count (source_hash TEXT NOT NULL, window_start INTEGER NOT NULL, total INTEGER NOT NULL, PRIMARY KEY (source_hash, window_start))',
+  // ---- docs/decisions/0014 §A. Two tables, ADDITIVE rather than columns added to `budget`,
+  // because `CREATE TABLE IF NOT EXISTS` cannot widen a table an instance already created and a
+  // migration path for a Durable Object's own SQLite is a thing this codebase does not have yet.
+  //
+  // The ORGANIZATION role: this Organization's daily `business` row-writes.
+  //
+  // WHY THE USED COUNTER IS PERSISTED AT ALL, when ordinary rate counters deliberately are not:
+  // an evicted instance that forgot how much its Organization had spent today would hand back the
+  // whole 10,000 ceiling on restart, and an eviction cycle would be an unbounded write path — the
+  // exact bypass the budget exists to close. The unspent PERMIT reserve may safely be lost;
+  // losing it spends nothing.
+  'CREATE TABLE IF NOT EXISTS write_budget (id INTEGER PRIMARY KEY, day_start INTEGER NOT NULL, used INTEGER NOT NULL, permits INTEGER NOT NULL)',
+  // The LEDGER role: one row per allocation, account-wide. A UTC day and an integer per row, and
+  // NO TENANT IDENTIFIER — which is what lets this one instance be shared at all
+  // (CLOUDFLARE_STANDARD.md §7 rule 3 exists so two tenants' DATA does not share an instance).
+  'CREATE TABLE IF NOT EXISTS ledger (allocation TEXT PRIMARY KEY, day_start INTEGER NOT NULL, used INTEGER NOT NULL)',
 ];
 
 /**
@@ -240,9 +289,6 @@ export class DudoCoordinatorObject {
   private state: CoordinationState | null = null;
   /** The Organization this instance was first used for. Fixed on first use; see `bind`. */
   private organizationId: string | null = null;
-  private ledgerDay = -1;
-  private ledgerUsed = 0;
-  private ledgerHydrated = false;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     this.sql = ctx.storage.sql;
@@ -309,6 +355,22 @@ export class DudoCoordinatorObject {
       };
       state.platformPermits = Number(budget[0].permits);
       state.platformPermitsDayStartMs = Number(budget[0].day_start);
+    }
+
+    // docs/decisions/0014 §A. The USED counter is authoritative across an eviction; the permit
+    // reserve is restored too, and restoring it is safe in the conservative direction — the
+    // ledger already charged those row-writes, so leaving them unrestored would waste admitted
+    // capacity rather than create any.
+    const writeBudget = this.sql
+      .exec('SELECT day_start, used, permits FROM write_budget WHERE id = 1')
+      .toArray();
+    if (writeBudget.length === 1) {
+      state.writeDay = {
+        dayStartMs: Number(writeBudget[0].day_start),
+        used: Number(writeBudget[0].used),
+      };
+      state.writePermits = Number(writeBudget[0].permits);
+      state.writePermitsDayStartMs = Number(writeBudget[0].day_start);
     }
 
     this.state = state;
@@ -379,6 +441,18 @@ export class DudoCoordinatorObject {
     );
   }
 
+  /** docs/decisions/0014 §A. One row-write per admitted mutation; see the SCHEMA comment. */
+  private persistWriteBudget(state: CoordinationState): void {
+    this.sql.exec(
+      'INSERT INTO write_budget (id, day_start, used, permits) VALUES (1, ?, ?, ?) ' +
+        'ON CONFLICT(id) DO UPDATE SET day_start = excluded.day_start, ' +
+        'used = excluded.used, permits = excluded.permits',
+      state.writeDay.dayStartMs,
+      state.writeDay.used,
+      state.writePermits,
+    );
+  }
+
   /**
    * The transport. `fetch` rather than RPC because RPC needs `cloudflare:workers`, which this
    * repository cannot load — see the file header, which also states what that costs.
@@ -392,6 +466,9 @@ export class DudoCoordinatorObject {
     }
     if (url.pathname === '/denial') {
       return this.handleDenial(body);
+    }
+    if (url.pathname === '/reserve') {
+      return this.handleReserveWrites(body);
     }
     if (url.pathname === '/permits') {
       return this.handlePermits(body);
@@ -519,7 +596,9 @@ export class DudoCoordinatorObject {
 
     const wanted = permitsToBuy(state, nowMs);
     if (wanted > 0) {
-      const granted = await this.buyPermits(windowStart(nowMs, DAY_MS), wanted);
+      // FROM THE `security` ALLOCATION, docs/decisions/0014 §A.5 — the same ledger a create
+      // draws `business` from, not a budget of its own beside it.
+      const granted = await this.buyPermits(windowStart(nowMs, DAY_MS), 'security', wanted);
       creditPermits(state, granted.permits, nowMs, granted.answered);
     }
 
@@ -550,29 +629,81 @@ export class DudoCoordinatorObject {
     });
   }
 
-  /** The LEDGER role. Grants permits against the platform-wide daily ceiling. */
+  /**
+   * ===========================================================================================
+   * THE ORGANIZATION ROLE — daily D1 write admission. docs/decisions/0014 §A.1, §A.6, §A.10.
+   * ===========================================================================================
+   *
+   * It answers `admitted: false` for BOTH exhaustion causes — this Organization at its own
+   * 10,000 ceiling, and the platform's `business` allocation spent by everyone together — and
+   * says nothing about which. That is not laziness in the protocol: the caller renders this as a
+   * `429` to a tenant, and a response that distinguished "you are out" from "the platform is
+   * out" would be a channel through which one Organization learns about aggregate activity it
+   * has no business seeing. There is nothing here for the Worker to leak because nothing here
+   * tells it.
+   */
+  private async handleReserveWrites(body: Record<string, unknown>): Promise<Response> {
+    const organizationId = String(body.organizationId ?? '');
+    if (!this.bind(organizationId)) {
+      return jsonResponse({ error: 'organization_mismatch' }, 409);
+    }
+    const state = this.hydrate();
+    const nowMs = Number(body.nowMs);
+    const units = Number(body.estimatedRowWrites);
+    if (!Number.isInteger(units) || units <= 0) {
+      // A malformed cost is a defect in Dudo's code, not a budget refusal, and admitting it
+      // would corrupt an account-wide counter. Refused without charging anything.
+      return jsonResponse({ error: 'invalid_write_cost' }, 400);
+    }
+
+    const wanted = writePermitsToBuy(state, units, nowMs);
+    if (wanted > 0) {
+      const granted = await this.buyPermits(windowStart(nowMs, DAY_MS), 'business', wanted);
+      creditWritePermits(state, granted.permits, nowMs, granted.answered);
+    }
+
+    const admitted = admitWrite(state, units, nowMs);
+    // PERSISTED WHETHER OR NOT THE WRITE WAS ADMITTED. On success the used counter moved and must
+    // survive an eviction; on failure the permit reserve may still have moved, because a block
+    // may have been bought that this request could not spend. Persisting only the success path
+    // would silently drop purchased capacity.
+    this.persistWriteBudget(state);
+    return jsonResponse({ admitted });
+  }
+
+  /**
+   * The LEDGER role. Grants row-writes against one of the platform-wide daily ALLOCATIONS.
+   *
+   * ONE LEDGER, THREE ALLOCATIONS, since `0014` §A.5 — `0013` had a ledger for summaries alone.
+   * `business`, `security` and `system` are separate counters that never borrow from one another,
+   * and their ceilings sum to exactly `PLATFORM_DAILY_ROW_WRITE_CEILING`, which
+   * `write-admission.ts` asserts at module load rather than trusting anyone to re-add.
+   *
+   * IT STILL HOLDS NO TENANT IDENTIFIER: an allocation name, a UTC day, and an integer.
+   */
   private handlePermits(body: Record<string, unknown>): Response {
-    if (!this.ledgerHydrated) {
-      const rows = this.sql.exec('SELECT day_start, used FROM budget WHERE id = 1').toArray();
-      if (rows.length === 1) {
-        this.ledgerDay = Number(rows[0].day_start);
-        this.ledgerUsed = Number(rows[0].used);
-      }
-      this.ledgerHydrated = true;
+    const allocation = toAllocation(body.allocation);
+    if (allocation === null) {
+      return jsonResponse({ error: 'unknown_allocation' }, 400);
     }
     const dayStartMs = Number(body.dayStartMs);
     const wanted = Math.max(0, Number(body.wanted));
-    if (dayStartMs !== this.ledgerDay) {
-      this.ledgerDay = dayStartMs;
-      this.ledgerUsed = 0;
-    }
-    const granted = Math.max(0, Math.min(wanted, PLATFORM_DAILY_SUMMARY_WRITES - this.ledgerUsed));
-    this.ledgerUsed += granted;
+
+    const rows = this.sql
+      .exec('SELECT day_start, used FROM ledger WHERE allocation = ?', allocation)
+      .toArray();
+    const storedDay = rows.length === 1 ? Number(rows[0].day_start) : -1;
+    const used = storedDay === dayStartMs && rows.length === 1 ? Number(rows[0].used) : 0;
+
+    const granted = Math.max(0, Math.min(wanted, DAILY_ALLOCATION[allocation] - used));
+    const nextUsed = used + granted;
     this.sql.exec(
-      'INSERT INTO budget (id, day_start, used, permits) VALUES (1, ?, ?, 0) ' +
-        'ON CONFLICT(id) DO UPDATE SET day_start = excluded.day_start, used = excluded.used',
-      this.ledgerDay,
-      this.ledgerUsed,
+      'INSERT INTO ledger (allocation, day_start, used) VALUES (?, ?, ?) ' +
+        'ON CONFLICT(allocation) DO UPDATE SET day_start = excluded.day_start, ' +
+        'used = excluded.used',
+      allocation,
+      dayStartMs,
+      nextUsed,
     );
     return jsonResponse({ granted });
   }
@@ -580,23 +711,26 @@ export class DudoCoordinatorObject {
   /**
    * `answered` separates "the ledger replied, and the reply was zero" from "the ledger could
    * not be reached". Only the first stops this instance asking again today; an unreachable
-   * ledger must not suppress a day of evidence because of a blip.
+   * ledger must not suppress a day of evidence, or a day of an Organization's writes, because
+   * of a blip.
    */
   private async buyPermits(
     dayStartMs: number,
+    allocation: WriteAllocation,
     wanted: number,
   ): Promise<{ permits: number; answered: boolean }> {
     const namespace = (this.env as { COORDINATION?: DurableObjectNamespace }).COORDINATION;
     if (namespace === undefined) {
       // No ledger reachable: grant nothing. Summaries are then suppressed and announced —
-      // evidence degrades, and nothing about access changes.
+      // evidence degrades, and nothing about access changes. A mutation is DEFERRED, which
+      // refuses a write and never permits one.
       return { permits: 0, answered: false };
     }
     try {
       const stub = namespace.get(namespace.idFromName(LEDGER_INSTANCE));
       const response = await stub.fetch('https://coordination.invalid/permits', {
         method: 'POST',
-        body: JSON.stringify({ dayStartMs, wanted }),
+        body: JSON.stringify({ dayStartMs, allocation, wanted }),
       });
       if (!response.ok) {
         return { permits: 0, answered: false };
@@ -610,6 +744,11 @@ export class DudoCoordinatorObject {
       return { permits: 0, answered: false };
     }
   }
+}
+
+/** The closed allocation set, over the wire. An unknown value is refused, never defaulted. */
+function toAllocation(value: unknown): WriteAllocation | null {
+  return value === 'business' || value === 'security' || value === 'system' ? value : null;
 }
 
 function keyTextOf(key: DenialGroupKey): string {
@@ -739,10 +878,55 @@ export function createDurableObjectRequestCoordinator(
           });
           return ok({
             summaries,
+            // The receipt for row-writes the object has ALREADY charged to the `security`
+            // allocation. Minted here rather than sent over the wire because a reservation is a
+            // branded, single-use, frozen value — a JSON copy of one would be a forgery, which
+            // is precisely what the brand exists to make impossible.
+            reservation:
+              summaries.length === 0
+                ? null
+                : mintWriteReservation({
+                    organizationId: request.organizationId,
+                    allocation: 'security',
+                    estimatedRowWrites: summaries.length * DENIAL_SUMMARY_ROW_WRITES,
+                    dayStartMs: windowStart(request.nowMs, DAY_MS),
+                  }),
             suppressedByCeiling:
               typeof answered.value.suppressedByCeiling === 'number'
                 ? answered.value.suppressedByCeiling
                 : 0,
+          });
+        },
+
+        async reserveWrites(
+          estimatedRowWrites: number,
+        ): Promise<Result<WriteAdmissionOutcome>> {
+          const answered = await call(instance, '/reserve', {
+            organizationId: request.organizationId,
+            estimatedRowWrites,
+            nowMs: request.nowMs,
+          });
+          if (!answered.ok) {
+            // An unreachable coordinator is NOT a grant. `pipeline.ts` turns this into a refused
+            // write, never a permitted one — the same direction degraded mode takes, and the
+            // only direction in which failing is safe against an account-wide allowance.
+            return answered;
+          }
+          if (answered.value.admitted !== true) {
+            return ok({
+              kind: 'deferred',
+              resumeAfterMs: nextUtcResetMs(request.nowMs),
+              retryAfterSeconds: retryAfterSecondsUntilReset(request.nowMs),
+            });
+          }
+          return ok({
+            kind: 'granted',
+            reservation: mintWriteReservation({
+              organizationId: request.organizationId,
+              allocation: 'business',
+              estimatedRowWrites,
+              dayStartMs: windowStart(request.nowMs, DAY_MS),
+            }),
           });
         },
 
@@ -756,20 +940,28 @@ export function createDurableObjectRequestCoordinator(
 }
 
 /**
- * The platform ledger as a Core port, for a caller that wants to read or reserve budget outside
- * a request. Unused by the pipeline — the Organization coordinator buys its own permits — and
- * present so the ceiling is reachable by name rather than only as a side effect.
+ * The platform ledger as a Core port, for a caller that wants to reserve budget outside a
+ * request — a scheduled `system` operation, or a queued bulk import continuing across daily
+ * windows (docs/decisions/0014 §A.9).
+ *
+ * Unused by the pipeline, which reserves through the Organization coordinator so that a mutation
+ * costs no round trip beyond the one the request already makes. Present so that the allocations
+ * are reachable by name rather than only as a side effect of a denial.
  */
-export function createDurableObjectSummaryWriteBudget(
+export function createDurableObjectDayWriteBudget(
   namespace: DurableObjectNamespace,
-): SummaryWriteBudget {
+): DayWriteBudget {
   return {
-    async take(dayStartMs: number, wanted: number): Promise<Result<number>> {
+    async take(
+      dayStartMs: number,
+      allocation: WriteAllocation,
+      wanted: number,
+    ): Promise<Result<number>> {
       try {
         const stub = namespace.get(namespace.idFromName(LEDGER_INSTANCE));
         const response = await stub.fetch('https://coordination.invalid/permits', {
           method: 'POST',
-          body: JSON.stringify({ dayStartMs, wanted }),
+          body: JSON.stringify({ dayStartMs, allocation, wanted }),
         });
         if (!response.ok) {
           return err(unavailable());

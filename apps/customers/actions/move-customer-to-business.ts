@@ -86,6 +86,14 @@ export function createMoveCustomerToBusinessAction(dependencies: {
     idempotent: false,
     audit: true,
     exposure: ['internal', 'public'],
+    /**
+     * Three: one primary-key UPDATE against `customer`, table row plus two index rows.
+     * `business_id` is the leading non-tenant column of
+     * `customer_by_tenant_business_status_name`, so this Action always rewrites that index entry
+     * — it is the one mutating Action for which the index row is never avoidable. Core adds five
+     * for the audit record; one move reserves eight (docs/decisions/0014 §A.1).
+     */
+    maxRowWrites: 3,
     parseInput(raw: unknown): Result<MoveCustomerInput> {
       const validated = validateObject(raw, MOVE_CUSTOMER_RULE);
       if (!validated.ok) {

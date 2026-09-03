@@ -79,6 +79,8 @@ export function createSearchCustomersAction(dependencies: {
     // Explicit for the same reason as ListCustomers: CD-15 is open, not overlooked.
     auditOnDenial: false,
     exposure: ['internal', 'public'],
+    /** Zero. A search writes nothing and never reaches the daily write budget. */
+    maxRowWrites: 0,
     parseInput(raw: unknown): Result<SearchInput> {
       const validated = validateObject(raw, SEARCH_CUSTOMERS_RULE);
       if (!validated.ok) {

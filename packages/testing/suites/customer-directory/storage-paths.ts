@@ -232,7 +232,11 @@ export function buildStoragePathSuite(makeWorld: MakeWorld, readsOnly = false): 
         createdAt: world.clock.now(),
         principalId: 'prn_owner_alpha',
       });
-      expectOk('control: the insert commits', await storeA.write([write]));
+      // `unbudgetedReservationFor` — this case drives the storage boundary DIRECTLY, below the
+      // pipeline, to test the tenant predicate. It is not a budget test and has no coordination
+      // handle to charge; the harness says so in the helper's name rather than quietly minting
+      // one. Every case that IS about docs/decisions/0014's budget goes through the pipeline.
+      expectOk('control: the insert commits', await storeA.write([write], world.unbudgetedReservationFor(ORG_A, 1)));
       const landed = world.customerRows().find((row) => row.customer_id === 'cust_alpha_path4x');
       assertEqual('control: the row exists', landed?.customer_id, 'cust_alpha_path4x');
       assertEqual(`${ISOLATION} the inserted row carries Organization A's tenant`, landed?.tenant_id, ORG_A);
@@ -251,7 +255,10 @@ export function buildStoragePathSuite(makeWorld: MakeWorld, readsOnly = false): 
 
       expectOk(
         'control: an update to an own row commits and changes it',
-        await storeA.write([updateOperation(CUST_A_ANNA, { [COLUMN.displayName]: 'Control Renamed' })]),
+        await storeA.write(
+          [updateOperation(CUST_A_ANNA, { [COLUMN.displayName]: 'Control Renamed' })],
+          world.unbudgetedReservationFor(ORG_A, 1),
+        ),
       );
       const control = world.customerRows(ORG_A).find((row) => row.customer_id === CUST_A_ANNA);
       assertEqual('control: the own row changed', control?.display_name, 'Control Renamed');
@@ -261,7 +268,10 @@ export function buildStoragePathSuite(makeWorld: MakeWorld, readsOnly = false): 
       // than protected by a check that could be forgotten.
       expectOk(
         'the cross-tenant update returns cleanly',
-        await storeA.write([updateOperation(CUST_B_ANNA, { [COLUMN.displayName]: 'Written across the boundary' })]),
+        await storeA.write(
+          [updateOperation(CUST_B_ANNA, { [COLUMN.displayName]: 'Written across the boundary' })],
+          world.unbudgetedReservationFor(ORG_A, 1),
+        ),
       );
       assertEqual(
         `${ISOLATION} every Organization B row is byte-unchanged after a cross-tenant write`,

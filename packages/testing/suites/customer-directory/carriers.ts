@@ -235,19 +235,25 @@ export function buildCarrierSuite(makeWorld: MakeWorld): Suite {
               limit: 1,
             }),
         },
+        // A VALID reservation is supplied on both write attempts, deliberately. The carrier under
+        // test is the TENANT COLUMN, and a write refused for want of an admission
+        // (docs/decisions/0014 §A.11) would refuse for the wrong reason and prove nothing about
+        // the predicate — the same trap `expectError` exists to catch everywhere else.
         {
           where: 'an insert value list',
           run: () =>
-            store.write([
-              { kind: 'insert', spec: { table: CUSTOMER_TABLE, values: { tenant_id: ORG_B, customer_id: 'x' } } },
-            ]),
+            store.write(
+              [{ kind: 'insert', spec: { table: CUSTOMER_TABLE, values: { tenant_id: ORG_B, customer_id: 'x' } } }],
+              world.unbudgetedReservationFor(ORG_A, 1),
+            ),
         },
         {
           where: 'an update set clause',
           run: () =>
-            store.write([
-              { kind: 'update', spec: { table: CUSTOMER_TABLE, set: { tenant_id: ORG_B }, where: eq(COLUMN.customerId, CUST_A_ANNA) } },
-            ]),
+            store.write(
+              [{ kind: 'update', spec: { table: CUSTOMER_TABLE, set: { tenant_id: ORG_B }, where: eq(COLUMN.customerId, CUST_A_ANNA) } }],
+              world.unbudgetedReservationFor(ORG_A, 1),
+            ),
         },
       ];
 

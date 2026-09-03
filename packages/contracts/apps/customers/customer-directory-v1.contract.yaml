@@ -286,6 +286,94 @@ authorizationModel:
       returned only when the caller EXPLICITLY names a business_id it is not authorized
       over — because there the caller asserted a scope and deserves a straight answer,
       whereas an unfiltered listing asserted nothing.
+  budgetExhaustion:
+    ruling: >-
+      EXHAUSTING A DAILY WRITE BUDGET REFUSES MUTATIONS WITH quota_exceeded. It never
+      refuses a read. Required by docs/decisions/0014 section A.10, which states the
+      obligation for mutations in the plural; this contract previously declared
+      quota_exceeded on CreateCustomer alone, so the other four mutations would have had a
+      declared-error set that could not express the answer the decision requires.
+    appliesTo: >-
+      THE FIVE REACHABLE MUTATIONS: CreateCustomer, UpdateCustomer, ArchiveCustomer,
+      RestoreCustomer and MoveCustomerToBusiness. All five declare quota_exceeded.
+      NOT GetCustomer, NOT ListCustomers, NOT SearchCustomers, and this exclusion is
+      normative rather than an omission — see readsAreNeverRefused.
+      DeleteCustomer and RestoreDeletedCustomer are mutations and are DELIBERATELY NOT
+      LISTED, because both are unreachable behind the section 7 confirmation gate
+      (mvpImplementationScope) and their routes answer not_implemented. Declaring an error
+      an Action cannot yet return would assert behaviour for an implementation this
+      contract deliberately leaves unspecified. WHOEVER LANDS THE CONFIRMATION GATE OWES
+      quota_exceeded ON BOTH, and this sentence exists so that obligation is not discovered
+      by its absence.
+    readsAreNeverRefused: >-
+      A read consumes no write budget, so refusing one buys back nothing it spent. Refusing
+      reads at a write ceiling would convert a write-capacity control into a total outage,
+      which is exactly the mistake docs/decisions/0013 control 9 was written to avoid — its
+      ceiling stops summary WRITES and explicitly does NOT refuse requests, because a
+      ceiling that refuses requests is a second denial-of-service lever.
+      AND A READ THAT COULD RETURN quota_exceeded WOULD CARRY A NEW SIGNAL ABOUT THE
+      ORGANIZATION'S BUDGET ON A PATH THAT CURRENTLY CARRIES NONE. GetCustomer is the
+      probing surface this whole contract is arranged around; adding a response code to it
+      that varies with the Organization's remaining budget would add a second dimension an
+      attacker can observe, on the one Action where the answer set is most carefully
+      constrained.
+    evaluationPosition: >-
+      NORMATIVE, AND IT IS THE WHOLE OF THE CONTROL. The budget refusal is evaluated at the
+      same position as the rate limit: after step 3 (authorize) and step 4 (validate), and
+      BEFORE step 5 resolves any record. It is RECORD-INDEPENDENT, exactly as the step 3
+      forbidden is, and for the same reason.
+      IF IT EVER MOVES BELOW STEP 5 THE CONTRACT IS BROKEN, and the failure is not subtle.
+      A budget check placed after record resolution — for instance to 'only count writes we
+      are actually going to make' — makes quota_exceeded reachable only when the target row
+      resolved inside the tenant. A caller could then exhaust its OWN budget deliberately,
+      which it controls completely, and thereafter distinguish quota_exceeded ('this
+      customer exists in my Organization') from not_found ('it does not, or it is another
+      Organization's'). That is a cross-tenant existence oracle that the attacker can switch
+      on at will, built out of a capacity control. Position is what prevents it; no wording
+      elsewhere in this contract does.
+    whatAquotaExceededDiscloses: >-
+      A statement about the caller's OWN Organization's budget, produced by the caller's own
+      Organization's traffic. It names no record, no customer identifier, no Business, and no
+      other Organization, and it is returned before any row has been read. The cross-tenant
+      indistinguishability property in notFoundVersusForbidden.crossTenantUnaffected is
+      untouched: every identifier outside the caller's Organization still terminates at step
+      5 with the same not_found, and a caller whose budget is intact cannot obtain
+      quota_exceeded at all.
+    auditTaxonomy: >-
+      quota_exceeded IS ALREADY A MEMBER OF THE CLOSED AuditDenialReason SET and is already
+      counted as a denial, so declaring it on four further Actions introduces no new
+      vocabulary and no new column value. The denial grouping stays bounded: its key is
+      built from the authenticated principal and the Action definition only, and has no
+      parameter the requested customer identifier could arrive through
+      (docs/decisions/0013 control 5). The change adds at most four group-windows per
+      credential per 15-minute window, and what bounds the writes is the daily summary
+      ceiling rather than the group count.
+    retryTime: >-
+      THE CARRIER NOW EXISTS. error-envelope.schema.json declares error.retry_after_seconds,
+      an optional non-negative integer, approved by the Team Lead against docs/decisions/0014
+      section A.10 and added to the PLATFORM-WIDE envelope rather than to this App's
+      contract, because an error shape that varies per module is not a shape. It also pays
+      the debt API_STANDARD.md section 10 records for rate_limited, which
+      platform/core/http/api.ts names as owed and unpaid.
+      WHAT THIS ACTION MAY PUT IN IT: seconds until the next 00:00 UTC reset, and nothing
+      else. That value is a function of the calendar, identical for every caller on the
+      platform at that instant, and it therefore says nothing about this Organization or any
+      other. IT MUST NEVER BE DERIVED FROM REMAINING BUDGET, OBSERVED USAGE, LOAD OR ATTEMPT
+      COUNT. A retry time computed from how much budget is left is a side channel on other
+      tenants' activity, reachable exactly the way evaluationPosition describes — by a caller
+      deliberately driving the one input it fully controls. The prohibition is stated in the
+      envelope schema as a prohibition; it is repeated here because this is the Action that
+      would be the first to break it.
+      IT IS OPTIONAL, INCLUDING ON THIS ACTION. A refusal with no retry time is valid and a
+      client falls back to the next UTC midnight from its own clock. Optional is deliberate:
+      required would mean a value gets invented on the path where none is known.
+    interimBehaviour: >-
+      Core currently answers unavailable for this condition on the four Actions, which all
+      declare it, and which the neighbouring degraded-mode branch already returns for the
+      same underlying fact. Nothing is broken today. Listing quota_exceeded here is what
+      lets that answer become the correct one without a code change, because
+      constrainToDeclaredErrors converts any code outside an Action's declared set to
+      internal — so an undeclared quota_exceeded would have surfaced as a 500.
 
 # ---------------------------------------------------------------------------
 # permissions — REGISTERED as of 2026-09-02.
@@ -782,7 +870,7 @@ actions:
       pending-deletion customer.
     input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/updateCustomerInput" }
     output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/updateCustomerOutput" }
-    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, conflict, rate_limited, internal, unavailable, timeout]
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, conflict, quota_exceeded, rate_limited, internal, unavailable, timeout]
     permission: customers.customer.update
     scope: business
     sensitivity: sensitive
@@ -800,6 +888,9 @@ actions:
       recorded as open question CD-3 rather than closed by inventing a field the feature
       scope excluded. Adding an optional 'version' request field plus a 'version' response
       field later is ADDITIVE under API_STANDARD.md §6; making it required is breaking.
+      quota_exceeded is declared because this Action writes. It is refused before any record
+      is resolved — authorizationModel.budgetExhaustion, and read evaluationPosition there
+      before moving the check.
 
   - id: customers.ArchiveCustomer
     title: "Archive customer"
@@ -811,7 +902,7 @@ actions:
       indefinitely, and only an explicit DeleteCustomer ever ends that.
     input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/archiveCustomerInput" }
     output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/archiveCustomerOutput" }
-    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, quota_exceeded, rate_limited, internal, unavailable, timeout]
     permission: customers.customer.archive
     scope: business
     sensitivity: sensitive
@@ -828,6 +919,9 @@ actions:
       but a permissive one writes an audit record saying a customer was archived when
       nothing changed, and an audit trail that records operations that did not happen is
       worse than one that is occasionally awkward to retry against. See README.md §6.
+      quota_exceeded is declared because this Action writes. It is refused before any record
+      is resolved — authorizationModel.budgetExhaustion, and read evaluationPosition there
+      before moving the check.
 
   - id: customers.RestoreCustomer
     title: "Restore customer"
@@ -837,7 +931,7 @@ actions:
       the default search.
     input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/restoreCustomerInput" }
     output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/restoreCustomerOutput" }
-    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, quota_exceeded, rate_limited, internal, unavailable, timeout]
     permission: customers.customer.restore
     scope: business
     sensitivity: sensitive
@@ -853,6 +947,9 @@ actions:
       scope; if this Action accepted 'pending_deletion' it would let a business-scope
       principal countermand an organization-level destruction order through the tidy-up
       permission.
+      quota_exceeded is declared because this Action writes. It is refused before any record
+      is resolved — authorizationModel.budgetExhaustion, and read evaluationPosition there
+      before moving the check.
 
   # --- added by the CD-2 decision -------------------------------------------
 
@@ -865,7 +962,7 @@ actions:
       unchanged; only which Business it belongs to changes.
     input: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/moveCustomerToBusinessInput" }
     output: { schemaRef: "urn:dudo:schema:customer-directory:1#/$defs/moveCustomerToBusinessOutput" }
-    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, quota_exceeded, rate_limited, internal, unavailable, timeout]
     permission: customers.customer.move
     scope: organization
     sensitivity: sensitive
@@ -892,6 +989,9 @@ actions:
       customer is ALLOWED — reorganising the Organization's own structure should not be
       blocked by a record being withdrawn from use, and an archived customer in a Business
       that no longer serves it is exactly a record someone will need to move.
+      quota_exceeded is declared because this Action writes. It is refused before any record
+      is resolved — authorizationModel.budgetExhaustion, and read evaluationPosition there
+      before moving the check.
 
   # --- added by the CD-8 decision -------------------------------------------
 

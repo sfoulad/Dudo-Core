@@ -50,9 +50,53 @@ import type {
   RequestCoordinator,
 } from '../../../platform/core/protection/coordination.ts';
 import { rehydratePersistedDenialGroupKey } from '../../../platform/core/protection/coordination.ts';
+import type { WriteAdmissionOutcome } from '../../../platform/core/protection/write-admission.ts';
 import type { Result } from '../../../platform/core/kernel/result.ts';
 import { err } from '../../../platform/core/kernel/result.ts';
 import { unavailable } from '../../../platform/core/kernel/errors.ts';
+
+/**
+ * Wraps a coordinator, replacing named methods of its handle and FORWARDING EVERYTHING ELSE.
+ *
+ * SPREAD RATHER THAN RE-LISTED, DELIBERATELY. Every wrapper in this file used to rebuild the
+ * handle field by field, and when `docs/decisions/0014` added `reserveWrites` to
+ * `RequestCoordination`, all five of them silently dropped it — a wrapper that forgets a method
+ * is a control that quietly stops testing what it claims to. Spreading means the next method
+ * added to the port is forwarded by every control here without an edit, and a control that wants
+ * to break it has to say so.
+ */
+function decorate(
+  inner: RequestCoordinator,
+  overrides: (
+    coordination: RequestCoordination,
+    request: CoordinatedRequest,
+  ) => Partial<RequestCoordination>,
+  onBegin?: (request: CoordinatedRequest) => void,
+): RequestCoordinator {
+  return {
+    async begin(request: CoordinatedRequest): Promise<Result<RequestCoordination>> {
+      onBegin?.(request);
+      const begun = await inner.begin(request);
+      if (!begun.ok) {
+        return begun;
+      }
+      const coordination = begun.value;
+      return {
+        ok: true,
+        value: {
+          ...coordination,
+          // Bound explicitly: spreading an object literal copies the function values, but these
+          // close over the inner handle rather than over `this`, so no binding is lost. Stated
+          // because "spread an object with methods" is a place people expect a `this` bug.
+          recordDenial: (key, context) => coordination.recordDenial(key, context),
+          reserveWrites: (units) => coordination.reserveWrites(units),
+          dispose: () => coordination.dispose(),
+          ...overrides(coordination, request),
+        },
+      };
+    },
+  };
+}
 
 /**
  * Admission SUCCEEDS; counting the denial FAILS.
@@ -68,31 +112,167 @@ export function withBrokenDenialRecording(
   inner: RequestCoordinator,
   failure: 'reject' | 'throw',
 ): RequestCoordinator {
-  return {
-    async begin(request: CoordinatedRequest): Promise<Result<RequestCoordination>> {
-      const begun = await inner.begin(request);
-      if (!begun.ok) {
-        return begun;
+  return decorate(inner, () => ({
+    async recordDenial(): Promise<Result<DenialRecordOutcome>> {
+      if (failure === 'throw') {
+        throw new Error('synthetic denial-recording failure');
       }
-      const coordination = begun.value;
+      return err(unavailable());
+    },
+  }));
+}
+
+/**
+ * Admission and denial counting both SUCCEED; the daily WRITE reservation fails.
+ *
+ * `docs/decisions/0014` §A's own degraded path, and it is distinct from every 0013 control: the
+ * request is authorized, valid, inside every rate limit, and has produced writes — and the
+ * budget cannot be consulted. Nothing may commit, because a write that could not be reserved is
+ * the unaccounted write §A.11 prohibits.
+ */
+export function withBrokenWriteAdmission(
+  inner: RequestCoordinator,
+  failure: 'reject' | 'throw',
+): RequestCoordinator {
+  return decorate(inner, () => ({
+    async reserveWrites(): Promise<Result<WriteAdmissionOutcome>> {
+      if (failure === 'throw') {
+        throw new Error('synthetic write-admission failure');
+      }
+      return err(unavailable());
+    },
+  }));
+}
+
+/**
+ * The daily budget answers `deferred` for every mutation, without any budget having to be spent.
+ *
+ * `0014` §A.10's exhaustion state, reached directly. Driving it through the real ledger is also
+ * done (the ceiling suite lowers `dailyCeilings`), and both are worth having: this one isolates
+ * what the PIPELINE does with a `deferred`, and that one proves the LEDGER produces one.
+ */
+export function withExhaustedWriteBudget(
+  inner: RequestCoordinator,
+  resumeAfterMs: number,
+  retryAfterSeconds: number,
+): RequestCoordinator {
+  return decorate(inner, () => ({
+    async reserveWrites(): Promise<Result<WriteAdmissionOutcome>> {
+      return { ok: true, value: { kind: 'deferred', resumeAfterMs, retryAfterSeconds } };
+    },
+  }));
+}
+
+/**
+ * Records every write reservation the pipeline asked for, and grants it through the real ledger.
+ *
+ * The cost an Action reserves is the thing `0014` §A.12 is about, and the only way to assert it
+ * is to write down what was actually requested.
+ */
+export function withWriteRequestRecorder(
+  inner: RequestCoordinator,
+  requested: number[],
+): RequestCoordinator {
+  return decorate(inner, (coordination) => ({
+    async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
+      requested.push(units);
+      return coordination.reserveWrites(units);
+    },
+  }));
+}
+
+/**
+ * Grants a reservation for a DIFFERENT Organization than the handle serves.
+ *
+ * The tenant half of `consumeWriteReservation`'s four checks, reached the only way a real system
+ * could reach it: a coordinator that hands back a receipt naming somebody else. The storage
+ * boundary must refuse it rather than write one Organization's row against another's budget.
+ */
+export function withForeignOrganizationReservation(
+  inner: RequestCoordinator,
+  organizationId: string,
+  mint: (organizationId: string, units: number) => unknown,
+): RequestCoordinator {
+  return decorate(inner, () => ({
+    async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
       return {
         ok: true,
         value: {
-          outcome: coordination.outcome,
-          retryAfterSeconds: coordination.retryAfterSeconds,
-          async recordDenial(): Promise<Result<DenialRecordOutcome>> {
-            if (failure === 'throw') {
-              throw new Error('synthetic denial-recording failure');
-            }
-            return err(unavailable());
-          },
-          dispose(): void {
-            coordination.dispose();
-          },
+          kind: 'granted',
+          reservation: mint(organizationId, units) as never,
         },
       };
     },
-  };
+  }));
+}
+
+/**
+ * Grants a FORGED reservation — a plain object with the right fields and no brand.
+ *
+ * The provenance half. It is the same shape as the `actorBusinessIds` and `DenialGroupKey`
+ * controls: a hand-built value must be refused, and a derived one must be accepted, or the
+ * refusal is of the shape rather than of the provenance.
+ */
+export function withForgedWriteReservation(inner: RequestCoordinator): RequestCoordinator {
+  return decorate(inner, (coordination, request) => ({
+    async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
+      return {
+        ok: true,
+        value: {
+          kind: 'granted',
+          reservation: {
+            organizationId: request.organizationId,
+            allocation: 'business',
+            estimatedRowWrites: units,
+            dayStartMs: 0,
+          } as never,
+        },
+      };
+    },
+  }));
+}
+
+/**
+ * Grants ONE reservation and hands the SAME object back on every later call.
+ *
+ * A reservation is per-batch. Without single-use enforcement one receipt for eight row-writes
+ * could fund an unbounded loop of batches, and the budget would be a formality.
+ */
+export function withReusedWriteReservation(inner: RequestCoordinator): RequestCoordinator {
+  // HELD OUTSIDE `decorate`, AND THE POSITION IS THE WHOLE CONTROL. `decorate` calls the
+  // overrides factory once per `begin`, which is once per REQUEST — a variable declared inside
+  // it is per-request and would hand each request its own fresh reservation, which is exactly
+  // the correct behaviour this control is supposed to break. An earlier revision did that and
+  // the case passed while testing nothing.
+  let held: WriteAdmissionOutcome | null = null;
+  return decorate(inner, (coordination) => ({
+    async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
+      if (held !== null) {
+        return { ok: true, value: held };
+      }
+      const granted = await coordination.reserveWrites(units);
+      if (granted.ok && granted.value.kind === 'granted') {
+        held = granted.value;
+      }
+      return granted;
+    },
+  }));
+}
+
+/**
+ * Grants a reservation SMALLER than the batch it will fund.
+ *
+ * The size half. Every statement writes at least one row, so a batch with more statements than
+ * row-writes reserved is provably under-reserved, and under-reserving is the direction §A.12
+ * calls a platform outage. Reserving one for a two-statement batch is the smallest case that
+ * proves the backstop runs below every caller.
+ */
+export function withUndersizedWriteReservation(inner: RequestCoordinator): RequestCoordinator {
+  return decorate(inner, (coordination) => ({
+    async reserveWrites(): Promise<Result<WriteAdmissionOutcome>> {
+      return coordination.reserveWrites(1);
+    },
+  }));
 }
 
 /** A coordinator whose `begin` refuses, without throwing. */
@@ -134,44 +314,27 @@ export function withIdentifierInGroupKey(
   inner: RequestCoordinator,
   channel: IdentifierChannel,
 ): RequestCoordinator {
-  return {
-    async begin(request: CoordinatedRequest): Promise<Result<RequestCoordination>> {
-      const begun = await inner.begin(request);
-      if (!begun.ok) {
-        return begun;
+  return decorate(inner, (coordination) => ({
+    async recordDenial(
+      key: DenialGroupKey,
+      context: DenialContext,
+    ): Promise<Result<DenialRecordOutcome>> {
+      const supplied = channel.current;
+      if (supplied === null) {
+        return coordination.recordDenial(key, context);
       }
-      const coordination = begun.value;
-      return {
-        ok: true,
-        value: {
-          outcome: coordination.outcome,
-          retryAfterSeconds: coordination.retryAfterSeconds,
-          async recordDenial(
-            key: DenialGroupKey,
-            context: DenialContext,
-          ): Promise<Result<DenialRecordOutcome>> {
-            const supplied = channel.current;
-            if (supplied === null) {
-              return coordination.recordDenial(key, context);
-            }
-            // The laundering `rehydratePersistedDenialGroupKey` warns about, performed on a
-            // request path so that its cost can be measured.
-            const rekeyed = rehydratePersistedDenialGroupKey({
-              organizationId: key.organizationId,
-              principalId: key.principalId,
-              appId: key.appId,
-              actionId: `${key.actionId}~${supplied}`,
-              category: key.category,
-            });
-            return coordination.recordDenial(rekeyed, context);
-          },
-          dispose(): void {
-            coordination.dispose();
-          },
-        },
-      };
+      // The laundering `rehydratePersistedDenialGroupKey` warns about, performed on a request
+      // path so that its cost can be measured.
+      const rekeyed = rehydratePersistedDenialGroupKey({
+        organizationId: key.organizationId,
+        principalId: key.principalId,
+        appId: key.appId,
+        actionId: `${key.actionId}~${supplied}`,
+        category: key.category,
+      });
+      return coordination.recordDenial(rekeyed, context);
     },
-  };
+  }));
 }
 
 /**
@@ -186,33 +349,21 @@ export function withKeyRecorder(
   seen: DenialGroupKey[],
   requests: CoordinatedRequest[] = [],
 ): RequestCoordinator {
-  return {
-    async begin(request: CoordinatedRequest): Promise<Result<RequestCoordination>> {
+  return decorate(
+    inner,
+    (coordination) => ({
+      async recordDenial(
+        key: DenialGroupKey,
+        context: DenialContext,
+      ): Promise<Result<DenialRecordOutcome>> {
+        seen.push(key);
+        return coordination.recordDenial(key, context);
+      },
+    }),
+    (request) => {
       requests.push(request);
-      const begun = await inner.begin(request);
-      if (!begun.ok) {
-        return begun;
-      }
-      const coordination = begun.value;
-      return {
-        ok: true,
-        value: {
-          outcome: coordination.outcome,
-          retryAfterSeconds: coordination.retryAfterSeconds,
-          async recordDenial(
-            key: DenialGroupKey,
-            context: DenialContext,
-          ): Promise<Result<DenialRecordOutcome>> {
-            seen.push(key);
-            return coordination.recordDenial(key, context);
-          },
-          dispose(): void {
-            coordination.dispose();
-          },
-        },
-      };
     },
-  };
+  );
 }
 
 /**
@@ -227,38 +378,21 @@ export function withForeignOrganizationKey(
   inner: RequestCoordinator,
   organizationId: string,
 ): RequestCoordinator {
-  return {
-    async begin(request: CoordinatedRequest): Promise<Result<RequestCoordination>> {
-      const begun = await inner.begin(request);
-      if (!begun.ok) {
-        return begun;
-      }
-      const coordination = begun.value;
-      return {
-        ok: true,
-        value: {
-          outcome: coordination.outcome,
-          retryAfterSeconds: coordination.retryAfterSeconds,
-          async recordDenial(
-            key: DenialGroupKey,
-            context: DenialContext,
-          ): Promise<Result<DenialRecordOutcome>> {
-            const foreign = rehydratePersistedDenialGroupKey({
-              organizationId,
-              principalId: key.principalId,
-              appId: key.appId,
-              actionId: key.actionId,
-              category: key.category,
-            });
-            return coordination.recordDenial(foreign, context);
-          },
-          dispose(): void {
-            coordination.dispose();
-          },
-        },
-      };
+  return decorate(inner, (coordination) => ({
+    async recordDenial(
+      key: DenialGroupKey,
+      context: DenialContext,
+    ): Promise<Result<DenialRecordOutcome>> {
+      const foreign = rehydratePersistedDenialGroupKey({
+        organizationId,
+        principalId: key.principalId,
+        appId: key.appId,
+        actionId: key.actionId,
+        category: key.category,
+      });
+      return coordination.recordDenial(foreign, context);
     },
-  };
+  }));
 }
 
 /** An unbranded value shaped like a `DenialGroupKey`. Nothing may accept it. */
