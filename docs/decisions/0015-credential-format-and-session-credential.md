@@ -1,6 +1,6 @@
 # 0015 — Credential format and the session credential (AZ2, continued)
 
-- **Status:** **Accepted**
+- **Status:** **Accepted for §§A–C · §D DEFERRED pending one measurement**
 - **Date:** 2026-09-03
 - **Deciders:** Dudo Team Lead, under authority the user delegated 2026-09-03 ("Go with your
   recommendation"). §D carries a user-reversible consequence — see Approval.
@@ -45,8 +45,30 @@ Measured against WebCrypto by the Team Lead:
 Argon2id's defence is *memory* hardness and PBKDF2 has none — a GPU evaluates it orders of
 magnitude faster than a server CPU. Argon2 and bcrypt are npm packages; none is approved.
 
-**A verifier table protected this way should be assumed crackable if it is stolen.** That is a
-floor imposed by the platform, not a tuning choice.
+**What 60,000-iteration PBKDF2 is actually worth.** A single consumer GPU sustains roughly
+2–5 billion PBKDF2 iterations/second, so **~50,000 password guesses per second per card**. A
+standard ~10¹⁰-candidate wordlist campaign finishes in **~2.3 days on one card, ~7 hours on
+eight** — and campaigns that size typically recover 70–80% of human-chosen passwords. **If the
+control-plane database is stolen, assume the majority of passwords are recovered.** Not "at
+risk". Recovered. bcrypt at cost 12 is ~35× the work; Argon2id is stronger again by a
+mechanism PBKDF2 does not possess at any iteration count.
+
+**A CORRECTION TO THIS RECORD, made 2026-09-03 after it was first written.** The original text
+said the CPU ceiling caps *password-hashing strength*. **That was false. It caps SERVER-SIDE
+password-hashing strength**, and the distinction admits an option the first draft missed —
+see §D option (f). The error is corrected rather than quietly rewritten because an Accepted
+record carrying a false premise is the exact defect this project has spent its effort
+eliminating.
+
+**The derived hard ceiling, and an argument against running near it.** The measurements give a
+clean linear fit of **0.120 ms per 1,000 iterations** with ~0.5 ms fixed overhead across a 60×
+range, so the absolute maximum is **~75,000 iterations** once the rest of the login path is
+allowed for. **60,000 leaves only ~23% headroom and should not be shipped**, for a reason
+beyond conservatism: **a CPU-limit kill produces a response Dudo did not author.**
+`pre-auth-http.ts` is a fixed table precisely so every branch is byte-identical; if the
+invocation is terminated at 10 ms, `finish()` never runs, the timing floor never applies, and
+the caller receives a runtime error whose shape Core does not control. That is an intermittent
+disclosure channel outside the fixed table.
 
 ### 3. A timing floor inside a Worker cannot measure CPU work — at all
 
@@ -114,7 +136,77 @@ invalidates every session on the platform.
    it directly; the overrun alert is not a sufficient detector.
 4. The **250 ms quantum is retained** for I/O variance.
 
-### D. The credential format: **WebAuthn / passkeys**
+### D. The credential format — **DECISION DEFERRED, one day of measurement first**
+
+**Status of §D changed 2026-09-03.** It was first recorded as *passkeys, Accepted*. That was
+decided on a premise now known to be false, and on a cost estimate now known to be too high.
+Both corrections are below. §§A–C are unaffected and stand.
+
+#### Option (f) — client-side KDF. The option the first draft missed.
+
+```
+client:  kdf_output = PBKDF2-SHA256(password, salt = normalize(email), 600,000, 32 bytes)
+         posts { email, base64url(kdf_output) }        43 chars, fits the 512 cap
+server:  stored == PBKDF2-SHA256(kdf_output, per_user_random_salt, 10,000)
+```
+
+An offline attacker must compute **both** KDFs per guess — **effective work factor ≈ 610,000,
+above OWASP's recommendation** — against 60,000 for the server-side design. Guess rate falls
+from ~50,000/s to ~5,000/s per GPU; the two-day campaign becomes three weeks. **Server CPU:
+1.7 ms**, 17% of budget, which also eliminates the runtime-kill channel above.
+
+**NORMATIVE, and the difference between this design and a catastrophe: the server stores a
+hash of the client's output, NEVER the output itself.** Storing `kdf_output` directly would
+make a database dump *directly usable as a login credential* with no cracking at all.
+
+It also **partly closes Part B's online-guessing hole, which nothing else does** — the
+attacker now pays 600,000 iterations per attempt too, converting a free attack into a metered
+one. And it makes finding 3 immaterial: at 1.7 ms, identical on both branches, the frozen
+clock cannot leak anything.
+
+**The salt has a forced answer.** A per-user random salt would need fetching before login, but
+`identity.login.start` is `disclosure: 'collapsed'` and renders one constant body — **there is
+no way to deliver a server-chosen salt under the registry as built.** Normalised email as the
+client salt removes the round trip. This is the construction Bitwarden ships.
+
+**Its real costs:** two clients must produce byte-identical output (deterministic, so testable
+— and a mismatch fails closed and loud, nobody can log in); **a client that posted the raw
+password instead of the KDF output would be indistinguishable to the server** — partially
+mitigated by requiring exactly 43 base64url characters, and this is the genuine residual risk;
+and no server-side password policy is possible.
+
+#### The WebAuthn cost was over-priced, and Core writes no binary parsing
+
+Under `attestation: 'none'` — the correct choice — **the attestation object is verified by
+nobody**, so the CBOR parse is pure data extraction, not a security control. Web's
+`getPublicKey()` returns SPKI DER directly. Apple's client can extract the key, because the
+value is untrusted either way. **The contract specifies one shape — `public_key_x` and
+`public_key_y`, base64url, 43 characters each — and the server imports a JWK.** The DER
+signature unwrap moves client-side too. **Core writes zero binary parsing**, against the
+~250–350 lines the first draft priced.
+
+#### Recovery is not a tiebreaker
+
+**(d) and (f) share the gap: recovery is blocked by the absence of an approved email provider,
+not by the credential format.** A forgotten password with no email is as unrecoverable as a
+lost passkey. Synced passkeys (iCloud Keychain, Google Password Manager) do most of the work
+for Dudo's actual users; requiring two credentials at enrollment reduces lockout further.
+
+#### The deciding factor is delivery, not cryptography
+
+Both are cryptographically adequate. The argument that decides it is that **`Dudo-Apple` has
+never produced a TestFlight build** and already carries two blockers, and ADR 0002's gate
+requires one complete vertical slice through **both** clients. WebAuthn adds associated
+domains, an entitlement, and an `apple-app-site-association` file to that critical path.
+**An option that cannot complete the seven-step gate is worse than a cryptographically weaker
+one that can.**
+
+**DECISION: prove the Apple associated-domain path first — roughly one day. If it works,
+passkeys. If it does not, option (f).** Either way, **plain server-side PBKDF2 is ruled out**:
+(f) costs the same to build, ships to the same clients, is ~10× stronger offline, uses a
+quarter of the CPU, and removes the runtime-kill channel. There is no axis on which it wins.
+
+#### Reference: the option comparison
 
 With operator-issued single-use enrollment codes for bootstrap and recovery, and **passkey
 registration behind an already-authenticated session** so CBOR parsing never sees
