@@ -1,0 +1,157 @@
+-- Control-plane migration 0004 — the session table.
+--
+-- Read `0001_principal.sql` first for the shared header of this directory.
+--
+-- NOT APPLIED. No migration runner exists and no agent may run one against real data.
+-- ROLLBACK PATH: DROP TABLE session. It is the ONE table in this directory whose rollback is
+-- genuinely safe at any time: dropping it signs every user out and nothing else. Sessions are
+-- disposable by design, and that property is worth keeping.
+-- FORWARD-ONLY and idempotent.
+--
+-- =============================================================================================
+-- SESSIONS ARE PRINCIPAL-SCOPED, NOT TENANT-SCOPED — docs/decisions/0014 §C.1
+-- =============================================================================================
+--
+-- `core-object-registry.yaml` records `Session` as `tenancy: tenant-scoped` and describes it as
+-- "bound to one principal and one active tenant". THAT ENTRY IS CIRCULAR. Reading a
+-- tenant-scoped row requires a tenant-scoped store handle; the handle requires the Organization;
+-- the Organization is what the session is read to DISCOVER. A tenant-scoped session cannot be
+-- read before the tenant is known, so it can never be read at all.
+--
+-- §C.1 breaks the loop by moving the record here. The registry is `architecture-agent`'s file;
+-- the correction is reported, not made here.
+--
+-- =============================================================================================
+-- WHAT THIS TABLE DELIBERATELY HAS NO COLUMN FOR, AND THE FIRST ONE IS THE IMPORTANT ONE
+-- =============================================================================================
+--
+--   * NO CREDENTIAL, NO TOKEN, NO SECRET, NO VERIFIER. `docs/decisions/0014` does not settle the
+--     identity provider or the credential format, and this schema is written so it does not
+--     settle them either. `session_id` is an OPAQUE IDENTIFIER, not a secret: the port takes a
+--     `sessionId` that some verifier produced, and how a bearer credential becomes that
+--     identifier is not decided, not implied, and not implemented anywhere in this repository.
+--
+--     A CONSTRAINT ON THE UNDECIDED DECISION, RECORDED HERE SO IT IS NOT DISCOVERED AFTERWARDS:
+--     IF THE CHOSEN FORMAT EVER MAKES THE BEARER TOKEN AND `session_id` THE SAME VALUE, THIS
+--     TABLE STORES A CREDENTIAL IN PLAINTEXT AND MUST GAIN A VERIFIER COLUMN FIRST. That is an
+--     additive migration, and it must be part of the identity-provider decision rather than a
+--     follow-up to it.
+--
+--   * NO `last_seen_at`, NO SLIDING EXPIRY, NO LOGIN COUNTER. Every one of those is a D1 WRITE
+--     ON A READ PATH, triggered by a caller at a rate the caller chooses — the exact shape
+--     `docs/decisions/0013` closed for denied reads and `0014` §A closed for creates. `expires_at`
+--     is absolute and nothing extends it (identity/session-resolution.ts, ruling 3).
+--
+--     THE CONSEQUENCE FOR `0014` §B: a "session refresh" pre-authentication entry point CANNOT
+--     be sliding-expiry. Refresh that writes is a write per refresh on a path with no
+--     authorization above it, and the daily budget does not carry it.
+--
+--   * NO IP ADDRESS, USER AGENT, OR DEVICE FINGERPRINT. A raw address is personal data about a
+--     tenant's staff; `protection/coordination.ts` already hashes one at the transport adapter
+--     rather than letting Core see it, and a session table is not the place to reintroduce it.
+--
+--   * NO `revoked_at`. Revocation DELETES the row (identity/control-plane-store.ts,
+--     `deleteSession`), so a revoked session and a session that never existed become the same
+--     observation and a replayed credential discloses nothing. What that costs is stated there:
+--     no record survives that a logout occurred, and session-lifecycle auditing is not built in
+--     this slice and is not decided by §C.
+--
+-- =============================================================================================
+-- WRITE COST — the number `0014` §A's budget for this platform is computed from
+-- =============================================================================================
+--
+--   1 table row
+-- + PRIMARY KEY (session_id)                                     implicit index
+-- + session_by_principal
+-- = 3 ESTIMATED ROW-WRITES PER LOGIN (identity/control-plane-admission.ts, SESSION_ROW_WRITES).
+--
+-- Counted by the same conservative rules as `platform/core/storage/write-cost.ts`, and quoting
+-- the same Cloudflare rule: "Indexes will add an additional written row when writes include the
+-- indexed column, as there are two rows written: one to the table itself, and one to the index."
+-- Every index is charged on every write to this table, including the UPDATE that sets
+-- `active_organization_id` and touches no indexed column — the over-charging direction, which is
+-- the only direction in which being wrong is safe (§A.12).
+--
+-- WHY IT MATTERS: the actor rate limit permits 86,400 requests a day per credential. At 3
+-- row-writes a login, ONE HOLDER OF ONE VALID CREDENTIAL COULD SPEND 259,200 ROW-WRITES A DAY
+-- AGAINST AN ENFORCED, ACCOUNT-WIDE 100,000 — taking D1 down for every Organization while doing
+-- nothing but logging in. That is why every write to this table reserves daily capacity first.
+--
+-- WHEN A MIGRATION ADDS AN INDEX HERE, `SESSION_ROW_WRITES` MUST MOVE WITH IT. Nothing can
+-- notice on our behalf: D1 exposes no portable schema introspection through a binding.
+--
+-- FREE-TIER IMPACT: ALLOWANCES CONSUMED d1-storage, d1-rows-read, d1-rows-written.
+--   STORAGE: three identifiers and two timestamps, ~150 bytes per row plus two index entries —
+--   call it ~300 bytes all in. The table holds live sessions plus at most one day of expired
+--   ones (see retention below): a few hundred rows in the closed beta, well under 1 MB.
+--   ROWS READ: one point lookup per authenticated request.
+--   ROWS WRITTEN: 3 per login, capped platform-wide at 3,000/day and per principal at 600/day
+--   (CONTROL_PLANE_DAILY_ROW_WRITES, PER_PRINCIPAL_DAILY_ROW_WRITES). Both are PROVISIONAL and
+--   belong in docs/operations/free-tier-register.md, which is the Team Lead's file.
+--   AT THE LIMIT: logins are deferred with `quota_exceeded` and a retry time derived from the
+--   next 00:00 UTC — the same value for every caller at that instant, so it carries no signal.
+--   Existing sessions keep working, because resolution performs no writes.
+--   COST: USD 0 / BD 0 per month.
+
+CREATE TABLE IF NOT EXISTS session (
+  -- Opaque, non-sequential, unguessable: 128 bits of base64url from the platform CSPRNG
+  -- (platform/core/kernel/ids.ts). Not a counter and not timestamp-prefixed — a session
+  -- identifier that could be ordered or guessed would be a session stealable without a
+  -- credential.
+  session_id             TEXT NOT NULL PRIMARY KEY,
+
+  principal_id           TEXT NOT NULL REFERENCES principal (principal_id),
+
+  -- NULLABLE, AND THAT IS THE DESIGN. A principal may belong to several Organizations, so a
+  -- session that has not selected one is an ordinary reachable state — not an error and not a
+  -- default. There is deliberately NO "first membership wins" fallback: a silent default would
+  -- be an ambient tenant, which MULTITENANCY_STANDARD.md §3 forbids by name.
+  --
+  -- HOLDING THE SELECTION SERVER-SIDE IS WHAT KEEPS A CALLER FROM NAMING A TENANT ON EVERY
+  -- REQUEST. `identity/principal-resolver.ts` records the standing rule that nothing letting a
+  -- caller name a tenant may be added to `AuthenticationInput`. A caller-supplied Organization
+  -- appears in exactly two places in the platform — issuing a session and switching one — and
+  -- in both it is a HINT validated against membership (0014 §C.6), never an assertion.
+  --
+  -- IT IS NOT A FOREIGN KEY TO `organization`, deliberately: membership is re-validated on
+  -- every request anyway (session-resolution.ts, ruling 2), so the authoritative check is the
+  -- membership row and not this column. A constraint here would imply this column is trusted.
+  active_organization_id TEXT,
+
+  created_at             TEXT NOT NULL,   -- RFC 3339, UTC
+  expires_at             TEXT NOT NULL    -- RFC 3339, UTC. Absolute; nothing extends it.
+);
+
+-- The access path for "every session belonging to this principal": revoking all of a user's
+-- sessions on a credential change, and showing a user their own active sessions.
+--
+-- `expires_at DESC` as the second column so the newest-first read is served from the index
+-- without touching a row body.
+CREATE INDEX IF NOT EXISTS session_by_principal
+  ON session (principal_id, expires_at DESC);
+
+-- =============================================================================================
+-- THERE IS NO INDEX ON `expires_at`, AND THAT IS A DELIBERATE TRADE WITH A STATED THRESHOLD.
+-- =============================================================================================
+--
+-- Retention needs "delete every session that has expired":
+--
+--   DELETE FROM session WHERE expires_at < ?
+--
+-- An index would serve it and would cost a fourth row-write on EVERY LOGIN — 33% more, forever,
+-- on the platform's hottest control-plane write. Without one the purge is a full table scan.
+--
+-- The scan is cheap because the table is small: it holds live sessions plus whatever expired
+-- since the purge last ran. At the closed beta's ten Organizations
+-- (MULTITENANCY_STANDARD.md §7.5) that is a few hundred rows, and a daily scan of a few hundred
+-- rows is not measurable against a 5,000,000 daily row-read allowance.
+--
+-- THE THRESHOLD AT WHICH THIS STOPS BEING RIGHT, stated so the decision can be revisited on
+-- evidence rather than on feel: when the session table exceeds roughly 50,000 rows, or when the
+-- purge runs more often than daily. Past either, add the index and raise SESSION_ROW_WRITES to 4.
+--
+-- NOTHING RUNS THE PURGE. There is no scheduled worker, no cron trigger and no retention job in
+-- this repository. Until one exists this table grows monotonically, which is stated here rather
+-- than left to be discovered: the retention job is a controlled system operation and draws from
+-- the `system` allocation, which is the same allocation the control plane's own sub-ceiling
+-- leaves 7,000 row-writes of.

@@ -28,6 +28,28 @@
  *         Organization mappings fail closed. No fallback binding, no default database, no
  *         'probably the shared one'."
  *
+ * ===========================================================================================
+ * THE FIVE PRE-AUTHENTICATION ENTRY POINTS ARE REGISTERED AND UNREACHABLE, ON PURPOSE.
+ * ===========================================================================================
+ *
+ * `docs/decisions/0014` §B's registry exists (`identity/pre-auth-registry.ts`) and this file
+ * composes NO `preAuth` dependencies, so `http/api.ts` answers `not_found` for all five. Two
+ * reasons, and neither is an oversight:
+ *
+ *   NO DURABLE LIMITER EXISTS YET. §B admits a permissionless route only if it carries rate
+ *   limiting, and the only limiter implementation today counts in one isolate's memory — a limit
+ *   divided by a number nobody controls, which is the exact fallback the COORDINATION refusal
+ *   below exists to prevent. A pre-auth limiter needs its own Durable Object instances (the
+ *   existing ones are named from the AUTHENTICATED Organization, which a pre-auth request does
+ *   not have), and that is a change to a file another task owns in this same change. Requested
+ *   through the Team Lead rather than made concurrently.
+ *
+ *   NO HANDLERS EXIST. Login, completion, refresh and revocation are the identity control
+ *   plane's (`0014` §C), which is not built. `platform.health` alone could be served today, and
+ *   serving one entry point out of a registry whose admission rule is not composed would be a
+ *   worse state than serving none: it is the shape in which "the limiter is not wired" stops
+ *   being obvious.
+ *
  * A THIRD GAP HAS NARROWED BUT HAS NOT CLOSED. `BusinessDirectory` now has a `business`
  * table to read (`platform/core/migrations/0002_business.sql`), so `CreateCustomer`,
  * `MoveCustomerToBusiness` and a business-filtered listing can produce the contract's step-5c

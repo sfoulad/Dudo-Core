@@ -32,6 +32,7 @@
 import type { ErrorCode } from '../kernel/errors.ts';
 import type { Result } from '../kernel/result.ts';
 import type { Scope } from '../authorization/scope.ts';
+import { implies } from '../authorization/scope.ts';
 import type { ActionContext } from '../tenancy/tenant-context.ts';
 import type { WriteOperation } from '../storage/store.ts';
 
@@ -219,6 +220,73 @@ export class AuditPolicyError extends Error {
 export function assertAuditPolicy(action: AuditPolicySource): void {
   if (action.audit && action.auditOnDenial === false) {
     throw new AuditPolicyError(action.id);
+  }
+}
+
+// =============================================================================================
+// The declared permission — 0007 D1, and its ONE exception (docs/decisions/0014 §B)
+// =============================================================================================
+
+/** The two fields the declaration check needs, so the helper works on anything Action-shaped. */
+export type PermissionDeclarationSource = {
+  readonly id: string;
+  readonly permission: string;
+  readonly scope: Scope;
+};
+
+/**
+ * ===========================================================================================
+ * "AN ACTION WITHOUT ONE FAILS ITS OWN REGISTRATION." `docs/decisions/0007` D1, now enforced.
+ * ===========================================================================================
+ *
+ * D1 says two things and only the first was structural before this. *"An entry point with no
+ * declared permission is unreachable, not open"* held, because `createAuthorizer` denies unless
+ * a declaration is FOUND and `''` matches nothing an App declares. *"Every Action declares
+ * exactly one permission and one scope level. An Action without one fails its own
+ * registration"* did not: an Action with `permission: ''` constructed happily, routed happily,
+ * and was simply always `forbidden` — a route that looks wired to a reviewer and answers
+ * nothing to a caller. Failing quietly in the safe direction is still failing quietly, and it is
+ * the shape a real permission typo takes.
+ *
+ * WHY IT IS ADDED IN THE CHANGE THAT BUILDS `0014` §B RATHER THAN ON ITS OWN. §B creates, for
+ * the first time, a legitimate way for a route to have no permission — the pre-auth registry. The
+ * moment that exists, "no permission" stops being unambiguously a mistake, and the ILLEGITIMATE
+ * form of it has to become a loud failure so that the two cannot be confused. A pre-auth entry
+ * point is not an `ActionDefinition` and cannot be one (`identity/pre-auth-registry.ts` — it has
+ * no `permission`, no `scope`, no `handle` of this shape); an Action with a blank permission is
+ * not an admission rule, it is a defect; and this function is the line between them.
+ *
+ * THERE IS DELIBERATELY NO BYPASS FLAG. Nothing was added to `ActionDefinition` for §B — no
+ * `preAuth: true`, no `access` field, no optional permission. §B is explicit that a pre-auth
+ * route is *"an admission rule, not a fake permission granted to an anonymous user"*, and a flag
+ * here would be exactly the fake: an Action carrying it would still flow through `invokeAction`,
+ * still hold a principal-shaped context, and still be one edit away from accumulating a grant.
+ */
+export class MissingPermissionError extends Error {
+  constructor(actionId: string) {
+    super(
+      `${actionId} declares no permission. docs/decisions/0007 D1: every Action declares ` +
+        'exactly one permission and one scope level, and an Action without one fails its own ' +
+        'registration. An entry point with no declared permission is UNREACHABLE, not open — ' +
+        'and a blank permission is not a way to make one open, it is a route that is always ' +
+        'forbidden while looking wired. The ONLY route without a permission is a registered ' +
+        'pre-authentication entry point (docs/decisions/0014 §B), which is not an Action and ' +
+        'cannot be expressed as one.',
+    );
+    this.name = 'MissingPermissionError';
+  }
+}
+
+export function assertDeclaredPermission(action: PermissionDeclarationSource): void {
+  if (typeof action.permission !== 'string' || action.permission.trim().length === 0) {
+    throw new MissingPermissionError(action.id);
+  }
+  // `implies(s, s)` is `SCOPE_RANK[s] <= SCOPE_RANK[s]`, which is TRUE for one of the seven
+  // scopes and FALSE for anything else, because an unknown key yields `NaN <= NaN`. Checking
+  // membership this way rather than against a second list of the scope names means the ladder
+  // stays defined in exactly one place (`authorization/scope.ts`).
+  if (typeof action.scope !== 'string' || !implies(action.scope, action.scope)) {
+    throw new MissingPermissionError(action.id);
   }
 }
 

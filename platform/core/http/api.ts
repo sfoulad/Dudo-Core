@@ -27,12 +27,15 @@
  *     retry time is a pure function of the clock — see the call to `renderError` below.
  *     Neither change touches the error envelope: `Retry-After` is a header, and the envelope is
  *     contract surface that is not this agent's to author.
- *   - PRE-AUTHENTICATION RATE LIMITING. The limiter needs a coordinator instance, and the
- *     instance is named from the AUTHENTICATED Organization, so an unauthenticated flood is
- *     not counted. It costs nothing today — production ships a deny-all principal resolver and
- *     an unauthenticated request reaches no storage — but the day AZ2 lands, authentication
- *     itself will do a lookup and that lookup will be unprotected. It belongs with AZ2, and
- *     the port is already shaped to serve it.
+ *   - PRE-AUTHENTICATION RATE LIMITING. **NOW BUILT, AND NOT BY REUSING THE COORDINATOR.** The
+ *     gap this entry described was real: the coordinator instance is named from the
+ *     AUTHENTICATED Organization, so it cannot count a request that has no Organization, and
+ *     `CoordinatedRequest` cannot even be constructed without one. `docs/decisions/0014` §B
+ *     therefore has its own limiter with its own subjects — source, and a bucket of the
+ *     submitted identifier — in `identity/pre-auth-admission.ts`. The two ports are deliberately
+ *     NOT unified: a single port serving both would need the Organization and the principal to
+ *     be optional, and an optional tenant on a security control is how a null Organization ends
+ *     up sharing a counter with a real one.
  *   - IDEMPOTENCY. §9 says every unsafe operation ACCEPTS an `Idempotency-Key` and that
  *     Actions marked `idempotent: true` REQUIRE one. Every Customer Directory Action is
  *     `idempotent: false`, so none requires one; the key store that would honour an offered
@@ -61,10 +64,31 @@ import { renderError, renderSuccess } from './response.ts';
 import { detail, internal, invalidArgument, notFound, notImplemented } from '../kernel/errors.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import { retryAfterSecondsUntilReset } from '../protection/write-admission.ts';
+import type { PreAuthDependencies } from '../identity/pre-auth-admission.ts';
+import { dispatchPreAuthRequest } from '../identity/pre-auth-admission.ts';
+import { matchPreAuthEntryPoint } from '../identity/pre-auth-registry.ts';
+import { buildPreAuthRequest, renderPreAuthResolution } from './pre-auth-http.ts';
 
 export type ApiDependencies = PipelineDependencies & {
   readonly principals: PrincipalResolver;
   readonly ids: IdGenerator;
+  /**
+   * ===========================================================================================
+   * PRE-AUTHENTICATION ADMISSION. `docs/decisions/0014` §B. OPTIONAL HERE, AND ABSENT MEANS THE
+   * FIVE ENTRY POINTS ARE UNREACHABLE — not open, not unlimited: unreachable.
+   * ===========================================================================================
+   *
+   * §B admits a route without a permission only if it is registered AND carries strict input
+   * validation AND rate limiting. The registry is a constant and is always present; the LIMITER
+   * is composed. So a runtime with no `preAuth` has an entry point that is registered and
+   * unlimited, which is not one of the states §B permits — and the honest rendering of that is
+   * `not_found`, exactly as an unregistered path gets.
+   *
+   * That is also why this is not defaulted to a permissive in-process limiter. A rate limit
+   * counted per isolate is a limit divided by a number nobody controls, which is the mistake
+   * `http/adapters/worker-entry.ts` already refuses to make for the authenticated path.
+   */
+  readonly preAuth?: PreAuthDependencies;
 };
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
@@ -110,6 +134,61 @@ export async function handleRequest(
   const correlationId = readCorrelationId(request, dependencies.ids);
 
   const url = new URL(request.url);
+
+  // ===========================================================================================
+  // PRE-AUTHENTICATION ENTRY POINTS ARE MATCHED FIRST, ON THE ABSOLUTE PATH. docs/decisions/0014
+  // §B, and the position is three separate controls at once.
+  // ===========================================================================================
+  //
+  // 1. AN APP CANNOT SHADOW OR IMPERSONATE ONE. Core answers `/auth/login/start` before the App
+  //    router is consulted, so a route table that claims the path is unreachable — and, the
+  //    direction that matters, an App cannot present itself to a user as the login endpoint.
+  //    `assertNoReservedPathCollision` refuses such a table at construction as well, so the
+  //    dead route is a build failure rather than silently ignored code.
+  //
+  // 2. THE PATH IS ABSOLUTE, NOT RELATIVE TO `basePath`. A login endpoint that moved when an App
+  //    was mounted elsewhere would be a login endpoint whose address depended on which App was
+  //    installed. The reservation is a property of the platform, not of an App's mount point.
+  //
+  // 3. NOTHING BELOW THIS BLOCK RUNS FOR A PRE-AUTH REQUEST. No principal is resolved, no
+  //    Action is matched, no permission is evaluated, no tenant store is obtained and
+  //    `invokeAction` is never called. THAT IS §B's "an admission rule, not a fake permission
+  //    granted to an anonymous user", expressed as control flow: the two mechanisms are
+  //    different code paths producing different types, so there is no pseudo-principal to flow
+  //    through the authorization pipeline and nothing for it to accumulate grants on.
+  const preAuthEntryPoint = matchPreAuthEntryPoint(request.method, url.pathname);
+  if (preAuthEntryPoint !== undefined) {
+    if (dependencies.preAuth === undefined) {
+      // Registered but not composed: no limiter, therefore not one of the states §B permits,
+      // therefore unreachable. See `ApiDependencies.preAuth`.
+      return renderError(notFound(), requestId, correlationId);
+    }
+    let bodyText = '';
+    if (METHODS_WITH_BODY.has(request.method)) {
+      try {
+        bodyText = await request.text();
+      } catch {
+        return renderError(
+          invalidArgument([detail('', 'must_be_valid_json')]),
+          requestId,
+          correlationId,
+        );
+      }
+    }
+    const resolution = await dispatchPreAuthRequest(
+      dependencies.preAuth,
+      preAuthEntryPoint,
+      buildPreAuthRequest(
+        bodyText,
+        request,
+        origin.sourceAddressHash,
+        requestId,
+        correlationId,
+      ),
+    );
+    return renderPreAuthResolution(resolution, requestId, correlationId);
+  }
+
   if (!url.pathname.startsWith(basePath)) {
     return renderError(notFound(), requestId, correlationId);
   }

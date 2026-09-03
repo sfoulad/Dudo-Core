@@ -172,6 +172,76 @@ control, switched on at will by the attacker.**
 slice of a control becoming the vulnerability, and like the other four it was found by an
 implementer rather than by review.
 
+### §A.5's three-way split has no slot for an externally-triggered platform write
+
+Found while allocating the login path, and worked around rather than resolved — recorded here
+because the workaround is a judgement that belongs in a decision record, not in a source file.
+
+§A.5 divides the 80,000 into **business** mutations, **security** summaries, and **controlled
+system operations**. A login fits none of them:
+
+- **Not business.** At login there is no Organization to charge, so it would draw on the
+  platform-level business allocation with no tenant bound at all. Charged *after* selection is
+  worse: a principal could exhaust its own Organization's Customer-create capacity by logging
+  in 3,333 times.
+- **Not security.** `coordination.ts` commits 9,216 of the 10,000 security allocation to four
+  all-day campaigns. Sessions would crowd out attack evidence — the one loss that cannot be
+  recovered after the fact.
+- **Not, honestly, a controlled system operation.** A login is **triggered from outside, by a
+  party the platform has not yet authorized.** "Controlled" is exactly what it is not.
+
+**Chosen: `system`, on failure-mode asymmetry.** Exhausting it delays migrations and
+retention — work the platform controls and can reschedule — rather than refusing customer
+traffic or destroying evidence.
+
+**And the `system` allocation is tighter than it first appears.** `core-agent` corrected its
+own earlier figure: the session *lifecycle* is creation **and** retention purging, and both
+draw on `system`.
+
+| Draw on `system` (10,000/day) | At saturation | Ten-Organization beta |
+|---|---|---|
+| Session creation | 3,000 | ~600 |
+| Session retention purge (~1,000 deletes × 3) | ~3,000 | ~600 |
+| **Left for migrations, maintenance, emergency work** | **~4,000** | **~8,800** |
+
+The purge is unbuilt, so nothing spends the second row today — **but it must be budgeted
+before it is written, or the first retention job discovers the ceiling.**
+
+**A login costs 3 row-writes, not 8, and carries no audit row — deliberately.** A per-attempt
+audit write on an unauthenticated path is `0013`'s hole with a different table name: the
+caller picks the write rate and holds no privilege. `audit_event` is also tenant-scoped, and
+at login there is no tenant.
+
+**Open:** whether §A.5 should gain a fourth allocation for externally-triggered platform
+writes. Deferred, not settled.
+
+### Server-derived is not the same as bounded
+
+`core-agent` established this while choosing a denial-evidence group key for pre-authenticated
+requests, and it is a general rule rather than a detail of §B.
+
+`0013` control 5 forbids grouping by the requested identifier. Its boundedness argument is a
+**cost** argument, not a provenance argument: `principalId` is bounded because *each new value
+costs the attacker an authentication.*
+
+A pre-auth request has no principal, so a substitute is needed. The obvious one —
+**the source address hash** — passes every test that *sounds* like the right test. It is
+server-derived, edge-set, and unforgeable by the caller. **It fails the cost test.** An
+attacker chooses how many addresses to attack from, and a single host is routinely handed an
+IPv6 /64. **Cost per new group: zero.** Grouping by it restores exactly the unbounded write
+growth control 5 exists to prevent, while looking rigorous.
+
+The same value is **safe as a rate key and fatal as a group key**: a fresh address buys
+allowance and writes no row, or buys a row against an account-wide allowance whose exhaustion
+is a platform outage.
+
+**The test is not "can the caller forge it". The test is "what does a new value cost the
+attacker".** Apply that test to any future grouping, quota, or aggregation key.
+
+The accepted key is `(entryPointId, category)` — both fixed at build time, five ids × three
+categories = 15 groups, hourly windows, **360 group-windows/day and 2,160 row-writes worst
+case** against the 10,000 security allocation.
+
 ### §A.10's retry time has no carrier, and the envelope must gain one
 
 `error-envelope.schema.json` declares `error` as `additionalProperties: false` with exactly
