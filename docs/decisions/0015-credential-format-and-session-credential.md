@@ -192,6 +192,42 @@ not by the credential format.** A forgotten password with no email is as unrecov
 lost passkey. Synced passkeys (iCloud Keychain, Google Password Manager) do most of the work
 for Dudo's actual users; requiring two credentials at enrollment reduces lockout further.
 
+#### MEASURED ON THE APPLE CLIENT, 2026-09-03 — three corrections
+
+`app-agent` measured this rather than reasoning about it. Repository untouched; every
+experiment ran in scratchpad copies.
+
+**1. §D is NOT blocked behind C5, and the Team Lead's suspicion that it was is withdrawn.**
+Apple's CDN fetches the AASA by default — observed in `swcd`:
+`route: cdn -> https://app-site-association.cdn-apple.com/a/v1/dudo.work`, refused with
+`SWCERR00202 Connections to private/reserved IP addresses are not allowed`. **But
+`webcredentials:dudo.work?mode=developer` flips the fetch to a direct
+`/.well-known/apple-app-site-association` request from the domain, bypassing the CDN**, and
+the simulator reports developer mode enabled by default. **The client plumbing is provable
+against any device-reachable HTTPS host, with no Cloudflare and no C5 clearance.**
+What *is* blocked behind C5 and deployment is gate steps 4 and 6 — a TestFlight tester on
+their own device uses the CDN path, and `mode=developer` is not available to them.
+
+**2. "Core writes zero binary parsing" was true and misleading, and the framing was the Team
+Lead's.** The parsing did not disappear — **it moved to the Apple client.** Apple exposes no
+`getPublicKey()` equivalent, so the Apple app must hand-write **CBOR attestation parsing plus
+a DER signature unwrap in Swift**, on a project with no test target that has never archived.
+**That is a cost transfer onto the riskiest client, not a cost reduction.** Honest Apple-side
+estimate: **3–5 working days, not one**, excluding first-archive unknowns.
+
+**3. Adding the entitlement breaks the macOS build today.** The macOS product currently signs
+with no embedded provisioning profile; with `com.apple.developer.associated-domains` the build
+fails — *"No profiles for 'com.dudo.work' were found… To enable automatic signing, pass
+-allowProvisioningUpdates"*. **That flag is a developer-portal write, so it is a user-only
+action, and it is the first gate — it blocks passkeys before any code is written.**
+
+Also forced: `performAutoFillAssistedRequests()` is iOS-only, and `ASPresentationAnchor` is
+`UIWindow` vs `NSWindow` — two platform divergences on a client that must ship to both.
+
+**A prerequisite either way, and it is news: `dudo.work` currently resolves to a
+private/reserved IP.** Apple's CDN will not fetch from it. Public DNS and domain ownership are
+unconfirmed and are needed for the shipping path regardless of which option §D selects.
+
 #### The deciding factor is delivery, not cryptography
 
 Both are cryptographically adequate. The argument that decides it is that **`Dudo-Apple` has
