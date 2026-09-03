@@ -176,8 +176,8 @@ One shape, everywhere:
 | `not_found` | 404 | Does not exist **or is not visible to this tenant** |
 | `conflict` | 409 | State conflict, or an idempotency key reused with different input |
 | `failed_precondition` | 422 | Valid input, wrong system state |
-| `rate_limited` | 429 | Too many requests; includes `Retry-After` |
-| `quota_exceeded` | 429 | Plan or subscription limit reached |
+| `rate_limited` | 429 | Too many requests; carries `retry_after_seconds` |
+| `quota_exceeded` | 429 | Write budget or plan limit reached; carries `retry_after_seconds`. **Reads are never refused for budget** (`0014` §A.10) |
 | `internal` | 500 | Unexpected failure |
 | `not_implemented` | 501 | Declared but not available |
 | `unavailable` | 503 | Dependency down; retryable |
@@ -209,9 +209,26 @@ and follows the same restriction.
 
 - Limits are per tenant **and** per principal. A per-tenant-only limit lets one runaway
   integration deny service to that tenant's humans.
-- `rate_limited` returns `Retry-After`.
+- **`rate_limited` and `quota_exceeded` carry `retry_after_seconds` in the error envelope**
+  (`packages/contracts/common/error-envelope.schema.json`, added by `0014`). The **envelope is
+  the source of truth and the `Retry-After` header is derived from it**, never the reverse —
+  internal, SDK and MCP callers never see HTTP headers and must get the same value.
+  It is **absent** on every other code, structurally: the envelope's `allOf` makes a retry
+  time beside a `not_found` fail validation.
+- **The value must come from a fixed window boundary** — the end of the rate window, or the
+  next 00:00 UTC reset — so it is **the same for every caller at that instant**. It must
+  **never** be derived from observed usage, remaining budget, queue depth, current load or
+  attempt count. *A retry time that is a function of the calendar discloses nothing; a retry
+  time that is a function of the system's state discloses the system's state.*
+- It is **optional even on those two codes**. A degraded coordinator has no value to give, and
+  a required field is a field someone invents a number for. A refusal with no retry time is
+  valid; the client falls back to the next UTC midnight from its own clock.
 - Quotas come from the tenant's plan and return `quota_exceeded`, which is a *different*
   condition from rate limiting: one is "slow down", the other is "upgrade or stop".
+- **`quota_exceeded` must be evaluated before any record is resolved.** Below that point it
+  is reachable only when the target exists in the caller's tenant, and a caller who
+  deliberately exhausts a budget it controls can use it to distinguish "in my Organization"
+  from "not" — a cross-tenant existence oracle built out of a capacity control (`0014`).
 - Limits are documented per endpoint. An undocumented limit is indistinguishable from an
   outage.
 

@@ -39,10 +39,25 @@ function headers(requestId: string, correlationId: string): Record<string, strin
   };
 }
 
+/**
+ * `retryAfterSeconds` is a TRANSPORT HINT, not part of the error envelope.
+ *
+ * It becomes a `Retry-After` HEADER and never a body field, so
+ * `packages/contracts/common/error-envelope.schema.json` is untouched — which matters, because
+ * the envelope is contract surface and contracts are not this agent's to author. `CoreError`
+ * still has no channel for a header, deliberately; the value is passed alongside it by the one
+ * layer that speaks HTTP.
+ *
+ * FOR `quota_exceeded` IT IS A PURE FUNCTION OF THE CLOCK — seconds to the next 00:00 UTC — and
+ * that is what makes it safe to return at all. It is byte-identical whether the Organization hit
+ * its own daily ceiling or the platform allocation ran out (docs/decisions/0014 §A.10), so it
+ * cannot be used to infer anything about platform-wide activity or about any other tenant.
+ */
 export function renderError(
   error: CoreError,
   requestId: string,
   correlationId: string,
+  retryAfterSeconds?: number,
 ): Response {
   const body: Record<string, unknown> = {
     error: {
@@ -56,11 +71,24 @@ export function renderError(
     status: HTTP_STATUS_BY_CODE[error.code],
     headers: headers(requestId, correlationId),
   };
-  if (error.code === 'rate_limited') {
-    // API_STANDARD.md §8 requires Retry-After on 429 rate limiting. No rate limiter exists
-    // in this slice, so nothing produces this code yet; the header is here so that when one
-    // does, the requirement is already met rather than rediscovered.
-    (init.headers as Record<string, string>)['Retry-After'] = '1';
+  if (error.code === 'rate_limited' || error.code === 'quota_exceeded') {
+    // API_STANDARD.md §8 requires Retry-After on 429. The two codes share the status and mean
+    // different things — one says slow down, the other says the day's capacity is gone — so
+    // they carry different times, and both come from the caller of this function rather than
+    // being invented here.
+    //
+    // THE FALLBACK OF ONE SECOND IS FOR `rate_limited` ONLY, AND IT IS STILL OWED. The
+    // coordinator computes the true value per 60-second window and it is not plumbed out of
+    // `invokeAction`, whose return type has no channel for it; that gap predates
+    // docs/decisions/0014 and is reported as owed rather than quietly widened here. It is safe
+    // in the meantime because a second is always an UNDER-statement of the wait for a fixed
+    // window, so a client that honours it retries and is refused again rather than being told
+    // to give up early.
+    (init.headers as Record<string, string>)['Retry-After'] = String(
+      retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds)
+        ? Math.max(1, Math.ceil(retryAfterSeconds))
+        : 1,
+    );
   }
   return new Response(JSON.stringify(body), init);
 }

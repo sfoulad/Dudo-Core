@@ -84,6 +84,22 @@ export function createUpdateCustomerAction(): ActionDefinition<UpdateCustomerInp
     idempotent: false,
     audit: true,
     exposure: ['internal', 'public'],
+    /**
+     * Three: one UPDATE against `customer`, costing the table row plus its two index rows. Core
+     * adds five for the audit record, so one update reserves eight
+     * (docs/decisions/0014 §A.1, create-customer.ts for the full arithmetic).
+     *
+     * ONE ROW, BECAUSE THE PREDICATE IS A PRIMARY-KEY EQUALITY — `eq(customer_id, ...)` inside a
+     * tenant-scoped handle. That is what makes three a worst case rather than an average: a
+     * broader predicate is one statement and an unbounded number of row-writes, and an Action
+     * with one would have to declare the largest number of rows it could match.
+     *
+     * CHARGED IN FULL EVEN WHEN THE UPDATE TOUCHES NO INDEXED COLUMN. Changing only `notes` does
+     * not rewrite an index entry, so the real cost is sometimes one. Estimating high is the
+     * direction §A.12 requires, and an estimate that varied per request would have to be computed
+     * from the SET clause on every call for a saving of two row-writes.
+     */
+    maxRowWrites: 3,
     parseInput(raw: unknown): Result<UpdateCustomerInput> {
       const validated = validateObject(raw, UPDATE_CUSTOMER_RULE);
       if (!validated.ok) {

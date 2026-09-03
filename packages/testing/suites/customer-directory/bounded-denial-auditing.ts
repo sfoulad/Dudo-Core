@@ -67,13 +67,21 @@ import {
   DenialGroupKeyNotDerivedError,
   EMISSION_LADDER,
   MAX_WRITES_PER_GROUP_WINDOW,
-  PER_ORGANIZATION_DAILY_SUMMARY_WRITES,
-  PLATFORM_DAILY_SUMMARY_WRITES,
+  PER_ORGANIZATION_DAILY_SUMMARIES,
+  PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES,
+  PLATFORM_DAILY_SUMMARIES,
+  PLATFORM_DAILY_SUMMARY_ROW_WRITES,
   RATE_LIMIT_PER_WINDOW,
   RATE_WINDOW_MS,
+  SOURCE_REPORT_INTERVAL,
   assertDenialGroupKey,
   deriveDenialGroupKey,
 } from '../../../../platform/core/protection/coordination.ts';
+import { DENIAL_SUMMARY_ROW_WRITES } from '../../../../platform/core/storage/write-cost.ts';
+import {
+  D1_FREE_DAILY_ROW_WRITES,
+  DAILY_ALLOCATION,
+} from '../../../../platform/core/protection/write-admission.ts';
 import {
   admit,
   createCoordinationState,
@@ -81,8 +89,9 @@ import {
   recordDenial as engineRecordDenial,
 } from '../../../../platform/core/protection/coordination-engine.ts';
 import {
+  createInProcessDayWriteBudget,
   createInProcessRequestCoordinator,
-  createInProcessSummaryWriteBudget,
+  createInProcessSourceCounterShard,
 } from '../../../../platform/core/protection/in-process-coordinator.ts';
 import {
   forgeUnbrandedGroupKey,
@@ -625,59 +634,112 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
     assertEqual('and by the source level, sharing one bucket', overUnknown.refusedBy, 'source');
   });
 
-  suite.test('CONTROL 6 — DEFECT: the source-address level can NEVER refuse a real request, because coordination state is partitioned per Organization and the Organization ceiling is lower', async () => {
+  suite.test('CONTROL 6 — REGRESSION: the source-address level now refuses ACROSS Organizations, which is the only thing the other two levels cannot do', async () => {
     // ===========================================================================================
-    // THIS CASE IS EXPECTED TO FAIL, AND THE FAILURE IS THE DELIVERABLE.
+    // THIS CASE WAS RED AND IS NOW GREEN, AND IT IS KEPT BECAUSE OF THAT RATHER THAN DESPITE IT.
     // ===========================================================================================
     //
-    // 0013 control 6 requires three levels: per actor, per Organization, and PER SOURCE IP AS A
-    // FALLBACK. The algorithm implements all three correctly (the case above). The composition
-    // does not, and two independent facts each make the third level unreachable:
+    // QA reported that the third level of 0013 control 6 could never refuse anything: coordination
+    // state is partitioned per Organization — correctly, because the deployed coordinator is one
+    // Durable Object per Organization — so a source counter living inside one Organization's state
+    // never aggregated a source active in several. And inside a single Organization the arithmetic
+    // forbade it anyway, because 300 < 600 means the Organization level always answers first.
     //
-    //   1. STATE IS PARTITIONED PER ORGANIZATION. `createInProcessRequestCoordinator` keeps one
-    //      `CoordinationState` per Organization — deliberately, because the deployed coordinator
-    //      is one Durable Object instance per Organization and the in-process one has to
-    //      reproduce that. A source counter therefore lives INSIDE one Organization's state and
-    //      never aggregates a source that is active in more than one Organization. This is what
-    //      the assertion below measures.
+    // `core-agent` fixed it with a SHARED `SourceCounterShard` that sits outside every
+    // `CoordinationState`, and did NOT fix it by lowering the number — which would have produced a
+    // level that fires without producing a level that catches anything new, and would have hurt
+    // the office-behind-one-NAT case the decision reasons about. This case now asserts the
+    // property the fix bought, so that a future refactor which puts the counter back inside the
+    // per-Organization state turns it red again.
     //
-    //   2. AND WITHIN ONE ORGANIZATION THE ARITHMETIC FORBIDS IT ANYWAY. Both counters live in
-    //      the same state and both increment once per request, so the Organization counter
-    //      (limit 300) always crosses its threshold before the source counter (limit 600) can
-    //      cross its own — and splitting traffic across several sources only makes the source
-    //      counter slower still. `admit` reports the FIRST refusing level in the order actor,
-    //      organization, source, so the source level cannot even be the reported reason.
-    //
-    // The consequence is not a privilege escalation: every request is still bounded by the
-    // actor and Organization levels, and nothing becomes reachable that was not. It is that a
-    // control the decision states as binding does not exist in the deployed shape, and the
-    // "office behind one NAT" case the decision reasons about is not in fact covered.
-    //
-    // REPORTED to the Team Lead for `core-agent`. It is left RED rather than rewritten to
-    // describe the current behaviour, because writing it green would mean asserting that a
-    // decided control is absent, which is not a thing a suite should certify.
-    const coordinator = createInProcessRequestCoordinator(createInProcessSummaryWriteBudget());
+    // ONE SHARED SHARD ACROSS MANY ORGANIZATIONS is the whole shape of the assertion. Distinct
+    // Organizations and distinct principals on every request, so neither of the other two levels
+    // can be what refuses; only the address is common.
+    const coordinator = createInProcessRequestCoordinator(createInProcessDayWriteBudget(), {
+      sourceShard: createInProcessSourceCounterShard(),
+    });
     const limit = RATE_LIMIT_PER_WINDOW.source;
-    for (let request = 0; request <= limit; request += 1) {
+    // The shard learns of an Organization's traffic on that Organization's FIRST request of a
+    // window and every SOURCE_REPORT_INTERVAL thereafter, so the shared total lags by up to
+    // `SOURCE_REPORT_INTERVAL - 1` per active Organization. Each request here comes from a NEW
+    // Organization, which is the reporting-friendly extreme: every one of them reports on its
+    // first request, so the shared total is exact and the level engages at the limit.
+    let refusedAt = -1;
+    for (let request = 0; request <= limit + SOURCE_REPORT_INTERVAL; request += 1) {
       const begun = await coordinator.begin({
         organizationId: `org_source_${request}`,
         principalId: `prn_source_${request}`,
         sourceAddressHash: 'hash_of_one_office_nat',
         nowMs: FIXED_START_MS,
       });
-      if (begun.ok) {
-        begun.value.dispose();
+      if (!begun.ok) {
+        continue;
       }
+      if (begun.value.outcome === 'rate_limited' && refusedAt === -1) {
+        refusedAt = request + 1;
+      }
+      begun.value.dispose();
     }
-    const over = await coordinator.begin({
-      organizationId: 'org_source_over',
-      principalId: 'prn_source_over',
+    assertTrue(
+      `one address spending budget through many Organizations is refused (0013 control 6, level 3) — refused at request ${refusedAt}`,
+      refusedAt > 0,
+      'the source level never engaged: the cross-Organization counter is not shared',
+    );
+    assertTrue(
+      `and it engages at about the stated limit of ${limit}, not far past it`,
+      refusedAt > limit && refusedAt <= limit + SOURCE_REPORT_INTERVAL + 1,
+      `refused at request ${refusedAt} against a limit of ${limit}`,
+    );
+
+    // A DIFFERENT ADDRESS IS UNAFFECTED, so the level is per source and not a global throttle.
+    const other = await coordinator.begin({
+      organizationId: 'org_source_other',
+      principalId: 'prn_source_other',
+      sourceAddressHash: 'hash_of_a_different_source',
+      nowMs: FIXED_START_MS,
+    });
+    assertTrue('a different source is still served', other.ok && other.value.outcome === 'admitted', 'the source level is not per source');
+
+    // AND THE SHARD HOLDS NO TENANT DATA. It is the one counter that spans Organizations, so what
+    // it can hold is a disclosure question: a hashed address, a window, an integer, and nothing
+    // that names an Organization, a principal or a record.
+    const shard = createInProcessSourceCounterShard();
+    await shard.add('hash_of_one_office_nat', FIXED_START_MS, 3);
+    assertEqual('the shard counts', shard.totalFor('hash_of_one_office_nat', FIXED_START_MS), 3);
+    assertEqual(
+      `${ISOLATION} and a different window is a different bucket, so a total cannot leak across time either`,
+      shard.totalFor('hash_of_one_office_nat', FIXED_START_MS + RATE_WINDOW_MS),
+      0,
+    );
+  });
+
+  suite.test('CONTROL 6 — an unreachable source shard DEGRADES rather than blocks, so the fallback level cannot become an outage lever of its own', async () => {
+    // The level that spans Organizations is also the level whose failure could refuse every
+    // Organization at once. `brokenSourceShard` makes the shared counter unreachable; admission
+    // must continue on the two tenant-scoped levels rather than fail closed platform-wide —
+    // the same argument as 0013's degraded mode, one level out.
+    const coordinator = createInProcessRequestCoordinator(createInProcessDayWriteBudget(), {
+      brokenSourceShard: true,
+    });
+    const begun = await coordinator.begin({
+      organizationId: ORG_A,
+      principalId: 'prn_owner_alpha',
       sourceAddressHash: 'hash_of_one_office_nat',
       nowMs: FIXED_START_MS,
     });
+    assertTrue('a request is still admitted', begun.ok && begun.value.outcome === 'admitted', 'a broken source shard refused a request');
+    if (begun.ok) {
+      begun.value.dispose();
+    }
+    // And the tenant-scoped levels still bind, so degrading the fallback does not disable the
+    // limiter — which would be the fail-open direction.
+    const state = createCoordinationState();
+    for (let request = 0; request < RATE_LIMIT_PER_WINDOW.actor; request += 1) {
+      admit(state, { organizationId: ORG_A, principalId: 'prn_owner_alpha', sourceAddressHash: null, nowMs: FIXED_START_MS });
+    }
     assertEqual(
-      `a source that has issued ${limit + 2} requests in one minute is refused (0013 control 6, level 3)`,
-      over.ok ? over.value.outcome : 'begin_failed',
+      'the per-actor level is unaffected by the shared counter being down',
+      admit(state, { organizationId: ORG_A, principalId: 'prn_owner_alpha', sourceAddressHash: null, nowMs: FIXED_START_MS }).outcome,
       'rate_limited',
     );
   });
@@ -945,10 +1007,19 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
 
   // =========================================================================================
   // CONTROL 9 — the daily summary-write ceiling
+  //
+  // AMENDED BY docs/decisions/0014 §A.5. The ceiling's UNIT changed: 0013 counted SUMMARIES,
+  // 0014 counts ROW-WRITES AS D1 BILLS THEM, and one summary is four of those — the
+  // `denial_summary` table plus its primary-key index plus its two explicit indexes, under
+  // Cloudflare's rule that an index adds a written row. The ceiling also stopped being its own
+  // budget and became the `security` ALLOCATION of one platform ledger, because two independent
+  // daily ceilings would sum past the platform ceiling by construction.
+  //
+  // These cases are rewritten in the new unit, not re-pointed at a renamed constant.
   // =========================================================================================
 
   suite.test('CONTROL 9 — at the daily ceiling, summary writes STOP, attempts keep being counted, the loss is announced, and the caller is NOT refused', async () => {
-    const world = await makeWorld({ summaryCeiling: 0 });
+    const world = await makeWorld({ dailyCeilings: { security: 0 } });
     try {
       const reported: CoordinationFailure[] = [];
       const reporter: CoordinationFailureReporter = { report: (failure) => reported.push(failure) };
@@ -985,8 +1056,13 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
     }
   });
 
-  suite.test('CONTROL 9 — the ceiling is a CEILING: exactly N summary writes are granted, then the rest are suppressed', async () => {
-    const world = await makeWorld({ summaryCeiling: 2 });
+  suite.test('CONTROL 9 — the ceiling is a CEILING, and it is spent in ROW-WRITES: a security allocation of exactly two summaries buys two, and no more', async () => {
+    // THE UNIT IS THE POINT OF THIS CASE. The allocation is set to two summaries' WORTH — two
+    // times `DENIAL_SUMMARY_ROW_WRITES` — rather than to the number 2, and the assertion checks
+    // both the rows written and the row-writes charged. An implementation that had kept counting
+    // summaries while the ledger counted row-writes would write EIGHT summaries here, spend four
+    // times the allocation it was given, and look correct on a row count alone.
+    const world = await makeWorld({ dailyCeilings: { security: 2 * DENIAL_SUMMARY_ROW_WRITES } });
     try {
       const reported: CoordinationFailure[] = [];
       const dependencies = { ...world.dependencies, coordinationFailureReporter: { report: (failure: CoordinationFailure) => reported.push(failure) } };
@@ -1005,9 +1081,18 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
           { customer_id: identifier },
         );
       }
-      assertEqual('exactly the ceiling was written', world.denialSummaryRows().length, 2);
-      assertEqual('the platform budget records both permits as spent', world.budget.usedToday(), 2);
-      assertEqual('and the two it could not pay for were announced', reported.filter((entry) => entry.cause === 'ceiling_reached').length, 2);
+      assertEqual('exactly two summaries were written', world.denialSummaryRows().length, 2);
+      assertEqual(
+        'and the SECURITY allocation was charged their true row-write cost, not one each',
+        world.budget.usedToday('security'),
+        2 * DENIAL_SUMMARY_ROW_WRITES,
+      );
+      assertEqual('the two it could not pay for were announced', reported.filter((entry) => entry.cause === 'ceiling_reached').length, 2);
+      // ALLOCATIONS DO NOT BORROW. A spent security allocation must not reach into `business`,
+      // which is the whole reason for splitting one ledger into three counters: a probing
+      // campaign must not be able to spend the product's capacity through the evidence path.
+      assertEqual('the business allocation is untouched by any of it', world.budget.usedToday('business'), 0);
+      assertEqual('and so is the system allocation', world.budget.usedToday('system'), 0);
     } finally {
       world.close();
     }
@@ -1021,12 +1106,12 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
     // A deliberately generous platform reserve, so the PER-ORGANIZATION ceiling is the only
     // thing that can bind. Without this the platform block size would be what ran out first and
     // the case would pass while measuring the wrong ceiling.
-    creditPermits(state, PLATFORM_DAILY_SUMMARY_WRITES, FIXED_START_MS);
+    creditPermits(state, PLATFORM_DAILY_SUMMARY_ROW_WRITES, FIXED_START_MS);
     const context = { actorBusinessIds: [BIZ_A_NORTH], permissionId: 'customers.customer.read', scope: 'business' };
 
     let emitted = 0;
     let suppressed = 0;
-    const attempts = PER_ORGANIZATION_DAILY_SUMMARY_WRITES + 50;
+    const attempts = PER_ORGANIZATION_DAILY_SUMMARIES + 50;
     for (let index = 0; index < attempts; index += 1) {
       // One group per synthetic principal, so every attempt is a group's first and emits.
       const key = deriveDenialGroupKey({
@@ -1043,41 +1128,71 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
       emitted += outcome.summaries.length;
       suppressed += outcome.suppressed;
     }
-    assertEqual('exactly the per-Organization ceiling was emitted', emitted, PER_ORGANIZATION_DAILY_SUMMARY_WRITES);
-    assertEqual('and everything past it was suppressed rather than silently dropped', suppressed, attempts - PER_ORGANIZATION_DAILY_SUMMARY_WRITES);
+    assertEqual('exactly the per-Organization ceiling was emitted', emitted, PER_ORGANIZATION_DAILY_SUMMARIES);
+    assertEqual('and everything past it was suppressed rather than silently dropped', suppressed, attempts - PER_ORGANIZATION_DAILY_SUMMARIES);
+    // THE DERIVED SUMMARY COUNT IS NOT A SECOND DECLARATION. `PER_ORGANIZATION_DAILY_SUMMARIES`
+    // is the row-write ceiling divided by the summary cost, so if an index is ever added to
+    // `denial_summary` and `DENIAL_SUMMARY_ROW_WRITES` moves with it, this case follows without
+    // an edit — and if the constant is NOT updated, the arithmetic assertion below goes red.
+    assertEqual(
+      'and the summary count really is the row-write ceiling divided by one summary',
+      PER_ORGANIZATION_DAILY_SUMMARIES * DENIAL_SUMMARY_ROW_WRITES,
+      PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES,
+    );
     assertTrue(
-      'the ceiling is well under the platform one, so a single Organization cannot spend the whole budget',
-      PER_ORGANIZATION_DAILY_SUMMARY_WRITES < PLATFORM_DAILY_SUMMARY_WRITES,
-      `per-Organization ${PER_ORGANIZATION_DAILY_SUMMARY_WRITES} against platform ${PLATFORM_DAILY_SUMMARY_WRITES}`,
+      'the ceiling is well under the platform one, so a single Organization cannot spend the whole allocation',
+      PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES < PLATFORM_DAILY_SUMMARY_ROW_WRITES,
+      `per-Organization ${PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES} against platform ${PLATFORM_DAILY_SUMMARY_ROW_WRITES}`,
+    );
+    assertEqual(
+      "0013's 5:1 platform-to-Organization ratio survived the unit change",
+      PLATFORM_DAILY_SUMMARY_ROW_WRITES / PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES,
+      5,
     );
   });
 
-  suite.test('CONTROL 9 — the ceilings are small enough that denial evidence cannot be what exhausts D1, asserted as arithmetic rather than as a comment', async () => {
-    // The free-tier reasoning in `coordination.ts` is the justification for these numbers, and
-    // numbers in a comment drift. This case pins the relationship: the platform ceiling must
-    // stay a small fraction of the enforced D1 daily write allowance, so that denial evidence
-    // would have to be many times over its own ceiling before it could trip the platform one.
-    const D1_FREE_DAILY_ROWS_WRITTEN = 100_000; // Verified by the Team Lead against d1/platform/pricing/
+  suite.test('CONTROL 9, REWRITTEN IN ROW-WRITES — denial evidence still cannot be what exhausts D1, and the corrected arithmetic is asserted rather than commented', () => {
+    // The free-tier reasoning is the justification for these numbers, and numbers in a comment
+    // drift. This case pins the relationships so a future edit to any allocation has to face
+    // them.
     const FREE_TIER_REGISTER_WARNING_LINE = 70_000;
+    assertEqual('the security allocation IS the summary ceiling — one ledger, not two', PLATFORM_DAILY_SUMMARY_ROW_WRITES, DAILY_ALLOCATION.security);
     assertTrue(
-      `the platform ceiling (${PLATFORM_DAILY_SUMMARY_WRITES}) is at most 10% of the enforced D1 allowance (${D1_FREE_DAILY_ROWS_WRITTEN})`,
-      PLATFORM_DAILY_SUMMARY_WRITES * 10 <= D1_FREE_DAILY_ROWS_WRITTEN,
+      `the security allocation (${PLATFORM_DAILY_SUMMARY_ROW_WRITES}) is at most 10% of the enforced D1 allowance (${D1_FREE_DAILY_ROW_WRITES})`,
+      PLATFORM_DAILY_SUMMARY_ROW_WRITES * 10 <= D1_FREE_DAILY_ROW_WRITES,
       'denial evidence could become a meaningful share of the account-wide D1 write allowance',
     );
     assertTrue(
       `and stays under the register's warning line (${FREE_TIER_REGISTER_WARNING_LINE})`,
-      PLATFORM_DAILY_SUMMARY_WRITES < FREE_TIER_REGISTER_WARNING_LINE,
-      'the summary ceiling alone could trip the free-tier warning',
+      PLATFORM_DAILY_SUMMARY_ROW_WRITES < FREE_TIER_REGISTER_WARNING_LINE,
+      'the security allocation alone could trip the free-tier warning',
     );
     // And the per-group cost the ceilings are computed against is the one the ladder produces.
     assertEqual('the ladder has five points', EMISSION_LADDER.length, 5);
-    assertEqual('so a group-window costs at most six row-writes, not one', MAX_WRITES_PER_GROUP_WINDOW, 6);
-    const allDayOneGroup = MAX_WRITES_PER_GROUP_WINDOW * (24 * 60 * 60 * 1000 / DENIAL_WINDOW_MS);
-    assertEqual('a single-group campaign running all day costs 576 writes', allDayOneGroup, 576);
+    assertEqual('so a group-window costs at most six SUMMARIES', MAX_WRITES_PER_GROUP_WINDOW, 6);
+    const summariesPerDayOneGroup = MAX_WRITES_PER_GROUP_WINDOW * (24 * 60 * 60 * 1000 / DENIAL_WINDOW_MS);
+    assertEqual('a single-group campaign running all day is 576 summaries', summariesPerDayOneGroup, 576);
+    // ===========================================================================================
+    // THE CORRECTION, ASSERTED. `0013` claimed its 5,000-summary ceiling accommodated EIGHT
+    // simultaneous all-day campaigns. The real figure was always FOUR, because the index rows
+    // were never counted — 576 summaries is 2,304 row-writes, not 576. The allocation did not
+    // shrink; the arithmetic was wrong and 0014 corrected it. This case asserts the corrected
+    // number, and asserts that the old one is NOT reachable, so nobody restores it from memory.
+    // ===========================================================================================
+    const rowWritesPerDayOneGroup = summariesPerDayOneGroup * DENIAL_SUMMARY_ROW_WRITES;
+    assertEqual('which is 2,304 ROW-WRITES once the indexes are counted', rowWritesPerDayOneGroup, 2_304);
+    const campaigns = Math.floor(PLATFORM_DAILY_SUMMARY_ROW_WRITES / rowWritesPerDayOneGroup);
+    assertEqual('so the allocation accommodates FOUR simultaneous all-day campaigns', campaigns, 4);
     assertTrue(
-      'so the platform ceiling accommodates several simultaneous all-day campaigns before evidence is dropped',
-      PLATFORM_DAILY_SUMMARY_WRITES / allDayOneGroup >= 8,
-      `${PLATFORM_DAILY_SUMMARY_WRITES / allDayOneGroup} all-day campaigns`,
+      "and NOT the eight 0013 claimed — that figure counted summaries as one row-write each",
+      campaigns < 8,
+      'the corrected arithmetic has been reverted to the uncorrected one',
+    );
+    assertEqual('or about 2,500 isolated one-off denials', PLATFORM_DAILY_SUMMARIES, 2_500);
+    assertEqual(
+      'the derived summary count is the allocation divided by one summary, never declared twice',
+      PLATFORM_DAILY_SUMMARIES * DENIAL_SUMMARY_ROW_WRITES,
+      PLATFORM_DAILY_SUMMARY_ROW_WRITES,
     );
   });
 

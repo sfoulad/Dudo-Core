@@ -62,6 +62,12 @@ export function createRestoreCustomerAction(): ActionDefinition<RestoreCustomerI
     idempotent: false,
     audit: true,
     exposure: ['internal', 'public'],
+    /**
+     * Three, symmetrically with `ArchiveCustomer`: one primary-key UPDATE against `customer`,
+     * table row plus two index rows, `status` being an indexed column. Core adds five for the
+     * audit record; one restore reserves eight (docs/decisions/0014 §A.1).
+     */
+    maxRowWrites: 3,
     parseInput(raw: unknown): Result<RestoreCustomerInput> {
       const validated = validateObject(raw, RESTORE_CUSTOMER_RULE);
       if (!validated.ok) {

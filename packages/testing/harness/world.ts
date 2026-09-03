@@ -69,12 +69,19 @@ import { invokeAction } from '../../../platform/core/action/pipeline.ts';
 import type { AnyActionDefinition } from '../../../platform/core/action/action.ts';
 import { asAnyAction } from '../../../platform/core/action/action.ts';
 import type { Result } from '../../../platform/core/kernel/result.ts';
-import type { RequestCoordinator, SummaryWriteBudget } from '../../../platform/core/protection/coordination.ts';
-import { PLATFORM_DAILY_SUMMARY_WRITES } from '../../../platform/core/protection/coordination.ts';
+import type { RequestCoordinator } from '../../../platform/core/protection/coordination.ts';
+import type {
+  DayWriteBudget,
+  WriteAllocation,
+  WriteReservation,
+} from '../../../platform/core/protection/write-admission.ts';
 import {
-  createInProcessRequestCoordinator,
-  createInProcessSummaryWriteBudget,
-} from '../../../platform/core/protection/in-process-coordinator.ts';
+  DAILY_ALLOCATION,
+  mintWriteReservation,
+  nextUtcResetMs,
+  utcDayStart,
+} from '../../../platform/core/protection/write-admission.ts';
+import { createInProcessRequestCoordinator, createInProcessDayWriteBudget } from '../../../platform/core/protection/in-process-coordinator.ts';
 
 import { createCustomerActions } from '../../../apps/customers/api/routes.ts';
 import { CUSTOMERS_APP_PERMISSIONS } from '../../../apps/customers/app.ts';
@@ -82,12 +89,22 @@ import { displayNameKey, emailKey, phoneKey } from '../../../apps/customers/doma
 
 import type { SqliteHarness } from './sqlite-d1.ts';
 import { createSqliteDatabase } from './sqlite-d1.ts';
-import { createBoundaryBypassStore, createPredicateBrokenStore } from './broken-controls.ts';
+import {
+  createAdmissionBypassStore,
+  createBoundaryBypassStore,
+  createPredicateBrokenStore,
+} from './broken-controls.ts';
 import {
   createRejectingCoordinator,
   createThrowingCoordinator,
   withBrokenDenialRecording,
+  withBrokenWriteAdmission,
+  withExhaustedWriteBudget,
+  withForeignOrganizationReservation,
+  withForgedWriteReservation,
   withIdentifierInGroupKey,
+  withReusedWriteReservation,
+  withUndersizedWriteReservation,
 } from './broken-coordination.ts';
 
 // ---------------------------------------------------------------------------
@@ -292,7 +309,7 @@ export function seedBusiness(harness: SqliteHarness, tenantId: string, businessI
 // The world
 // ---------------------------------------------------------------------------
 
-export type StoreMode = 'real' | 'predicate-broken' | 'boundary-bypass';
+export type StoreMode = 'real' | 'predicate-broken' | 'boundary-bypass' | 'admission-bypass';
 export type ResolverMode = 'real' | 'always-organization-b';
 
 /**
@@ -310,6 +327,22 @@ export type ResolverMode = 'real' | 'always-organization-b';
  *            tension 0013 has to reconcile: control 8 governs admission (fail closed), D2
  *            requirement 6 governs evidence (the answer must not change). Only this mode
  *            reaches requirement 6's path.
+ *
+ * `docs/decisions/0014` §A adds a third conversation with the same coordinator — the daily
+ * WRITE reservation — and it has its own failure modes, none of which the 0013 modes reach:
+ *
+ *   write-rejects / write-throws
+ *            everything succeeds up to the commit and the daily budget cannot be consulted.
+ *            Nothing may commit: a write that could not be reserved is the unaccounted write
+ *            §A.11 prohibits.
+ *   write-exhausted
+ *            the budget answers `deferred` for every mutation, without a ceiling being spent.
+ *            Isolates what the PIPELINE does with §A.10's exhaustion from whether the LEDGER
+ *            produces it; the ceiling suite drives the ledger for real as well.
+ *   forged-reservation / reused-reservation / foreign-reservation / undersized-reservation
+ *            the four ways `consumeWriteReservation` can be handed something it must refuse.
+ *            Each is reached through a coordinator that grants a bad receipt, which is the only
+ *            way a real system could produce one — the pipeline has no other channel.
  */
 export type CoordinatorMode =
   | 'real'
@@ -317,7 +350,14 @@ export type CoordinatorMode =
   | 'reject'
   | 'throw'
   | 'record-rejects'
-  | 'record-throws';
+  | 'record-throws'
+  | 'write-rejects'
+  | 'write-throws'
+  | 'write-exhausted'
+  | 'forged-reservation'
+  | 'reused-reservation'
+  | 'foreign-reservation'
+  | 'undersized-reservation';
 
 export type WorldOptions = {
   readonly storeMode?: StoreMode;
@@ -338,12 +378,17 @@ export type WorldOptions = {
   /** See `CoordinatorMode`. Defaults to `real`. */
   readonly coordinatorMode?: CoordinatorMode;
   /**
-   * The PLATFORM daily summary-write ceiling (0013 control 9). Defaults to the shipped
-   * `PLATFORM_DAILY_SUMMARY_WRITES`. Lowered by the ceiling suite so the control can actually
-   * be reached: 5,000 emissions is not something a suite should produce, and a ceiling that is
-   * never reached is a ceiling that has never been verified.
+   * The PLATFORM daily ledger's per-allocation ceilings, in ESTIMATED ROW-WRITES.
+   *
+   * ONE LEDGER, THREE ALLOCATIONS, since `docs/decisions/0014` §A.5 folded 0013's separate
+   * summary budget into it. The unit changed with it: 0013 counted SUMMARIES, 0014 counts
+   * row-writes as D1 bills them, and one summary is `DENIAL_SUMMARY_ROW_WRITES` of them.
+   *
+   * Overridable so a suite can reach a ceiling in a handful of requests rather than ten
+   * thousand. A harness lowering a ceiling can only make a test cheaper; it can never make
+   * production more permissive, because production does not pass this argument.
    */
-  readonly summaryCeiling?: number;
+  readonly dailyCeilings?: Partial<Record<WriteAllocation, number>>;
   /**
    * NEGATIVE CONTROL 5: the requested identifier IS part of the denial group key — the single
    * change 0013 control 5 forbids. Supplied as a coordinator WRAPPER so that no production
@@ -372,11 +417,26 @@ export type World = {
    * two-Organization fixture; see the rate-limit suite for the arithmetic.
    */
   readonly coordinator: RequestCoordinator | null;
-  /** The platform daily summary-write budget, for the ceiling assertions (control 9). */
-  readonly budget: SummaryWriteBudget & { readonly usedToday: () => number };
+  /**
+   * The one account-wide daily ledger, for the ceiling assertions (0013 control 9 and 0014 §A).
+   * `usedToday` now takes an allocation, because there are three of them in one day.
+   */
+  readonly budget: DayWriteBudget & { readonly usedToday: (allocation: WriteAllocation) => number };
   /** Written by `withIdentifierInGroupKey`. Null unless that negative control is on. */
   readonly identifierChannel: { current: string | null } | null;
   storeFor(organizationId: string): Promise<TenantScopedStore>;
+  /**
+   * A `WriteReservation` for a suite that drives `TenantScopedStore.write` DIRECTLY, below the
+   * pipeline — the storage-path and carrier suites do, because they test the boundary itself.
+   *
+   * IT MINTS WITHOUT CHARGING, AND THAT IS WHY IT LIVES HERE AND IS NAMED THIS WAY.
+   * `mintWriteReservation`'s own documentation says in capitals that calling it on a path which
+   * did not decrement a counter defeats `0014` §A.1. A harness that is testing the tenant
+   * predicate is not testing the budget and has no coordinator handle to charge against, so it
+   * says so out loud instead of quietly building one. Every case that is about the BUDGET goes
+   * through the pipeline or through the coordinator, never through this.
+   */
+  unbudgetedReservationFor(organizationId: string, statements: number): WriteReservation;
   invoke(
     action: AnyActionDefinition | { id: string },
     principal: AuthenticatedPrincipal,
@@ -544,6 +604,10 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     if (storeMode === 'boundary-bypass') {
       return createBoundaryBypassStore(harness);
     }
+    // CONTROL 4: the write-admission guard stops guarding (docs/decisions/0014 §A.11).
+    if (storeMode === 'admission-bypass') {
+      return createAdmissionBypassStore(harness, effective);
+    }
     return createD1TenantStore(harness.database, effective);
   });
 
@@ -554,16 +618,14 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       ? { ...built, get: { ...built.get, auditOnDenial: false } }
       : built;
 
-  // ---- The request coordinator (docs/decisions/0013) -------------------------------------
+  // ---- The request coordinator (docs/decisions/0013) and the day ledger (0014 §A) ---------
   //
   // THE SHIPPED IMPLEMENTATION, NOT A HARNESS ONE. `in-process-coordinator.ts` exists in Core
   // for exactly this use and is marked never-for-deployment; using it means these suites drive
   // the shipped `coordination-engine.ts` — the same ladder, the same windows, the same
   // ceilings — rather than a second algorithm that could agree with the tests and disagree
   // with production.
-  const budget = createInProcessSummaryWriteBudget(
-    options.summaryCeiling ?? PLATFORM_DAILY_SUMMARY_WRITES,
-  );
+  const budget = createInProcessDayWriteBudget({ ...DAILY_ALLOCATION, ...options.dailyCeilings });
   const coordinatorMode = options.coordinatorMode ?? 'real';
   const identifierChannel = options.identifierInGroupKey === true ? { current: null } : null;
 
@@ -583,6 +645,40 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     }
     if (coordinatorMode === 'record-throws') {
       coordinator = withBrokenDenialRecording(coordinator, 'throw');
+    }
+    if (coordinatorMode === 'write-rejects') {
+      coordinator = withBrokenWriteAdmission(coordinator, 'reject');
+    }
+    if (coordinatorMode === 'write-throws') {
+      coordinator = withBrokenWriteAdmission(coordinator, 'throw');
+    }
+    if (coordinatorMode === 'write-exhausted') {
+      coordinator = withExhaustedWriteBudget(
+        coordinator,
+        nextUtcResetMs(clock.nowMs()),
+        // The value the pipeline would carry, computed the same way production does, so a suite
+        // asserting on it is asserting on the shipped function rather than on a harness number.
+        Math.max(1, Math.ceil((nextUtcResetMs(clock.nowMs()) - clock.nowMs()) / 1000)),
+      );
+    }
+    if (coordinatorMode === 'forged-reservation') {
+      coordinator = withForgedWriteReservation(coordinator);
+    }
+    if (coordinatorMode === 'reused-reservation') {
+      coordinator = withReusedWriteReservation(coordinator);
+    }
+    if (coordinatorMode === 'foreign-reservation') {
+      coordinator = withForeignOrganizationReservation(coordinator, ORG_B, (organizationId, units) =>
+        mintWriteReservation({
+          organizationId,
+          allocation: 'business',
+          estimatedRowWrites: units,
+          dayStartMs: utcDayStart(clock.nowMs()),
+        }),
+      );
+    }
+    if (coordinatorMode === 'undersized-reservation') {
+      coordinator = withUndersizedWriteReservation(coordinator);
     }
     if (identifierChannel !== null) {
       coordinator = withIdentifierInGroupKey(coordinator, identifierChannel);
@@ -654,6 +750,19 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
         throw new Error(`the harness could not resolve a store for ${organizationId}`);
       }
       return resolved.value;
+    },
+
+    unbudgetedReservationFor(organizationId: string, statements: number): WriteReservation {
+      return mintWriteReservation({
+        organizationId,
+        allocation: 'business',
+        // The adapter's size check is `statementCount > estimatedRowWrites`, so a reservation
+        // for a direct-boundary test must cover at least the statements it carries. It is sized
+        // at the statement count and no larger, so a case that accidentally batches more
+        // statements than it meant to still trips the guard.
+        estimatedRowWrites: statements,
+        dayStartMs: utcDayStart(clock.nowMs()),
+      });
     },
 
     async invoke(action, principal, rawInput, sourceAddressHash): Promise<Result<unknown>> {
@@ -779,6 +888,19 @@ export const EXPECTED_RATE_LIMITED = {
 export const EXPECTED_UNAVAILABLE = {
   code: 'unavailable',
   message: 'A dependency is unavailable.',
+};
+
+/**
+ * The daily-budget refusal `docs/decisions/0014` §A.10 requires: `429`, with a retry time after
+ * the next UTC reset.
+ *
+ * IT NAMES THE ORGANIZATION'S OWN QUOTA AND NOTHING ELSE. The message is identical whether this
+ * Organization hit its own 10,000 ceiling or the platform's business allocation ran out, which
+ * is what keeps it from being a statement about other tenants' activity.
+ */
+export const EXPECTED_QUOTA_EXCEEDED = {
+  code: 'quota_exceeded',
+  message: 'A quota for this organization has been reached.',
 };
 
 export const EXPECTED_INVALID_CURSOR = {

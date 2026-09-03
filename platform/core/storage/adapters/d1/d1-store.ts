@@ -16,6 +16,13 @@
  * lets the SQL be exercised without a Cloudflare runtime and without installing anything.
  *
  * ADR 0003 also says bindings, not REST. Nothing here constructs a URL or a fetch.
+ *
+ * IT IS ALSO WHERE `docs/decisions/0014` §A.11 IS ENFORCED. Because this is the only file that
+ * can reach D1, a check here is a check on every write in the platform: `write` refuses to
+ * compile a statement without a valid, unspent, correctly-sized reservation for the tenant this
+ * handle serves. A writer that bypasses the admission port is therefore not a writer that broke
+ * a convention — it is code that cannot be written without editing this file, which is the same
+ * review surface the tenant predicate has.
  */
 
 import type {
@@ -30,6 +37,8 @@ import type {
 import type { Result } from '../../../kernel/result.ts';
 import { err, ok } from '../../../kernel/result.ts';
 import { internal, unavailable } from '../../../kernel/errors.ts';
+import type { WriteReservation } from '../../../protection/write-admission.ts';
+import { consumeWriteReservation } from '../../../protection/write-admission.ts';
 import {
   compileDelete,
   compileInsert,
@@ -102,7 +111,28 @@ export function createD1TenantStore(database: D1Database, tenantId: string): Ten
       }
     },
 
-    async write(operations: readonly WriteOperation[]): Promise<Result<void>> {
+    async write(
+      operations: readonly WriteOperation[],
+      reservation: WriteReservation,
+    ): Promise<Result<void>> {
+      // =====================================================================================
+      // NO ADMISSION, NO WRITE. docs/decisions/0014 §A.11, enforced at the only file that
+      // names D1 — which is what makes "direct D1 writes outside the port are prohibited" a
+      // property of the code rather than a sentence in a standard.
+      // =====================================================================================
+      //
+      // THIS RUNS BEFORE THE EMPTY-BATCH SHORT-CIRCUIT, DELIBERATELY. A caller that presents a
+      // forged, foreign or already-spent reservation is a defect whether or not it happens to
+      // have brought any statements, and letting the empty case through would leave one path
+      // on which the guard does not run — which is one path on which it could be developed
+      // against.
+      //
+      // IT THROWS rather than returning an error, exactly like the tenant-column guard above.
+      // No client can cause this: clients supply values, never reservations. What it catches
+      // is Dudo's own code writing to an ACCOUNT-WIDE allowance without accounting for it,
+      // which must stop the request rather than be handled, logged and shipped.
+      consumeWriteReservation(reservation, tenantId, operations.length);
+
       if (operations.length === 0) {
         return ok(undefined);
       }

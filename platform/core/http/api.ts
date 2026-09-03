@@ -18,10 +18,15 @@
  *
  * WHAT IS NOT BUILT, NAMED SO IT IS NOT MISTAKEN FOR AN OVERSIGHT:
  *
- *   - `Retry-After` ON A `rate_limited` RESPONSE. API_STANDARD.md §10 requires it, the
- *     coordinator computes the value, and it is NOT returned: `CoreError` has no channel for a
- *     header, and giving it one changes the shape of the error envelope, which is contract
- *     surface and not this agent's to author. Reported to the Team Lead as owed.
+ *   - `Retry-After` ON A `rate_limited` RESPONSE. STILL OWED. API_STANDARD.md §10 requires it,
+ *     the coordinator computes the per-window value, and it is not returned: it would have to
+ *     travel back through `invokeAction`, whose `Result` has no channel for it. `response.ts`
+ *     sends a conservative `1` in the meantime, which under-states the wait and so causes a
+ *     retry-and-refuse rather than a premature give-up. The `quota_exceeded` case IS now
+ *     answered (docs/decisions/0014 §A.10) and needed no such channel, because a daily budget's
+ *     retry time is a pure function of the clock — see the call to `renderError` below.
+ *     Neither change touches the error envelope: `Retry-After` is a header, and the envelope is
+ *     contract surface that is not this agent's to author.
  *   - PRE-AUTHENTICATION RATE LIMITING. The limiter needs a coordinator instance, and the
  *     instance is named from the AUTHENTICATED Organization, so an unauthenticated flood is
  *     not counted. It costs nothing today — production ships a deny-all principal resolver and
@@ -34,9 +39,16 @@
  *     one does not exist. The cost is the contract's own CD-4: a retried create after a
  *     network failure produces a second customer. That is recorded as accepted, so it is
  *     not repaired here by inventing a store.
- *   - QUOTAS. `quota_exceeded` is declared on CreateCustomer so the error path exists, but
- *     CD-10 records that the per-Organization customer limit is a product decision that has
- *     not been made. A number invented here would set that decision by side effect.
+ *   - A PER-ORGANIZATION CUSTOMER QUOTA. Still not built, and still not this file's to invent:
+ *     CD-10 records that the per-Organization customer LIMIT — how many customers an
+ *     Organization may hold — is a product decision nobody has made.
+ *
+ *     DO NOT CONFUSE IT WITH WHAT docs/decisions/0014 §A ADDED, which is a different quota
+ *     entirely: a daily D1 WRITE budget, decided by the user, bounding how much an Organization
+ *     may write per UTC day rather than how much it may store in total. That one exists, it is
+ *     enforced in `action/pipeline.ts`, and reaching it returns `quota_exceeded` with a
+ *     `Retry-After`. A customer directory could sit far inside the storage limit CD-10 will
+ *     eventually set and still be refused by the daily budget, and the reverse.
  */
 
 import type { PipelineDependencies } from '../action/pipeline.ts';
@@ -48,6 +60,7 @@ import { mergeInputSources } from './router.ts';
 import { renderError, renderSuccess } from './response.ts';
 import { detail, internal, invalidArgument, notFound, notImplemented } from '../kernel/errors.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
+import { retryAfterSecondsUntilReset } from '../protection/write-admission.ts';
 
 export type ApiDependencies = PipelineDependencies & {
   readonly principals: PrincipalResolver;
@@ -201,7 +214,25 @@ export async function handleRequest(
   );
 
   if (!outcome.ok) {
-    return renderError(outcome.error, requestId, correlationId);
+    // `Retry-After` FOR A DAILY-BUDGET REFUSAL, docs/decisions/0014 §A.10.
+    //
+    // COMPUTED HERE, FROM THE CLOCK, RATHER THAN PLUMBED OUT OF THE PIPELINE. The retry time for
+    // an exhausted daily budget IS the next 00:00 UTC and nothing else — it does not depend on
+    // the Organization, on how much was spent, or on which of the two ceilings bound — so
+    // carrying it back through `invokeAction` would carry no information the clock does not
+    // already have, at the cost of changing a return type every Action shares.
+    //
+    // THAT INDEPENDENCE IS ALSO THE SECURITY PROPERTY. A retry time derived from budget state
+    // would differ between "this Organization is out" and "the platform is out", and the second
+    // is a statement about other tenants. This one cannot differ.
+    return renderError(
+      outcome.error,
+      requestId,
+      correlationId,
+      outcome.error.code === 'quota_exceeded'
+        ? retryAfterSecondsUntilReset(dependencies.clock.nowMs())
+        : undefined,
+    );
   }
 
   try {

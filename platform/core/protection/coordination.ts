@@ -59,6 +59,9 @@
 import type { AuditDenialReason } from '../audit/audit.ts';
 import type { Result } from '../kernel/result.ts';
 import type { AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
+import type { WriteAdmissionOutcome, WriteReservation } from './write-admission.ts';
+import { DAILY_ALLOCATION, UTC_DAY_MS } from './write-admission.ts';
+import { DENIAL_SUMMARY_ROW_WRITES } from '../storage/write-cost.ts';
 
 // =============================================================================================
 // Windows
@@ -78,8 +81,13 @@ export const DENIAL_WINDOW_MS = 15 * 60 * 1000;
 /** The rate-limit window. Fixed windows, not a sliding log: a log is per-attempt state. */
 export const RATE_WINDOW_MS = 60 * 1000;
 
-/** The daily budget window. Cloudflare resets its Free daily limits at 00:00 UTC. */
-export const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * The daily budget window. Cloudflare resets its Free daily limits at 00:00 UTC.
+ *
+ * ONE DEFINITION, IN `write-admission.ts`, re-exported here rather than restated. Two constants
+ * for the same day would be two constants until one of them changed.
+ */
+export const DAY_MS = UTC_DAY_MS;
 
 export function windowStart(nowMs: number, windowMs: number): number {
   return Math.floor(nowMs / windowMs) * windowMs;
@@ -152,7 +160,15 @@ export function windowStart(nowMs: number, windowMs: number): number {
  * traffic being counted.
  *
  * These are a capacity guard, not an anti-fraud control. They are deliberately generous, and
- * they are not what bounds the daily D1 write cost — the summary ceilings below are.
+ * THEY ARE NOT WHAT BOUNDS THE DAILY D1 WRITE COST.
+ *
+ * `0013` finished that sentence with "the summary ceilings below are", which was true of the
+ * DENIAL path and only of it. `docs/decisions/0014` found what the sentence left out: at 60/min
+ * the actor limit permits 86,400 requests/day, and on the SUCCESS path nothing bounded what each
+ * one wrote. **A per-minute window cannot bound a per-day allowance**, whichever path it sits on.
+ * The daily budget that bounds the success path is `write-admission.ts`; the ceilings below,
+ * reconciled into its `security` allocation, bound the denial path. Both are daily, both draw on
+ * one ledger, and neither of them is a rate limit.
  */
 export const RATE_LIMIT_PER_WINDOW: Readonly<Record<RateLimitLevel, number>> = {
   actor: 60,
@@ -193,30 +209,47 @@ export const SOURCE_REPORT_INTERVAL = 25;
 export const UNKNOWN_SOURCE = 'unknown-source';
 
 // =============================================================================================
-// The daily summary-write ceilings — 0013 control 9
+// The daily summary-write ceilings — 0013 control 9, RECONCILED BY docs/decisions/0014 §A.5
 // =============================================================================================
 
 /**
  * THE CEILING THAT RESERVES D1 CAPACITY FOR THE PRODUCT. "Security evidence must not be able
  * to starve the product."
  *
- * PLATFORM: 5,000 summary row-writes per UTC day, account-wide.
+ * ===========================================================================================
+ * TWO THINGS CHANGED HERE UNDER `0014` §A.5, AND NEITHER IS COSMETIC
+ * ===========================================================================================
  *
- *   - D1 Free enforces 100,000 rows written per day ACCOUNT-WIDE, and exceeding it is an
- *     OUTAGE for every Organization, not a bill.
- *   - `docs/operations/free-tier-register.md` puts the warning line at 70,000.
- *   - 5,000 is 5% of the enforced allowance and 7% of the warning line. Denial evidence
- *     therefore cannot, by construction, be the thing that trips either — it would have to be
- *     twenty times over its own ceiling first.
- *   - Is it enough to be useful? A single-group campaign running all day costs at most
- *     `EMISSION_LADDER.length + 1` writes per 15-minute window — 6 × 96 = 576 writes/day. So
- *     5,000 accommodates roughly eight simultaneous all-day campaigns, or about five thousand
- *     isolated one-off denials, before evidence starts being dropped.
+ * 1. THE UNIT. `0013` counted SUMMARIES, one permit per summary. `0014` §A.3 denominates the
+ *    platform ceiling in ESTIMATED ROW-WRITES, and a summary is not one row-write: the
+ *    `denial_summary` table and its three indexes make it FOUR
+ *    (`storage/write-cost.ts`, and Cloudflare's rule that an index adds a written row). A
+ *    ceiling counting summaries cannot be added to a ceiling counting row-writes, and §A.5
+ *    requires precisely that addition. So both ceilings below are now row-writes.
  *
- * PER ORGANIZATION: 1,000 per UTC day. Defence in depth, and it is the half that survives
- * without any shared state: one Organization cannot consume the whole platform budget and
- * blind every other Organization's evidence, which is the same starvation argument one level
- * down.
+ * 2. WHERE THE BUDGET COMES FROM. `0013`'s 5,000 was a ceiling of its OWN, sitting beside the
+ *    product's consumption and bounded only against the 100,000 allowance directly. §A.5 makes
+ *    security evidence an ALLOCATION INSIDE the 80,000 platform ceiling, so it is now defined
+ *    AS that allocation — `DAILY_ALLOCATION.security` — and drawn from the same ledger, through
+ *    the same `DayWriteBudget`, as every business mutation. Two independent daily ceilings that
+ *    each believed themselves safe would have summed past the platform ceiling by construction.
+ *
+ * PLATFORM: 10,000 estimated row-writes per UTC day = **2,500 summaries**, account-wide.
+ *
+ *   - It is 10% of the enforced 100,000, and 12.5% of the 80,000 admitted ceiling.
+ *   - Is it still enough to be useful? A single-group campaign running all day costs at most
+ *     `MAX_WRITES_PER_GROUP_WINDOW` summaries per 15-minute window — 6 x 96 = 576 summaries =
+ *     2,304 row-writes/day. So the allocation accommodates roughly four simultaneous all-day
+ *     campaigns, or about 2,500 isolated one-off denials, before evidence starts being dropped.
+ *     `0013` claimed eight campaigns at 5,000 summaries; the real figure was always four, because
+ *     the index rows were never counted. The allocation did not shrink — the arithmetic was
+ *     corrected.
+ *
+ * PER ORGANIZATION: 2,000 estimated row-writes = **500 summaries** per UTC day. `0013`'s
+ * platform-to-Organization ratio was 5:1 and is preserved exactly: one Organization cannot
+ * consume the whole platform allocation and blind every other Organization's evidence, which is
+ * the same starvation argument one level down. It is also the half that survives without any
+ * shared state.
  *
  * BOTH NUMBERS ARE PROVISIONAL AND SHOULD BE TRACKED IN THE FREE-TIER REGISTER. Dudo has zero
  * Organizations, no authentication and no traffic, so these are reasoned bounds and not
@@ -224,13 +257,39 @@ export const UNKNOWN_SOURCE = 'unknown-source';
  * low is lost evidence, which is announced; the failure mode of one that is too high is a
  * platform outage, which is not.
  *
- * WHAT HAPPENS AT THE CEILING, and it is NOT a request refusal: summary writes stop, the
- * coordinator KEEPS COUNTING, every suppressed summary is announced, and the caller's response
- * is unchanged. Refusing requests when evidence cannot be stored would turn the ceiling into a
- * second denial-of-service lever — which is the exact mistake 0013 exists to correct.
+ * ===========================================================================================
+ * WHAT HAPPENS AT THIS CEILING IS NOT WHAT HAPPENS AT THE MUTATION CEILING. BOTH ARE RIGHT.
+ * ===========================================================================================
+ *
+ * HERE: summary writes stop, the coordinator KEEPS COUNTING, every suppressed summary is
+ * announced, and **the caller's response is unchanged**. Refusing requests when evidence cannot
+ * be stored would turn the ceiling into a second denial-of-service lever — burn the evidence
+ * budget, refuse everyone — which is the exact mistake `0013` exists to correct.
+ *
+ * AT THE BUSINESS CEILING (`0014` §A.10): the mutation returns `429` with a retry time. There is
+ * no silent continuation available, because the write IS the request's purpose and accepting it
+ * without performing it is data loss reported as success.
+ *
+ * THE DIFFERENCE IS WHICH SIDE OF THE DECISION THE WRITE SITS ON. A summary records an answer
+ * that was already given and cannot change it. A mutation IS the answer. Anyone tempted to make
+ * these two behave alike should read `write-admission.ts`'s header, which states the same
+ * distinction from the other end — and note that harmonising them in either direction
+ * reintroduces a vulnerability a user decision was written to close.
  */
-export const PLATFORM_DAILY_SUMMARY_WRITES = 5_000;
-export const PER_ORGANIZATION_DAILY_SUMMARY_WRITES = 1_000;
+export const PLATFORM_DAILY_SUMMARY_ROW_WRITES = DAILY_ALLOCATION.security;
+export const PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES = 2_000;
+
+/**
+ * The summaries those row-write ceilings buy, for reading and for reporting. Derived, never
+ * declared: a summary count written down beside a row-write ceiling is a number that goes stale
+ * the day an index is added to `denial_summary`.
+ */
+export const PLATFORM_DAILY_SUMMARIES = Math.floor(
+  PLATFORM_DAILY_SUMMARY_ROW_WRITES / DENIAL_SUMMARY_ROW_WRITES,
+);
+export const PER_ORGANIZATION_DAILY_SUMMARIES = Math.floor(
+  PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES / DENIAL_SUMMARY_ROW_WRITES,
+);
 
 /**
  * When, inside an open window, a summary row is (re)written.
@@ -591,12 +650,51 @@ export type RequestCoordination = {
    * Organization's counters and has nothing else it could return.
    */
   recordDenial(key: DenialGroupKey, context: DenialContext): Promise<Result<DenialRecordOutcome>>;
+  /**
+   * ===========================================================================================
+   * RESERVE DAILY D1 WRITE CAPACITY FOR THIS REQUEST'S MUTATION. `docs/decisions/0014` §A.1.
+   * ===========================================================================================
+   *
+   * `estimatedRowWrites` is the Action's declared WORST CASE, including the audit row
+   * (`action/action.ts`, `estimatedRowWriteCost`). §A.12: over-reserving delays a write,
+   * under-reserving is a platform outage, and the reservation is not refunded if the write then
+   * costs less, fails, or never happens.
+   *
+   * IT DRAWS FROM THE `business` ALLOCATION AND FROM NO OTHER, AND THAT IS STRUCTURAL RATHER
+   * THAN POLICY: this method has no allocation parameter. An Action therefore cannot spend the
+   * security allocation that holds denial evidence, nor the system allocation reserved for
+   * controlled operations, however it is called and whatever it declares. The security
+   * allocation is reachable only through `recordDenial`, which runs after a refusal and cannot
+   * be reached on a success.
+   *
+   * NEITHER THE ORGANIZATION NOR THE CLOCK IS A PARAMETER. Both are fixed by the handle, from
+   * the authenticated context, when `begin` was called — the same reason no method on
+   * `TenantScopedStore` takes a tenant. A budget keyed by a value the caller supplies is not a
+   * budget; it is a namespace the caller can move within at will.
+   *
+   * `deferred` is not an error and must not be logged as one. It is the day's capacity being
+   * spent, which is an ordinary operating state with a known end time.
+   */
+  reserveWrites(estimatedRowWrites: number): Promise<Result<WriteAdmissionOutcome>>;
   /** Releases the handle. Never throws. Safe to call more than once. */
   dispose(): void;
 };
 
 export type DenialRecordOutcome = {
   readonly summaries: readonly DenialSummary[];
+  /**
+   * The receipt for the row-writes the summaries above will cost, or null when there are none.
+   *
+   * ISSUED HERE RATHER THAN ASKED FOR LATER, BECAUSE THE SPEND HAS ALREADY HAPPENED. The
+   * coordinator took the permits out of the `security` allocation when it decided a summary was
+   * due (`spendPermit`); a summary that was refused by a ceiling never reaches `summaries` at
+   * all. Making the caller ask again would be charging twice for one decision, and making it
+   * write without asking would be the unaccounted write `0014` §A.11 prohibits.
+   *
+   * ITS SIZE IS EXACTLY `summaries.length * DENIAL_SUMMARY_ROW_WRITES`, so the evidence path is
+   * accounted in the same unit, against the same ledger, as every business mutation.
+   */
+  readonly reservation: WriteReservation | null;
   /**
    * How many summaries a DAILY CEILING refused (0013 control 9).
    *
@@ -637,18 +735,22 @@ export type RequestCoordinator = {
 };
 
 /**
- * The platform-wide daily summary-write budget. Consulted only when a summary is actually due,
- * never per request.
+ * ===========================================================================================
+ * `SummaryWriteBudget` IS GONE. IT IS `DayWriteBudget` IN `write-admission.ts`, AND THE
+ * REPLACEMENT IS THE POINT RATHER THAN A RENAME.
+ * ===========================================================================================
  *
- * IT HOLDS NO TENANT DATA — a UTC day and a count, and nothing else. That is why it is the one
- * piece of coordination state that is not per-Organization: a per-Organization budget cannot
- * reserve an ACCOUNT-WIDE D1 allowance, because the account-wide total would be the per-tenant
- * ceiling multiplied by a tenant count nobody bounds. The tension with `CLOUDFLARE_STANDARD.md`
- * §7 rule 3 ("a DO instance belongs to exactly one tenant") is real, is narrow, and is
- * reported rather than resolved unilaterally: the rule exists so that two tenants' DATA does
- * not share an instance, and no tenant identifier reaches this one.
+ * `0013` gave denial summaries their own daily ledger. `0014` §A.5 makes them an ALLOCATION
+ * inside one platform ceiling, so a separate ledger is exactly the shape the decision forbids:
+ * two independent daily budgets, each correct about itself, summing past 80,000 while the
+ * account goes down. There is now one ledger, three allocations, and summaries take from
+ * `security` through the same call a create uses for `business`.
+ *
+ * IT STILL HOLDS NO TENANT DATA — a UTC day and one integer per allocation, and nothing else.
+ * That remains why it is the one piece of coordination state that is not per-Organization, and
+ * the narrow tension with `CLOUDFLARE_STANDARD.md` §7 rule 3 ("a DO instance belongs to exactly
+ * one tenant") is unchanged and still reported rather than resolved unilaterally: the rule
+ * exists so that two tenants' DATA does not share an instance, and no tenant identifier reaches
+ * this one.
  */
-export type SummaryWriteBudget = {
-  /** Requests `wanted` permits for the given UTC day. Returns how many were granted. */
-  take(dayStartMs: number, wanted: number): Promise<Result<number>>;
-};
+export type { DayWriteBudget, WriteAllocation } from './write-admission.ts';

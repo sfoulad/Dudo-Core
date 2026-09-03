@@ -140,6 +140,19 @@ export function createGetCustomerAction(): ActionDefinition<GetCustomerInput, Cu
     audit: false,
     auditOnDenial: true,
     exposure: ['internal', 'public'],
+    /**
+     * ZERO, DECLARED RATHER THAN OMITTED. A successful read writes nothing, so it reserves
+     * nothing and never consults the daily budget — which is `docs/decisions/0014` §A.10's
+     * "reads remain available" holding by construction rather than by a branch: at exhaustion
+     * there is no code path on which this Action asks the budget anything.
+     *
+     * ITS DENIALS STILL COST, AND THEY ARE NOT PRICED HERE. `auditOnDenial: true` means a refused
+     * read is counted and, at an emission point, written as a `denial_summary` row. That is
+     * charged to the `security` allocation by the coordinator, on the other side of the decision,
+     * at four row-writes per summary — never to the `business` allocation and never through this
+     * field, which prices only what a SUCCESSFUL invocation writes.
+     */
+    maxRowWrites: 0,
     parseInput(raw: unknown): Result<GetCustomerInput> {
       const validated = validateObject(raw, GET_CUSTOMER_RULE);
       if (!validated.ok) {

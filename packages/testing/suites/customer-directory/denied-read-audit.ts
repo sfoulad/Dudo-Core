@@ -1010,6 +1010,12 @@ export function buildDeniedReadAuditSuite(makeWorld: MakeWorld): Suite {
         sensitivity: 'read',
         idempotent: false,
         audit: true,
+        // REQUIRED SINCE docs/decisions/0014 §A. This Action's handler emits no writes of its
+        // own, but `audit: true` means the pipeline appends an audit row — a real D1 write that
+        // must be reserved for. Declaring 1 is the smallest value that lets the audit row be
+        // priced; see the write-admission suite's case on why an audited Action cannot express
+        // "I write nothing myself" and why that is a reported gap rather than a workaround here.
+        maxRowWrites: 1,
         exposure: [],
         parseInput: (raw) => ok(raw),
         targetIdentifier: () => null,

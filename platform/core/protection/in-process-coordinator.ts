@@ -1,5 +1,5 @@
 /**
- * A `RequestCoordinator` and `SummaryWriteBudget` that hold their state in this process.
+ * A `RequestCoordinator` and `DayWriteBudget` that hold their state in this process.
  *
  * ===========================================================================================
  * THIS IS NOT A DEPLOYMENT IMPLEMENTATION AND MUST NEVER BE WIRED INTO A DEPLOYED WORKER.
@@ -49,54 +49,82 @@ import type {
   RequestCoordination,
   RequestCoordinator,
   SourceCounterShard,
-  SummaryWriteBudget,
 } from './coordination.ts';
+import { DAY_MS, denialGroupKeyFromText, windowStart } from './coordination.ts';
+import type {
+  DayWriteBudget,
+  WriteAdmissionOutcome,
+  WriteAllocation,
+} from './write-admission.ts';
 import {
-  DAY_MS,
-  PLATFORM_DAILY_SUMMARY_WRITES,
-  denialGroupKeyFromText,
-  windowStart,
-} from './coordination.ts';
+  DAILY_ALLOCATION,
+  mintWriteReservation,
+  nextUtcResetMs,
+  retryAfterSecondsUntilReset,
+} from './write-admission.ts';
+import { DENIAL_SUMMARY_ROW_WRITES } from '../storage/write-cost.ts';
 import type { CoordinationState } from './coordination-engine.ts';
 import {
   admit,
+  admitWrite,
   applySourceTotal,
   createCoordinationState,
   creditPermits,
+  creditWritePermits,
   permitsToBuy,
   recordDenial,
   sourceBlocked,
   sourceRetryAfterSeconds,
   sweepClosedWindows,
+  writePermitsToBuy,
 } from './coordination-engine.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import { internal, unavailable } from '../kernel/errors.ts';
 
 /**
- * The platform-wide daily ceiling, in memory.
+ * The platform-wide daily ledger, in memory. `docs/decisions/0014` §A.2 and §A.5.
  *
- * Deliberately NOT per-Organization: it holds a UTC day and a count and no tenant identifier
+ * ONE LEDGER, THREE ALLOCATIONS — it replaces `0013`'s `createInProcessSummaryWriteBudget`, and
+ * the replacement is the reconciliation rather than a rename. A separate summary budget beside a
+ * separate mutation budget is two ceilings that each believe themselves safe while their sum
+ * exceeds the platform ceiling; here `security` and `business` are counters in the same day.
+ *
+ * Deliberately NOT per-Organization: it holds a UTC day and three counts and no tenant identifier
  * of any kind, which is the same shape the deployed ledger has and the reason that one is the
  * single piece of coordination state that is not tenant-scoped.
+ *
+ * `ceilings` is overridable so a verification harness can drive exhaustion in a few requests
+ * instead of ten thousand. The default is the decided allocation, and a harness lowering a
+ * ceiling makes a test cheaper — it can never make production more permissive, because production
+ * does not pass this argument.
  */
-export function createInProcessSummaryWriteBudget(
-  ceiling: number = PLATFORM_DAILY_SUMMARY_WRITES,
-): SummaryWriteBudget & { readonly usedToday: () => number } {
+export function createInProcessDayWriteBudget(
+  ceilings: Readonly<Record<WriteAllocation, number>> = DAILY_ALLOCATION,
+): DayWriteBudget & { readonly usedToday: (allocation: WriteAllocation) => number } {
   let dayStartMs = -1;
-  let used = 0;
+  const used: Record<WriteAllocation, number> = { business: 0, security: 0, system: 0 };
   return {
-    async take(day: number, wanted: number): Promise<Result<number>> {
+    async take(
+      day: number,
+      allocation: WriteAllocation,
+      wanted: number,
+    ): Promise<Result<number>> {
       if (day !== dayStartMs) {
         dayStartMs = day;
-        used = 0;
+        used.business = 0;
+        used.security = 0;
+        used.system = 0;
       }
-      const granted = Math.max(0, Math.min(wanted, ceiling - used));
-      used += granted;
+      // ALLOCATIONS DO NOT BORROW FROM ONE ANOTHER. A spent `security` allocation cannot reach
+      // into `business`, which is the whole reason for splitting them: a probing campaign must
+      // not be able to spend the product's capacity through the evidence path.
+      const granted = Math.max(0, Math.min(wanted, ceilings[allocation] - used[allocation]));
+      used[allocation] += granted;
       return ok(granted);
     },
-    usedToday(): number {
-      return used;
+    usedToday(allocation: WriteAllocation): number {
+      return used[allocation];
     },
   };
 }
@@ -145,7 +173,7 @@ export type InProcessCoordinatorOptions = {
 };
 
 export function createInProcessRequestCoordinator(
-  budget: SummaryWriteBudget,
+  budget: DayWriteBudget,
   options: InProcessCoordinatorOptions = {},
 ): RequestCoordinator {
   const byOrganization = new Map<string, CoordinationState>();
@@ -220,9 +248,11 @@ export function createInProcessRequestCoordinator(
             return err(internal());
           }
 
+          const dayStartMs = windowStart(request.nowMs, DAY_MS);
+
           const wanted = permitsToBuy(state, request.nowMs);
           if (wanted > 0) {
-            const granted = await budget.take(windowStart(request.nowMs, DAY_MS), wanted);
+            const granted = await budget.take(dayStartMs, 'security', wanted);
             // A budget that cannot answer grants nothing, and is NOT recorded as exhausted:
             // the denial is still counted, only its durable summary is dropped, and the drop is
             // announced. See `creditPermits`.
@@ -231,9 +261,69 @@ export function createInProcessRequestCoordinator(
 
           const recorded = recordDenial(state, key, context, request.nowMs);
           const swept = sweepClosedWindows(state, denialGroupKeyFromText, request.nowMs);
+          const summaries = [...recorded.summaries, ...swept.summaries];
           return ok({
-            summaries: [...recorded.summaries, ...swept.summaries],
+            summaries,
+            // THE RECEIPT FOR A SPEND THAT HAS ALREADY HAPPENED. `spendPermit` took
+            // `DENIAL_SUMMARY_ROW_WRITES` out of both the per-Organization and the platform
+            // `security` counters for each summary that reached this list; one a ceiling refused
+            // is in `suppressed`, not here. Minting is therefore accounting for what was charged,
+            // never a second charge — and null when nothing is due, so an empty write cannot be
+            // funded by a reservation that exists for no reason.
+            reservation:
+              summaries.length === 0
+                ? null
+                : mintWriteReservation({
+                    organizationId: request.organizationId,
+                    allocation: 'security',
+                    estimatedRowWrites: summaries.length * DENIAL_SUMMARY_ROW_WRITES,
+                    dayStartMs,
+                  }),
             suppressedByCeiling: recorded.suppressed + swept.suppressed,
+          });
+        },
+
+        async reserveWrites(
+          estimatedRowWrites: number,
+        ): Promise<Result<WriteAdmissionOutcome>> {
+          if (disposed) {
+            return err(internal());
+          }
+          const dayStartMs = windowStart(request.nowMs, DAY_MS);
+
+          const wanted = writePermitsToBuy(state, estimatedRowWrites, request.nowMs);
+          if (wanted > 0) {
+            const granted = await budget.take(dayStartMs, 'business', wanted);
+            // An unreachable ledger grants nothing and is NOT recorded as exhaustion. The
+            // request is then deferred — which refuses a write, never permits one — and the
+            // Organization asks again on its next mutation instead of being stopped for the
+            // rest of the UTC day by one transient failure.
+            creditWritePermits(
+              state,
+              granted.ok ? granted.value : 0,
+              request.nowMs,
+              granted.ok,
+            );
+          }
+
+          if (!admitWrite(state, estimatedRowWrites, request.nowMs)) {
+            return ok({
+              kind: 'deferred',
+              resumeAfterMs: nextUtcResetMs(request.nowMs),
+              retryAfterSeconds: retryAfterSecondsUntilReset(request.nowMs),
+            });
+          }
+          return ok({
+            kind: 'granted',
+            // Minted only after `admitWrite` returned true, which is the call that decremented
+            // both the per-Organization counter and the platform reserve. A reservation that
+            // existed before the decrement would be a promise against capacity nobody had taken.
+            reservation: mintWriteReservation({
+              organizationId: request.organizationId,
+              allocation: 'business',
+              estimatedRowWrites,
+              dayStartMs,
+            }),
           });
         },
 

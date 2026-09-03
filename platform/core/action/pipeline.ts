@@ -82,14 +82,43 @@
  * that was authorized stays authorized and nothing new becomes reachable — while the resource
  * 0013 set out to protect, D1 write capacity, is protected absolutely, because in that mode
  * there are no writes at all.
+ *
+ * ===========================================================================================
+ * AMENDED AGAIN BY docs/decisions/0014 §A — A MUTATION NOW RESERVES DAILY CAPACITY FIRST
+ * ===========================================================================================
+ *
+ * 0013 bounded what a DENIED request writes. It left the success path bounded by nothing, and
+ * every rate limit in this system is a 60-SECOND window while every D1 allowance that causes an
+ * outage is DAILY. At 60 requests a minute one credential may make 86,400 requests a day; a
+ * successful `CreateCustomer` writes eight estimated rows (`storage/write-cost.ts`); the product
+ * is 691,200 against an enforced, ACCOUNT-WIDE 100,000. And the realistic trigger is not an
+ * attacker at all — it is a tenant migrating fifty thousand records through the API, fully
+ * authorized and inside every limit, halting D1 for every other Organization.
+ *
+ * ONE THING CHANGES IN THIS FILE, at step 7 and nowhere else: **nothing commits until the day's
+ * write capacity has been reserved for it.** The reservation is the Action's declared worst case
+ * plus Core's price for the audit row, it is charged before the commit, and it is never
+ * refunded. `TenantScopedStore.write` cannot be called without one, so this is not a step a
+ * future Action can skip — see storage/store.ts, property 5.
+ *
+ * WHY IT SITS AT THE COMMIT RATHER THAN AT STAGE 5, and why exhaustion answers the caller here
+ * while 0013's ceiling deliberately does not, are both argued at the code below, because both
+ * look wrong until the argument is read.
  */
 
 import type { AnyActionDefinition } from './action.ts';
-import { assertAuditPolicy, auditsOnDenial, auditsSuccesses } from './action.ts';
+import {
+  assertAuditPolicy,
+  assertWriteCostPolicy,
+  auditsOnDenial,
+  auditsSuccesses,
+  estimatedRowWriteCost,
+} from './action.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import type { CoreError, ErrorCode } from '../kernel/errors.ts';
-import { forbidden, internal, rateLimited, unavailable } from '../kernel/errors.ts';
+import { forbidden, internal, quotaExceeded, rateLimited, unavailable } from '../kernel/errors.ts';
+import { AUDIT_EVENT_ROW_WRITES } from '../storage/write-cost.ts';
 import type { ActionContext, AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
 import type { TenantStoreResolver } from '../tenancy/tenant-store-resolver.ts';
 import type { TenantScopedStore } from '../storage/store.ts';
@@ -214,6 +243,10 @@ export async function invokeAction(
   // caller can cause and no caller can influence, so it throws, like the storage boundary's
   // own guards, and surfaces as `internal` at the transport edge.
   assertAuditPolicy(action);
+  // Same treatment for a malformed daily write-cost declaration (docs/decisions/0014 §A.12). A
+  // fractional or negative cost would corrupt an account-wide budget silently, and a budget that
+  // is quietly wrong is worse than no budget at all, because it is believed.
+  assertWriteCostPolicy(action);
 
   const occurredAt = dependencies.clock.now();
 
@@ -409,6 +442,17 @@ export async function invokeAction(
     // A summary is due. THIS is the only denial path that touches D1, and it happens at most
     // `MAX_WRITES_PER_GROUP_WINDOW` times per group per 15-minute window rather than once per
     // attempt — which is the whole of 0013 control 1.
+    const summaryReservation = recorded.value.reservation;
+    if (summaryReservation === null) {
+      // The coordinator returned summaries without a receipt for them. That is a defect in a
+      // coordinator implementation rather than a budget refusal — a summary a ceiling refused
+      // never reaches `summaries` at all, it is reported through `suppressedByCeiling` above.
+      // Writing them anyway would be exactly the unaccounted write docs/decisions/0014 §A.11
+      // prohibits, so the evidence is dropped and the loss is announced. Losing a record is
+      // recoverable; writing against an account-wide allowance nothing is counting is not.
+      announce('summary_write_failed', key, recorded.value.summaries.length);
+      return err(constrained);
+    }
     const target = await ensureStore();
     if (target === null) {
       announce('summary_write_failed', key, recorded.value.summaries.length);
@@ -417,6 +461,7 @@ export async function invokeAction(
     try {
       const written = await createStoreDenialSummarySink(target, dependencies.ids).write(
         recorded.value.summaries,
+        summaryReservation,
       );
       if (!written.ok) {
         announce('summary_write_failed', key, recorded.value.summaries.length);
@@ -567,12 +612,102 @@ export async function invokeAction(
       // coordinator can put Dudo into read-only. That is better than both alternatives: failing
       // OPEN restores the platform-wide D1 outage 0013 was written to close, and refusing
       // EVERYTHING converts a coordinator outage into a total one — the same lever, renamed.
-      if (degraded) {
+      // `coordination === null` is what `degraded` means; both are named here so the admission
+      // call below is reached only with a handle, and so a reader does not have to hold the
+      // equivalence in their head to see that it cannot be null.
+      if (degraded || coordination === null) {
         return err(constrainToDeclaredErrors(action, unavailable()));
       }
+
+      // =========================================================================================
+      // DAILY D1 WRITE ADMISSION. docs/decisions/0014 §A.1, and the last thing before the commit.
+      // =========================================================================================
+      //
+      // WHY HERE AND NOT AT STAGE 5 WITH THE RATE LIMITER, which is the position "before
+      // execution" first suggests. Reserving at admission would charge the Organization's daily
+      // write budget for requests that then turn out to be FORBIDDEN, INVALID or NOT FOUND — and
+      // at 10,000 row-writes a day a caller holding one low-privilege credential could spend its
+      // whole Organization's capacity on refusals in about four minutes, halting every legitimate
+      // write in that tenant until the UTC reset. That is a denial-of-service lever built out of
+      // the control meant to prevent one, and it is the same reasoning as 0013 control 7: the
+      // cheapest denials must cost nothing downstream. Here, only a request that has passed
+      // authorization, validation, the rate limiter, record resolution and the state precondition
+      // — one that is about to write — reaches the budget.
+      //
+      // AND IT IS STILL "BEFORE EXECUTION" IN THE SENSE §A.1 MEANS. The mutation is the commit,
+      // and nothing has been committed above this line: the handler returned its writes rather
+      // than performing them (action.ts), so no row exists yet to be accounted for after the
+      // fact.
+      //
+      // THE COST IS THE ACTION'S DECLARED WORST CASE, NOT `writes.length`. §A.12 requires
+      // worst-case, and `writes.length` counts STATEMENTS while the allowance counts ROWS — one
+      // insert into an indexed table is several rows written (storage/write-cost.ts). Charging
+      // the declaration also means the charge cannot vary with what the handler happened to do,
+      // so a handler cannot make itself cheaper.
+      //
+      // NOT REFUNDED, ON ANY PATH BELOW. §A.12 again: if the commit then fails, if the write
+      // costs less than declared, or if this request dies after this line, the units stay spent.
+      // There is no refund call to forget, because there is no refund.
+      const reservedUnits = estimatedRowWriteCost(action, AUDIT_EVENT_ROW_WRITES);
+      if (reservedUnits <= 0) {
+        // An Action that produced writes while declaring `maxRowWrites: 0` is a defect: it is
+        // about to commit rows against an account-wide allowance that nothing has counted. It
+        // becomes `internal`, disclosing nothing, and the writes do not happen — the fail-closed
+        // direction, and the reason a missing declaration is a loud failure rather than a
+        // silent bypass.
+        return err(constrainToDeclaredErrors(action, internal()));
+      }
+
+      let admitted;
+      try {
+        admitted = await coordination.reserveWrites(reservedUnits);
+      } catch (cause) {
+        // A throw out of the coordinator must not commit anything. Unreachable admission is
+        // treated exactly as degraded mode is, one line above: no write.
+        return err(constrainToDeclaredErrors(action, unavailable()));
+      }
+      if (!admitted.ok) {
+        return err(constrainToDeclaredErrors(action, unavailable()));
+      }
+      if (admitted.value.kind === 'deferred') {
+        // =======================================================================================
+        // §A.10 — EXHAUSTION IS A REFUSAL THE CALLER IS TOLD ABOUT, UNLIKE 0013'S CEILING.
+        // =======================================================================================
+        //
+        // 0013's summary ceiling deliberately leaves the caller's response UNCHANGED, because
+        // refusing a request whose EVIDENCE could not be stored would hand an attacker a second
+        // outage lever. This budget is the other case and the opposite answer is correct: the
+        // write IS the request, so there is no unchanged answer available — accepting a create
+        // and not performing it is data loss reported as success. Both behaviours are right and
+        // neither should be "harmonised" into the other; protection/coordination.ts and
+        // protection/write-admission.ts each state the distinction from their own side.
+        //
+        // READS ARE UNAFFECTED. `select` takes no reservation, so no read consults this budget in
+        // any state — a blanket refusal is not reachable from here.
+        //
+        // WHY THE ERROR CODE IS CONDITIONAL, AND IT IS A CONTRACT GAP RATHER THAN A CHOICE.
+        // §A.10 says `429`, which is `quota_exceeded`. `customer-directory-v1` declares that code
+        // on CreateCustomer ONLY; Update, Archive, Restore and Move do not list it, and
+        // `constrainToDeclaredErrors` would turn it into a `500 internal` — a worse answer than
+        // either alternative. Until the contract is amended (requested through the Team Lead;
+        // contracts are not this agent's to author), those Actions answer `unavailable`, which
+        // they do declare and which is what the neighbouring degraded-mode branch already
+        // returns for the same underlying fact: this write cannot be performed now, try later.
+        // The moment `quota_exceeded` is added to those Actions' declared sets, this expression
+        // starts returning it with no further change.
+        //
+        // NEITHER ANSWER IS AN ORACLE. The retry time is a pure function of the clock — seconds
+        // to the next 00:00 UTC — and is identical whether this Organization hit its own 10,000
+        // ceiling or the platform's business allocation ran out. A caller therefore cannot learn
+        // from it that any other Organization exists, let alone what it is doing.
+        return fail(
+          action.errors.includes('quota_exceeded') ? quotaExceeded() : unavailable(),
+        );
+      }
+
       let committed;
       try {
-        committed = await resolvedStore.write(writes);
+        committed = await resolvedStore.write(writes, admitted.value.reservation);
       } catch (cause) {
         return err(constrainToDeclaredErrors(action, internal()));
       }

@@ -51,10 +51,14 @@
  *   CURSOR_SIGNING_KEY     a Worker SECRET, not a variable. Nothing in the repository holds
  *                          its value, and nothing may.
  *   COORDINATION           the SQLite-backed Durable Object namespace that counts rate limits
- *                          and denials (docs/decisions/0013 control 2). It needs a
+ *                          and denials (docs/decisions/0013 control 2) AND holds the daily D1
+ *                          write budget (docs/decisions/0014 §A.2). It needs a
  *                          `new_sqlite_classes` migration in the Worker configuration — Team
  *                          Lead's to author, and named here so it is not discovered at deploy.
  *                          KV-BACKED IS PROHIBITED: it requires a paid plan (0008).
+ *                          The SAME namespace now carries three roles — one instance per
+ *                          Organization, one account-wide ledger, and 256 source shards — and no
+ *                          additional binding is introduced by 0014.
  *
  * `"remote": true` MUST NOT BE SET IN LOCAL OR CI CONFIGURATION (CLOUDFLARE_STANDARD.md
  * §4.1). A remote binding is a deliberate, reviewed act in a deployed environment, and a CI
@@ -157,14 +161,23 @@ export async function createCoreRuntime(
   // AND IT MUST NOT FALL BACK TO THE IN-PROCESS COORDINATOR. That one counts per isolate, and a
   // rate limit divided by a number nobody controls is not a rate limit — it is a limit that
   // looks present in review and is absent in production, which is worse than none.
+  //
+  // 0014 §A MAKES THE REFUSAL DO MORE WORK, and the reason is worth stating where the refusal
+  // is. Without this binding there is now also no DAILY WRITE BUDGET, so nothing bounds what a
+  // single authorized tenant's bulk import spends of an account-wide, enforced 100,000
+  // rows/day — and that case needs no attacker at all. The pipeline refuses to commit a write it
+  // could not reserve capacity for, so a Worker started without this binding would serve reads
+  // and refuse every mutation; refusing to start at all is the honest version of the same state.
   const coordinationNamespace = env.COORDINATION;
   if (coordinationNamespace === undefined) {
     throw new Error(
       'COORDINATION is not bound. It is the SQLite-backed Durable Object namespace that ' +
-        'enforces rate limits and bounds denial auditing (docs/decisions/0013). Without it a ' +
-        'single authenticated caller can exhaust the account-wide D1 daily write allowance and ' +
-        'stop D1 answering for every Organization, so the Worker refuses to start rather than ' +
-        'serve requests with the control absent.',
+        'enforces rate limits and bounds denial auditing (docs/decisions/0013), and that holds ' +
+        'the daily D1 write budget every mutation must reserve from (docs/decisions/0014 §A). ' +
+        'Without it a single authenticated caller — or one authorized tenant migrating records ' +
+        'at a permitted rate — can exhaust the account-wide D1 daily write allowance and stop ' +
+        'D1 answering for every Organization, so the Worker refuses to start rather than serve ' +
+        'requests with the control absent.',
     );
   }
 

@@ -51,25 +51,33 @@ used because adopting it would be a TS1 decision that is not QA's to make.
 
 ### What the run prints
 
-A **primary run**, then **five negative-control runs** — predicate, resolver, boundary, D2
-reverted, and the denial group key — as `TESTING_STANDARD.md` §5.6 requires each separately.
-For every control each case is classified as *red on an isolation assertion*, *red on another
-assertion*, or **STILL GREEN**. The third is printed as a coverage gap, because under `0006`
-Option A a case that stays green under a deliberately broken control does not test that
-control, whatever its name says.
+A **primary run**, then **six negative-control runs**, as `TESTING_STANDARD.md` §5.6 requires
+each separately. For every control each case is classified as *red on an isolation assertion*,
+*red on another assertion*, or **STILL GREEN**.
 
-The fifth control puts the **requested customer identifier back into the denial group key** —
-the single change `docs/decisions/0013` control 5 forbids. It exists because the oracle and
-the timing properties both fall out of that exclusion, and an assertion about a property
-nobody has broken is a comment.
+| # | Control | What it breaks |
+|---|---|---|
+| 1 | the predicate | `tenant_id = ?` removed from the real compiler's output |
+| 2 | the resolver | every request is handed Organization B's store |
+| 3 | the boundary | the query path reaches the engine without the Core-owned port |
+| 4 | D2 reverted | `GetCustomer` back to `auditOnDenial: false` |
+| 5 | the group key | the requested identifier is back in it (`0013` control 5) |
+| 6 | the write admission | every reservation is replaced with a valid one (`0014` §A.11) |
+
+**Read the STILL GREEN line differently for controls 1–3 than for 4–6.** Controls 1–3 break
+tenant isolation, which every case in the isolation and storage-path suites claims to test, so
+a case that stays green there is a real coverage gap. Controls 4–6 break one narrow mechanism
+each, and most cases legitimately do not touch it — a ceiling-arithmetic case staying green
+under the write-admission control is correct, not a gap. What matters for 4–6 is that the cases
+which DO claim the mechanism go red.
 
 ### Layout
 
 ```
 harness/runner.ts              the runner, the assertions, and `expectError`
 harness/sqlite-d1.ts           node:sqlite behind the D1 port, recording every statement
-harness/broken-controls.ts     the three deliberately broken storage controls
-harness/broken-coordination.ts the deliberately broken coordination controls (0013)
+harness/broken-controls.ts     the deliberately broken storage controls
+harness/broken-coordination.ts the deliberately broken coordination controls (0013, 0014)
 harness/world.ts               the two-Organization fixture, all synthetic
 suites/customer-directory/     the suites
 run-customer-directory.ts      the entry point
@@ -78,23 +86,31 @@ run-customer-directory.ts      the entry point
 **The breaks are never committed as configuration.** `broken-controls.ts` and
 `broken-coordination.ts` contain no edit to `platform/core/**`: the predicate control removes
 the tenant term from the REAL compiler's output, the coordination controls wrap the REAL
-`in-process-coordinator.ts`, and production code has no switch that turns any of it off.
+`in-process-coordinator.ts`, the admission control wraps the REAL `createD1TenantStore`, and
+production code has no switch that turns any of it off.
 
-### The request coordinator
+### The request coordinator and the day ledger
 
-Since `docs/decisions/0013` the pipeline requires a `RequestCoordinator`, and the harness
+Since `docs/decisions/0013` the pipeline requires a `RequestCoordinator`, and since `0014` §A
+that coordinator also holds the daily D1 write budget every mutation reserves from. The harness
 supplies Core's own `platform/core/protection/in-process-coordinator.ts` — which exists for
 exactly this purpose and is marked never-for-deployment. A harness-local coordinator would
 verify the harness's algorithm rather than the shipped one.
 
 **The Durable Object adapter is not executed by anything here** — there is no Worker
-configuration and no runtime — so persistence, eviction and restart of the coordinator are
-**not covered**, and are reported that way rather than implied by a green run.
+configuration and no runtime — so persistence, eviction and restart of the coordinator and of
+the day ledger are **not covered**, and are reported that way rather than implied by a green
+run.
 
-### Expected red
+### The index-count check
 
-One case is currently **red on purpose**: `CONTROL 6 — DEFECT: the source-address level can
-NEVER refuse a real request`. It asserts the third rate-limit level `0013` control 6 requires,
-which the implementation cannot reach. It is left failing rather than rewritten, because a
-green suite that asserts the absence of a decided control is worse than a red one. See the
-case's own comment for the diagnosis.
+`storage/write-cost.ts` says, honestly, that nothing can catch a cost declaration that counts
+statements correctly and index rows wrongly, because D1 exposes no portable schema
+introspection through the binding — so it is "a review obligation, stated as one".
+
+**This harness is not D1.** The migrations are executed into a real SQLite database, so
+`PRAGMA index_list` answers what D1 will not, and the write-admission suite computes every
+table's true cost from the live schema and compares it with the declared constants and with
+what each Action actually reserves. Add an index to a migration without moving the number and
+the suite goes red. The review obligation still stands for a **deployed** database whose schema
+this harness does not see.

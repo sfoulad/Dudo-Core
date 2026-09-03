@@ -54,12 +54,23 @@ import type { TenantScopedStore, WriteOperation } from '../storage/store.ts';
 import type { Result } from '../kernel/result.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import { toRfc3339Utc } from '../kernel/clock.ts';
+import type { WriteReservation } from '../protection/write-admission.ts';
 
 export const DENIAL_SUMMARY_TABLE = 'denial_summary';
 
 export type DenialSummarySink = {
   operation(summary: DenialSummary): WriteOperation;
-  write(summaries: readonly DenialSummary[]): Promise<Result<void>>;
+  /**
+   * `reservation` covers these summaries and comes from the coordinator that produced them
+   * (`DenialRecordOutcome.reservation`), drawn from the `security` allocation of the one daily
+   * ledger (docs/decisions/0014 §A.5). Evidence is accounted in the same unit, against the same
+   * 80,000, as every business mutation — which is the difference between an allocation and a
+   * second budget that happens to sit next to the first.
+   */
+  write(
+    summaries: readonly DenialSummary[],
+    reservation: WriteReservation,
+  ): Promise<Result<void>>;
 };
 
 export function createStoreDenialSummarySink(
@@ -115,8 +126,11 @@ export function createStoreDenialSummarySink(
     operation(summary: DenialSummary): WriteOperation {
       return toOperation(summary);
     },
-    async write(summaries: readonly DenialSummary[]): Promise<Result<void>> {
-      return store.write(summaries.map(toOperation));
+    async write(
+      summaries: readonly DenialSummary[],
+      reservation: WriteReservation,
+    ): Promise<Result<void>> {
+      return store.write(summaries.map(toOperation), reservation);
     },
   };
 }

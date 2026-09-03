@@ -92,6 +92,39 @@ export function createCreateCustomerAction(dependencies: {
     idempotent: false,
     audit: true,
     exposure: ['internal', 'public'],
+    /**
+     * ===========================================================================================
+     * THE DAILY D1 WRITE COST OF ONE CREATE. docs/decisions/0014 §A.1, §A.7, §A.12.
+     * ===========================================================================================
+     *
+     * THREE, NOT ONE, AND THE DIFFERENCE IS INDEXES. This Action emits exactly one statement — an
+     * INSERT into `customer` — and one INSERT is not one row written. Cloudflare: *"Indexes will
+     * add an additional written row when writes include the indexed column, as there are two rows
+     * written: one to the table itself, and one to the index."* `customer` carries two indexes,
+     * counting the one SQLite materialises for its composite `PRIMARY KEY (tenant_id,
+     * customer_id)`:
+     *
+     *   1  the table row
+     * + 1  PRIMARY KEY (tenant_id, customer_id)
+     * + 1  customer_by_tenant_business_status_name
+     * = 3  (apps/customers/data/migrations/0001_customer.sql)
+     *
+     * THE AUDIT ROW IS NOT COUNTED HERE. Core prices it — five, for `audit_event` and its four
+     * indexes — and adds it because `audit: true`. An App that could price Core's audit record
+     * could price it at zero. So the full reservation for one create is **eight**.
+     *
+     * WHICH MAKES `0014` §A.7's "two units" AND §A.8's "5,000 customers/day" ARITHMETIC THAT
+     * NEEDS AMENDING, and the correction is reported rather than absorbed: two is the count of
+     * ROWS INSERTED, eight is the count of ROW-WRITES the ceiling is denominated in, and at the
+     * decided 10,000/day Organization ceiling that is **1,250 creates a day, not 5,000**. §A.12
+     * settles which way to be wrong while that is decided: *"the failure mode of over-reserving
+     * is a delayed write, and of under-reserving is a platform outage."*
+     *
+     * IT IS A WORST CASE AND IT IS EXACT HERE. One statement, one row, one primary key — there is
+     * no input to this Action that makes it insert two customers. An Action whose statement count
+     * varied with its input would declare the largest value it could produce.
+     */
+    maxRowWrites: 3,
     parseInput(raw: unknown): Result<CreateCustomerInput> {
       const validated = validateObject(raw, CREATE_CUSTOMER_RULE);
       if (!validated.ok) {

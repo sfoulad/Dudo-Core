@@ -45,6 +45,7 @@
 import type { Scope } from '../authorization/scope.ts';
 import type { Result } from '../kernel/result.ts';
 import type { WriteOperation } from '../storage/store.ts';
+import type { WriteReservation } from '../protection/write-admission.ts';
 import type { AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
 
 export const AUDIT_TABLE = 'audit_event';
@@ -259,5 +260,11 @@ export function assertChangedFieldNames(names: readonly string[]): void {
  */
 export type AuditSink = {
   operation(entry: AuditEntry): WriteOperation;
-  append(entry: AuditEntry): Promise<Result<void>>;
+  /**
+   * `reservation` is required, like every other D1 write (docs/decisions/0014 §A.11). An audit
+   * row costs five estimated row-writes — `audit_event` plus its four indexes — and evidence
+   * gets no exemption from the daily budget: an exempt writer is unaccounted capacity against an
+   * account-wide allowance, which is what the budget exists to stop.
+   */
+  append(entry: AuditEntry, reservation: WriteReservation): Promise<Result<void>>;
 };

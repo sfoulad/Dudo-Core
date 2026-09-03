@@ -41,6 +41,7 @@ import { buildAuthorizationSuite } from './suites/customer-directory/authorizati
 import { buildAuditSuite } from './suites/customer-directory/audit.ts';
 import { buildDeniedReadAuditSuite } from './suites/customer-directory/denied-read-audit.ts';
 import { buildBoundedDenialAuditingSuite } from './suites/customer-directory/bounded-denial-auditing.ts';
+import { buildWriteAdmissionSuite } from './suites/customer-directory/write-admission.ts';
 import { buildHttpAndDeferralSuite } from './suites/customer-directory/http-and-deferral.ts';
 import { buildSearchAndCollectionSuite } from './suites/customer-directory/search-and-collections.ts';
 import { buildStateAndValidationSuite } from './suites/customer-directory/state-and-validation.ts';
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
     buildAuditSuite(make),
     buildDeniedReadAuditSuite(make),
     buildBoundedDenialAuditingSuite(make),
+    buildWriteAdmissionSuite(make),
     buildStateAndValidationSuite(make),
     buildSearchAndCollectionSuite(make),
     buildHttpAndDeferralSuite(make),
@@ -159,6 +161,20 @@ async function main(): Promise<void> {
   classify(
     'THE GROUP KEY — the requested customer identifier is BACK in it, which 0013 control 5 forbids',
     await runAll([buildDeniedReadAuditSuite(identifierKeyed)]),
+  );
+
+  // ---- Negative control 6: the write-admission guard stops guarding ------------
+  //
+  // `docs/decisions/0014` §A.11 is made structural at `d1-store.ts`, which refuses to compile a
+  // statement without a valid, unspent, correctly-sized reservation for the tenant the handle
+  // serves. None of the five controls above touches that guard, so none of them can tell us
+  // whether the write-admission suite would notice if it stopped enforcing. This one substitutes
+  // a freshly minted valid reservation for whatever the caller presented — the guard still runs
+  // and never sees anything wrong — and the four §A.11 refusal cases must go red.
+  const admissionBypassed: MakeWorld = (options) => realWorld({ ...options, storeMode: 'admission-bypass' });
+  classify(
+    'THE WRITE ADMISSION — every reservation is silently replaced with a valid one, which 0014 §A.11 forbids',
+    await runAll([buildWriteAdmissionSuite(admissionBypassed)]),
   );
 
   const counts = tally(primary);

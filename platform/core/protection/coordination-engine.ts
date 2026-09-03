@@ -38,6 +38,15 @@
  *     sustained attack stays warm precisely when it matters.
  *   - DENIAL GROUP STATE IS PERSISTED AT ITS EMISSION POINTS and nowhere else, so it is
  *     already bounded by `MAX_WRITES_PER_GROUP_WINDOW`.
+ *   - THE DAILY WRITE BUDGET IS PERSISTED ON EVERY ADMITTED WRITE, and that exception is
+ *     deliberate. `docs/decisions/0014` §A: an evicted instance that forgot how much its
+ *     Organization had spent today would hand back the whole 10,000 daily ceiling on restart, and
+ *     an eviction cycle would then be an unbounded write path — the exact bypass the budget
+ *     exists to close. The reserve of unspent permits may safely be lost (losing them spends
+ *     nothing); the USED counter may not. The cost is bounded by the budget itself: at most
+ *     `DAILY_ALLOCATION.business / cheapest declared cost` Durable Object row-writes per day
+ *     account-wide, which for the Customer Directory's eight-row-write mutations is 7,500 against
+ *     a 100,000/day allowance.
  */
 
 import type {
@@ -51,7 +60,7 @@ import type {
 import {
   DENIAL_WINDOW_MS,
   EMISSION_LADDER,
-  PER_ORGANIZATION_DAILY_SUMMARY_WRITES,
+  PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES,
   RATE_LIMIT_PER_WINDOW,
   RATE_WINDOW_MS,
   SOURCE_REPORT_INTERVAL,
@@ -61,6 +70,8 @@ import {
   denialGroupKeyText,
   windowStart,
 } from './coordination.ts';
+import { PER_ORGANIZATION_DAILY_ROW_WRITES } from './write-admission.ts';
+import { DENIAL_SUMMARY_ROW_WRITES } from '../storage/write-cost.ts';
 
 // =============================================================================================
 // State
@@ -131,11 +142,17 @@ export type CoordinationState = {
   /** The source level. Counted here, ADJUDICATED by a shared shard. */
   readonly source: Map<string, SourceSubjectState>;
   readonly groups: Map<string, DenialGroupState>;
-  /** The per-Organization daily summary-write ceiling. */
+  /**
+   * The per-Organization daily SECURITY-EVIDENCE ceiling, in estimated row-writes.
+   *
+   * DENOMINATED IN ROW-WRITES SINCE `docs/decisions/0014` §A.5, not in summaries. One summary
+   * costs `DENIAL_SUMMARY_ROW_WRITES`; see `coordination.ts` for why the unit had to change
+   * before this ceiling could be added to the platform ceiling at all.
+   */
   perOrganizationDay: { dayStartMs: number; used: number };
   /**
-   * Platform-wide summary-write permits held locally, bought in blocks from the
-   * `SummaryWriteBudget`. Held as a reserve so the shared budget is consulted once per block
+   * Platform-wide SECURITY-allocation permits held locally, in row-writes, bought in blocks from
+   * the `DayWriteBudget`. Held as a reserve so the shared ledger is consulted once per block
    * instead of once per emission.
    */
   platformPermits: number;
@@ -155,6 +172,36 @@ export type CoordinationState = {
    * would suppress a day of evidence for a blip.
    */
   platformExhaustedDayStartMs: number;
+
+  // ===========================================================================================
+  // DAILY D1 WRITE ADMISSION — docs/decisions/0014 §A. The BUSINESS allocation's half.
+  // ===========================================================================================
+  //
+  // Deliberately a SECOND, PARALLEL set of counters rather than a generalisation of the three
+  // above. The two budgets share an algorithm and nothing else: they draw on different
+  // allocations, they behave differently at exhaustion (see `coordination.ts`), and one of them
+  // is visible to the caller while the other must never be. Folding them into one set of fields
+  // would make the next person maintaining this file believe those differences are accidental.
+
+  /** This Organization's `business` row-writes used today. Ceiling: PER_ORGANIZATION_DAILY_ROW_WRITES. */
+  writeDay: { dayStartMs: number; used: number };
+  /** Platform `business` permits held locally, in row-writes, bought in blocks from the ledger. */
+  writePermits: number;
+  /** The UTC day the write reserve was bought for. A reserve does not survive the day boundary. */
+  writePermitsDayStartMs: number;
+  /**
+   * The UTC day on which the ledger ANSWERED that the business allocation was spent.
+   *
+   * Same reasoning as `platformExhaustedDayStartMs`, and it matters more here: mutations are far
+   * more frequent than summary emissions, so without this every mutation for the rest of the day
+   * would spend a ledger round trip to be told the same thing — the control funding its own
+   * denial of service against an allowance that is itself exhaustible.
+   *
+   * SET ONLY ON A SUCCESSFUL ANSWER OF ZERO, never on a failure to reach the ledger. An
+   * unreachable ledger is not evidence that the day is spent, and treating it as such would stop
+   * an Organization writing for a day because of a blip.
+   */
+  writeExhaustedDayStartMs: number;
 };
 
 export function createCoordinationState(): CoordinationState {
@@ -166,6 +213,10 @@ export function createCoordinationState(): CoordinationState {
     platformPermits: 0,
     platformPermitsDayStartMs: 0,
     platformExhaustedDayStartMs: -1,
+    writeDay: { dayStartMs: 0, used: 0 },
+    writePermits: 0,
+    writePermitsDayStartMs: 0,
+    writeExhaustedDayStartMs: -1,
   };
 }
 
@@ -392,8 +443,11 @@ export function sourceRetryAfterSeconds(nowMs: number): number {
  * What is given up is the intermediate ladder (10, 100, 1,000, 10,000 attempts), whose value is
  * making a growing count durable against a mid-window eviction. That is real but second-order,
  * and trading it triples the number of group-windows the same budget can cover.
+ *
+ * IN ROW-WRITES SINCE `0014` §A.5, like the ceiling it is half of. The threshold is a halfway
+ * line, so the unit it is expressed in has to be the unit `perOrganizationDay.used` counts.
  */
-export const CONSERVATION_THRESHOLD = Math.floor(PER_ORGANIZATION_DAILY_SUMMARY_WRITES / 2);
+export const CONSERVATION_THRESHOLD = Math.floor(PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES / 2);
 
 export type DenialRecordResult = {
   /** Summaries now due to be written to D1 by the caller. */
@@ -427,12 +481,16 @@ function toSummary(
 }
 
 /**
- * Spends one summary-write permit if both ceilings allow it.
+ * Spends one summary's worth of security-allocation permits if both ceilings allow it.
  *
  * BOTH ARE CHECKED, and the per-Organization one is not decoration: without it a single
  * Organization could spend the whole platform budget and blind every other Organization's
  * evidence, which is the same starvation argument the platform ceiling exists to prevent, one
  * level down.
+ *
+ * ONE SUMMARY COSTS `DENIAL_SUMMARY_ROW_WRITES`, NOT ONE (`0014` §A.5, `storage/write-cost.ts`).
+ * The whole cost is taken or none of it is: a half-charged summary is a row written against an
+ * allocation that had no room for it, which is the under-reserving §A.12 calls an outage.
  */
 function spendPermit(state: CoordinationState, dayStartMs: number): boolean {
   if (state.perOrganizationDay.dayStartMs !== dayStartMs) {
@@ -444,14 +502,17 @@ function spendPermit(state: CoordinationState, dayStartMs: number): boolean {
     state.platformPermits = 0;
     state.platformPermitsDayStartMs = dayStartMs;
   }
-  if (state.perOrganizationDay.used >= PER_ORGANIZATION_DAILY_SUMMARY_WRITES) {
+  if (
+    state.perOrganizationDay.used + DENIAL_SUMMARY_ROW_WRITES >
+    PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES
+  ) {
     return false;
   }
-  if (state.platformPermits <= 0) {
+  if (state.platformPermits < DENIAL_SUMMARY_ROW_WRITES) {
     return false;
   }
-  state.perOrganizationDay.used += 1;
-  state.platformPermits -= 1;
+  state.perOrganizationDay.used += DENIAL_SUMMARY_ROW_WRITES;
+  state.platformPermits -= DENIAL_SUMMARY_ROW_WRITES;
   return true;
 }
 
@@ -616,13 +677,15 @@ export function sweepClosedWindows(
 }
 
 /**
- * How many platform permits the reserve is short of, for the adapter to buy before recording.
+ * How many security-allocation permits the reserve is short of, for the adapter to buy before
+ * recording. In ROW-WRITES since `0014` §A.5.
  *
- * Bought in BLOCKS rather than one at a time so the shared budget is consulted once per block.
- * A block left unspent by a quiet Organization is at most `BLOCK - 1` permits of the daily
- * platform allowance — accepted, and the reason the block is small.
+ * Bought in BLOCKS rather than one at a time so the shared ledger is consulted once per block.
+ * A block left unspent by a quiet Organization is at most `BLOCK - 1` row-writes of the daily
+ * security allocation — accepted, and the reason the block is small. 128 row-writes is 32
+ * summaries, which is `0013`'s block size in its original unit.
  */
-export const PERMIT_BLOCK = 32;
+export const PERMIT_BLOCK = 32 * DENIAL_SUMMARY_ROW_WRITES;
 
 export function permitsToBuy(state: CoordinationState, nowMs: number): number {
   const dayStartMs = windowStart(nowMs, DAY_MS);
@@ -633,7 +696,8 @@ export function permitsToBuy(state: CoordinationState, nowMs: number): number {
   }
   if (
     state.perOrganizationDay.dayStartMs === dayStartMs &&
-    state.perOrganizationDay.used >= PER_ORGANIZATION_DAILY_SUMMARY_WRITES
+    state.perOrganizationDay.used + DENIAL_SUMMARY_ROW_WRITES >
+      PER_ORGANIZATION_DAILY_SUMMARY_ROW_WRITES
   ) {
     // Already at this Organization's own ceiling. Buying platform permits it cannot spend
     // would take them from Organizations that can.
@@ -642,7 +706,7 @@ export function permitsToBuy(state: CoordinationState, nowMs: number): number {
   if (state.platformPermitsDayStartMs !== dayStartMs) {
     return PERMIT_BLOCK;
   }
-  return state.platformPermits > 0 ? 0 : PERMIT_BLOCK;
+  return state.platformPermits >= DENIAL_SUMMARY_ROW_WRITES ? 0 : PERMIT_BLOCK;
 }
 
 /**
@@ -667,4 +731,153 @@ export function creditPermits(
   if (answered && granted === 0) {
     state.platformExhaustedDayStartMs = dayStartMs;
   }
+}
+
+// =============================================================================================
+// Daily D1 write admission — docs/decisions/0014 §A. The BUSINESS allocation.
+// =============================================================================================
+
+/**
+ * How many `business` row-writes are bought at a time.
+ *
+ * 512 = sixty-four Customer creates at eight row-writes each. It is larger than the security
+ * block because mutations are far more frequent than summary emissions, and every block is one
+ * ledger round trip against a Durable Object request allowance that is itself exhaustible
+ * (`adapters/durable-objects/coordinator-object.ts`, the accounting block).
+ *
+ * THE COST OF A BLOCK IS BOUNDED AND STATED: an Organization that buys a block and then goes
+ * quiet holds at most `WRITE_PERMIT_BLOCK - 1` row-writes of the platform allocation until the
+ * UTC reset. With the business allocation at 60,000 and six Organizations at their ceiling, that
+ * is at most about 3,000 row-writes unspendable in the worst case — 5% of the allocation, and it
+ * comes out of admitted capacity rather than out of the safety margin.
+ *
+ * `writePermitsToBuy` additionally caps every purchase at what the Organization could still
+ * legally spend today, so an Organization can never hold permits its own ceiling forbids it from
+ * using. Without that cap a nearly-exhausted Organization would take a full block out of the
+ * shared allocation on its last write and strand it.
+ */
+export const WRITE_PERMIT_BLOCK = 512;
+
+/**
+ * Thrown, not returned. A non-integer or non-positive write cost is a defect in an Action's
+ * declaration or in Core, never something a caller can cause — and admitting it would corrupt an
+ * account-wide budget in a way that is invisible until D1 stops answering.
+ */
+export class InvalidWriteCostError extends Error {
+  constructor(units: number) {
+    super(
+      `A write reservation was requested for ${String(units)} row-writes. A cost must be a ` +
+        'positive integer: it is charged against an account-wide daily allowance, and a ' +
+        'fractional, negative or NaN charge is an accounting corruption rather than a bad ' +
+        'request (docs/decisions/0014 §A.1).',
+    );
+    this.name = 'InvalidWriteCostError';
+  }
+}
+
+function assertWriteUnits(units: number): void {
+  if (!Number.isInteger(units) || units <= 0) {
+    throw new InvalidWriteCostError(units);
+  }
+}
+
+function rollWriteDay(state: CoordinationState, dayStartMs: number): void {
+  if (state.writeDay.dayStartMs !== dayStartMs) {
+    state.writeDay = { dayStartMs, used: 0 };
+  }
+  if (state.writePermitsDayStartMs !== dayStartMs) {
+    // A reserve bought yesterday is not spendable today: the allocation it was drawn from has
+    // already reset at 00:00 UTC, and spending it would be spending capacity twice.
+    state.writePermits = 0;
+    state.writePermitsDayStartMs = dayStartMs;
+  }
+}
+
+/**
+ * How many `business` row-writes the local reserve is short of, for the adapter to buy before
+ * admitting. Zero means "do not ask the ledger".
+ *
+ * IT RETURNS ZERO IN THE HOPELESS CASES RATHER THAN LETTING THE CALLER FIND OUT FROM THE LEDGER,
+ * and each case is a round trip that would have bought nothing:
+ *
+ *   - the ledger already answered that the business allocation is spent for today;
+ *   - this Organization is at its own ceiling, so permits bought here would be taken from
+ *     Organizations that can still spend them;
+ *   - the reserve already covers this request.
+ */
+export function writePermitsToBuy(
+  state: CoordinationState,
+  units: number,
+  nowMs: number,
+): number {
+  assertWriteUnits(units);
+  const dayStartMs = windowStart(nowMs, DAY_MS);
+  rollWriteDay(state, dayStartMs);
+
+  if (state.writeExhaustedDayStartMs === dayStartMs) {
+    return 0;
+  }
+  if (state.writeDay.used + units > PER_ORGANIZATION_DAILY_ROW_WRITES) {
+    return 0;
+  }
+  if (state.writePermits >= units) {
+    return 0;
+  }
+  const wanted = Math.max(WRITE_PERMIT_BLOCK, units);
+  // Never hold more than this Organization could still legally spend today.
+  const spendableRemaining =
+    PER_ORGANIZATION_DAILY_ROW_WRITES - state.writeDay.used - state.writePermits;
+  return Math.max(0, Math.min(wanted, spendableRemaining));
+}
+
+/**
+ * Credits `business` permits the ledger ACTUALLY granted.
+ *
+ * `answered` separates "the ledger replied, and the reply was zero" from "the ledger could not be
+ * reached". Only the first is evidence that the allocation is spent. Treating an unreachable
+ * ledger as exhaustion would stop an Organization writing for the rest of a UTC day because of a
+ * transient failure — and unlike lost evidence, that is visible to every user of that
+ * Organization.
+ */
+export function creditWritePermits(
+  state: CoordinationState,
+  granted: number,
+  nowMs: number,
+  answered = true,
+): void {
+  const dayStartMs = windowStart(nowMs, DAY_MS);
+  rollWriteDay(state, dayStartMs);
+  state.writePermits += granted;
+  if (answered && granted === 0) {
+    state.writeExhaustedDayStartMs = dayStartMs;
+  }
+}
+
+/**
+ * Charges `units` against both ceilings, or charges nothing.
+ *
+ * ALL OR NOTHING, AND BOTH CEILINGS. A partial charge would let a write proceed against capacity
+ * that was not there, which is the under-reserving `0014` §A.12 names as the outage direction.
+ * The per-Organization ceiling is checked first because it is the one that binds for a single
+ * tenant's runaway import — the case §A.9 is written for — and the platform reserve second
+ * because it is what protects every other Organization from that tenant.
+ *
+ * RETURNING FALSE IS `deferred`, NOT `denied`. Nothing about authorization has been reconsidered
+ * here; the caller was already permitted to do this and the day's capacity has run out. See
+ * `write-admission.ts` for why that distinction is carried all the way to the caller.
+ */
+export function admitWrite(state: CoordinationState, units: number, nowMs: number): boolean {
+  assertWriteUnits(units);
+  const dayStartMs = windowStart(nowMs, DAY_MS);
+  rollWriteDay(state, dayStartMs);
+
+  if (state.writeDay.used + units > PER_ORGANIZATION_DAILY_ROW_WRITES) {
+    return false;
+  }
+  if (state.writePermits < units) {
+    return false;
+  }
+  state.writeDay.used += units;
+  state.writePermits -= units;
+  return true;
 }
