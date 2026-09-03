@@ -150,6 +150,66 @@ export const ORGANIZATION_MEMBERSHIP_ROW_WRITES = 2;
 /** `tenant_directory` (`0005`): 1 table row + 1 implicit primary-key index. Unwritten here. */
 export const TENANT_DIRECTORY_ROW_WRITES = 2;
 
+/**
+ * =============================================================================================
+ * EVERY CONTROL-PLANE OPERATION, COSTED — including the ones nothing has built yet.
+ * =============================================================================================
+ *
+ * Counted the way `0014` §A.7 counts a Customer create: TABLE ROW + PRIMARY-KEY AUTOINDEX +
+ * EVERY EXPLICIT INDEX THE WRITE TOUCHES. Where the charge is higher than the true cost, the
+ * over-charge is stated with its size, because §A.12 makes over-reserving CORRECT — "the failure
+ * mode of over-reserving is a delayed write, and of under-reserving is a platform outage" — but
+ * only a stated over-charge is a decision. An unexamined one is a number nobody can check.
+ *
+ *   OPERATION                  STATEMENTS   TRUE   CHARGED   NOTE
+ *   ------------------------------------------------------------------------------------------
+ *   login                          1          3       3      == session creation; see below
+ *   session creation               1          3       3      exact
+ *   session revocation             1          3       3      exact — a DELETE leaves EVERY index
+ *   Organization switch            1          1       3      OVER-CHARGED BY 2 (200%)
+ *   session rotation               2          6       6      NOT BUILT
+ *   membership change              1        1-2       2      NOT BUILT; + 5 in the tenant database
+ *   Organization change            1        1-2       2      NOT BUILT; onboarding is 6
+ *
+ * LOGIN AND SESSION CREATION ARE THE SAME WRITE. A login that names an Organization writes the
+ * validated identifier IN THE INSERT rather than following up with an UPDATE, so there is no
+ * two-step that can half-complete and no second reservation. THERE IS NO AUDIT ROW ON THIS PATH,
+ * deliberately: `audit_event` is tenant-scoped and a login has no tenant yet, and a D1 write per
+ * authentication attempt is `0013`'s hole reopened on a path with no authorization above it.
+ * That is why a login costs 3 and a Customer create costs 8.
+ *
+ * THE ORGANIZATION SWITCH IS THE ONE DELIBERATE OVER-CHARGE. `UPDATE session SET
+ * active_organization_id = ? WHERE session_id = ?` touches no indexed column — not the primary
+ * key, not `session_by_principal`'s `(principal_id, expires_at)` — so D1 bills ONE row. It is
+ * charged `SESSION_ROW_WRITES`, three. The 2-row-write excess buys a single constant that cannot
+ * drift from the schema: a separate `SESSION_UPDATE_ROW_WRITES = 1` would be correct today and
+ * silently wrong the first time someone indexes a column this statement sets. Switches are rare,
+ * so the excess is bounded by a rare operation, and the direction of the error is the safe one.
+ *
+ * SESSION ROTATION IS NOT BUILT AND ITS NUMBER IS A WARNING. Rotation is one INSERT plus one
+ * DELETE = 6, which is TWICE a login. At the sub-ceiling that is 500 rotations a day
+ * platform-wide. A design that rotates on every request — some do, as a session-fixation
+ * defence — would cost 6 row-writes per request and is unaffordable by two orders of magnitude.
+ * Rotation also cannot be specified before the credential format is, so it is costed here and
+ * deliberately not implemented.
+ *
+ * A MEMBERSHIP CHANGE COSTS 2 HERE AND 5 IN THE TENANT DATABASE, AND THE TWO CANNOT BE ATOMIC.
+ * `.claude/rules/security.md` §6 requires membership changes to be audited, and the audit record
+ * belongs in the affected Organization's tenant-scoped `audit_event` (5 row-writes: 1 table +
+ * 1 primary key + 3 explicit indexes). Those are TWO DATABASES, so there is no batch that
+ * commits both — the device `TenantScopedStore.write` uses to make a mutation and its audit row
+ * one unit is unavailable across a database boundary. The slice that builds membership
+ * administration must decide the ordering and the partial-failure behaviour, and it must decide
+ * it explicitly; §C does not. It also spends from TWO ALLOCATIONS: 2 from `system` through this
+ * port, 5 from `business` through the per-Organization coordinator.
+ *
+ * ORGANIZATION CREATION HAS NO AUDITABLE HOME YET, and that is worth knowing before it is built.
+ * Onboarding is 6 row-writes here — `organization` 2 + `tenant_directory` 2 + the owner's
+ * `organization_membership` 2 — and its audit record cannot go into the new Organization's
+ * tenant audit log, because reaching that log needs a tenant store handle, which needs the
+ * directory entry that the same operation is still creating. Another decision for that slice.
+ */
+
 // =============================================================================================
 // The ceilings
 // =============================================================================================

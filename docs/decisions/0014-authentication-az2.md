@@ -172,6 +172,34 @@ control, switched on at will by the attacker.**
 slice of a control becoming the vulnerability, and like the other four it was found by an
 implementer rather than by review.
 
+### The database boundary breaks atomicity, and one operation has no auditable home
+
+Two consequences of §C's split that this record did not anticipate. Both are **found, not
+solved** — they belong to slices not yet written, and are recorded so those slices inherit
+them rather than rediscovering them.
+
+**1. A membership change cannot be atomic.** It costs 2 row-writes in the control-plane
+database **and** 5 in the tenant database's `audit_event`, which `.claude/rules/security.md`
+§6 requires. **Two databases, so no batch commits both.** The device
+`TenantScopedStore.write` uses to make a mutation and its audit row a single unit — the whole
+reason the deletion-path ordering question was answerable — **is unavailable across a database
+boundary.** It also spends from **two allocations**: `system` here, `business` through the
+per-Organization coordinator. Ordering and partial-failure behaviour need deciding, and §C
+does not decide them.
+
+**2. Organization creation has no auditable home.** Onboarding costs 6 — `organization` 2,
+`tenant_directory` 2, owner membership 2 — and **its audit record cannot go into the new
+Organization's tenant log**, because reaching that log needs a tenant store handle, which
+needs the directory entry the same operation is still creating. The circularity §C removed
+from session reads reappears one level up, at creation.
+
+**3. Session rotation is affordable once per login and not once per request.** Rotation is 6
+row-writes, twice a login, ~500/day platform-wide under the sub-ceiling. **A design that
+rotates on every request — a common session-fixation defence — costs 6 per request and is
+unaffordable by roughly two orders of magnitude.** It is costed and deliberately not built,
+because it also cannot be specified before the credential format is. Whoever writes that
+decision inherits this number.
+
 ### §A.5's three-way split has no slot for an externally-triggered platform write
 
 Found while allocating the login path, and worked around rather than resolved — recorded here
