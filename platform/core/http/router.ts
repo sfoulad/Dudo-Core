@@ -35,7 +35,9 @@
  */
 
 import type { AnyActionDefinition } from '../action/action.ts';
-import { assertAuditPolicy } from '../action/action.ts';
+import { assertAuditPolicy, assertDeclaredPermission } from '../action/action.ts';
+import { isReservedPreAuthPath } from '../identity/pre-auth-registry.ts';
+import { ReservedPathCollisionError } from '../identity/pre-auth-registry.ts';
 
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -127,6 +129,27 @@ export function createRouter(routes: readonly Route[]): Router {
       // Same reason as above, one gate along: an Action that audits its successes and hides
       // its denials must stop the build, not show up as an absence in an incident review.
       assertAuditPolicy(route.action);
+      // And one more: an Action with a blank permission is not an open route, it is a route
+      // that is always `forbidden` while looking wired (docs/decisions/0007 D1, and
+      // `action/action.ts`). It must stop the build here for the same reason the deferral guard
+      // does — the alternative is a route a reviewer reads as working and a caller never reaches.
+      assertDeclaredPermission(route.action);
+    }
+    // ===========================================================================================
+    // NO APPLICATION ROUTE MAY CLAIM A RESERVED PRE-AUTHENTICATION PATH. docs/decisions/0014 §B.
+    // ===========================================================================================
+    //
+    // `http/api.ts` matches the registry FIRST, so such a route is already unreachable and this
+    // check changes nothing a caller can observe. It exists for the same reason
+    // `DeferredActionWiredError` does: a route table that believes it serves the login path is a
+    // route table someone eventually makes serve it, and dead code that looks live is the state
+    // a security review reads wrongly.
+    //
+    // IT TESTS THE ROUTE'S OWN PATH, without a base path, because that is the only form
+    // available at construction. The base-path-aware version is `assertNoReservedPathCollision`,
+    // which the composition root calls once it knows where the App is mounted.
+    if (isReservedPreAuthPath(route.path)) {
+      throw new ReservedPathCollisionError(route.path);
     }
   }
 
