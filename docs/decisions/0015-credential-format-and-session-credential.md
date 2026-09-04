@@ -1,6 +1,6 @@
 # 0015 — Credential format and the session credential (AZ2, continued)
 
-- **Status:** **Accepted for §§A–C · §D DEFERRED pending one measurement**
+- **Status:** **Accepted** — §D decided 2026-09-04
 - **Date:** 2026-09-03
 - **Deciders:** Dudo Team Lead, under authority the user delegated 2026-09-03 ("Go with your
   recommendation"). §D carries a user-reversible consequence — see Approval.
@@ -136,7 +136,47 @@ invalidates every session on the platform.
    it directly; the overrun alert is not a sufficient detector.
 4. The **250 ms quantum is retained** for I/O variance.
 
-### D. The credential format — **DECISION DEFERRED, one day of measurement first**
+### D. The credential format — **DECIDED 2026-09-04: client-side KDF (option f)**
+
+The measurement was taken and the answer went the other way. **Passkeys are the stronger
+option and are not chosen.** Reasons, in the order they weigh:
+
+1. **They cannot complete the gate on the schedule that matters.** ADR 0002 requires a slice
+   through *both* clients. Passkeys add **3–5 days of hand-written CBOR and DER parsing in
+   Swift** — plus two forced platform divergences — to the critical path of a client that has
+   **never produced a build**. Option (f) uses `CCKeyDerivationPBKDF`, a system API.
+2. **The security gap is smaller than it looks.** Client-side KDF gives an effective offline
+   work factor of **~610,000 iterations — above OWASP's recommendation.** This is not "weaker
+   crypto shipped for convenience"; it is adequate crypto that ships. It also **partly closes
+   the online-guessing hole** ADR 0014 §B could not close by any means available to it,
+   because the attacker now pays 600,000 iterations per attempt too.
+3. **Recovery does not separate them.** Both are equally unrecoverable without an approved
+   email provider. It was never a tiebreaker.
+4. **It is the reversible choice, and passkeys are not.** A verifier column carrying an
+   algorithm identifier lets Dudo migrate to passkeys later, transparently, on each user's
+   next login. **Choosing the KDF now does not foreclose passkeys. Choosing passkeys now and
+   failing to ship forecloses the slice.**
+
+**This dissolves blocker 1.** No associated-domains entitlement, no
+`-allowProvisioningUpdates`, no developer-portal write. The macOS build is untouched.
+
+**Normative, and it is the difference between this design and a catastrophe: the server stores
+a hash of the client's output, never the output itself.** A database dump must not be usable
+as a login credential.
+
+**Also normative:** the client salt is the normalised email, because
+`identity.login.start` is `disclosure: 'collapsed'` and **a server-chosen salt is
+undeliverable under the registry as built.** And the server-side hash runs at 10,000
+iterations — 1.7 ms, 17% of the CPU budget — which keeps it far from the cap where a
+runtime kill would produce a response outside the fixed table.
+
+**The residual risk, recorded rather than softened:** a client that posted the raw password
+instead of the KDF output would be indistinguishable to the server. Requiring exactly 43
+base64url characters mitigates but does not close it. QA must bind both clients with shared
+test vectors, because web (`crypto.subtle`) and Apple (`CCKeyDerivationPBKDF`) must produce
+byte-identical output.
+
+#### The option comparison that produced this — retained for the record
 
 **Status of §D changed 2026-09-03.** It was first recorded as *passkeys, Accepted*. That was
 decided on a premise now known to be false, and on a cost estimate now known to be too high.
