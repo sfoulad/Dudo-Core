@@ -87,6 +87,45 @@ is not a defect in what it built.
 `freeTierImpact`, `qa` and `openQuestions` — all stale prose downstream of the struck block, not new
 defects. **Flagged in the file header rather than allowed to look complete.** A sweep is owed.
 
+## `ON-5` / `CR-5` — who runs the KDF when an operator creates a credential
+
+**The last thing gating onboarding and reset**, and it collides with the property `0015` §D exists
+to protect: **the password never reaches Dudo.** The client derives; the server stores a hash of the
+derived value; `principal_credential` has no password column and must never gain one.
+
+An operator creating another person's credential has no client of that person's to derive in.
+
+**Decision: the operator's browser derives, exactly as `tools/seed-principal.ts` does today.**
+
+1. The **console generates** a high-entropy password from a CSPRNG — 24 bytes, base64url, ~192
+   bits — matching the seed tool. **Never operator-chosen**, for `0017`'s reason: entropy is what
+   protects these accounts, not the rate limiter.
+2. The console runs the **same client-side KDF** — 600,000 iterations, the same normalisation split
+   — in the operator's browser. This is why `admin-shell`'s KDF being byte-identical to the web
+   client's was verified before anything else.
+3. **Only the derived value is sent.** The server hashes it again at 10,000 and stores that.
+4. The password is **shown once** and stored nowhere.
+
+**The property `0015` §D protects is preserved exactly: the server never sees a password.** What
+changes is only *which* browser does the deriving.
+
+### What this does not preserve, stated rather than buried
+
+**The operator sees the new admin's password.** That is unavoidable for any operator-created
+account, and it is the trust model the seed tool already has — but it has never been written down
+as a property, and it should be.
+
+**And there is no self-service password change.** So an operator-set password is permanent until an
+operator resets it, and the person who received it cannot replace it with one only they know.
+**That is a real gap**, it follows from `0015` §D's recorded cost (no email provider, no recovery
+flow), and it means **every tenant admin's credential is known to whoever onboarded them, forever,
+today.**
+
+**Owed:** a change-password flow, which needs no email provider because it is authenticated — the
+principal already holds a session. It is the smallest thing that would close this, and it should be
+built before any non-operator user exists, alongside `0018`'s reserved allocation and `0021`'s
+`OS-1`.
+
 ## What this does NOT decide
 
 - **The confirmation mechanism's shape.** Its own contract, and it must satisfy D15 for three
