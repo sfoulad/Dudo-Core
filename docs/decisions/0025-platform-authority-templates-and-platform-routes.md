@@ -158,10 +158,61 @@ store handle resolves, then the record is written.
   records. That constant is wrong in the code and must be corrected with the count of what
   onboarding actually writes.
 - **The inner unit is renamed `Workspace`** per `architecture-agent`'s ruling — `Branch` was
-  unavailable because it already names a level *below* it. **The rename lands before onboarding and
-  Templates are built**, or both are built on the old name and renamed twice.
+  unavailable because it already names a level *below* it. ~~**The rename lands before onboarding and
+  Templates are built**, or both are built on the old name and renamed twice.~~ **Amended below —
+  the rename is not one operation, and two of its four parts are not cleanups.**
 - **Free-tier impact: USD 0 / BD 0.** New control-plane tables, no new service. 300 onboardings/day
   platform-wide at the corrected cost.
+
+## Amendment, 2026-09-05 — the `Workspace` rename is four changes, and only one of them is a rename
+
+The consequence above told the team to land the rename before onboarding. **Acting on it would have
+been wrong**, and the reason is worth recording because the instruction looked obviously correct.
+
+**The theory I checked.** `BUSINESS_ID_COLUMN` in `tenancy/business-directory.ts` is a named
+constant, which suggested the physical column name was already treated as an implementation detail
+behind one seam — so the rename would be vocabulary above that line and one adapter at it.
+
+**That is false, and the grep that disproves it is the whole amendment.** `'business_id'` is emitted
+as a literal in four different roles:
+
+| Role | Where | What renaming it costs |
+|---|---|---|
+| TypeScript vocabulary | ~107 files, five territories | Mechanical. A rename. |
+| Physical column | `0002_business.sql` and two others | A migration against live data |
+| **Published wire field** | `apps/customers/domain/validation.ts:135`, `:215` — `required: ['business_id', …]` | **A breaking change to a shipped contract, consumed by two clients** |
+| **Persisted audit value** | `actions/move-customer-to-business.ts:163` — `changedFieldNames: ['business_id']` | **Rewriting audit history** |
+
+**The last two are not cleanups.** `customer-directory-v1` is shipped and both clients consume it;
+`.claude/rules/architecture.md` §1 requires a breaking contract change to go through Team Lead
+review and a decision record of its own — **it does not get smuggled in as tidying during another
+feature's build.** And rewriting stored audit rows to satisfy a naming preference inverts what an
+audit trail is for.
+
+### Decision
+
+**The rename is not performed as one operation, and not during the super-admin build.**
+
+1. **The new platform surface is written in `Workspace` terms natively** — `architecture-agent`
+   already did this in all four contracts. **The hole stops getting deeper today.**
+2. **The user-facing words come from Template display labels** (Decision 2 above), which is the
+   mechanism already decided here and which has to exist anyway, because a school says "Campus"
+   where a shop says "Branch". **This is what the user actually asked for** — the complaint was
+   about words on a screen.
+3. **The wire field and the column keep the name `business_id`** until a dedicated slice with its
+   own record retires them through the §1 breaking-change process.
+
+### The cost, stated rather than left to be discovered
+
+**Dudo now has two vocabularies for one concept** — `Workspace` in the platform contracts,
+`business_id` on the customer wire — and a reader has to know both. That is a real cost and it is
+being accepted deliberately, not overlooked. It is smaller than a breaking change to a shipped
+contract plus an audit rewrite, executed concurrently with three agents writing in the same 107
+files, which is `.claude/rules/workflow.md` §2a's failure mode with a rename on top.
+
+**The closing trigger, so this does not become permanent by silence:** the rename slice is owed
+**before a second App ships a contract using the word**, because at that point the divergence stops
+being one legacy contract and becomes the convention.
 
 ## What this does NOT decide
 
