@@ -173,7 +173,7 @@ Each item states what correct looks like, because several correct behaviours loo
 | Core business-set cases | **adopted into `packages/testing/**`** as `suites/az2-login/business-set.ts` |
 | Core role-guard harness | 16 passed, 0 failed — scratchpad only |
 | Customer Directory regression | 165 passed, 0 failed, 1 skipped, 166 registered |
-| QA independent AZ2 + AZ5 suites | **88 passed, 0 failed, 0 skipped, 0 not run — 88 registered / 88 reported** |
+| QA independent AZ2 + AZ5 suites | **107 passed, 0 failed, 0 skipped, 0 not run — 107 registered / 107 reported** |
 | Customer Directory regression, after skip closed | **166 passed, 0 failed, 0 skipped, 0 not run** |
 | Web verification scripts | 177 checks, 0 failed |
 | Apple `DudoTests` — macOS (arm64) | 50 passed, 3 suites — **re-run by `qa-agent`** |
@@ -257,6 +257,39 @@ is not diligence:
 **The rule, which is mechanical rather than a matter of care: when a new test goes red, find out what
 the actual value is before deciding what the assertion should be.** Reaching for the assertion first
 is how a test comes to describe the harness rather than the code.
+
+### The ninth, and the most literal one
+
+Found by `qa-agent` while adopting a harness into `packages/testing/**`:
+
+```ts
+check('the line contains nothing caller-supplied',
+  !whole.includes('customers.ListCustomers') === false || true);
+```
+
+**The trailing `|| true` makes it pass unconditionally** — an empty assertion wearing the name of the
+most security-relevant check in its file, and the first instance of this class found in a *harness*
+rather than in a test or a stub.
+
+It rewrote it to assert what the name claims, against the whole log line rather than the parsed
+object, so a value smuggled into a prefix or suffix is caught: no principal id, no request id, no
+correlation id, no action id, no app path.
+
+**It passes.** Which makes this the frozen-grants pattern for the second time: **the protection was
+real; the check was not checking it.** The code was correct and nothing established that it was.
+
+### The two instances found while fixing the others
+
+`qa-agent`'s own wrong diagnosis — reporting an unselected session as "the 0019/0020 empty-set case"
+— was instance eight, in the tool built to catch this class. **And the fix it declined is as
+instructive as the one it made.** The Team Lead asked it to correct a URL in CHECK 3; it verified all
+four `/api/v1` paths were already correct per contract, and refused:
+
+> *"Changing it would have replaced a correct path with a wrong one on the strength of a symptom that
+> had another cause. My wrong diagnosis nearly propagated into a wrong fix."*
+
+**A wrong diagnosis does not stop at a wrong report. It proposes a wrong repair, and the repair is
+harder to detect** — because the symptom does disappear.
 
 ### An open flake, and a rule it forces about how Apple results are read
 
