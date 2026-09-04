@@ -252,16 +252,7 @@
 
 .panel--attached { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
 
-.directory { width: 100%; border-collapse: collapse; table-layout: fixed; }
-
-/* Proportions rather than content-driven widths, so a long email address does
-   not squeeze the phone column into wrapping on every row. */
-.directory col.col-name     { width: 26%; }
-.directory col.col-type     { width: 9%; }
-.directory col.col-email    { width: 25%; }
-.directory col.col-phone    { width: 15%; }
-.directory col.col-business { width: 16%; }
-.directory col.col-status   { width: 9%; }
+.directory { width: 100%; border-collapse: collapse; }
 
 .directory thead th {
   padding: var(--s-3) var(--s-4);
@@ -276,10 +267,9 @@
   white-space: nowrap;
 }
 
-.directory tbody tr { border-bottom: 1px solid var(--line); cursor: pointer; }
+.directory tbody tr { border-bottom: 1px solid var(--line); }
 .directory tbody tr:last-child { border-bottom: 0; }
 .directory tbody tr:hover { background: var(--navy-050); }
-.directory tbody tr:focus-within { background: var(--navy-050); }
 
 .directory td {
   padding: var(--s-3) var(--s-4);
@@ -304,25 +294,6 @@
 .cell-empty { color: var(--ink-faint); }
 .cell-tabular { font-variant-numeric: tabular-nums; }
 
-/* Email and Business may be truncated with an ellipsis in the directory — the
-   whole value is on the record, which is one click away, and a row that grows
-   to three lines makes the directory harder to scan than a shortened value
-   does. The full text stays available to assistive technology and on hover. */
-.directory td.cell-email .cell-muted,
-.directory td.cell-business .cell-muted {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.directory td.cell-phone { white-space: nowrap; }
-
-@media (max-width: 55rem) {
-  .directory colgroup { display: none; }
-  .directory td.cell-email .cell-muted,
-  .directory td.cell-business .cell-muted { white-space: normal; overflow: visible; }
-}
-
 /* Below the table breakpoint each row becomes a record card with its own
    labels, so no column meaning is lost when the header row disappears. */
 @media (max-width: 55rem) {
@@ -332,23 +303,10 @@
   .directory tbody tr {
     padding: var(--s-4);
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 1fr auto;
     gap: var(--s-1) var(--s-3);
   }
-  /* min-width: 0 on both the cell and its value is what stops a long email
-     address — a single unbreakable token — from forcing the whole page wider
-     than the phone it is being read on. */
-  .directory td {
-    padding: 0;
-    display: flex;
-    gap: var(--s-2);
-    align-items: baseline;
-    min-width: 0;
-  }
-  .directory td > :not(.cell__label) {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
+  .directory td { padding: 0; display: flex; gap: var(--s-2); align-items: baseline; }
 
   .directory td.cell-name { grid-column: 1; grid-row: 1; }
   .directory td.cell-status { grid-column: 2; grid-row: 1; justify-self: end; }
@@ -460,15 +418,9 @@
   max-width: 34rem;
   color: var(--ink-muted);
 }
-/* Monospace is for machine tokens — a request id, an identifier. Prose in a
-   monospace face reads as debug output, not as guidance. */
 .state__code {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--ink-faint);
-}
-.state__note {
-  font-size: var(--text-sm);
   color: var(--ink-faint);
 }
 .state__actions { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; margin-top: var(--s-2); }
@@ -612,20 +564,7 @@
 }
 .form-error__title { font-weight: 700; }
 .form-error__list { display: grid; gap: var(--s-1); font-size: var(--text-sm); }
-.form-error__list button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-weight: 600;
-  text-align: left;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.form-error__list button:hover { text-decoration-thickness: 2px; }
-.form-error .state__code { color: var(--scarlet-700); opacity: 0.85; }
+.form-error__list a { color: var(--scarlet-700); }
 
 .readonly-value {
   min-height: 2.5rem;

@@ -70,30 +70,6 @@ function append(node, children) {
   }
 }
 
-/**
- * Put focus back on the control a person was using, after a re-render
- * replaced it with an identical one. Silent when the element is gone: that
- * means the screen genuinely changed, and the shell has already moved focus to
- * the new one.
- *
- * The caret is sent to the end of a text field rather than to position zero,
- * which is where a fresh input would otherwise start.
- */
-export function restoreFocusById(id) {
-  if (!id) return false;
-  const node = document.getElementById(id);
-  if (!node || typeof node.focus !== 'function') return false;
-  node.focus({ preventScroll: true });
-  if (typeof node.setSelectionRange === 'function' && typeof node.value === 'string') {
-    try {
-      node.setSelectionRange(node.value.length, node.value.length);
-    } catch {
-      /* setSelectionRange is not supported on every input type. */
-    }
-  }
-  return true;
-}
-
 export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
   return node;
