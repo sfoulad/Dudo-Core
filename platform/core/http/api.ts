@@ -69,6 +69,17 @@ import { dispatchPreAuthRequest } from '../identity/pre-auth-admission.ts';
 import { matchPreAuthEntryPoint } from '../identity/pre-auth-registry.ts';
 import type { SessionRouteDependencies } from '../identity/session-routes.ts';
 import { dispatchSessionRoute, matchSessionRoute } from '../identity/session-routes.ts';
+import { CORE_APP_PERMISSIONS, CORE_BASE_PATH, createCoreRouter } from './core-routes.ts';
+
+/**
+ * Core's own route table, built once at module load exactly as an App's router is.
+ *
+ * IT IS A MODULE CONSTANT RATHER THAN A DEPENDENCY, and that is deliberate: Core's Actions are
+ * not optional, not composable and not something a deployment may omit or substitute. Every
+ * deployment has them, which is `docs/decisions/0023`'s reason for putting them in Core rather
+ * than in an App's router in the first place.
+ */
+const coreRouter = createCoreRouter();
 import { buildPreAuthRequest, renderPreAuthResolution } from './pre-auth-http.ts';
 
 export type ApiDependencies = PipelineDependencies & {
@@ -259,12 +270,40 @@ export async function handleRequest(
     return renderSuccess(outcome.value, 200, requestId, correlationId);
   }
 
-  if (!url.pathname.startsWith(basePath)) {
-    return renderError(notFound(), requestId, correlationId);
+  // ===========================================================================================
+  // CORE'S OWN ACTIONS, AHEAD OF THE APP ROUTER. `docs/decisions/0023`.
+  // ===========================================================================================
+  //
+  // `core.ListAuthorizedBusinesses` and `core.ResolveBusinessReferences` are Core's contract
+  // routes, not an App's. They 404'd on the live deployment because `/api/v1/businesses` does not
+  // start with the App's `/api/v1/apps/customers`, so it failed the base-path test below.
+  //
+  // THE MATCH IS TRIED FIRST AND FALLS THROUGH ON A MISS RATHER THAN ANSWERING 404. Core's base
+  // path `/api/v1` is a PREFIX of the App's, so a Core block that claimed every path under it
+  // would swallow every App route. Falling through is what keeps the two tables independent.
+  //
+  // EVERYTHING BELOW THIS POINT IS SHARED — authentication, body parsing, the repeated-parameter
+  // refusal, input merging, and `invokeAction`. A Core Action gets the identical pipeline an App
+  // Action gets, including the tenant store and the permission evaluation, because
+  // `architecture-agent`'s test is that anything touching tenant data is always an Action. The
+  // only thing that varies is WHICH ENVELOPE declares the ceiling.
+  let envelope = app;
+  let matched = coreRouter.match(
+    request.method,
+    url.pathname.startsWith(CORE_BASE_PATH) ? url.pathname.slice(CORE_BASE_PATH.length) : '',
+  );
+  if (matched.kind === 'none') {
+    if (!url.pathname.startsWith(basePath)) {
+      return renderError(notFound(), requestId, correlationId);
+    }
+    matched = router.match(request.method, url.pathname.slice(basePath.length));
+  } else {
+    // CORE'S OWN ENVELOPE, AND ONLY FOR A ROUTE CORE'S OWN FROZEN TABLE MATCHED. It is not a
+    // bypass: the ceiling still binds, the principal must still hold the permission at a
+    // reaching scope, and this envelope declares exactly one permission so it cannot serve as a
+    // ceiling for anything else. See `http/core-routes.ts`.
+    envelope = CORE_APP_PERMISSIONS;
   }
-  const routePath = url.pathname.slice(basePath.length);
-
-  const matched = router.match(request.method, routePath);
 
   if (matched.kind === 'none') {
     // An unmatched path and an unmatched method both answer not_found. There is no
@@ -354,7 +393,8 @@ export async function handleRequest(
     matched.route.action,
     {
       principal: principal.value,
-      app,
+      // The App's envelope, or Core's when Core's own frozen table matched the route.
+      app: envelope,
       requestId,
       correlationId,
       sourceAddressHash: origin.sourceAddressHash,

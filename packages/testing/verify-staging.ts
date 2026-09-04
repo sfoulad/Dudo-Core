@@ -441,6 +441,42 @@ async function main(): Promise<void> {
   );
 
   // ===========================================================================================
+  // CHECK 1b — IS THIS THE RIGHT ONE OF THE THREE HOSTNAMES? `docs/decisions/0022`.
+  // ===========================================================================================
+  //
+  // `/health` ANSWERS 200 ON ALL THREE HOSTS, so CHECK 1 cannot tell them apart — and only one is
+  // correct for a cookie-based client like this script.
+  //
+  //   app.dudo.work    the web application AND its API, one origin   <- this script belongs here
+  //   admin.dudo.work  the admin interface, SEPARATE session
+  //   api.dudo.work    API only, for non-browser Bearer clients
+  //
+  // The session cookie is HOST-ONLY — `pre-auth-http.ts` sets no `Domain` attribute, deliberately,
+  // because a `Domain=dudo.work` cookie would broadcast a session credential for a business's
+  // customer records to every subdomain that ever exists. So a script pointed at `api.` would
+  // authenticate and then be refused on everything after, which looks exactly like a Bearer defect
+  // and is not one.
+  //
+  // Serving the SPA is what distinguishes the application origin from the machine one, so that is
+  // what is asked. This is a WARNING rather than a gate: `api.dudo.work` is a legitimate target
+  // for a purely Bearer client, and refusing to run there would be wrong.
+  const root = await call(`${baseUrl}/`, { method: 'GET', headers: { Accept: 'text/html' } });
+  const servesSpa = root.status === 200 && root.text.toLowerCase().includes('<!doctype html');
+  record(
+    'CHECK 1b',
+    'the host serves the web application, so it is the application origin',
+    servesSpa ? 'passed' : 'failed',
+    `GET / → HTTP ${String(root.status)}${servesSpa ? ', HTML document' : ', not an HTML document'}`,
+    servesSpa
+      ? 'This is app.dudo.work-shaped: the SPA and its API on one origin, which is what a ' +
+        'host-only session cookie requires.'
+      : 'THIS HOST DOES NOT SERVE THE SPA. All three Dudo hostnames answer 200 on /health, so a ' +
+        'green CHECK 1 does not mean you picked the right one. If this is api.dudo.work, this ' +
+        'script will authenticate and then be refused on every call after — which will look like ' +
+        'a Bearer defect and will not be one. Point it at app.dudo.work (0022).',
+  );
+
+  // ===========================================================================================
   // CHECK 2 — THE ONE WHOSE REAL-WORLD FAILURE IS SILENT.
   // ===========================================================================================
   const login = await call(`${baseUrl}/auth/login/complete`, {
@@ -468,6 +504,21 @@ async function main(): Promise<void> {
       `HTTP 200 but no dudo_session cookie was set.`,
       'The credential was accepted and no session was issued. That is a Core defect, not a ' +
         'configuration problem — report it to core-agent.');
+  } else if (login.status === 404) {
+    // A 404 IS NOT THE COLLAPSED REFUSAL AND MUST NOT BE READ AS ONE. The collapsed refusal is a
+    // 401: one fixed body for a wrong password, an absent account and a lookup-key mismatch. A
+    // 404 means the ROUTE is not being served at all — no credential was ever evaluated.
+    //
+    // This branch exists because the script reported a 404 as "the collapsed refusal" during a
+    // live run and then listed credential causes for it, none of which applied. Same
+    // over-conclusion as CHECK 3's, found the same way: by running it.
+    record('CHECK 2', 'the seeded principal can log in', 'failed',
+      `HTTP 404 in ${String(login.elapsedMs)} ms — THE ROUTE IS NOT SERVED.`,
+      'This says NOTHING about the credential. /auth/login/complete is not reaching the Worker. ' +
+        'Check that the hostname still has a route (a redeploy that adds custom domains can ' +
+        'remove the workers.dev route), that the custom domains resolve in DNS, and that ' +
+        'run_worker_first lists "/auth/*". Do not investigate IDENTITY_LOOKUP_KEY or the ' +
+        'password for a 404.');
   } else {
     // THE IMPORTANT BRANCH. Four causes, one indistinguishable answer — so the script ranks them
     // and says plainly that it cannot choose between them, rather than inventing a diagnosis.
@@ -638,25 +689,78 @@ async function main(): Promise<void> {
     return;
   }
 
-  const bearer = await call(`${baseUrl}/api/v1/businesses`, {
+  // ===========================================================================================
+  // CHECK 3 — the Apple carrier, tested on a route that is KNOWN TO EXIST.
+  // ===========================================================================================
+  //
+  // THE FIRST VERSION TESTED THIS ON `/api/v1/businesses` AND MIS-DIAGNOSED THE RESULT. That
+  // route returned 404 on the live deployment, and the check reported *"the Bearer carrier did
+  // not work... the Apple client cannot use this deployment."* Both halves were wrong: Bearer
+  // works perfectly, and the 404 meant the ROUTE was absent, not that the credential was
+  // rejected.
+  //
+  // A carrier test must not be able to fail because of a missing route. So it now runs against
+  // the App route — which the same run proves reachable — and 404 is treated as "cannot tell",
+  // never as a carrier failure. Whether the core business-read routes exist is a separate
+  // question and is asked separately in CHECK 3c.
+  const bearer = await call(`${baseUrl}/api/v1/apps/customers/customers?page_size=1`, {
     method: 'GET',
     headers: { ...JSON_HEADERS, Authorization: `Bearer ${sessionCredential}` },
   });
   record(
     'CHECK 3',
     'the same credential is accepted as Authorization: Bearer',
-    bearer.status === 200 ? 'passed' : 'failed',
-    `HTTP ${String(bearer.status)} in ${String(bearer.elapsedMs)} ms`,
+    bearer.status === 200 ? 'passed' : bearer.status === 404 ? 'not_run' : 'failed',
+    `HTTP ${String(bearer.status)} in ${String(bearer.elapsedMs)} ms on the App route`,
     bearer.status === 200
       ? 'One value, two carriers, one contract (0015 §A) — confirmed against the deployment ' +
         'rather than against a stub.'
-      : 'The cookie carrier worked and the Bearer carrier did not. That is the exact defect ' +
-        '0018 §A was written to close, and it means the Apple client cannot use this deployment.',
+      : bearer.status === 404
+        ? 'THE ROUTE IS ABSENT, so this says NOTHING about the carrier. Do not read a 404 here ' +
+          'as a Bearer failure — find a mounted authenticated route and re-test.'
+        : bearer.status === 401 || bearer.status === 403
+          ? 'The credential was REJECTED on a route that exists. The cookie carrier worked and ' +
+            'Bearer did not — the exact defect 0018 §A was written to close, and it means the ' +
+            'Apple client cannot use this deployment.'
+          : 'Neither a success nor a carrier rejection. Read the body before concluding.',
   );
 
-  // The Bearer path is also where the two halves of AZ5 become visible.
-  if (bearer.status === 200) {
-    const businesses = (bearer.body as { data?: unknown[] } | null)?.data;
+  // CHECK 3c — are the core business-read routes mounted at all? Asked separately, because
+  // conflating "the route is missing" with "the credential was refused" is what produced the
+  // wrong diagnosis above.
+  const businessRead = await call(`${baseUrl}/api/v1/businesses`, {
+    method: 'GET',
+    headers: { ...JSON_HEADERS, Authorization: `Bearer ${sessionCredential}` },
+  });
+  record(
+    'CHECK 3c',
+    'core.ListAuthorizedBusinesses (/api/v1/businesses) is mounted',
+    businessRead.status === 200 ? 'passed' : 'failed',
+    `HTTP ${String(businessRead.status)}`,
+    businessRead.status === 200
+      ? ''
+      : businessRead.status === 404
+        ? 'THE ROUTE DOES NOT EXIST — and as of 2026-09-05 the OPERATIONS BEHIND IT WERE NEVER ' +
+          'BUILT. `business-read-v1` specifies GET /api/v1/businesses and POST ' +
+          '/api/v1/businesses/names; `core-agent` established there is no implementation ' +
+          'anywhere, and every ActionDefinition in the tree belongs to the Customer Directory. ' +
+          'The web client has been calling a route that never existed. This is NOT the ' +
+          'App-never-mounted defect — that was wiring; this is absence. See ' +
+          'docs/decisions/0023-core-owned-actions.md, which adds a Core route block, Core\'s own ' +
+          'permission envelope, and core.business.read to both roles.'
+        : 'Mounted but not answering 200. Read the body.',
+  );
+
+  // Where the two halves of AZ5 become visible. Sourced from the BUSINESS-READ response, not
+  // from CHECK 3's — they are different routes now, and reading the customer list here would
+  // have counted customers while calling them Businesses.
+  if (businessRead.status !== 200) {
+    record('CHECK 3b', 'the authorized business set is populated', 'not_run',
+      `The business-read route answered ${String(businessRead.status)}.`,
+      'Whether 0019 and 0020 are live CANNOT be determined while the route that reports the ' +
+        'authorized set is unmounted. This is not evidence either way.');
+  } else {
+    const businesses = (businessRead.body as { data?: unknown[] } | null)?.data;
     const count = Array.isArray(businesses) ? businesses.length : -1;
     record(
       'CHECK 3b',
@@ -800,8 +904,24 @@ async function stubGapChecks(
   // A synthetic customer, obviously test data, created once.
   const marker = `QA staging probe ${new Date().toISOString()}`;
   const businesses = await call(`${baseUrl}/api/v1/businesses`, { method: 'GET', headers: auth });
-  const businessId = ((businesses.body as { data?: { business_id?: string }[] } | null)?.data ?? [])[0]
+  let businessId = ((businesses.body as { data?: { business_id?: string }[] } | null)?.data ?? [])[0]
     ?.business_id;
+
+  // FALLBACK: take a business_id from an existing customer. The authorized-business route is not
+  // the only place one is observable, and when it is unmounted §8a.3 — the PATCH three-way check,
+  // whose failure is silent data loss — would otherwise be blocked by a defect it has nothing to
+  // do with. A check that cannot run because of an UNRELATED fault is a check nobody sees.
+  if (businessId === undefined) {
+    const existing = (paged.body as { data?: { business_id?: string }[] } | null)?.data ?? [];
+    businessId = existing[0]?.business_id;
+    if (businessId !== undefined) {
+      record('§8a.0', 'business_id recovered from an existing customer', 'passed',
+        `The authorized-business route answered ${String(businesses.status)}; took the ` +
+          'business_id from the customer list instead.',
+        'This is a WORKAROUND for CHECK 3c, not a pass for it. It lets §8a.2 and §8a.3 run; it ' +
+          'does not mean the business-read route works.');
+    }
+  }
   if (businessId === undefined) {
     // THE DIAGNOSIS THIS BRANCH USED TO GIVE WAS WRONG, AND WRONGLY CONFIDENT. It said "this is
     // the 0019/0020 empty-set case" for ANY absence of a Business — including a 422, which means

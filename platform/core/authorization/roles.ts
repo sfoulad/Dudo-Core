@@ -101,6 +101,44 @@ const CUSTOMER_RESTORE = 'customers.customer.restore';
 const CUSTOMER_MOVE = 'customers.customer.move';
 
 /**
+ * ===========================================================================================
+ * THE FIRST NON-APP PERMISSION IN THIS TABLE. `docs/decisions/0023` decision 3.
+ * ===========================================================================================
+ *
+ * `core.business.read` is Core's, not the Customer Directory's, and it is already registered in
+ * `packages/contracts/registries/permission-catalog.yaml` — this contract was the first to use a
+ * permission the catalog already declared, which is what the catalog is for.
+ *
+ * BOTH ROLES HOLD IT, AND IT IS JUSTIFIED ON ITS MERITS RATHER THAN AS A WORKAROUND: it is a
+ * read, `maxRowWrites: 0`, and **a principal who cannot list its own Businesses cannot use the
+ * product** — every create form, every row label and every Business filter needs it. Withholding
+ * it from `member` would leave a read-only user unable to see the name of the Business whose
+ * customers they are reading.
+ *
+ * GRANTED AT `organization` SCOPE, WHICH REACHES THE `business`-SCOPED ACTIONS. `implies()` ranks
+ * organization wider than business, so an organization-scope grant satisfies a business-scope
+ * Action; the narrowing that actually applies is the authorized business set, computed per
+ * request by `0020`. This also keeps `assertRoleMappingIsCoherent`'s organization-scope invariant
+ * intact rather than carving an exception into it.
+ *
+ * ===========================================================================================
+ * AND IT IS THE THIRD DEADLOCK OF ONE SHAPE, WHICH `0023` RECORDS AS DEBT WITH A TRIGGER.
+ * ===========================================================================================
+ *
+ * `0019`, `0021` and `0023` each ran into the same wall: build a capability, and every caller is
+ * refused because no role grants its permission. **Two role vocabularies exist** — the permission
+ * catalog's six seed roles (`business-owner`, `business-admin`, `member`, `developer`,
+ * `platform-admin`, `marketplace-moderator`) against `0019`'s two — and they are not the same
+ * `member`. `0023` requires them reconciled **before a second App exists**, because that is the
+ * point at which "add it to both roles" stops being a small change and becomes a fork.
+ *
+ * THIS EDIT IS A PRIVILEGE CHANGE AND `0007` RULE 9 WANTS IT AUDITED. There is still no audited
+ * path for a role or permission change — the same gap `0018` and `0019` recorded for operator SQL
+ * and for role edits. Recorded again here rather than solved.
+ */
+const BUSINESS_READ = 'core.business.read';
+
+/**
  * DELIBERATELY GRANTED TO NOBODY, and their absence is the point rather than an oversight.
  *
  * `customers.customer.delete` starts a permanent, 30-day-recoverable erasure and
@@ -135,6 +173,7 @@ const OWNER_PERMISSIONS: readonly string[] = Object.freeze([
   CUSTOMER_ARCHIVE,
   CUSTOMER_RESTORE,
   CUSTOMER_MOVE,
+  BUSINESS_READ,
 ]);
 
 /**
@@ -144,7 +183,12 @@ const OWNER_PERMISSIONS: readonly string[] = Object.freeze([
  * which changes which Business a record belongs to and is therefore a change of scope as well as
  * of data.
  */
-const MEMBER_PERMISSIONS: readonly string[] = Object.freeze([CUSTOMER_READ, CUSTOMER_LIST]);
+const MEMBER_PERMISSIONS: readonly string[] = Object.freeze([
+  CUSTOMER_READ,
+  CUSTOMER_LIST,
+  // A read-only user still has to see the name of the Business whose customers it is reading.
+  BUSINESS_READ,
+]);
 
 const GRANTS_BY_ROLE: Readonly<Record<MembershipRole, PrincipalGrants>> = Object.freeze({
   owner: Object.freeze({ grants: Object.freeze(OWNER_PERMISSIONS.map(organizationGrant)) }),
