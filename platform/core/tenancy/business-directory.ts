@@ -50,12 +50,53 @@ import { eq } from '../storage/predicate.ts';
 export const BUSINESS_TABLE = 'business';
 export const BUSINESS_ID_COLUMN = 'business_id';
 
+/**
+ * The most Businesses one organization-scope principal may be authorized over in a request.
+ * `docs/decisions/0020`.
+ *
+ * REQUIRED RATHER THAN UNLIMITED, for the reason `SelectSpec.limit` and
+ * `MAX_ENTERABLE_ORGANIZATIONS` are: on a single-threaded database an unbounded read is every
+ * Organization's latency, and this one runs on EVERY authenticated request that reaches a
+ * handler.
+ *
+ * WHAT HAPPENS AT THE LIMIT, STATED BECAUSE IT IS NOT NOTHING. A tenant with more Businesses than
+ * this gets a TRUNCATED authorized set, and the Businesses past the limit become unreachable to
+ * that principal — `authorizeSuppliedBusiness` answers `forbidden` for them and an unfiltered
+ * list omits them. That is the fail-closed direction: someone loses access to their own data,
+ * which is visible and reported, rather than gaining access to somebody else's, which is not.
+ *
+ * 500 against a closed beta of ten Organizations (`MULTITENANCY_STANDARD.md` §7.5) is far more
+ * headroom than the shape of the product needs, and it is a number to revisit against real
+ * tenants rather than a property that holds forever. THE REAL FIX AT SCALE IS NOT A BIGGER
+ * NUMBER: it is the explicit business assignment `0020` defers, which makes the set small
+ * because it is chosen rather than large because it is everything.
+ */
+export const MAX_AUTHORIZED_BUSINESSES = 500;
+
 export type BusinessDirectory = {
   /**
    * True when the Business exists in the store's tenant. False when it does not exist, or
    * exists in another Organization — the two are the same answer here, by construction.
    */
   existsInTenant(store: TenantScopedStore, businessId: string): Promise<Result<boolean>>;
+
+  /**
+   * Every Business in the store's tenant. `docs/decisions/0020`.
+   *
+   * IT IS TENANT-SCOPED BY CONSTRUCTION AND NOT BY CARE. The handle carries the tenant predicate
+   * inside it, so there is no Organization identifier in this signature and no way to write this
+   * query for another Organization — the same property every other read through
+   * `TenantScopedStore` has. That is why `0020` says to read the set through the tenant handle
+   * rather than from the control plane.
+   *
+   * `limit` IS REQUIRED AND THERE IS NO UNLIMITED FORM, for the reason `SelectSpec.limit` is
+   * required: on a single-threaded database an unbounded read is every Organization's latency.
+   * A tenant with more Businesses than the limit gets a TRUNCATED authorized set, which is the
+   * fail-closed direction — some Businesses become unreachable rather than someone else's
+   * becoming reachable — and it is a product problem to solve with a real assignment model, not
+   * a reason to remove the bound. See `MAX_AUTHORIZED_BUSINESSES`.
+   */
+  listInTenant(store: TenantScopedStore, limit: number): Promise<Result<readonly string[]>>;
 };
 
 export function createStoreBusinessDirectory(): BusinessDirectory {
@@ -74,6 +115,34 @@ export function createStoreBusinessDirectory(): BusinessDirectory {
         return err(outcome.error);
       }
       return ok(outcome.value.length > 0);
+    },
+
+    async listInTenant(
+      store: TenantScopedStore,
+      limit: number,
+    ): Promise<Result<readonly string[]>> {
+      const outcome = await store.select({
+        table: BUSINESS_TABLE,
+        // ONE COLUMN. The authorized set is a set of identifiers and nothing else, so nothing
+        // about a Business — a name, a status, a created date — is read into a value that then
+        // travels onto `ActionContext`, where an App could see it.
+        columns: [BUSINESS_ID_COLUMN],
+        // NO PREDICATE, AND THAT IS SAFE ONLY BECAUSE OF THE HANDLE. The tenant predicate is
+        // inside `store` and is added by the compiler to every statement it emits, so "no
+        // predicate" here means "every Business in THIS Organization" and cannot mean more.
+        limit,
+      });
+      if (!outcome.ok) {
+        return err(outcome.error);
+      }
+      const ids: string[] = [];
+      for (const row of outcome.value) {
+        const value = row[BUSINESS_ID_COLUMN];
+        if (typeof value === 'string' && value.length > 0) {
+          ids.push(value);
+        }
+      }
+      return ok(ids);
     },
   };
 }

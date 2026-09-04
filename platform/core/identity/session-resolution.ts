@@ -224,6 +224,35 @@ export type SessionResolver = {
     /** A HINT, or `null` for a session with no Organization selected yet. */
     readonly requestedOrganizationId: string | null;
   }): Promise<Result<SessionRecord>>;
+
+  /**
+   * Ends a session. Logout.
+   *
+   * ===========================================================================================
+   * IT ANSWERS THE SAME THING WHETHER IT REVOKED SOMETHING OR NOTHING, AND THAT IS THE POINT.
+   * ===========================================================================================
+   *
+   * `pre-auth-registry.ts` makes `identity.session.revoke` `disclosure: 'collapsed'` for a reason
+   * that is easy to miss and is restated here because this is the function that could break it:
+   *
+   *   *"A logout that answered 'no such session' for an unknown token and 'done' for a real one
+   *   is a TOKEN-VALIDITY ORACLE: an attacker holding a stolen or guessed token learns whether it
+   *   is live without using it."*
+   *
+   * So a session identifier that does not exist, one that has expired, and one that was deleted a
+   * moment ago all return `ok`. The only errors this can produce are Dudo-side — a store failure
+   * or an exhausted daily budget — and the handler collapses those too.
+   *
+   * IT PERFORMS NO WRITE WHEN THERE IS NOTHING TO DELETE, which is what keeps an unauthenticated
+   * caller from spending D1 capacity. A forged credential never reaches this function at all: the
+   * MAC is checked first (`session-credential.ts`), so it costs one HMAC and no database read.
+   *
+   * THE PRINCIPAL FOR THE RESERVATION COMES FROM THE SESSION ROW, never from the caller. That is
+   * what `ControlPlaneWriteAdmission.reserve` requires — a principal identifier that is
+   * server-derived from a verified credential — and reading the row first is the only way to
+   * obtain one here.
+   */
+  revokeSession(sessionId: string): Promise<Result<void>>;
 };
 
 export type SessionResolverDependencies = {
@@ -376,7 +405,21 @@ export function createSessionResolver(
           principalId,
           principalType,
           organizationId,
-          authorizedBusinessIds: authorized.value.authorizedBusinessIds,
+          // ===================================================================================
+          // EMPTY HERE, AND COMPLETED BY THE PIPELINE. `docs/decisions/0020`.
+          //
+          // This is §C.5's authorized ORGANIZATION context. The authorized BUSINESS set is the
+          // step after `TenantStoreResolver`, because it is a read of the tenant's own `business`
+          // table and there is no tenant store at this point in the order. `0020` calls this a
+          // SPLIT rather than a reordering, and the distinction matters: nothing about when
+          // authorization happens has moved. Two things with different dependencies were bundled
+          // into one step, and they are now two steps.
+          //
+          // Leaving it empty is safe in the only direction that counts — a principal that somehow
+          // reached a handler without being completed is authorized over nothing.
+          // ===================================================================================
+          authorizedBusinessIds: [],
+          businessScope: 'organization',
           grants: authorized.value.grants,
           // Delegation is `AUTHORIZATION_STANDARD.md` §11 and is not part of `0014` §C. A
           // session cannot express "acting for", and inventing a column for it here would be
@@ -508,6 +551,52 @@ export function createSessionResolver(
         return err(written.error);
       }
       return ok(record);
+    },
+
+    async revokeSession(sessionId: string): Promise<Result<void>> {
+      // ---- The row is read first, and NOT through `liveSession`.
+      //
+      // `liveSession` refuses an expired session and a suspended principal, which is right for
+      // authentication and wrong here. A SUSPENDED PRINCIPAL MUST STILL BE ABLE TO HAVE ITS
+      // SESSION DELETED — suspension is exactly when you want the live credential gone — and an
+      // expired session's row is still a row that retention would otherwise have to collect.
+      // Reading directly keeps logout working in both states.
+      const found = await store.findSession(sessionId);
+      if (!found.ok) {
+        return err(found.error);
+      }
+      const session = found.value;
+      if (session === null) {
+        // NOTHING TO DELETE, AND NO WRITE. This is the branch an attacker with a guessed
+        // identifier reaches, and it must cost nothing and disclose nothing. `ok` is returned
+        // rather than an error precisely so that a caller cannot tell it apart from a successful
+        // revocation — the token-validity oracle above.
+        return ok(undefined);
+      }
+
+      // A DELETE COSTS THE SAME 3 ROW-WRITES AS AN INSERT, and the reason is worth keeping next
+      // to the number: removing a row removes its entry from EVERY index, so the table row, the
+      // primary key and `session_by_principal` are all written. `control-plane-admission.ts`
+      // records it as "session revocation — 1 statement, 3 true, 3 charged, exact".
+      const admitted = await admission.reserve({
+        principalId: session.principalId,
+        estimatedRowWrites: SESSION_ROW_WRITES,
+        nowMs: clock.nowMs(),
+      });
+      if (!admitted.ok) {
+        return err(admitted.error);
+      }
+      if (admitted.value.kind === 'deferred') {
+        // THE DAILY CEILING CAN REFUSE A LOGOUT, and that is a genuine consequence rather than an
+        // oversight: at the platform ceiling nothing writes, including this. The session still
+        // expires on its own at 12 hours, and rotating `SESSION_HMAC_KEY` remains the bulk
+        // revocation of last resort. The handler collapses this to `acknowledged`, so a caller
+        // is told the same thing either way — which means A REFUSED LOGOUT IS INVISIBLE TO THE
+        // USER. Reported; it is the price of the collapse, not a defect in it.
+        return err(quotaExceeded());
+      }
+
+      return store.deleteSession(sessionId, admitted.value.reservation);
     },
   };
 }

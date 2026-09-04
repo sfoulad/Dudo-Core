@@ -6,8 +6,32 @@
 
 import type { ReactNode } from 'react';
 import { Toaster } from './Toaster';
+import { Button } from './ui/button';
+import { transportBadge } from '@/api/config';
 
-export function AppShell({ busy, children }: { busy: boolean; children: ReactNode }) {
+export function AppShell({
+  busy,
+  children,
+  signedIn,
+  signingOut,
+  onSignOut,
+}: {
+  busy: boolean;
+  children: ReactNode;
+  /** Whether to offer the sign-out control at all. */
+  signedIn: boolean;
+  signingOut: boolean;
+  onSignOut: () => void;
+}) {
+  /*
+   * THE BADGE MUST TELL THE TRUTH IN BOTH DIRECTIONS. It said "Fixture data"
+   * unconditionally while the fixture transport was the only one; now that a
+   * real one exists, a hardcoded label would mean a live build carrying a
+   * screenshot that says it is a demonstration, or the reverse. Whether a
+   * screen is showing a tenant's real records is not something a reviewer
+   * should have to check the build flags to find out.
+   */
+  const badge = transportBadge();
   return (
     <div className="flex min-h-dvh flex-col">
       <a
@@ -28,9 +52,38 @@ export function AppShell({ busy, children }: { busy: boolean; children: ReactNod
           </a>
           <div className="grow" />
           <span className="inline-flex items-center gap-2 rounded-full border border-white/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.04em] text-[#b9c0dd]">
-            <span aria-hidden="true" className="size-2 rounded-full bg-gold-500" />
-            Fixture data
+            <span
+              aria-hidden="true"
+              // In-palette on both branches. The dot is decoration — the label
+              // carries the meaning, which is why it is `aria-hidden`.
+              className={badge.live ? 'size-2 rounded-full bg-green-500' : 'size-2 rounded-full bg-gold-500'}
+            />
+            {badge.label}
           </span>
+
+          {/*
+            Sign out. Offered only when signed in — a control that cannot do
+            anything is worse than no control.
+
+            IT ENDS THE SESSION SERVER-SIDE AND CANNOT CLEAR THE COOKIE
+            (docs/decisions/0018 finding 1). The session row is deleted, so the
+            credential stops resolving immediately, which is the property that
+            matters; the dead cookie lingers in the browser until it expires.
+            That is why the client treats a later 401 as signed out rather than
+            as something to retry.
+          */}
+          {signedIn ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              busy={signingOut}
+              disabled={signingOut}
+              onClick={onSignOut}
+              className="text-[#b9c0dd] hover:not-disabled:bg-white/10 hover:not-disabled:text-white"
+            >
+              {signingOut ? 'Signing out…' : 'Sign out'}
+            </Button>
+          ) : null}
         </div>
       </header>
 
@@ -52,7 +105,11 @@ export function AppShell({ busy, children }: { busy: boolean; children: ReactNod
         <div className="mx-auto flex max-w-[1180px] flex-wrap gap-x-4 gap-y-2 p-4 text-xs text-ink-muted">
           <span>Dudo — Customer Directory</span>
           <span>Contract customer-directory-v1</span>
-          <span>Local fixture build. No server, no network calls, synthetic data only.</span>
+          <span>
+            {badge.live
+              ? 'Live build. Sessions last 12 hours and are not renewed; signing out revokes immediately.'
+              : 'Local fixture build. No server, no network calls, synthetic data only.'}
+          </span>
         </div>
       </footer>
 

@@ -80,6 +80,13 @@ export function toApiError(thrown: unknown): ApiError {
  * A retry is offered only where retrying could plausibly succeed without the
  * person changing anything. Offering "Try again" beside `forbidden` invites
  * someone to hammer a door that is closed on purpose.
+ *
+ * `unauthenticated` IS DELIBERATELY NOT RETRYABLE, AND THAT IS NOW A RULE RATHER
+ * THAN A JUDGEMENT. `docs/decisions/0018` requires a `401` to be read as SIGNED
+ * OUT: logout deletes the session row but CANNOT clear the cookie, so after a
+ * successful sign-out the browser keeps presenting a dead credential for up to
+ * 12 hours. Retrying with it can only fail again. The recovery is to sign in —
+ * which is what the gate does when the transport reports the `401`.
  */
 export function isRetryable(error: Pick<ApiError, 'code'> | null | undefined): boolean {
   if (!error) return false;

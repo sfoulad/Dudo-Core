@@ -151,6 +151,27 @@ export const ORGANIZATION_MEMBERSHIP_ROW_WRITES = 2;
 export const TENANT_DIRECTORY_ROW_WRITES = 2;
 
 /**
+ * `principal_credential` (`0006`): 1 table row + 1 implicit primary-key index.
+ *
+ * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL:
+ * `CredentialStore` (`credential-store.ts`) has exactly one method and it is a read. Enrollment is
+ * an operator action performed out of band by `tools/seed-principal.ts`, which PRINTS SQL and
+ * executes nothing, so these two row-writes are spent by a human running a statement by hand and
+ * never by request traffic. No unauthenticated caller can cause a write to this table at all.
+ *
+ * Declared anyway, for the reason `PRINCIPAL_ROW_WRITES` is: the first writer — self-service
+ * registration, or credential rotation — must draw an accounted, already-counted cost rather than
+ * a number it picked. THAT SLICE MUST ALSO ANSWER TWO QUESTIONS THIS ONE DOES NOT: which
+ * allocation an enrollment draws from, and how an enrollment endpoint stops a client posting a
+ * raw password in place of the derived value (`credential-verifier.ts`,
+ * `SUBMITTED_VALUE_CHARACTERS`).
+ *
+ * WHEN A MIGRATION ADDS AN INDEX — the obvious candidate is `principal_id`, for revoking every
+ * credential a principal holds — THIS NUMBER MUST MOVE WITH IT.
+ */
+export const PRINCIPAL_CREDENTIAL_ROW_WRITES = 2;
+
+/**
  * =============================================================================================
  * EVERY CONTROL-PLANE OPERATION, COSTED — including the ones nothing has built yet.
  * =============================================================================================
@@ -170,6 +191,16 @@ export const TENANT_DIRECTORY_ROW_WRITES = 2;
  *   session rotation               2          6       6      NOT BUILT
  *   membership change              1        1-2       2      NOT BUILT; + 5 in the tenant database
  *   Organization change            1        1-2       2      NOT BUILT; onboarding is 6
+ *   credential enrollment          1          2       2      OPERATOR-ONLY, out of band; see below
+ *
+ * CREDENTIAL ENROLLMENT IS IN THIS TABLE AND NOT IN THIS BUDGET, and the distinction is worth
+ * stating rather than inferring from a blank cell. `docs/decisions/0015` §D gave the platform a
+ * credential format, so `principal_credential` now exists and has a cost — but the running Worker
+ * contains no code that writes it. The rows are inserted by an operator running SQL that
+ * `tools/seed-principal.ts` printed, so they never pass through `reserve` and cannot be caused by
+ * a request. When self-service registration is built, it will be the first thing on this path to
+ * write without a verified principal, which is the case `ControlPlaneWriteAdmission.reserve` has
+ * no parameter for — the same finding `pre-auth-admission.ts` records for login start.
  *
  * LOGIN AND SESSION CREATION ARE THE SAME WRITE. A login that names an Organization writes the
  * validated identifier IN THE INSERT rather than following up with an UPDATE, so there is no

@@ -81,6 +81,7 @@
  */
 
 import type { Result } from '../kernel/result.ts';
+import type { MembershipRole } from '../authorization/roles.ts';
 import type { ControlPlaneWriteReservation } from './control-plane-admission.ts';
 
 // =============================================================================================
@@ -139,18 +140,33 @@ export type OrganizationRecord = {
 export type MembershipStatus = 'active' | 'suspended';
 
 /**
- * Binds one principal to one Organization.
+ * Binds one principal to one Organization, and carries the grant.
  *
- * NO ROLE, NO PERMISSION, NO GRANT AND NO BUSINESS ASSIGNMENT. `docs/decisions/0007`'s logical
- * permission model does not say where a principal's grants are stored, `0014` §C does not decide
- * it, and a column here encoding roles would settle it silently. The seam is
- * `PrincipalAuthorizationSource` (`principal-authorization-source.ts`), which is injected and
- * defaults to granting nothing.
+ * `role` ARRIVED WITH `docs/decisions/0019`, WHICH CLOSED AZ5. Until then this record deliberately
+ * had no role, no permission and no grant, because `0007` did not say where a principal's grants
+ * were stored and a column encoding them would have settled that silently. The decision now
+ * exists, and the mapping from role to permissions is `authorization/roles.ts` — never a
+ * conditional on the role name anywhere else.
+ *
+ * `null` MEANS DENY EVERYTHING, and it covers two cases the adapter deliberately merges: no role
+ * was ever set, and a value this build does not recognise. `0019`: an unrecognised role "is not
+ * an error and not a partial grant — it is deny all, on the same path as an absent membership."
+ *
+ * THE ROLE IS PER-ORGANIZATION BECAUSE IT SITS HERE AND NOT ON `PrincipalRecord`. A principal may
+ * belong to several Organizations and must not carry authority across them; on `principal` this
+ * field would be a tenant-isolation defect with a convenient shape.
+ *
+ * STILL NO BUSINESS ASSIGNMENT. `AuthenticatedPrincipal.authorizedBusinessIds` cannot be answered
+ * from this record — for an organization-scope principal the set is "every Business in its
+ * Organization", which is a read of the TENANT database after `TenantStoreResolver`, and that is
+ * after this step in `0014` §C.5's order. `0019` does not close that half; see
+ * `principal-authorization-source.ts`.
  */
 export type OrganizationMembershipRecord = {
   readonly principalId: string;
   readonly organizationId: string;
   readonly status: MembershipStatus;
+  readonly role: MembershipRole | null;
 };
 
 /**

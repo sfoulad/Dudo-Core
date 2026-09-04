@@ -62,6 +62,7 @@
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import type { Clock } from '../kernel/clock.ts';
+import type { CryptoBytes } from '../kernel/bytes.ts';
 import { detail, invalidArgument, unavailable } from '../kernel/errors.ts';
 import { EMISSION_LADDER, RATE_WINDOW_MS, windowStart } from '../protection/coordination.ts';
 import type {
@@ -124,6 +125,13 @@ export type PreAuthCredential = {
 export type PreAuthOutcome =
   | { readonly kind: 'acknowledged' }
   | { readonly kind: 'issued'; readonly credentials: readonly PreAuthCredential[] }
+  /**
+   * REVOCATION. `docs/decisions/0018` §B. NOTE THAT IT HAS NO `credentials` FIELD, and that is
+   * the difference from `issued` rather than a simplification of it: the clearing cookie is a
+   * constant the transport emits, so there is no value here for a handler to choose, to vary per
+   * request, or to be steered into setting. See `PreAuthOutcomeKind` in `pre-auth-registry.ts`.
+   */
+  | { readonly kind: 'cleared' }
   | { readonly kind: 'refused' }
   | { readonly kind: 'unavailable' };
 
@@ -237,6 +245,29 @@ export type PreAuthHandler = (
  */
 export type PreAuthPresentedCredentials = {
   get(name: PreAuthCredentialName): string | undefined;
+  /**
+   * The `Authorization: Bearer` credential, or `undefined`.
+   *
+   * ===========================================================================================
+   * `docs/decisions/0018` §A. THIS IS NOT A HEADER MAP AND MUST NEVER BECOME ONE.
+   * ===========================================================================================
+   *
+   * `PreAuthRequest` still carries no headers, for the reason stated there and unchanged: *"a
+   * handler with the header map is a handler that can read a caller-supplied
+   * `X-Organization-Id`."* This method returns ONE value — the credential after the `Bearer`
+   * scheme — and there is no parameter through which a handler could ask for any other header.
+   * The transport parses it; a handler cannot reach past it.
+   *
+   * IT IS `undefined` FOR EVERY ENTRY POINT EXCEPT REVOCATION, and that is enforced in the
+   * transport rather than trusted here: `readPresentedCredentials` takes the entry-point id and
+   * consults a closed allow-list. `0018` §A widened exactly one route, and widening a second is a
+   * deliberate edit to that list.
+   *
+   * WHY IT OPENS NO CHANNEL. The value is only ever VERIFIED, never trusted — identical to a
+   * cookie — and revocation's response is a fixed constant regardless of what was presented or
+   * whether anything resolved. Which header the server reads cannot vary the bytes it returns.
+   */
+  bearer(): string | undefined;
 };
 
 /**
@@ -587,7 +618,7 @@ export type PreAuthIdentifierBucketer = {
  * counter.
  */
 export async function createHmacIdentifierBucketer(
-  secret: Uint8Array,
+  secret: CryptoBytes,
 ): Promise<PreAuthIdentifierBucketer> {
   if (secret.length < 32) {
     throw new PreAuthRateSubjectError(
@@ -990,6 +1021,8 @@ export type PreAuthResolution =
   | { readonly kind: 'static'; readonly bodyText: string }
   | { readonly kind: 'acknowledged' }
   | { readonly kind: 'issued'; readonly credentials: readonly PreAuthCredential[] }
+  /** The acknowledgement body plus the transport's fixed clearing cookie. `0018` §B. */
+  | { readonly kind: 'cleared' }
   | { readonly kind: 'refused' }
   | { readonly kind: 'unavailable' }
   | { readonly kind: 'rate_limited'; readonly retryAfterSeconds: number }
@@ -1186,6 +1219,13 @@ function outcomeOfKind(kind: PreAuthOutcomeKind): PreAuthOutcome {
   if (kind === 'acknowledged') {
     return { kind: 'acknowledged' };
   }
+  if (kind === 'cleared') {
+    // A LEGITIMATE COLLAPSE TARGET, UNLIKE `issued`, AND THE TEST THAT SEPARATES THEM IS BELOW.
+    // Collapsing to `cleared` on a thrown or out-of-set outcome REMOVES a credential; collapsing
+    // to `issued` would GRANT one. A failure path that revokes is fail-closed; a failure path
+    // that authenticates is the bypass. `docs/decisions/0018` §B.
+    return { kind: 'cleared' };
+  }
   if (kind === 'refused') {
     return { kind: 'refused' };
   }
@@ -1246,10 +1286,14 @@ function evidenceCategoryOf(outcome: PreAuthOutcome): PreAuthEvidenceCategory | 
   if (outcome.kind === 'unavailable') {
     return 'unavailable';
   }
-  // `acknowledged` and `issued` are not denials. Note that a COLLAPSED entry point therefore
-  // records nothing on its refusal path — because it has no refusal path, by construction. What
-  // its handler learned is the identity slice's own to log, in the control plane, where it is not
-  // reachable through a response.
+  // `acknowledged`, `issued` and `cleared` are not denials. Note that a COLLAPSED entry point
+  // therefore records nothing on its refusal path — because it has no refusal path, by
+  // construction. What its handler learned is the identity slice's own to log, in the control
+  // plane, where it is not reachable through a response.
+  //
+  // `cleared` IS DELIBERATELY NOT COUNTED AS EVIDENCE. A logout is not a denial, and counting one
+  // would put a row-writing path behind an endpoint an unauthenticated caller can call at will —
+  // which is `0013`'s hole, reopened through the evidence trail rather than through the audit log.
   return null;
 }
 

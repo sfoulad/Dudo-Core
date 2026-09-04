@@ -18,6 +18,7 @@
  *   static          200     the registry's frozen constant           none
  *   acknowledged    200     `{"status":"ok"}`                        none
  *   issued          200     `{"status":"ok"}`                        one per credential
+ *   cleared         200     `{"status":"ok"}`                        ONE FIXED CLEARING COOKIE
  *   refused         401     the fixed `unauthenticated` envelope     none
  *   unavailable     503     the fixed `unavailable` envelope         none
  *   rate_limited    429     the fixed `rate_limited` envelope        none
@@ -68,6 +69,7 @@ import type {
   PreAuthResolution,
 } from '../identity/pre-auth-admission.ts';
 import type { PreAuthCredentialName } from '../identity/pre-auth-admission.ts';
+import type { PreAuthEntryPointId } from '../identity/pre-auth-registry.ts';
 import { renderError } from './response.ts';
 import {
   invalidArgument,
@@ -109,7 +111,57 @@ function baseHeaders(requestId: string, correlationId: string): Headers {
  * a name of its choosing. That last one is the reason: a `get(name: string)` would let a handler
  * be steered into reading attacker-chosen input by a future change that looked harmless.
  */
-export function readPresentedCredentials(request: Request): PreAuthPresentedCredentials {
+/**
+ * ===========================================================================================
+ * WHICH ENTRY POINTS MAY SEE `Authorization`. `docs/decisions/0018` §A, and it is a CLOSED LIST.
+ * ===========================================================================================
+ *
+ * `0018` §A widened exactly one route, because exactly one had the defect: an Apple client
+ * presenting `Authorization: Bearer` could not log out, and the handler correctly answered
+ * "acknowledged" while revoking nothing — a security action reporting success without performing
+ * it, which no client could detect and none could compensate for.
+ *
+ * IT IS AN ALLOW-LIST RATHER THAN "PARSE IT ALWAYS", and the reason is least privilege between
+ * Core's own components, the same argument `control-plane-store.ts` property 3 makes. Nothing
+ * else needs the header: `identity.login.complete` authenticates from the body and
+ * `identity.login.start` reads nothing at all, so handing either of them a caller-supplied header
+ * would be widening a surface for no purpose. Adding a second entry here is a deliberate edit
+ * with a reviewer, which is what "closed" means.
+ */
+const ENTRY_POINTS_READING_AUTHORIZATION: ReadonlySet<PreAuthEntryPointId> = new Set<
+  PreAuthEntryPointId
+>(['identity.session.revoke']);
+
+const BEARER_PREFIX = 'bearer ';
+
+/**
+ * Reads the `Authorization: Bearer` credential, for the entry points permitted to see one.
+ *
+ * THE SCHEME IS CASE-INSENSITIVE AND THE CREDENTIAL IS NOT — RFC 7235. This mirrors
+ * `identity/session-credential.ts::readBearer` deliberately rather than sharing code with it: that
+ * one serves the AUTHENTICATED path and this one the pre-auth path, and the two modules may not
+ * import each other's transport. The rule is identical on purpose and must stay identical; the
+ * duplication is the price of the boundary.
+ */
+function readBearer(request: Request, entryPointId: PreAuthEntryPointId): string | undefined {
+  if (!ENTRY_POINTS_READING_AUTHORIZATION.has(entryPointId)) {
+    return undefined;
+  }
+  const header = request.headers.get('authorization');
+  if (header === null || header.length <= BEARER_PREFIX.length) {
+    return undefined;
+  }
+  if (header.slice(0, BEARER_PREFIX.length).toLowerCase() !== BEARER_PREFIX) {
+    return undefined;
+  }
+  const value = header.slice(BEARER_PREFIX.length).trim();
+  return value.length === 0 ? undefined : value;
+}
+
+export function readPresentedCredentials(
+  request: Request,
+  entryPointId: PreAuthEntryPointId,
+): PreAuthPresentedCredentials {
   const header = request.headers.get('cookie');
   const found = new Map<PreAuthCredentialName, string>();
   if (header !== null) {
@@ -130,9 +182,13 @@ export function readPresentedCredentials(request: Request): PreAuthPresentedCred
       }
     }
   }
+  const bearer = readBearer(request, entryPointId);
   return {
     get(name: PreAuthCredentialName): string | undefined {
       return found.get(name);
+    },
+    bearer(): string | undefined {
+      return bearer;
     },
   };
 }
@@ -140,13 +196,14 @@ export function readPresentedCredentials(request: Request): PreAuthPresentedCred
 export function buildPreAuthRequest(
   bodyText: string,
   request: Request,
+  entryPointId: PreAuthEntryPointId,
   sourceAddressHash: string | null,
   requestId: string,
   correlationId: string,
 ): PreAuthRequest {
   return {
     bodyText,
-    credentials: readPresentedCredentials(request),
+    credentials: readPresentedCredentials(request, entryPointId),
     sourceAddressHash,
     requestId,
     correlationId,
@@ -156,10 +213,18 @@ export function buildPreAuthRequest(
 /**
  * The `Set-Cookie` value. Attributes forced; see the file header.
  *
- * `maxAgeSeconds: 0` PRODUCES A CLEARING COOKIE — an empty value with `Max-Age=0` — which is how
- * `identity.session.revoke` removes a credential. It is written as one branch rather than left to
- * the handler to express, so "log out" cannot be implemented as "set a session cookie to the
- * empty string with a year's lifetime".
+ * `maxAgeSeconds: 0` PRODUCES A CLEARING COOKIE — an empty value with `Max-Age=0`. It is written
+ * as one branch rather than left to the handler to express, so "log out" cannot be implemented as
+ * "set a session cookie to the empty string with a year's lifetime".
+ *
+ * A CORRECTION TO THIS COMMENT, MADE 2026-09-04, AND THE ERROR IS WORTH KEEPING VISIBLE. It
+ * previously said this branch was "how `identity.session.revoke` removes a credential". IT WAS
+ * NOT, AND IT COULD NOT BE: a clearing cookie can only travel on an `issued` outcome, and the
+ * registry declared revocation's only outcome as `acknowledged`. The branch was unreachable, and
+ * the comment asserting otherwise is precisely what stopped anyone noticing — a comment
+ * describing code that cannot execute is worse than no comment, because it answers the question a
+ * reader came to ask. `docs/decisions/0018` §B fixed it by adding the `cleared` outcome, which is
+ * what actually reaches this function now, through `CLEARED_SESSION_COOKIE` below.
  */
 export function renderCredential(credential: PreAuthCredential): string {
   const maxAge = Math.max(
@@ -172,6 +237,28 @@ export function renderCredential(credential: PreAuthCredential): string {
     'HttpOnly; Secure; SameSite=Lax'
   );
 }
+
+/**
+ * The exact bytes every revocation sets, computed once at module load. `docs/decisions/0018` §B.
+ *
+ * IT CLEARS `dudo_session` AND NOTHING ELSE, deliberately. `dudo_refresh` and `dudo_login_state`
+ * are in the closed credential-name set but the platform never issues either — `0015` §B.3 leaves
+ * refresh unbuilt and §D removed the need for login state — so clearing them would emit two
+ * `Set-Cookie` headers for credentials that do not exist. When either is built, it is added here
+ * in the same change that starts issuing it, and the response stays constant because this
+ * constant stays constant.
+ *
+ * IT IS BUILT THROUGH `renderCredential` RATHER THAN WRITTEN OUT AS A LITERAL, so `HttpOnly`,
+ * `Secure`, `SameSite` and `Path` come from the one place that forces them. A hand-written string
+ * here would be a second definition of the cookie attributes, and a clearing cookie whose `Path`
+ * did not match the one that set it does not clear anything — a failure that looks like the
+ * server ignoring logout.
+ */
+export const CLEARED_SESSION_COOKIE = renderCredential({
+  name: 'dudo_session',
+  value: '',
+  maxAgeSeconds: 0,
+});
 
 /**
  * The renderer. One switch, no logic.
@@ -205,6 +292,23 @@ export function renderPreAuthResolution(
       // would drop one and log the user out on the next request.
       headers.append('set-cookie', renderCredential(credential));
     }
+    return new Response(PRE_AUTH_ACK_BODY_TEXT, { status: 200, headers });
+  }
+  if (resolution.kind === 'cleared') {
+    // ===========================================================================================
+    // ONE CONSTANT, RENDERED FROM A MODULE-LEVEL STRING, ON EVERY REVOCATION. `0018` §B.
+    // ===========================================================================================
+    //
+    // `resolution` HAS NO FIELD THIS BRANCH READS, and that is the property rather than an
+    // accident of the shape: there is nothing a handler could put in it, so the bytes cannot vary
+    // with the session that was revoked, with whether one was revoked, or with anything the
+    // caller presented. A valid session, a forged credential, an unknown session, a replay and an
+    // absent cookie all produce this identical response.
+    //
+    // THE BODY IS `PRE_AUTH_ACK_BODY_TEXT`, THE SAME CONSTANT `acknowledged` AND `issued` USE, so
+    // the response is also indistinguishable in length from every other success on this path.
+    const headers = baseHeaders(requestId, correlationId);
+    headers.append('set-cookie', CLEARED_SESSION_COOKIE);
     return new Response(PRE_AUTH_ACK_BODY_TEXT, { status: 200, headers });
   }
   if (resolution.kind === 'refused') {

@@ -67,6 +67,8 @@ import { retryAfterSecondsUntilReset } from '../protection/write-admission.ts';
 import type { PreAuthDependencies } from '../identity/pre-auth-admission.ts';
 import { dispatchPreAuthRequest } from '../identity/pre-auth-admission.ts';
 import { matchPreAuthEntryPoint } from '../identity/pre-auth-registry.ts';
+import type { SessionRouteDependencies } from '../identity/session-routes.ts';
+import { dispatchSessionRoute, matchSessionRoute } from '../identity/session-routes.ts';
 import { buildPreAuthRequest, renderPreAuthResolution } from './pre-auth-http.ts';
 
 export type ApiDependencies = PipelineDependencies & {
@@ -89,6 +91,14 @@ export type ApiDependencies = PipelineDependencies & {
    * `http/adapters/worker-entry.ts` already refuses to make for the authenticated path.
    */
   readonly preAuth?: PreAuthDependencies;
+  /**
+   * THE SESSION ROUTE CLASS. `docs/decisions/0021`. Optional here, and absent means the two
+   * routes are UNREACHABLE — not open: `not_found`, exactly as an unregistered path gets.
+   *
+   * Composed by `identity/composition.ts`, which is the only place that holds both the session
+   * resolver and the credential reader these need.
+   */
+  readonly sessionRoutes?: SessionRouteDependencies;
 };
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
@@ -181,12 +191,72 @@ export async function handleRequest(
       buildPreAuthRequest(
         bodyText,
         request,
+        // THE ENTRY-POINT ID IS PASSED SO THE TRANSPORT CAN DECIDE WHETHER THIS ROUTE MAY SEE
+        // `Authorization` (docs/decisions/0018 §A). It is the value Core matched against its own
+        // frozen registry a few lines above — never anything the caller supplied — so it cannot
+        // be steered to widen the allow-list.
+        preAuthEntryPoint.id,
         origin.sourceAddressHash,
         requestId,
         correlationId,
       ),
     );
     return renderPreAuthResolution(resolution, requestId, correlationId);
+  }
+
+  // ===========================================================================================
+  // THE SESSION ROUTE CLASS. `docs/decisions/0021`. Matched AFTER the pre-authentication registry
+  // and BEFORE the App router, and both sides of that position are deliberate.
+  // ===========================================================================================
+  //
+  // AFTER PRE-AUTH: the five entry points are a closed set that must not be shadowed, and their
+  // paths are exact, so anything reaching here is not one of them.
+  //
+  // BEFORE THE APP ROUTER AND BEFORE THE `basePath` TEST: these are ABSOLUTE `/auth/**` paths, not
+  // App-relative ones. They sit under a reserved prefix, so `assertNoReservedPathCollision`
+  // already refuses any App route table that could resolve onto them — an App cannot serve,
+  // shadow, or present itself as the Organization picker.
+  //
+  // NOTHING BELOW THIS BLOCK RUNS FOR A SESSION ROUTE. No principal is resolved, no tenant store
+  // is obtained, no permission is evaluated and `invokeAction` is never called. That is `0021`'s
+  // whole decision expressed as control flow: an Action always has a tenant, and these are not
+  // Actions.
+  const sessionRoute = matchSessionRoute(request.method, url.pathname);
+  if (sessionRoute !== undefined) {
+    if (dependencies.sessionRoutes === undefined) {
+      // Registered but not composed: unreachable, exactly as an unregistered path is.
+      return renderError(notFound(), requestId, correlationId);
+    }
+    let sessionBodyText = '';
+    if (METHODS_WITH_BODY.has(request.method)) {
+      try {
+        sessionBodyText = await request.text();
+      } catch {
+        return renderError(
+          invalidArgument([detail('', 'must_be_valid_json')]),
+          requestId,
+          correlationId,
+        );
+      }
+    }
+    const outcome = await dispatchSessionRoute(dependencies.sessionRoutes, sessionRoute, {
+      bodyText: sessionBodyText,
+      headers: new Map(
+        [...request.headers.entries()].map(([name, value]) => [name.toLowerCase(), value]),
+      ),
+      // THE RAW QUERY STRING, REFUSED WHOLESALE BY THE DISPATCHER. Neither route declares a query
+      // parameter, and `0021` is explicit that without this the one route in Dudo that accepts a
+      // tenant identifier would be the one route with no input validation.
+      queryString: url.search.startsWith('?') ? url.search.slice(1) : url.search,
+      requestId,
+      correlationId,
+    });
+    if (!outcome.ok) {
+      return renderError(outcome.error, requestId, correlationId);
+    }
+    // 200 for both. Neither route creates a resource — selection MOVES the row behind an existing
+    // session rather than making one — so a 201 would misdescribe it.
+    return renderSuccess(outcome.value, 200, requestId, correlationId);
   }
 
   if (!url.pathname.startsWith(basePath)) {

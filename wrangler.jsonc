@@ -1,0 +1,151 @@
+{
+  // Dudo-Core — Cloudflare Workers deployment configuration.
+  //
+  // OWNER: Team Lead (root-level shared configuration).
+  //
+  // THIS FILE IS NOT YET DEPLOYABLE, BY DESIGN. Two things are deliberately absent:
+  //
+  //   1. `database_id` values. No D1 database has been created, because creating
+  //      Cloudflare resources is gated on C5 (the billing confirmations) which only the
+  //      user can complete. The placeholders below are invalid on purpose: wrangler will
+  //      refuse them loudly rather than silently bind the wrong database.
+  //
+  //   2. Secrets. `CURSOR_SIGNING_KEY`, `SESSION_HMAC_KEY` and `IDENTITY_LOOKUP_KEY` are
+  //      set with `wrangler secret put` and never appear in this file. Both repositories
+  //      are public (.claude/rules/architecture.md §8); a credential committed here is
+  //      compromised on landing and survives deletion from the working tree.
+  //
+  //      IDENTITY_LOOKUP_KEY (>= 32 bytes) IS A SEPARATE SECRET AND MUST NEVER BE DERIVED
+  //      FROM OR SHARED WITH SESSION_HMAC_KEY. It keys the HMAC that turns an email into
+  //      the primary key of `principal_credential`, which is how the control plane finds a
+  //      credential while storing no email address at all.
+  //
+  //      The two have opposite rotation properties, and that is the whole argument:
+  //      rotating SESSION_HMAC_KEY signs everyone out, which is recoverable in one login
+  //      and is exactly what you want to be cheap during an incident. Rotating
+  //      IDENTITY_LOOKUP_KEY is IRREVERSIBLE — the stored hashes cannot be recomputed
+  //      without the plaintext addresses the schema deliberately does not hold. Sharing
+  //      one value makes the cheap emergency control permanently lock out every user, and
+  //      you would discover that mid-incident.
+  //
+  // Bindings are fixed here and in platform/core so the two agree. Adding a binding is a
+  // Team Lead change, not an implementation detail.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dudo-core",
+  // The deployment entry module is at the ROOT, not inside platform/core.
+  //
+  // Mounting an App requires importing `apps/customers/**`, and CORE_BOUNDARIES.md §6 rule 2
+  // forbids `platform/core/**` from importing from `apps/**`. `fetchHandler` takes the router
+  // and permission envelope as parameters precisely so the composition can live outside Core —
+  // this file is what finally stands in that seam. See worker.ts.
+  //
+  // `DudoCoordinatorObject` is re-exported from worker.ts, because a Durable Object class must
+  // be exported from whatever `main` names.
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-04",
+
+  // Static assets: the React SPA (docs/decisions/0016).
+  //
+  // Asset requests are free and unlimited and DO NOT invoke the Worker, which is the
+  // whole reason 0016 chose an SPA over SSR. That property is preserved here.
+  //
+  // `run_worker_first` is scoped to "/api/*" ONLY. 0016 §5 prohibited `run_worker_first`
+  // outright, but was written against the boolean form (`true`), which routes EVERY
+  // request through the Worker and would indeed convert free asset requests into billed,
+  // capped invocations. The array form routes only the listed patterns. Without it,
+  // `not_found_handling: "single-page-application"` rewrites unmatched paths to
+  // /index.html, and an API route that the client reaches by navigation rather than
+  // fetch() would silently receive the SPA shell instead of JSON. See the amendment
+  // recorded in docs/decisions/0016-web-application-stack.md.
+  //
+  // Requests under /api/* are API calls that must reach the Worker regardless, so
+  // scoping it this way costs no invocation that was not already going to happen.
+  // THE PATTERN LIST IS NOT JUST "/api/*", AND THE OMISSION WAS A REAL BUG.
+  //
+  // Pre-authentication routes are absolute under `/auth/` and `/health` (0014 §B's
+  // registry) — they are deliberately NOT under `/api/`, because `/api/` is the namespace
+  // Apps mount into and login must not sit where an App could collide with it.
+  //
+  // With only "/api/*" listed, a deployed `POST /auth/login/complete` matched no asset,
+  // fell to `not_found_handling`, and was rewritten to `/index.html` and answered `200`
+  // with the SPA shell. Login would have failed while looking like a client bug, and the
+  // status code would have said everything was fine.
+  //
+  // The fix is to list the pre-auth prefixes here. It is NOT to move login under `/api`.
+  "assets": {
+    "directory": "./platform/web/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/auth/*", "/health"]
+  },
+
+  // D1 — two databases (docs/decisions/0006 §0.3).
+  //
+  // DB_TENANT holds tenant business data; every access is scoped through the tenant
+  // store and carries an Organization. DB_CONTROL holds the control plane: Principal,
+  // Organization, membership, Session, and TenantDirectoryEntry.
+  //
+  // They are separate because D1 is single-threaded per database, and because the
+  // control plane is the thing that decides tenancy — it cannot live inside a database
+  // that tenancy scopes.
+  //
+  // MIGRATION LAYOUT — READ BEFORE ADDING A MIGRATION.
+  //
+  // `wrangler d1 migrations apply` matches TOP-LEVEL .sql files inside `migrations_dir`
+  // only; it does not recurse. Our two sets are therefore separated by nesting:
+  //
+  //   platform/core/migrations/*.sql                 -> DB_TENANT   (3 files)
+  //   platform/core/migrations/control-plane/*.sql   -> DB_CONTROL  (5 files)
+  //
+  // This works, but it is fragile in one specific and dangerous way: a control-plane
+  // migration saved one directory too high lands at the top level and is applied to the
+  // TENANT database, silently and successfully. The control plane is the thing that
+  // decides tenancy, so misapplying its schema is a tenant-isolation problem, not a
+  // tidiness problem. Put every new migration in the directory for its own database and
+  // confirm which one it went to.
+  "d1_databases": [
+    {
+      "binding": "DB_TENANT",
+      "database_name": "dudo-tenant",
+      "database_id": "23c905c6-ab95-482b-a278-3058e2f5a5a2",
+      "migrations_dir": "platform/core/migrations"
+    },
+    {
+      "binding": "DB_CONTROL",
+      "database_name": "dudo-control-plane",
+      "database_id": "ee01839d-1e38-47e7-a7df-0c8814b12869",
+      "migrations_dir": "platform/core/migrations/control-plane"
+    }
+  ],
+
+  // Durable Objects — the bounded-denial-auditing and rate-limit coordinator
+  // (docs/decisions/0013). SQLite-backed, so it is declared under `new_sqlite_classes`.
+  //
+  // The class must be exported from the entry module named in `main` above, or the
+  // binding fails at deploy time.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COORDINATION",
+        "class_name": "DudoCoordinatorObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DudoCoordinatorObject"]
+    }
+  ]
+
+  // NOT ENABLED, deliberately:
+  //
+  // `observability` — Workers Logs would make a deployed Worker debuggable, and not
+  // having it will hurt. It is off because .claude/rules/architecture.md §6a requires a
+  // free-tier impact check BEFORE a feature is built, and that check has not been done
+  // for Workers Logs. Turning it on to make debugging easier, without checking what it
+  // consumes, is exactly the sequence that rule exists to prevent. It is a live open
+  // item, not an oversight.
+  //
+  // `nodejs_compat` — Core is dependency-free and uses WebCrypto, which is native to
+  // the runtime. The flag is not needed and is not added speculatively.
+}

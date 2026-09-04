@@ -1,0 +1,230 @@
+-- Control-plane migration 0006 — the credential table.
+--
+-- Read `0001_principal.sql` first for the shared header of this directory. In particular: no
+-- table here has a `tenant_id` column and none may gain one, and the separate database is an
+-- isolation boundary and NOT additional quota (docs/decisions/0014 §C.7).
+--
+-- IT BELONGS TO `DB_CONTROL`, and the directory it sits in is what decides that. `wrangler.jsonc`
+-- routes `platform/core/migrations/control-plane/*.sql` to DB_CONTROL and
+-- `platform/core/migrations/*.sql` to DB_TENANT, and `wrangler d1 migrations apply` does not
+-- recurse — so a control-plane migration saved one directory too high is applied to the TENANT
+-- database, silently and successfully. Confirm which database this went to.
+--
+-- NOT APPLIED. There is no migration runner in this repository (CLOUDFLARE_STANDARD.md CF5) and
+-- no agent may run a migration against real data (.claude/rules/security.md §7). This file is a
+-- reviewed definition, not a deployment.
+--
+-- ROLLBACK PATH (CLOUDFLARE_STANDARD.md §4 rule 10): DROP TABLE principal_credential. Safe only
+-- while the table is empty. Once credentials exist, dropping it locks every user out of the
+-- platform permanently — the rows cannot be reconstructed, because reconstructing one requires
+-- the user's password. From the first enrolled principal onward, every migration touching this
+-- table must be additive.
+--
+-- FORWARD-ONLY and idempotent, so a partially-completed run is re-runnable (§4 rule 11).
+--
+-- =============================================================================================
+-- WHY THIS IS A SEPARATE TABLE AND NOT COLUMNS ON `principal` — 0001's FIRST RECORDED OMISSION
+-- =============================================================================================
+--
+-- `0001_principal.sql` states it, and requires that any credential design be reviewed against it:
+--
+--   "NO CREDENTIAL MATERIAL. No password hash, no token, no key, no MFA secret.
+--    `core-object-registry.yaml` holds `AuthCredential` and `MfaFactor` as separate objects, and
+--    `docs/decisions/0014` explicitly does not settle the identity provider or the credential
+--    format. A credential column added here would settle it in a migration."
+--
+-- docs/decisions/0015 settles the format, so the material may now exist — and it lands where the
+-- registry already said it belongs: in its own object, in its own table. Three things follow from
+-- keeping it separate rather than widening `principal`:
+--
+--   * `principal` KEEPS ITS COST OF 2 ROW-WRITES AND ITS SINGLE POINT-LOOKUP ACCESS PATH. It is
+--     read on EVERY authenticated request (identity/session-resolution.ts, step 2); this table is
+--     read only during a login attempt. Widening the hot row with a 43-character verifier that
+--     the hot path never uses would drag credential material through every session resolution
+--     for no benefit.
+--   * A PRINCIPAL MAY HAVE ZERO CREDENTIALS. A service account, an AI agent or an IoT device
+--     authenticates by a mechanism nobody has designed yet, and a NOT NULL credential column on
+--     `principal` would have forced a fake one for each of them.
+--   * MIGRATING TO PASSKEYS LATER ADDS A ROW SHAPE, NOT A CHANGE TO THE PRINCIPAL. 0015 §D.4 is
+--     explicit that choosing the KDF must not foreclose passkeys: "A verifier column carrying an
+--     algorithm identifier lets Dudo migrate to passkeys later, transparently, on each user's
+--     next login."
+--
+-- =============================================================================================
+-- THE PRIMARY KEY IS A KEYED HASH, AND THAT IS 0001's SECOND RECORDED OMISSION SURVIVING
+-- =============================================================================================
+--
+--   "NO EMAIL ADDRESS, NAME, PHONE NUMBER OR LOCALE. This is the one table in the platform that
+--    spans every Organization. A directory of every user's personal details, readable without any
+--    tenant scope, would be the highest-value target in the system and it would exist for the
+--    convenience of a login form."
+--
+-- A login form does have to find a row from an email address. IT DOES SO WITHOUT THE ADDRESS
+-- EVER BEING STORED: `identifier_hash` is base64url of HMAC-SHA-256(IDENTITY_LOOKUP_KEY,
+-- normalize(email)), computed at request time from what the caller typed
+-- (platform/core/identity/credential-store.ts). A point lookup on that hash is the whole access
+-- path, and nothing else in the platform can reach this table.
+--
+-- SO A STOLEN CONTROL-PLANE DATABASE IS NOT A MAILING LIST. The column is not invertible without
+-- the Worker secret; the secret is not in the database, not in the repository, and not in the
+-- same failure domain as a D1 dump. AN UNKEYED HASH WOULD NOT DO — email addresses are
+-- low-entropy and enumerable, so an attacker holding a dump recovers the whole address list by
+-- hashing a wordlist, which is precisely the disclosure the omission above refused.
+--
+-- THE THREE COSTS, STATED HERE AS WELL AS IN THE SOURCE, BECAUSE AN OPERATOR READS THIS FILE:
+--
+--   1. ROTATING `IDENTITY_LOOKUP_KEY` LOCKS EVERY USER OUT PERMANENTLY. The stored hashes were
+--      computed under the old key and cannot be recomputed without the plaintext addresses,
+--      which are deliberately not stored. There is no migration that avoids re-enrolling every
+--      user. This is the single most dangerous operational property of this schema, and it is
+--      why the key must NOT be derived from, or shared with, SESSION_HMAC_KEY — rotating that
+--      one is the intended emergency "sign everybody out" control, and it must stay cheap.
+--   2. AN OPERATOR CANNOT ANSWER "WHICH ACCOUNT IS sam@example.com" FROM THE DATABASE. They must
+--      compute the hash with the key. That friction is the same friction that stops a database
+--      reader enumerating users: it is a feature and a cost at once.
+--   3. NO FUZZY OR CASE-INSENSITIVE MATCHING IS POSSIBLE. The hash is exact, so normalisation is
+--      load-bearing and normative. It is specified once, in `credential-store.ts`, for all three
+--      implementations that must agree byte-for-byte: this server, the web client, and the Apple
+--      client.
+--
+-- =============================================================================================
+-- WHAT `verifier` HOLDS, AND THE ONE SENTENCE THAT MATTERS MOST IN THIS FILE
+-- =============================================================================================
+--
+-- docs/decisions/0015 §D, normative:
+--
+--   client:  kdf_output = PBKDF2-SHA256(password, salt = normalize(email), 600,000, 32 bytes)
+--   server:  stored == PBKDF2-SHA256(kdf_output, per_user_random_salt, 10,000)
+--
+--   "THE SERVER STORES A HASH OF THE CLIENT'S OUTPUT, NEVER THE OUTPUT ITSELF. Storing
+--    kdf_output directly would make a database dump DIRECTLY USABLE AS A LOGIN CREDENTIAL with
+--    no cracking at all."
+--
+-- `verifier` is therefore the SERVER-SIDE hash and never the value the client posts. The combined
+-- offline work factor is roughly 610,000 PBKDF2-SHA256 iterations per guess, above OWASP's
+-- recommendation — and 0015 finding 2 is equally on the record and is not softened here: PBKDF2
+-- has NO memory hardness, is not equivalent to Argon2id at any iteration count, and neither
+-- argon2 nor bcrypt is an approved dependency (0003 approves no npm package). If this database is
+-- stolen, assume a determined attacker recovers weak passwords eventually. It buys weeks where
+-- plain server-side PBKDF2 would have bought days; it does not buy immunity.
+--
+-- =============================================================================================
+-- WHAT THIS TABLE DELIBERATELY HAS NO COLUMN FOR
+-- =============================================================================================
+--
+--   * NO `last_used_at`, NO `failed_attempts`, NO `locked_until`. Each is a D1 WRITE ON AN
+--     UNAUTHENTICATED PATH at a rate the caller chooses — the exact shape docs/decisions/0013
+--     closed for denied reads and 0014 §A closed for creates. `locked_until` is additionally the
+--     account-existence oracle 0014 §B forbids by name (a real account locks after five attempts,
+--     a nonexistent one cannot lock because there is nothing to lock) AND a per-account denial of
+--     service that anyone can trigger by failing five times against someone else's address.
+--     Rate limiting happens by BUCKET, in `identity/pre-auth-admission.ts`, where the counter is
+--     keyed by an HMAC bucket of the submitted string and therefore has no existence input.
+--   * NO `updated_at` AND NO PASSWORD HISTORY. Nothing in the running Worker writes this table,
+--     so there is nothing to stamp; history would be additional credential material at rest, for
+--     a reuse policy nobody has adopted.
+--   * NO EMAIL, NAME OR ANY OTHER PROFILE ATTRIBUTE. See above.
+--   * NO MFA FACTOR. `core-object-registry.yaml` holds `MfaFactor` as its own object and 0015
+--     explicitly does not decide MFA.
+--
+-- =============================================================================================
+-- WRITE COST, AND WHO PAYS IT
+-- =============================================================================================
+--
+--   1 table row
+-- + PRIMARY KEY (identifier_hash)                              implicit index
+-- = 2 ESTIMATED ROW-WRITES (identity/control-plane-admission.ts, PRINCIPAL_CREDENTIAL_ROW_WRITES).
+--
+-- NOTHING IN THIS REPOSITORY'S WORKER WRITES THIS TABLE, AND THAT IS THE STRONGEST FORM OF
+-- "registration is not built in this slice" AVAILABLE. `CredentialStore` has one method and it
+-- is a read. Enrollment is an operator action performed out of band with
+-- `platform/core/identity/tools/seed-principal.ts`, which PRINTS SQL and executes nothing. So
+-- these 2 row-writes are spent by an operator running a statement by hand, never by request
+-- traffic, and no unauthenticated caller can cause a write here at all.
+--
+-- THERE IS NO INDEX ON `principal_id`, and that is a deliberate trade with a stated threshold. It
+-- would serve "revoke every credential for this principal" — an operation nothing performs — and
+-- would cost a third row-write on every enrollment. Add it when credential administration is
+-- built, and raise PRINCIPAL_CREDENTIAL_ROW_WRITES to 3 in the same change. Nothing can notice on
+-- our behalf: D1 exposes no portable schema introspection through a binding.
+--
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008).
+--   ALLOWANCES CONSUMED: d1-storage; d1-rows-read; d1-rows-written.
+--   STORAGE: 43 + 22 + 22 + 43 characters plus two short columns and a timestamp, about 200 bytes
+--   per row plus a primary-key index entry of similar size. The closed beta is at most 10
+--   Organizations (MULTITENANCY_STANDARD.md §7.5); at 10 principals each that is 100 rows, well
+--   under 50 KB. Against the 500 MB per-database ceiling this is not a measurable term.
+--   ROWS READ: one point lookup per login attempt that reaches the handler — bounded above by the
+--   pre-authentication rate limits, not by traffic.
+--   ROWS WRITTEN: 2 per enrollment, and enrollment is manual and rare.
+--   AT THE LIMIT: nothing to degrade; this table has no request-driven growth term.
+--   COST: USD 0 / BD 0 per month. No new service and no new database slot.
+
+-- =============================================================================================
+-- EVERY TEXT COLUMN BELOW CARRIES `CHECK (length(...) > 0)`, AND `NOT NULL` IS NOT ENOUGH.
+-- =============================================================================================
+--
+-- `NOT NULL` DOES NOT EXCLUDE THE EMPTY STRING, and on this table that gap had teeth. `qa-agent`
+-- found it: a row with `salt = ''` was read as corrupt by the adapter, answered before any
+-- derivation ran, and therefore cost far less than a lookup that missed — a per-account timing
+-- and outcome signal on the one path reachable without authentication.
+--
+-- THE READ SIDE IS FIXED TOO AND NEITHER FIX IS SUFFICIENT ALONE. `d1-credential-store.ts` now
+-- carries every value through raw so `credential-verifier.ts` routes an empty one onto the miss
+-- path at the miss path's cost. That protects against a row that already exists, or one written
+-- by something that is not this build. These constraints protect against this build ever writing
+-- one. Write-side and read-side, because either alone leaves the other's case open.
+--
+-- THE LENGTHS ARE NOT PINNED TO 43 AND 22 HERE, DELIBERATELY. A constraint asserting the exact
+-- base64url width would encode this build's algorithm choice in the schema, which is the thing
+-- the `algorithm` column exists to keep out of the schema. Emptiness is the property that is
+-- wrong under every algorithm; exact width is not.
+
+CREATE TABLE IF NOT EXISTS principal_credential (
+  -- base64url of HMAC-SHA-256(IDENTITY_LOOKUP_KEY, normalize(email)). Exactly 43 characters.
+  -- Computed at request time; the plaintext identifier is never stored and never logged. See the
+  -- header for what rotating that key destroys.
+  identifier_hash TEXT NOT NULL PRIMARY KEY CHECK (length(identifier_hash) > 0),
+
+  principal_id    TEXT NOT NULL REFERENCES principal (principal_id)
+                    CHECK (length(principal_id) > 0),
+
+  -- The migration seam docs/decisions/0015 §D.4 requires. An algorithm this build does not
+  -- recognise is treated by the verifier as a MISS — on the SAME work path as an absent row, so
+  -- that "which of your users is still on the old algorithm" is not measurable from outside.
+  algorithm       TEXT NOT NULL CHECK (algorithm IN ('pbkdf2-sha256-v1')),
+
+  -- 10,000 for 'pbkdf2-sha256-v1' (0015 §D). It is a column rather than a constant in code so an
+  -- already-enrolled user can be migrated without being locked out, and it is bounded on read:
+  -- the verifier refuses a value above MAX_SERVER_KDF_ITERATIONS. Read
+  -- `identity/credential-verifier.ts` before raising it. Running near the 10 ms Workers CPU limit
+  -- produces a response outside the fixed pre-authentication response table — an intermittent
+  -- disclosure channel that appears only under load, which is when an attack happens.
+  iterations      INTEGER NOT NULL CHECK (iterations > 0),
+
+  -- base64url of 16 CSPRNG bytes, per user. Exactly 22 characters. THIS IS NOT THE CLIENT'S SALT.
+  -- The client's salt is the normalised email (0015 §D), because a server-chosen salt cannot be
+  -- delivered under a login-start endpoint that is `disclosure: 'collapsed'` and renders one
+  -- constant body.
+  salt            TEXT NOT NULL CHECK (length(salt) > 0),
+
+  -- base64url of 32 bytes: PBKDF2-SHA256(kdf_output, salt, iterations). A HASH OF THE CLIENT'S
+  -- OUTPUT, NEVER THE OUTPUT ITSELF. See the header.
+  verifier        TEXT NOT NULL CHECK (length(verifier) > 0),
+
+  created_at      TEXT NOT NULL CHECK (length(created_at) > 0)   -- RFC 3339, UTC
+);
+
+-- NO SECONDARY INDEX. There is exactly one query against this table in the repository —
+--
+--   SELECT identifier_hash, principal_id, algorithm, iterations, salt, verifier
+--   FROM principal_credential WHERE identifier_hash = ? LIMIT 1
+--
+-- — a point lookup on the full primary key, served from the automatic index the PRIMARY KEY
+-- already creates (CLOUDFLARE_STANDARD.md §4 rule 4 is satisfied, not waived).
+--
+-- A UNIQUE CONSTRAINT ON `principal_id` IS DELIBERATELY ABSENT, so one principal may hold more
+-- than one credential under different identifiers. That is what makes an address change possible
+-- without a lockout window, and it weakens nothing: each row is verified independently, every one
+-- of them authenticates the same principal, and that principal's status is re-checked on every
+-- single request (identity/session-resolution.ts).

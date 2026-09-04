@@ -57,12 +57,27 @@
 -- WHAT THIS TABLE DELIBERATELY HAS NO COLUMN FOR
 -- =============================================================================================
 --
---   * NO ROLE, PERMISSION, OR GRANT. `docs/decisions/0007` records the logical permission model
---     but does not say where a principal's grants are stored, and `0014` §C does not decide it.
---     A `role` column here would settle it in a migration, as a side effect of unblocking a
---     login. The seam is `identity/principal-authorization-source.ts`, which is injected and
---     currently grants nothing — so every authenticated request is refused at pipeline step 3.
---     That is fail-closed and correct, and it is the honest state of an undecided decision.
+--   * NO ROLE, PERMISSION, OR GRANT — UNTIL 2026-09-04. THE ORIGINAL REFUSAL IS KEPT BELOW
+--     RATHER THAN DELETED, because the reasoning should outlive the thing it was blocking.
+--
+--     AS WRITTEN: "`docs/decisions/0007` records the logical permission model but does not say
+--     where a principal's grants are stored, and `0014` §C does not decide it. A `role` column
+--     here would settle it in a migration, as a side effect of unblocking a login. The seam is
+--     `identity/principal-authorization-source.ts`, which is injected and currently grants
+--     nothing — so every authenticated request is refused at pipeline step 3. That is fail-closed
+--     and correct, and it is the honest state of an undecided decision."
+--
+--     THAT REFUSAL IS WHY `docs/decisions/0019` EXISTS AS A RECORD instead of as a column
+--     somebody found later. `0019` decides AZ5 — the grant is a role on this row, and Core owns
+--     the mapping from role to an explicit permission set — and the column is added by
+--     `0007_membership_role.sql`, NULLABLE and with no default, so an existing row denies. The
+--     mapping is `platform/core/authorization/roles.ts`: a closed union, frozen literal
+--     permission lists, and no wildcards, because a role is exactly where `0007` rule 3 would
+--     otherwise be reintroduced.
+--
+--     STILL NOT DECIDED, AND STILL NOT TO BE ADDED HERE: how a role is CHANGED after seeding.
+--     `0007` rule 9 requires permission changes to be audited and an operator editing the column
+--     by hand produces no audit record.
 --
 --   * NO BUSINESS ASSIGNMENT. `AuthenticatedPrincipal.authorizedBusinessIds` cannot be answered
 --     here anyway: for an organization-scope principal the set is "every Business in its

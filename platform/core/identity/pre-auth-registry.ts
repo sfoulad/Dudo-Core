@@ -110,7 +110,33 @@ export type PreAuthHttpMethod = 'GET' | 'POST';
  * structural for the two entry points where any variation at all would be a signal — see
  * `disclosure` below.
  */
-export type PreAuthOutcomeKind = 'acknowledged' | 'issued' | 'refused' | 'unavailable';
+export type PreAuthOutcomeKind =
+  | 'acknowledged'
+  | 'issued'
+  /**
+   * `cleared` — REVOCATION. `docs/decisions/0018` §B, amending `0014` §B.
+   *
+   * It renders the acknowledgement body plus a CONSTANT, ARGUMENT-FREE CLEARING COOKIE, and the
+   * two adjectives are the whole security argument. The handler supplies nothing: no name, no
+   * value, no lifetime. `http/pre-auth-http.ts` emits one fixed `Set-Cookie` that is byte-
+   * identical for a valid session, a forged credential, an unknown session, a replay, and a
+   * request that presented no credential at all.
+   *
+   * WHY IT IS NOT `issued` WEARING A DIFFERENT NAME, which is the objection it has to survive.
+   * `issued` carries `credentials` the handler chose, so it can vary per request and can convey a
+   * capability — which is why `outcomeOfKind` refuses to let any entry point COLLAPSE to it: a
+   * failure path that issued a credential would be an authentication bypass built out of an error
+   * handler. `cleared` has no payload to vary and REMOVES a credential rather than granting one,
+   * so collapsing to it is safe in the one direction that matters. A caller cannot learn anything
+   * from a response that is the same bytes in every case.
+   *
+   * IT REPLACES `acknowledged` FOR REVOCATION RATHER THAN JOINING IT, so
+   * `assertRegistryIsCoherent`'s rule that a `collapsed` entry point declares exactly one outcome
+   * still holds — one answer, one branch, nothing to tell apart.
+   */
+  | 'cleared'
+  | 'refused'
+  | 'unavailable';
 
 /**
  * ===========================================================================================
@@ -279,8 +305,13 @@ const ENTRY_POINTS: readonly PreAuthEntryPoint[] = Object.freeze([
     // holding a stolen or guessed token learns whether it is live without using it. So revocation
     // always answers the same thing, whether it revoked something, revoked nothing, or failed.
     disclosure: 'collapsed',
-    outcomes: ['acknowledged'],
-    collapseTo: 'acknowledged',
+    // `cleared` RATHER THAN `acknowledged`, per docs/decisions/0018 §B. The session cookie is
+    // HttpOnly, so no client can clear it; a logout that did not clear it left a dead credential
+    // in the browser for the session's full lifetime. Still exactly ONE outcome, so the collapsed
+    // rule is unchanged — the answer is a constant, it is simply a constant that includes a fixed
+    // `Set-Cookie`.
+    outcomes: ['cleared'],
+    collapseTo: 'cleared',
     kind: 'delegated',
     sourceLimitPerWindow: 60,
     writes: true,

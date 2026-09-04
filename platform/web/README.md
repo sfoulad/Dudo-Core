@@ -79,11 +79,13 @@ a phone number begins with a neutral `+`, so the bidi algorithm reordered
 
 ## What is built
 
-The **Customer Directory**, contract `customer-directory-v1`, running against fixture
-data. Five screens:
+The **Customer Directory**, contract `customer-directory-v1`, plus **sign-in** and a
+**real HTTP transport**. Six screens:
 
 | Screen | Address | Actions used |
 |---|---|---|
+| Sign in | shown by `AuthGate` when not authenticated | `identity.login.complete` |
+| Sign out | header control, when signed in | `identity.session.revoke` |
 | Directory | `#/customers` | `ListCustomers`, `SearchCustomers` |
 | Record | `#/customers/{id}` | `GetCustomer`, `ArchiveCustomer`, `RestoreCustomer` |
 | New customer | `#/customers/new` | `CreateCustomer` |
@@ -124,6 +126,19 @@ through real problems. Faults are injected explicitly from the query string:
 `fault` is one of `list`, `detail`, `write`, `all`. `faultCode` is any platform error
 code; it defaults to `unavailable`.
 
+**Both switches are fixture-only and are not read in an HTTP build**, because a query
+parameter appearing to change how the real API behaves is a lie in the address bar.
+
+### The login screen in a fixture build
+
+The fixture build shows the login screen first, and **the derivation is real** — the
+worker, the 600,000 iterations, the measured progress and the 43-character assertion all
+run. Only the request is absent, so a reviewer can time a real sign-in on their own device
+with no backend. Any submittable address and any non-empty password is accepted; it
+authenticates nobody, because there is no server, no session and no principal in that
+build. The hint lives in `sessionStorage`, so a reload stays signed in and a new tab does
+not.
+
 ## Layout
 
 ```
@@ -134,10 +149,21 @@ src/App.tsx                      route table
 src/styles/index.css             Tailwind v4 @theme tokens + the directory table rules
 src/lib/                         cn(), hash router, last-list memory
 src/contracts/                   contract-derived TYPES, field rules, formatting
-src/api/                         client, fixture transport, fixtures, error envelope
+src/api/config.ts                transport selection, validated at start-up
+src/api/client.ts                the Customer Directory client, transport-agnostic
+src/api/fixture-transport.ts     in-memory Core stand-in
+src/api/http-transport.ts        the real one, per the contracts' httpBinding
+src/api/kdf.ts                   NORMATIVE client-side KDF (ADR 0015 §D)
+src/api/kdf-worker.ts            the derivation, off the main thread
+src/api/kdf-client.ts            worker lifetime, measured progress, fallback
+src/api/auth.ts                  login, logout, session probing, the session hint
+src/api/session-signal.ts        the 401 notification
+src/lib/use-session.ts           the session state machine (unknown/auth/anon)
 src/components/ui/               copy-in shadcn-style primitives
+src/components/AuthGate.tsx      login-or-app, and it is presentation only
 src/components/                  shell, toaster, state blocks
-src/screens/                     the four screens
+src/screens/                     the five screens, including Login
+scripts/verify-*.mjs             dependency-free verification (see Verifying)
 reference/vanilla/               the zero-dependency build (see below)
 ```
 
@@ -154,26 +180,149 @@ python3 -m http.server 8931 --bind 127.0.0.1
 
 It is **not** part of the Vite build and is excluded from `tsconfig.json`.
 
-## Swapping the fixture for the real API
+## Choosing the transport
 
-One file. `src/api/client.ts` takes a `Transport` with a single `invoke(action, input)`
-method; `fixture-transport.ts` implements it from memory today, and an `http-transport.ts`
-will implement it against the routes already transcribed in `client.ts` (`BASE_PATH` +
-`ROUTES`). **No screen changes**, because no screen knows which transport it is talking to.
+Both transports implement one `Transport` interface, so **no screen knows which one it is
+talking to** and switching is configuration rather than a code change.
 
-Two fixture-only things must go at the same time, and both are marked in the code:
+| Variable | Values | Default | Meaning |
+|---|---|---|---|
+| `VITE_DUDO_TRANSPORT` | `fixture`, `http` | `fixture` | Which transport is constructed |
+| `VITE_DUDO_API_BASE_URL` | an origin, or empty | empty (same origin) | Where the Core API is |
+| `VITE_DUDO_API_TIMEOUT_MS` | integer 1000–120000 | `20000` | Per-request timeout |
 
-- `FIXTURE_ACTING_PRINCIPAL` in `fixture-transport.ts` — the real
-  `updated_by_principal_id` is derived server-side and is never chosen by a client.
-- `listBusinesses()` and `FIXTURE_BUSINESSES` — **no contract published the Businesses a
-  principal may file a customer under** when this was built, and `business_id` is required
-  on `CreateCustomer`. A `core/organization/business-read-v1` contract now exists; this
-  goes away when it is consumable.
+```
+npm run dev                                  # fixture, no network
+VITE_DUDO_TRANSPORT=http npm run build       # real API, same origin
+```
+
+Three rules `src/api/config.ts` enforces at start-up rather than documents:
+
+- **Unset means `fixture`.** A build that was never configured must not reach the network.
+- **An unrecognised value is a hard failure.** `VITE_DUDO_TRANSPORT=htpp` throws rather
+  than quietly becoming `fixture` — that is the shape of a release everyone believes is
+  live and is not.
+- **A cross-origin `VITE_DUDO_API_BASE_URL` is refused.** Core issues `dudo_session` with
+  `SameSite=Lax` and sets no CORS credential headers, so a cross-origin API receives no
+  cookie: login would appear to succeed and every call after it would be refused. Serving
+  the app and the API from one origin is a requirement of the session design, not a
+  preference. `wrangler.jsonc` already does this.
+
+The header badge reads **Fixture data** or **Live API** from the same value, so a
+screenshot says which it is without anyone checking build flags.
+
+Two fixture-only things live in `fixture-transport.ts` and are used only when that
+transport is constructed: `FIXTURE_ACTING_PRINCIPAL` (the real `updated_by_principal_id`
+is derived server-side) and `FIXTURE_BUSINESSES`.
+
+## Signing in
+
+ADR 0015 §D, option (f): **the browser does the password hashing.** The Workers CPU budget
+is 10 ms and cannot fit a real password KDF, so the client derives and the server stores a
+hash of what the client sends.
+
+```
+POST /auth/login/complete
+{ "email": "<normalised>", "derived_key": "<43 base64url characters>" }
+```
+
+`derived_key` is `base64url(PBKDF2-SHA256(NFC(password), salt = normalizeIdentifier(email),
+600000 iterations, 32 bytes))`. **The raw password never leaves the browser.**
+
+Every parameter is **normative and identical on both clients**. `src/api/kdf.ts` is a
+cross-client contract written in code — the same derivation exists in Swift in
+`Dudo-Apple` and in `platform/core/identity/credential-store.ts`, and if the three
+disagree, nobody can log in.
+
+**Two inputs, two different normalisations, and confusing them is the failure mode:**
+
+| Input | Normalisation |
+|---|---|
+| email (the salt) | validate ASCII `0x21`–`0x7E`, then **NFKC**, then ASCII-only case fold |
+| password | **NFC** only — no case folding, no trimming, no ASCII restriction |
+
+- **Whitespace in an email is rejected, never trimmed.** JS `trim()` and Swift
+  `trimmingCharacters(in:.whitespacesAndNewlines)` trim different sets. In a *password*,
+  leading and trailing spaces are kept — someone who chose them chose them.
+- **Email case folding is ASCII-only, not `toLowerCase()`.** Full Unicode case mapping
+  differs between JS and Swift (U+0130 is the usual example). A password is never folded.
+- **The password is NFC, never NFKC.** NFKC is a compatibility mapping that folds distinct
+  characters onto one (`ﬁ`→`fi`, `²`→`2`), which on a password **destroys entropy the user
+  believes they have**. NFC is canonical only: it changes the bytes, never which characters
+  were typed. This follows RFC 8265's PRECIS `OpaqueString`, as SCRAM and SASL do.
+
+Swift: `precomposedStringWithCanonicalMapping` for the password,
+`precomposedStringWithCompatibilityMapping` for the email. **They are different calls.**
+
+Core never sees a password, so **the NFC rule is one only the clients can keep** — there is
+no server-side check that could catch a client skipping it, because the server receives 43
+characters either way.
+
+Accepted, recorded cost: an RFC 6531 internationalised address cannot log in. Punycode
+domains work.
+
+600,000 iterations is **one to four seconds of local CPU**, so it runs in a Web Worker
+(`src/api/kdf-worker.ts`) and the login screen shows progress measured by a real
+calibration on the device. True iteration-level progress is impossible — `deriveBits` is
+atomic — and the two ways to fake it are both refused, with reasons, in that file.
+
+### Session handling
+
+The session credential is a cookie Core sets `HttpOnly; Secure; SameSite=Lax; Path=/`.
+Therefore, on the web:
+
+- **There is no token to store.** The browser holds it; `credentials: 'same-origin'` is
+  the whole of session handling.
+- **Auth state is probed, not read.** `AuthGate` asks the server, because this client
+  cannot see the cookie. `unknown` is a real state and is not rendered as signed-out.
+- **Logout revokes and clears.** `POST /auth/session/revoke`, no body, session taken from
+  the cookie. `docs/decisions/0018` §B's `cleared` outcome is built: `revokeHandler` returns
+  it on all six paths and `collapseTo` is `cleared`, so a `200` **always** carries the
+  constant clearing cookie — including when the delete itself failed on budget exhaustion.
+  The browser drops the credential regardless.
+- **`cleared` means the credential left this browser, not that the row was deleted.** Which
+  of the six handler paths ran is what the collapsed response exists to withhold, and this
+  client does not guess at it.
+- **A logout that was not a `200` is reported, not swallowed.** A network failure or the
+  60/minute source rate limit means nothing was revoked and no cookie was cleared — the
+  session is still live — so the login screen says so plainly. A screen that implies someone
+  is signed out when they are not is the quiet version of the failure §B fixed.
+- **`401` means signed out, never "retry".** This survives §B: the clearing cookie removes
+  one cause of a stale credential, not the class — 12-hour absolute expiry, revoked
+  membership, a suspended principal, or a rotated `SESSION_HMAC_KEY` all still end a session.
+  Enforced in three places rather than remembered: `isRetryable` excludes `unauthenticated`,
+  `probeSession` maps it to `anonymous` and never `unknown`, and the transport fires
+  `onUnauthenticated`.
+- **Nothing signs in or out on its own**, and that is a budget rule too. 0018 costs
+  revocation at 3 row-writes, same as a login, so a **cycle is 6** — 500/day platform-wide,
+  100 per principal, half what `0014` §C's "1,000 logins/day" implies to anyone who has not
+  counted logout. No auto re-login, no retry loop around `login`, and **no revocation on a
+  `401`** (the session is already gone; revoking would spend 3 row-writes deleting nothing).
+
+On XSS, stated precisely: an injected script **cannot exfiltrate** the credential —
+`HttpOnly` puts it out of reach of every JavaScript API. It **can still act as the user**
+for as long as the page is open, via same-origin requests the browser attaches the cookie
+to. `HttpOnly` removes credential theft, not session abuse.
+
+## Verifying
+
+No test framework is approved (`architecture.md` §6, TS1 open), and an agent may not
+install one. These run on Node's own WebCrypto with **zero dependencies** and import the
+**real modules**, not copies:
+
+```
+npm run verify           # typecheck + all three below
+npm run verify:kdf       # the KDF, and the shared cross-client test vectors
+npm run verify:transport # what the HTTP transport puts on the wire
+npm run verify:auth      # the login request body, field by field
+```
+
+`verify:kdf` prints the **shared test vectors** ADR 0015 §D requires QA to bind both
+clients with. An Apple implementation that does not reproduce them character for character
+is a cross-client contract defect.
 
 ## What this application does not do
 
-- **It makes no network call.** Nothing authenticates and no environment is deployed
-  (contract §11 item 1 — AZ2).
 - **It decides nothing.** Permission, tenant resolution and the authorized-business set
   are decided in `platform/core/**` on every call. Client-side validation exists so a
   person is told about a mistake before they submit it; the server validates again and

@@ -8,7 +8,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:kdf": "node --experimental-strip-types scripts/verify-kdf.mjs",
+    "verify:transport": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-transport.mjs",
+    "verify:auth": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-auth.mjs",
+    "verify": "npm run typecheck && npm run verify:kdf && npm run verify:transport && npm run verify:auth"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

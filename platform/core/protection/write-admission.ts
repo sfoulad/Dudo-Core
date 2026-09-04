@@ -229,24 +229,52 @@ export class WriteBudgetIncoherentError extends Error {
   }
 }
 
-export function assertAllocationsAreCoherent(): void {
-  const total =
-    DAILY_ALLOCATION.business + DAILY_ALLOCATION.security + DAILY_ALLOCATION.system;
-  if (total !== PLATFORM_DAILY_ROW_WRITE_CEILING) {
+/**
+ * ===========================================================================================
+ * THE PARAMETERS EXIST SO THE THREE THROW BRANCHES CAN BE REACHED FROM A TEST. THEY DEFAULT TO
+ * THE SHIPPED CONSTANTS, SO EVERY EXISTING CALL IS UNCHANGED.
+ * ===========================================================================================
+ *
+ * This function took no arguments and read module-level `const` bindings directly, which ESM does
+ * not let a test rebind. `qa-agent` recorded the consequence honestly rather than working around
+ * it — the case was reported SKIPPED with the note that reaching the branches "would mean editing
+ * `platform/core/**`, which qa-agent does not do", and a recommendation addressed to `core-agent`
+ * to add exactly these parameters. This is that change, made by the owner of the file, on the
+ * Team Lead's instruction.
+ *
+ * WHAT IT BUYS AND WHY IT IS WORTH A SIGNATURE CHANGE. The suite could already assert each of the
+ * three invariants separately against the shipped values, so a drift would go red — but it could
+ * NOT assert that this function throws rather than, say, comparing the wrong pair of numbers. A
+ * coherence check that is itself unchecked is a guard nobody has watched fail.
+ *
+ * THE DEFAULTS ARE THE POINT, NOT A CONVENIENCE. `assertAllocationsAreCoherent()` with no
+ * arguments still validates the real constants, still runs at module load below, and still stops
+ * the module rather than shipping an incoherent budget. A test supplies deliberately broken values
+ * to prove the guard bites; nothing in production supplies anything.
+ */
+export function assertAllocationsAreCoherent(
+  allocation: Readonly<Record<WriteAllocation, number>> = DAILY_ALLOCATION,
+  platformCeiling: number = PLATFORM_DAILY_ROW_WRITE_CEILING,
+  safetyMargin: number = PLATFORM_DAILY_SAFETY_MARGIN,
+  perOrganization: number = PER_ORGANIZATION_DAILY_ROW_WRITES,
+  d1DailyLimit: number = D1_FREE_DAILY_ROW_WRITES,
+): void {
+  const total = allocation.business + allocation.security + allocation.system;
+  if (total !== platformCeiling) {
     throw new WriteBudgetIncoherentError(
       `The daily allocations sum to ${String(total)} and the platform ceiling is ` +
-        `${String(PLATFORM_DAILY_ROW_WRITE_CEILING)} (docs/decisions/0014 §A.5). They must be ` +
+        `${String(platformCeiling)} (docs/decisions/0014 §A.5). They must be ` +
         'equal: an allocation set that sums to less leaves capacity nothing can spend, and one ' +
         'that sums to more is a ceiling that does not bound.',
     );
   }
-  if (PLATFORM_DAILY_ROW_WRITE_CEILING + PLATFORM_DAILY_SAFETY_MARGIN > D1_FREE_DAILY_ROW_WRITES) {
+  if (platformCeiling + safetyMargin > d1DailyLimit) {
     throw new WriteBudgetIncoherentError(
       'The platform ceiling plus the safety margin exceeds the enforced account-wide D1 daily ' +
         'row-write allowance (docs/decisions/0014 §A.3 and §A.4).',
     );
   }
-  if (PER_ORGANIZATION_DAILY_ROW_WRITES > DAILY_ALLOCATION.business) {
+  if (perOrganization > allocation.business) {
     throw new WriteBudgetIncoherentError(
       'One Organization may not be permitted more than the whole business allocation ' +
         '(docs/decisions/0014 §A.5 and §A.6).',

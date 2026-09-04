@@ -73,9 +73,25 @@ export type DenialSummarySink = {
   ): Promise<Result<void>>;
 };
 
+/**
+ * `_ids` IS UNUSED ON PURPOSE AND THE UNDERSCORE IS THE ONLY THING THAT CHANGED.
+ *
+ * The parameter is deliberately taken and deliberately not read — the reasoning is on
+ * `denial_summary_id` below, and it is a real design constraint rather than a leftover: this
+ * table's identity is DERIVED from the grouping, the window and the emission index, so that a
+ * retry or a replayed message collides on the primary key instead of silently doubling a
+ * campaign's apparent size. A generated identifier here would make the table non-idempotent.
+ *
+ * IT IS RENAMED RATHER THAN REMOVED, and the two wrong fixes are worth naming because both look
+ * tidier than this one. Deleting it changes the factory's arity and breaks all three call sites
+ * — `action/pipeline.ts` and two in `packages/testing/**`, which is `qa-agent`'s territory — for
+ * a cosmetic gain. Wiring it in to "use" it would swap a derived key for a random one and undo
+ * the idempotence above. The underscore states the intent in the signature, which is where the
+ * next reader will look.
+ */
 export function createStoreDenialSummarySink(
   store: TenantScopedStore,
-  ids: IdGenerator,
+  _ids: IdGenerator,
 ): DenialSummarySink {
   function toOperation(summary: DenialSummary): WriteOperation {
     // The runtime half of the control-5 guard. A grouping that did not come from

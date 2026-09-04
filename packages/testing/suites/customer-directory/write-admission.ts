@@ -202,19 +202,117 @@ export function buildWriteAdmissionSuite(makeWorld: MakeWorld): Suite {
     assertTrue('and its error type exists to be thrown', typeof WriteBudgetIncoherentError === 'function', 'no incoherence error type');
   });
 
-  suite.skip(
-    "§A.5 — assertAllocationsAreCoherent() THROWS when the allocations are made incoherent",
-    'NOT RUN, and the reason is a limit of the code rather than of the suite. ' +
-      '`assertAllocationsAreCoherent()` takes no parameters and reads module-level `const` ' +
-      'bindings, which ESM does not permit a test to rebind — so its three THROW branches ' +
-      'cannot be reached from outside without editing platform/core/**, which qa-agent does ' +
-      'not do. What IS covered: the case above asserts each of the three invariants separately ' +
-      'against the shipped constants, so a change that breaks one goes red at the same moment ' +
-      'the module would throw; and because the assertion runs at module load, the suite ' +
-      'importing at all is itself evidence that the current values are coherent. What is NOT ' +
-      'covered is that the function would actually throw rather than, say, comparing the wrong ' +
-      'pair of numbers. RECOMMENDED to core-agent: give it optional parameters defaulting to ' +
-      'the constants, and this case becomes three ordinary assertions.',
+  suite.test(
+    '§A.5 — assertAllocationsAreCoherent() THROWS on each of its three incoherent inputs',
+    () => {
+      // ===========================================================================================
+      // THIS WAS A SKIP. IT IS NOW THREE ORDINARY ASSERTIONS, AND THAT IS WORTH ONE PARAGRAPH.
+      // ===========================================================================================
+      //
+      // The skip's reason was a limit of the code, not of the suite: the function took no
+      // parameters and read module-level `const` bindings that ESM will not let a test rebind, so
+      // its three throw branches were unreachable without editing `platform/core/**`. It named
+      // exactly what was NOT covered — *"that the function would actually throw rather than, say,
+      // comparing the wrong pair of numbers"* — and recommended optional parameters to the owning
+      // agent rather than reaching across the boundary to add them.
+      //
+      // `core-agent` added them. Five optional parameters, all defaulting to the shipped
+      // constants, every existing call unchanged, still asserted at module load. So the branches
+      // are now reachable from outside and the skip has no reason to exist.
+      //
+      // EACH BRANCH IS DRIVEN SEPARATELY AND THE ERROR TYPE IS CHECKED. A single "it throws
+      // something" assertion would pass if the function threw a TypeError from a typo, which is
+      // the failure mode this case is supposed to distinguish from a real refusal.
+
+      const expectThrows = (label: string, run: () => void): void => {
+        let thrown: unknown = null;
+        try {
+          run();
+        } catch (cause) {
+          thrown = cause;
+        }
+        assertTrue(`${label}: it throws`, thrown !== null, 'the incoherent input was accepted');
+        assertTrue(
+          `${label}: and it throws WriteBudgetIncoherentError, not an incidental error`,
+          thrown instanceof WriteBudgetIncoherentError,
+          `threw ${thrown instanceof Error ? thrown.name : String(thrown)}`,
+        );
+      };
+
+      // Branch 1 — the allocations must sum to the platform ceiling exactly. Under by 1.
+      expectThrows('allocations summing to less than the ceiling', () => {
+        assertAllocationsAreCoherent({
+          business: DAILY_ALLOCATION.business - 1,
+          security: DAILY_ALLOCATION.security,
+          system: DAILY_ALLOCATION.system,
+        });
+      });
+      // ...and over by 1, because "not equal" has two sides and a comparison written with the
+      // wrong operator would catch only one of them.
+      expectThrows('allocations summing to more than the ceiling', () => {
+        assertAllocationsAreCoherent({
+          business: DAILY_ALLOCATION.business + 1,
+          security: DAILY_ALLOCATION.security,
+          system: DAILY_ALLOCATION.system,
+        });
+      });
+
+      // Branch 2 — ceiling plus margin must not exceed the enforced D1 allowance.
+      expectThrows('ceiling plus margin exceeding the D1 daily allowance', () => {
+        assertAllocationsAreCoherent(
+          DAILY_ALLOCATION,
+          PLATFORM_DAILY_ROW_WRITE_CEILING,
+          D1_FREE_DAILY_ROW_WRITES - PLATFORM_DAILY_ROW_WRITE_CEILING + 1,
+          PER_ORGANIZATION_DAILY_ROW_WRITES,
+          D1_FREE_DAILY_ROW_WRITES,
+        );
+      });
+
+      // Branch 3 — one Organization may not be permitted more than the whole business allocation.
+      expectThrows('a per-Organization ceiling above the business allocation', () => {
+        assertAllocationsAreCoherent(
+          DAILY_ALLOCATION,
+          PLATFORM_DAILY_ROW_WRITE_CEILING,
+          PLATFORM_DAILY_SAFETY_MARGIN,
+          DAILY_ALLOCATION.business + 1,
+          D1_FREE_DAILY_ROW_WRITES,
+        );
+      });
+
+      // THE POSITIVE CONTROL. Without it, a function that threw unconditionally would pass every
+      // assertion above — which is precisely the "comparing the wrong pair of numbers" failure the
+      // skip said was uncovered.
+      let threwOnValidInput: unknown = null;
+      try {
+        assertAllocationsAreCoherent();
+      } catch (cause) {
+        threwOnValidInput = cause;
+      }
+      assertTrue(
+        'and it does NOT throw against the shipped constants',
+        threwOnValidInput === null,
+        `the real parameter set was rejected: ${String(threwOnValidInput)}`,
+      );
+      // Explicitly passing the shipped values must behave identically to passing nothing, or the
+      // defaults and the parameters have drifted apart and every case above tests a phantom.
+      let threwOnExplicitValidInput: unknown = null;
+      try {
+        assertAllocationsAreCoherent(
+          DAILY_ALLOCATION,
+          PLATFORM_DAILY_ROW_WRITE_CEILING,
+          PLATFORM_DAILY_SAFETY_MARGIN,
+          PER_ORGANIZATION_DAILY_ROW_WRITES,
+          D1_FREE_DAILY_ROW_WRITES,
+        );
+      } catch (cause) {
+        threwOnExplicitValidInput = cause;
+      }
+      assertTrue(
+        'and the explicit shipped values behave exactly as the defaults do',
+        threwOnExplicitValidInput === null,
+        `the defaults and the parameters disagree: ${String(threwOnExplicitValidInput)}`,
+      );
+    },
   );
 
   suite.test('§A.4 — the 20,000 safety margin is NOT spendable: draining every allocation yields 80,000 and never 100,000', async () => {
@@ -372,40 +470,48 @@ export function buildWriteAdmissionSuite(makeWorld: MakeWorld): Suite {
     }
   });
 
-  suite.test('§A.7 / §A.8 DISCREPANCY, ASSERTED SO IT IS VISIBLE — the implemented cost is 8 and the implied ceiling is 1,250 customers/day, not the ADR\'s 2 and 5,000', () => {
+  suite.test('§A.7 / §A.8 — the implementation and the corrected ADR agree: 8 row-writes per create, 1,250 creates/day', () => {
     // ===========================================================================================
-    // THE ADR IS WRONG AND THIS SUITE ASSERTS THE IMPLEMENTATION, NOT THE ADR.
+    // THIS CASE WAS A DISCREPANCY REPORT. IT IS NOW AN AGREEMENT CHECK, AND THAT IS THE POINT.
     // ===========================================================================================
     //
-    // §A.7 "A Customer create costs two units — the customer row and its audit row."
-    // §A.8 "Therefore an Organization may create at most 5,000 customers/day."
+    // Until 2026-09-03 the ADR said a Customer create cost TWO units and implied 5,000
+    // creates/day, while the implementation charged EIGHT and permitted 1,250. This case
+    // asserted the implementation and NAMED the ADR's figures, so the disagreement could not be
+    // forgotten. Its own failure message carried the instruction for this moment: *"if the ADR
+    // was corrected to 8 this case must be updated"*. It was corrected, so it is.
     //
-    // Both count ROWS INSERTED. §A.3's ceiling is denominated in ROW-WRITES, and under
-    // Cloudflare's index rule the same operation is 8 of those. Charging 2 where D1 bills 8 is
-    // under-reserving by a factor of four — it would leave the 80,000 ceiling permitting roughly
-    // 320,000 real row-writes against an enforced 100,000, which is the outage 0014 exists to
-    // prevent with a budget in front of it saying it is fine.
+    // §A.7 now reads: "A Customer create costs EIGHT estimated row-writes — corrected 2026-09-03
+    // from the two this record originally stated." §A.8 now reads: "at most 1,250 customers per
+    // UTC day — corrected from 5,000."
     //
-    // The user is deciding the correction. This case asserts the IMPLEMENTED numbers and names
-    // the ADR's, so that whichever way the correction lands, the change is visible here.
-    const ADR_A7_UNITS_PER_CREATE = 2;
-    const ADR_A8_CUSTOMERS_PER_DAY = 5_000;
+    // WHY THE ARITHMETIC IS KEPT RATHER THAN THE CASE DELETED. The derivation below is what
+    // caught the original four-times understatement, and deleting it would discard the only
+    // executable copy of it. D1 bills an index row per indexed column touched, so `customer` is
+    // 1 table + 1 PK index + 1 explicit index = 3, and `audit_event` is 1 table + 1 PK index +
+    // 3 explicit indexes = 5. Charging 2 where D1 bills 8 would leave the 80,000 ceiling
+    // permitting ~320,000 real row-writes against an enforced 100,000 — the outage `0014` exists
+    // to prevent, with a budget in front of it reporting that everything is fine.
+    //
+    // IT NOW FAILS IN BOTH DIRECTIONS, which the discrepancy form could not do: if the code
+    // drifts off 8, or if the ADR is edited back toward 2, this case goes red. Pinning only the
+    // implementation would let the record drift away again unnoticed.
+    const ADR_A7_UNITS_PER_CREATE = 8;
+    const ADR_A8_CUSTOMERS_PER_DAY = 1_250;
     const implementedUnitsPerCreate = CUSTOMER_TABLE_ROW_WRITES_FOR_REFERENCE + AUDIT_EVENT_ROW_WRITES;
+
+    assertEqual('the customer row and its indexes cost 3', CUSTOMER_TABLE_ROW_WRITES_FOR_REFERENCE, 3);
+    assertEqual('the audit row and its indexes cost 5', AUDIT_EVENT_ROW_WRITES, 5);
     assertEqual('the implemented cost of one create', implementedUnitsPerCreate, 8);
     assertEqual(
-      'so the per-Organization daily ceiling permits 1,250 creates, not 5,000',
+      'which is what ADR §A.7 records after the 2026-09-03 correction',
+      implementedUnitsPerCreate,
+      ADR_A7_UNITS_PER_CREATE,
+    );
+    assertEqual(
+      'the per-Organization daily ceiling therefore permits 1,250 creates',
       Math.floor(PER_ORGANIZATION_DAILY_ROW_WRITES / implementedUnitsPerCreate),
-      1_250,
-    );
-    assertTrue(
-      `ADR §A.7 says ${ADR_A7_UNITS_PER_CREATE} units — REPORTED as needing correction, not silently accepted`,
-      implementedUnitsPerCreate !== ADR_A7_UNITS_PER_CREATE,
-      'the implementation now agrees with §A.7; if the ADR was corrected to 8 this case must be updated, and if the CODE was changed to 2 that is a four-times under-reservation and a defect',
-    );
-    assertTrue(
-      `ADR §A.8 says ${ADR_A8_CUSTOMERS_PER_DAY} customers/day — REPORTED as needing correction`,
-      Math.floor(PER_ORGANIZATION_DAILY_ROW_WRITES / implementedUnitsPerCreate) !== ADR_A8_CUSTOMERS_PER_DAY,
-      'the implementation now agrees with §A.8; see above',
+      ADR_A8_CUSTOMERS_PER_DAY,
     );
     // AND THE CONTEXT TABLE'S FIGURE MOVES WITH IT, in the direction that strengthens the case
     // for the decision rather than weakening it.

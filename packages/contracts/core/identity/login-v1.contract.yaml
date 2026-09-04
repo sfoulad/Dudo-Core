@@ -1,0 +1,1093 @@
+---
+# Login — contract of record, version 1
+#
+# The machine-readable half is login-v1.schema.json; this file carries the rulings, the
+# normative algorithms and the open questions. BOTH ARE NORMATIVE TOGETHER, and a change to one
+# that is not reflected in the other is a contract defect — the class that produced ADR 0012.
+#
+# THERE IS DELIBERATELY NO README.md IN THIS DIRECTORY. The neighbouring contract sets use three
+# files; this one uses two, and the reasoning that would live in a README is here instead. That
+# is stated so nobody goes looking for a third file and concludes it was lost.
+#
+# Governed by: docs/decisions/0014-authentication-az2.md (Accepted) — §B is the whole of the
+#                pre-authentication admission rule this contract describes
+#              docs/decisions/0015-credential-format-and-session-credential.md (Accepted) —
+#                §A the session credential, §B its lifetime, §D the credential format and KDF,
+#                INCLUDING THE 2026-09-04 AMENDMENT that fixes the password's normalisation at
+#                NFC. §D previously said only "the UTF-8 password"; web-agent found the gap while
+#                implementing and raised it rather than choosing locally. See
+#                clientKdf.passwordNormalization — it is the one normative rule in this contract
+#                that CORE CANNOT ENFORCE, because Core never receives a password.
+#              docs/decisions/0016-web-application-stack.md (Accepted) — one contract, two clients
+#              docs/architecture/standards/API_STANDARD.md — §7 request/response, §8 errors
+#              docs/architecture/standards/SECURITY_STANDARD.md
+#              docs/architecture/standards/MULTITENANCY_STANDARD.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# =========================================================================================
+# READ THIS FIRST. THIS CONTRACT WAS WRITTEN AFTER THE CODE IT DESCRIBES.
+# =========================================================================================
+#
+# IT IS A TRANSCRIPTION, NOT A SPECIFICATION, AND PRESENTING IT AS CONTRACT-FIRST WORK WOULD
+# TEACH THE WRONG LESSON. platform/core/identity/login.ts was implemented with no contract in
+# existence. That is out of order under .claude/rules/workflow.md §3, which requires
+# architecture-agent to author the contract, the Team Lead to agree it, and only then consumers
+# to implement. The Team Lead has recorded the sequencing error as their own: implementation was
+# dispatched before a contract was requested.
+#
+# THE COST WAS NOT HYPOTHETICAL. With no published shape, two client agents had to read Core's
+# TypeScript to learn the field names, and one of them guessed wrong. A field name guessed wrong
+# on this path does not fail visibly in review — it fails as "nobody can log in", at integration,
+# on one client only.
+#
+# WHAT THAT MEANS FOR HOW THIS FILE IS READ AND CHANGED:
+#
+#   1. WHERE THIS FILE AND CORE DISAGREE, CORE WINS AND THIS FILE IS THE DEFECT. Every statement
+#      below was checked against platform/core/identity/{login.ts, credential-store.ts,
+#      credential-verifier.ts, session-credential.ts, pre-auth-admission.ts, pre-auth-registry.ts}
+#      and platform/core/http/{pre-auth-http.ts, api.ts, response.ts}. Nothing here is invented,
+#      improved, tidied or aspirational. Several things below are ODDER than a contract author
+#      would design; they are what runs.
+#   2. IT IS NOT AN APPROVAL OF THE IMPLEMENTATION. Documenting a shape is not accepting it. The
+#      Team Lead accepts this contract; that acceptance settles the SHAPE both clients build
+#      against and settles nothing about whether the design behind it was reviewed.
+#   3. FROM NOW ON THIS FILE IS AUTHORITATIVE FOR CLIENTS. A client reads this, not login.ts. A
+#      change to Core's login path that changes anything below is a contract change first.
+#
+# =========================================================================================
+# THIS IS NOT AN ACTION CONTRACT, AND READING IT AS ONE IS THE MOST LIKELY MISUSE
+# =========================================================================================
+#
+# Every other contract in packages/contracts/ describes ACTIONS: an id, a permission, a scope, a
+# sensitivity, an audit policy, maxRowWrites, an ActionContext, a tenant-scoped store. LOGIN HAS
+# NONE OF THEM, and their absence is structural rather than an omission.
+#
+# docs/decisions/0014 §B: "This is an admission rule, not a fake permission granted to an
+# anonymous user. The distinction matters: a pseudo-principal holding a pseudo-permission would
+# flow through the authorization pipeline and could accumulate grants. An admission rule cannot."
+#
+# In Core that is expressed as two different code paths producing two different types.
+# platform/core/http/api.ts matches the five reserved pre-authentication paths BEFORE the App
+# router, and nothing below that block runs for a pre-auth request: no principal is resolved, no
+# Action is matched, no permission is evaluated, no tenant store is obtained, and invokeAction is
+# never called. A PreAuthEntryPoint has no permission, no scope, no principal, no organizationId,
+# no grants, no store and no handle-returning-ActionOutcome — not set to null, ABSENT.
+#
+# SO THIS CONTRACT DECLARES NO PERMISSION AND REQUESTS NO CATALOG ENTRY, and neither may be added
+# later. See admissionModel.
+
+contractVersion: 1
+apiVersion: null            # SEE versioning.thereIsNoVersionInTHESEPATHS. This is not an oversight.
+namespace: core
+domain: identity
+status: proposed
+updated: "2026-09-04"
+documentsExistingImplementation: true
+
+# ---------------------------------------------------------------------------
+# tenancy — A LOGIN HAS NO TENANT, AND THAT IS THE POINT OF IT
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none
+  ruling: >-
+    NO REQUEST OR RESPONSE IN THIS CONTRACT CARRIES, ACCEPTS, IMPLIES OR RETURNS AN ORGANIZATION.
+    A login is what DISCOVERS the tenant, so the tenant cannot be an input to it.
+    docs/decisions/0014 §C.5 fixes the order as session -> principal -> memberships -> authorized
+    Organization/Business context -> TenantStoreResolver -> business data. Login sits at the far
+    LEFT of that order, before the first arrow.
+  whyNoOrganizationHintIsAccepted: >-
+    THE SESSION ISSUER SUPPORTS ONE AND LOGIN DELIBERATELY DOES NOT PASS IT (login.ts). Two
+    reasons, both structural. It would add a membership lookup to some logins and not others,
+    which is a per-request work difference on the entry point whose timing is most closely
+    watched. And it would make the answer depend on the caller's membership in a named
+    Organization — a valid credential naming an Organization it does not belong to would be
+    REFUSED where the same credential naming nothing would be ISSUED, which is an
+    Organization-membership oracle available to anyone who steals one credential.
+  whatItReachesInstead: >-
+    NO TENANT DATA, STRUCTURALLY. A pre-auth handler is given a clock, a request id, a
+    correlation id, the validated body and the presented cookies. There is no TenantStoreResolver,
+    no TenantScopedStore, no ActionContext and no Env anywhere on the path
+    (pre-auth-admission.ts). It has nothing to query, so "accesses no tenant business data" is a
+    property of what it was handed rather than a rule a handler must follow.
+  theOneWriteAndWhereItGOES: >-
+    A SUCCESSFUL LOGIN WRITES EXACTLY ONE SESSION ROW, AND IT IS A CONTROL-PLANE WRITE, NOT A
+    TENANT WRITE. A session belongs to a principal and not to an Organization
+    (0014 §C.1), so it does not and cannot go through TenantScopedStore. See freeTierImpact.
+  aFailedLoginWritesNOTHING: >-
+    NORMATIVE, AND IT IS WHAT STOPS AN UNAUTHENTICATED CALLER SPENDING D1 CAPACITY. No audit row,
+    no attempt counter, no lockout record, no session touch. The only durable write on this path
+    happens AFTER verification succeeds, under a reservation drawn for the VERIFIED principal. An
+    unauthenticated caller cannot cause a durable write here at all. The security evidence that
+    does get written is bounded and is described in audit.
+
+# ---------------------------------------------------------------------------
+# admissionModel — what replaces "authorization" on this path
+# ---------------------------------------------------------------------------
+admissionModel:
+  permission: none
+  permissionRuling: >-
+    NO PERMISSION IS DECLARED, NO CATALOG ENTRY IS REQUESTED, AND NEITHER MAY BE ADDED. Under
+    docs/decisions/0007 D1 an entry point with no declared permission is UNREACHABLE, not open.
+    0014 §B adds exactly one exception — a closed, Core-owned, enumerated registry of five
+    pre-authentication entry points — and login is two of the five. The registry is never
+    manifest-declarable: no App may add to it, no App may serve one of its paths, and Core matches
+    those paths before the App router so an App cannot present itself as the login endpoint.
+  theFiveObligations: >-
+    0014 §B requires every pre-auth route to declare access: pre-authentication, be explicitly
+    registered, carry strict input validation, carry rate limiting, reveal no account-existence
+    difference, access no tenant business data, issue no business permission, and fail closed.
+    Each is enforced in Core against a flag the registry declares, and each is described in this
+    contract at the place it becomes observable to a client: validation in wire.errors, rate
+    limiting in rateLimits, account-existence in disclosureRulings, tenant data in tenancy, and
+    fail-closed in reservedPaths.
+  issuesNoPermission: >-
+    A SUCCESSFUL LOGIN GRANTS NOTHING. It returns an opaque credential, and a credential is not a
+    permission — it is a value a LATER, authenticated request presents so that Core can derive a
+    principal through the ordinary path. PreAuthOutcome has no grant, no scope, no permission and
+    no principal field for one to travel in.
+  everythingAfterLoginIsAuthorizedNORMALLY: >-
+    Stated because it is the boundary of this contract. Once a session exists, every business
+    operation is an Action, authorized in Core on every call, deny by default, at its declared
+    permission and scope. Nothing in this contract weakens, bypasses or pre-authorizes any of it.
+
+# ---------------------------------------------------------------------------
+# entryPoints — THE PATHS. Absolute, outside /api/v1, and reserved to Core.
+# ---------------------------------------------------------------------------
+entryPoints:
+
+  # =======================================================================================
+  - id: identity.login.complete
+    method: POST
+    path: "/auth/login/complete"
+    surface: public
+    clientsCallIt: true
+    title: "Log in"
+    description: >-
+      THE WHOLE OF LOGIN. One request, one round trip. The client derives locally and posts the
+      derived value; Core verifies it against the stored verifier and, only on success, issues a
+      session.
+    request: { schemaRef: "urn:dudo:schema:login:1#/$defs/loginCompleteRequest" }
+    successBody: { schemaRef: "urn:dudo:schema:login:1#/$defs/preAuthAcknowledgement" }
+    successStatus: 200
+    setsCredential: { schemaRef: "urn:dudo:schema:login:1#/$defs/sessionCredential" }
+    errors: [invalid_argument, unauthenticated, rate_limited, unavailable]
+    notes: >-
+      THE ERROR LIST IS EXACTLY FOUR AND THE ABSENCES ARE NORMATIVE. There is no not_found, no
+      forbidden, no conflict, no failed_precondition, no quota_exceeded, no internal and no
+      timeout on this path. Core's pre-auth renderer is a FIXED TABLE with seven branches and no
+      other exit (http/pre-auth-http.ts), so an error outside this list is not something a handler
+      can produce.
+      NO forbidden IS THE ONE WORTH NAMING: there is no permission on this path, so there is
+      nothing to be forbidden by. A caller who is refused is refused as unauthenticated, always.
+
+  # =======================================================================================
+  - id: identity.login.start
+    method: POST
+    path: "/auth/login/start"
+    surface: public
+    clientsCallIt: false
+    title: "Login start — RESERVED. Clients do not call it."
+    description: >-
+      REGISTERED, REACHABLE, AND IT DOES NOTHING. It accepts an 'email' field, discards it, and
+      answers 200 {"status":"ok"} for every input — a real account, an address nobody has ever
+      used, a malformed string, or an internal failure. It is not a placeholder and not
+      unfinished; doing nothing is the correct implementation.
+    request:
+      fields: [email]
+      note: >-
+        The field is declared and accepted so that the bucketed identifier rate limit applies to
+        enumeration traffic aimed at this endpoint. The value is read, keyed, bucketed and
+        forgotten. No handler ever sees a reason to touch it.
+    successBody: { schemaRef: "urn:dudo:schema:login:1#/$defs/preAuthAcknowledgement" }
+    successStatus: 200
+    errors: [invalid_argument, rate_limited]
+    theRulingForCLIENTS: >-
+      NEITHER CLIENT CALLS THIS ENDPOINT. Not first, not optionally, not "to be safe", and not to
+      check whether an account exists — it cannot answer that and is built so it never can. A
+      client that calls it has added a round trip, an extra rate-limit charge against the user's
+      own bucket, and a code path that looks like it means something.
+    whyItExistsANYWAY: >-
+      THREE REASONS, AND THE FIRST IS THE ONE PEOPLE MISS.
+      1. A ROUND TRIP WITH NO PAYLOAD TO CARRY. 0014 §B registered five entry points against an
+         identity provider that had not been chosen. 0015 §D then chose one in which login start
+         has no work to do: the client's PBKDF2 salt is the normalised email, so the client needs
+         NOTHING from the server before it derives. A per-user random salt would have needed
+         fetching — but this endpoint is disclosure: 'collapsed' and renders one constant body, so
+         there is no way to deliver a server-chosen salt through it. Normalised email as the salt
+         removed the round trip rather than the endpoint.
+      2. DELETING IT WOULD MAKE A SECURITY CHANNEL NOISY. An absent handler is not free: Core
+         announces 'handler_absent' for a registered entry point with no handler, once per
+         isolate, through the channel operators alert on — the same channel that carries
+         'evidence_unrecorded' and 'identifier_level_absent'. A platform emitting "a
+         pre-authentication entry point has no handler" for an endpoint that is DELIBERATELY empty
+         trains whoever reads that channel to ignore it. A control an operator learns to ignore is
+         a control that is off.
+      3. THE PATH STAYS RESERVED. /auth/ is a reserved prefix; Core refuses any App route table
+         that could resolve onto it, at construction. So no App can serve /auth/login/start and no
+         App can present itself to a user as the login endpoint. That protection is a property of
+         the reservation, not of the handler.
+    itIsCOLLAPSED: >-
+      disclosure: 'collapsed' is a Core-enforced flag, not a description. Every outcome the
+      handler could return — success, refusal, its own failure, or a thrown exception — is
+      rendered as the same fixed 200. Core's registry refuses to load if a collapsed entry point
+      declares more than one possible outcome. THE COST IS STATED: a genuine outage here is
+      invisible to the caller, who is told "accepted". That is the correct trade for the one
+      endpoint an unauthenticated caller hands an account identifier to, and the outage is not
+      invisible internally.
+
+  # =======================================================================================
+  - id: identity.session.refresh
+    method: POST
+    path: "/auth/session/refresh"
+    surface: public
+    clientsCallIt: false
+    title: "Session refresh — RESERVED, NO HANDLER, FAILS CLOSED."
+    description: >-
+      Registered with no handler. Every call collapses to the fixed 401 unauthenticated, whatever
+      it presents. Under docs/decisions/0015 §B.3's absolute expiry a refresh either does nothing
+      or is a second login, so there is nothing for it to do. Rotation is also unaffordable: it
+      would be 6 control-plane row-writes per request against a 3,000/day ceiling.
+    errors: [unauthenticated, rate_limited]
+    whyNotInvalidArgument: >-
+      NO 400 IS REACHABLE HERE, AND THE REASON IS THE ORDER OF CORE'S ADMISSION STEPS RATHER THAN
+      A LENIENT PARSER. Core looks the handler up BEFORE it parses the body, so an entry point with
+      no handler collapses before validation runs. A malformed body, an unknown field and an
+      oversized value all reach the same 401. Stated because it differs from
+      /auth/login/complete, where the same malformed body IS a 400.
+    theRulingForCLIENTS: >-
+      NO CLIENT CALLS IT AND NO CLIENT IMPLEMENTS SILENT REFRESH. A session lasts twelve hours and
+      then ends. When a request returns 401, the correct client behaviour is to send the user to
+      the login screen — never to retry, never to attempt a refresh, and never to treat the 401 as
+      transient. A client that builds a refresh loop against this path builds an infinite loop of
+      401s.
+
+  # =======================================================================================
+  - id: identity.session.revoke
+    method: POST
+    path: "/auth/session/revoke"
+    surface: public
+    clientsCallIt: false
+    title: "Session revoke — RESERVED, NO HANDLER. THERE IS NO LOGOUT."
+    description: >-
+      Registered with no handler, disclosure 'collapsed', so it answers 200 {"status":"ok"} and
+      REVOKES NOTHING. This is reported as a gap rather than smoothed over. It is fail-closed in
+      the security sense — nothing is issued and nothing is deleted — and it is honest at the wire,
+      because revocation is collapsed precisely so that "revoked" and "did nothing" are
+      indistinguishable (a logout that said "no such session" for an unknown token and "done" for a
+      real one is a token-validity oracle).
+    errors: [rate_limited]
+    whyNoOtherCodeIsReachable: >-
+      IT HAS NO HANDLER, SO CORE COLLAPSES IT BEFORE THE BODY IS PARSED — no 400 — and its
+      collapse target is 'acknowledged', so a malformed request, an unknown field and a valid one
+      all receive the same 200. The only other answer it can give is the rate limit.
+    theConsequenceSTATED: >-
+      A USER CANNOT LOG OUT. The cookie is HttpOnly, so no client can clear it from script, and the
+      session row lives its full twelve hours. NEITHER CLIENT MAY FAKE A LOGOUT that implies the
+      session ended — clearing local state while the credential stays valid is a false statement to
+      the user, and on a shared device it is a security defect rather than a cosmetic one. Recorded
+      as LG-1. It is a product gap, not a security bypass, and it is the first follow-up owed on
+      this slice.
+
+# ---------------------------------------------------------------------------
+# clientKdf — NORMATIVE. IDENTICAL IN BOTH CLIENTS. THIS IS THE PART THAT MUST NOT DIVERGE.
+# ---------------------------------------------------------------------------
+clientKdf:
+  derivation: |-
+    derived_key = base64url_unpadded(
+        PBKDF2-HMAC-SHA256(
+            password   = UTF-8 bytes of NFC(password),          # NFC. NOT NFKC. See passwordNormalization.
+            salt       = UTF-8 bytes of normalizeIdentifier(email),
+            iterations = 600000,
+            dkLen      = 32 bytes ) )
+    The result is EXACTLY 43 base64url characters, unpadded, from the alphabet [A-Za-z0-9_-].
+
+    THE TWO INPUTS ARE NORMALISED DIFFERENTLY, ON PURPOSE, IN THE SAME THREE LINES OF CLIENT CODE.
+    That is the single most confusable thing in this contract, so it is stated at the derivation
+    itself and again in full below:
+
+        input     | normalisation                                            | case folded?
+        ----------|----------------------------------------------------------|-------------
+        email     | validate ASCII 0x21-0x7E, then NFKC, then ASCII-only fold | YES
+        password  | NFC only                                                  | NO
+
+    NEITHER IS trimmed. NEITHER uses toLowerCase() or lowercased(). The password has NO character
+    restriction, NO length restriction beyond the body floor, and is NEVER case folded.
+  allSIXParametersAreNORMATIVE: >-
+    THE HASH, THE ITERATION COUNT, THE SALT, THE OUTPUT LENGTH, THE ENCODING AND THE PASSWORD
+    NORMALISATION ARE FIXED AND NONE IS NEGOTIABLE PER CLIENT, PER PLATFORM, PER DEVICE CLASS OR
+    PER BUILD CONFIGURATION. The server stores a hash of this exact value. A client that changes
+    any one of them derives different bytes and its users cannot log in — on that client only,
+    while the other client keeps working.
+    IT WAS FIVE UNTIL 2026-09-04. Password normalisation was added by the amendment to
+    docs/decisions/0015 §D described in passwordNormalization, and the count is stated as having
+    changed rather than silently corrected, because "all N parameters" is the kind of sentence a
+    reader trusts without recounting.
+  # =======================================================================================
+  # passwordNormalization — NORMATIVE, ADDED 2026-09-04, AND CORE CANNOT ENFORCE ANY OF IT.
+  # =======================================================================================
+  passwordNormalization:
+    ruling: >-
+      THE PASSWORD IS NORMALISED TO UNICODE NFC BEFORE IT IS ENCODED AS UTF-8 AND HANDED TO
+      PBKDF2. Every client, every platform, enrollment and login alike. NFC — Normalization Form
+      C, canonical decomposition followed by canonical composition — AND NOTHING ELSE: no case
+      folding, no trimming, no whitespace collapsing, no character restriction, no length rule
+      beyond Core's 512-character body-field floor, and no NFKC.
+    provenance: >-
+      docs/decisions/0015 §D specified "the UTF-8 password" and stopped there. web-agent found the
+      gap while implementing the web client and raised it rather than choosing a normalisation
+      locally, which is the behaviour that kept this out of production. The Team Lead has recorded
+      the amendment in 0015; THIS BLOCK MIRRORS IT AND DOES NOT ORIGINATE IT.
+    whatBREAKSWITHOUTIT: >-
+      A NON-ASCII PASSWORD TYPED IN COMPOSED AND DECOMPOSED FORM IS TWO DIFFERENT BYTE SEQUENCES
+      AND DERIVES TWO DIFFERENT KEYS. "é" is U+00E9 composed, or U+0065 U+0301 decomposed. Both
+      render identically, both are what the user believes they typed, and neither the user nor a
+      support engineer can see the difference on a screen.
+      THE FAILURE PRESENTS AS A WRONG PASSWORD, WHICH IS WHY IT WOULD HAVE BEEN EXPENSIVE. A user
+      enrols on one platform and cannot log in on another; there is no error message that says so,
+      because there is only one 401 and it must stay that way; the user retypes the same password
+      and is refused again; and it reproduces only for that user, only on one platform, only for
+      passwords containing a character with more than one representation. It is also
+      INPUT-METHOD-DEPENDENT rather than platform-dependent in principle — macOS text input and
+      some IMEs favour decomposed forms — so it does not reproduce reliably even on the affected
+      client.
+    whyNFCAndNotNFKC:
+      theContrastIsInONECODEPATH: >-
+        BOTH FORMS NOW APPEAR IN THE SAME THREE LINES OF CLIENT CODE — NFKC for the email that
+        becomes the salt, NFC for the password — SO THIS MUST BE UNMISSABLE RATHER THAN CORRECT.
+        The email is an IDENTIFIER: collapsing compatibility variants is right for it, because a
+        fullwidth or a ligature form of an address should find the same account, and it is case
+        folded for the same reason. The password is an OPAQUE SECRET: it is not looked up, not
+        compared for human equivalence, and not meant to match anything but itself.
+      nfkcOnAPasswordDESTROYSENTROPY: >-
+        AND IT DESTROYS ENTROPY THE USER BELIEVES THEY HAVE, WHICH IS THE WHOLE ARGUMENT. NFKC
+        collapses compatibility variants onto their canonical equivalents: fullwidth Latin onto
+        ASCII, superscript and subscript digits onto ordinary digits, ligatures onto their
+        component letters, and several distinct space characters onto U+0020. A user who
+        deliberately chose a fullwidth or a superscript character has chosen a character that NFKC
+        maps away, so the derived key is the key of a WEAKER password than the one they typed —
+        silently, with no indication anywhere that the choice did not count. CASE FOLDING WOULD BE
+        THE SAME MISTAKE, MORE OBVIOUSLY: it halves the alphabet of every letter in the password.
+      theCitation: >-
+        RFC 8265, PRECIS FRAMEWORK, THE 'OpaqueString' PROFILE — the profile SCRAM and SASL use for
+        exactly this problem. It specifies NFC for passwords, applies no case mapping, and treats
+        the value as opaque rather than as an identifier. RFC 8265's own 'UsernameCaseMapped'
+        profile is the identifier-shaped counterpart, and the split between the two is the same
+        split this contract makes between the password and the email. Dudo is not implementing
+        PRECIS in full — that would bring width mapping, directionality and disallowed-character
+        rules this platform has not decided on — and the citation is here so that the CHOICE is
+        recognisable as the standard answer rather than as a local invention.
+    theEquivalentInEACHIMPLEMENTATION: >-
+      web    password.normalize('NFC')
+      Apple  password.precomposedStringWithCanonicalMapping
+      NOTE THE APPLE PAIR CAREFULLY, BECAUSE THE TWO METHOD NAMES DIFFER BY ONE WORD AND DO
+      DIFFERENT THINGS: precomposedStringWithCanonicalMapping is NFC and is for the PASSWORD;
+      precomposedStringWithCompatibilityMapping is NFKC and is for the EMAIL. Swapping them
+      compiles, runs, passes an ASCII test suite, and breaks exactly the users this rule exists
+      for.
+    coreCANNOTENFORCETHIS:
+      ruling: >-
+        CORE NEVER RECEIVES A PASSWORD, SO CORE CANNOT CHECK, ENFORCE, DETECT OR REPAIR THIS RULE.
+        There is no server-side validation of it, there never can be one, and no future Core change
+        can add one without abandoning the client-side KDF entirely.
+      whyThatMakesITCONTRACTTEXT: >-
+        THIS IS THE STRONGEST AVAILABLE ARGUMENT FOR THE RULE LIVING HERE RATHER THAN IN A CODE
+        COMMENT IN ONE CLIENT. Every other rule in this contract has a server-side backstop: an
+        unknown field is rejected, a malformed email is refused, a wrongly sized derived_key is
+        refused. THIS ONE HAS NONE. What Core receives is 43 base64url characters that are either
+        the right 43 or the wrong 43, and a wrongly normalised password is indistinguishable from
+        a wrong password — to Core, to the logs, and to the user.
+      soTHEONLYENFORCEMENTISQA: >-
+        THE ONLY PLACE THIS RULE CAN BE ENFORCED IS SHARED TEST VECTORS BINDING BOTH CLIENTS, and
+        that makes them a security control rather than a convenience. See testObligations. A
+        reviewer who assumes a server check exists will not ask for the vectors, which is precisely
+        the assumption this paragraph exists to prevent.
+    andITAPPLIESTOENROLLMENTTOO: >-
+      ENROLLMENT MUST APPLY THE IDENTICAL NORMALISATION, OR IT WRITES A VERIFIER NOBODY CAN EVER
+      MATCH. Enrollment is an out-of-band operator action today, run with Dudo's own tool, so the
+      obligation lands there first. A future self-service registration slice inherits it, and a
+      registration client that normalises differently from the login client would enrol users who
+      are locked out at their first login — with no error anywhere that says why.
+  theFailureModeIsLOUDButLOCAL: >-
+    A MISMATCH FAILS CLOSED, WHICH IS THE SAFE DIRECTION AND IS STILL AN OUTAGE. Nobody can log in
+    with the wrong derivation, so it cannot ship silently as a weakened credential. But it can ship
+    as "login is broken on iPhone", and it is testable in advance precisely because the function is
+    deterministic: same password, same email, same 43 characters, in every implementation.
+  theEquivalentInEACHIMPLEMENTATION: >-
+    Written out so a client author does not infer it from Core's TypeScript. THE NORMALISATION
+    STEPS ARE PART OF THE PROCEDURE AND ARE NUMBERED FIRST, because they are the steps a client
+    author is most likely to leave out — they look like preparation and they are the credential.
+      web    1. passwordBytes = UTF8( password.normalize('NFC') )
+             2. salt          = UTF8( email.normalize('NFKC') then ASCII-only A-Z -> a-z )
+             3. crypto.subtle.importKey('raw', passwordBytes, 'PBKDF2', false, ['deriveBits'])
+             4. crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations:
+                600000 }, key, 256)
+             5. base64url-encode the 32 bytes and STRIP the '=' padding.
+      Apple  1. passwordBytes = UTF8( password.precomposedStringWithCanonicalMapping )
+             2. salt          = UTF8( email.precomposedStringWithCompatibilityMapping then the
+                same ASCII-only A-Z -> a-z map — NOT lowercased() )
+             3. CCKeyDerivationPBKDF with kCCPBKDF2, kCCPRFHmacAlgSHA256, rounds 600000,
+                derivedKey length 32
+             4. the same base64url encoding with padding stripped.
+    STEPS 1 AND 2 USE DIFFERENT NORMALISATION FORMS AND THAT IS NOT A TYPO IN THIS FILE. NFC for
+    the password, NFKC for the email. On Apple the two method names differ by one word. See
+    passwordNormalization and normalizeIdentifier.
+    BASE64URL, NOT BASE64: '+' becomes '-', '/' becomes '_', and trailing '=' is removed. A client
+    that sends standard base64 sends 44 characters with padding and is refused.
+  whyTheClientDOESTHEWORK: >-
+    600,000 ITERATIONS ON THE CLIENT IS WHAT MAKES THE TOTAL WORK FACTOR ADEQUATE, because the
+    server side deliberately cannot be large. Core re-derives at only 10,000 iterations, and that
+    number is a SAFETY CEILING rather than a budget: at ~1.7 ms it is 17% of the Workers Free 10 ms
+    CPU allowance, and an invocation killed at the CPU limit returns a response Dudo did not author
+    — an intermittent escape from the fixed response table, appearing under load, which is when an
+    attack happens. Core refuses at module load if the constant drifts above 20,000.
+    docs/decisions/0015 finding 2 also records what PBKDF2 costs and does not soften it: PBKDF2 has
+    no memory hardness and is not equivalent to Argon2id at any iteration count. Argon2 and bcrypt
+    are npm packages and docs/decisions/0003 approves none, so the choice is PBKDF2 over WebCrypto
+    with the client carrying the work factor.
+  whatTHESERVERSTORES: >-
+    NOT derived_key. The stored verifier is PBKDF2-SHA256(derived_key, per-user random 16-byte
+    salt, 10000) — a hash OF the value the client sends, exactly as it would be a hash of a
+    password. derived_key is a bearer secret, so storing it would make a database dump directly
+    usable as a login credential with no cracking at all. This is stated in a client-facing
+    contract because it is why derived_key must be treated as a secret in transit and never
+    logged, cached, or written to disk by a client.
+  enrollmentISNOTINTHISCONTRACT: >-
+    THERE IS NO REGISTRATION, NO PASSWORD CHANGE, NO PASSWORD RESET AND NO CREDENTIAL UPDATE
+    ANYWHERE IN DUDO TODAY, and no endpoint for any of them. Enrollment is an OPERATOR action run
+    out of band with Dudo's own tool, which performs this same client-side KDF. The running Worker
+    has no code path that writes a credential at all, which is the strongest available form of
+    "registration is not built in this slice". A self-service enrollment slice must bind its client
+    with shared test vectors BEFORE it accepts a single enrollment: an enrollment endpoint that
+    stored a hash of whatever the client posted would enroll a raw password without either side
+    noticing, and the 43-character width check would not detect it.
+
+# ---------------------------------------------------------------------------
+# normalizeIdentifier — NORMATIVE. THREE IMPLEMENTATIONS, BYTE-IDENTICAL OUTPUT.
+# ---------------------------------------------------------------------------
+normalizeIdentifier:
+  whyItIsINTHECONTRACT: >-
+    BECAUSE IT IS THE PBKDF2 SALT, SO IT IS PART OF THE CREDENTIAL AND NOT AN INTERNAL DETAIL. The
+    same function runs in three places — Core's TypeScript, the web client's TypeScript, and the
+    Apple client's Swift — and all three must produce BYTE-IDENTICAL output or the derived value
+    differs and the user is refused. Core also uses it to compute the lookup key of the credential
+    row, so a divergence means the row is not even found.
+  theTwoSTEPS: >-
+    STEP 0 IS A REFUSAL AND IT IS NOT PART OF NORMALISATION. Validate first (see theFloor below);
+    a value that fails is REFUSED, never repaired. Then:
+      1. NFKC normalisation.
+      2. ASCII-ONLY CASE FOLDING: map U+0041..U+005A ('A'..'Z') to U+0061..U+007A ('a'..'z'), and
+         change nothing else.
+    That is the whole function. There is no trimming, no stripping, no dot removal, no plus-tag
+    removal, no domain lowercasing special case, and no provider-specific rule.
+  itIsNOTToLowerCase: >-
+    THE SINGLE MOST LIKELY THING FOR A CLIENT AUTHOR TO 'SIMPLIFY', AND IT WOULD BE A DEFECT.
+    JavaScript's toLowerCase() and Swift's lowercased() are FULL UNICODE case mapping and they
+    differ from each other for real characters — U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE is
+    the usual example. A login that works on the web and fails on iPhone for one user is a defect
+    nobody would find, because it reproduces only for that user's address.
+    THE CORRECT FORMS: in JavaScript, value.normalize('NFKC') then replace /[A-Z]/g with the same
+    code point + 32. In Swift, value.precomposedStringWithCompatibilityMapping then the same
+    ASCII-only map — NOT lowercased().
+  whyNFKCATALL: >-
+    For the ASCII subset NFKC is the identity function, so it costs nothing today. It is applied
+    anyway so the definition stays correct if the ASCII restriction is ever relaxed by a recorded
+    decision, and so that all three implementations already agree on the step rather than adding
+    it later under pressure.
+  theContrastWithTHEPASSWORD:
+    ruling: >-
+      THIS FUNCTION IS NFKC AND CASE-FOLDING. THE PASSWORD IS NFC AND NOTHING ELSE. The two run in
+      the same three lines of client code, on the two inputs of the same PBKDF2 call, and they are
+      DELIBERATELY DIFFERENT. Applying this function to a password, or the password's rule to an
+      email, is a defect in both directions.
+    why: >-
+      AN IDENTIFIER IS LOOKED UP; A PASSWORD IS ONLY EVER COMPARED WITH ITSELF. Collapsing
+      compatibility variants and case is correct for something a user must be able to retype and
+      still find the same account. It is wrong for a secret, because every collapse removes a
+      distinction the user believed they had chosen — NFKC on a password silently derives the key
+      of a weaker password than the one that was typed. RFC 8265 draws the same line between its
+      'UsernameCaseMapped' and 'OpaqueString' profiles. Full reasoning:
+      clientKdf.passwordNormalization.
+    theEASIESTWAYTOGETITWRONG: >-
+      ON APPLE, precomposedStringWithCompatibilityMapping (NFKC, this function) AND
+      precomposedStringWithCanonicalMapping (NFC, the password) DIFFER BY ONE WORD. Swapping them
+      compiles, runs, and passes any test suite whose fixtures are ASCII.
+  theFloor:
+    ruling: >-
+      REJECT BEFORE NORMALISING. A value is submittable only if ALL THREE hold:
+        - its length is at least 3 and at most 254;
+        - every character is in U+0021..U+007E (printable ASCII, SPACE EXCLUDED);
+        - it contains at least one '@' (more than one is accepted).
+      A value failing any of them is REFUSED with the fixed 401. It is never trimmed, never
+      stripped, never lowercased into acceptability and never partially repaired.
+    whyWhitespaceIsREFUSEDANDNOTTRIMMED: >-
+      THIS IS THE NARROWING THAT LOOKS UNHELPFUL AND IS THE MOST LOAD-BEARING. JavaScript's
+      String.prototype.trim removes the Unicode White_Space set; Swift's
+      trimmingCharacters(in: .whitespacesAndNewlines) removes a different set. A value that needs
+      trimming is therefore a value the three implementations can disagree about, and the
+      disagreement would show up as a salt mismatch — that is, as an unexplainable login failure.
+      REFUSING REMOVES THE DISAGREEMENT INSTEAD OF ARBITRATING IT.
+      A CLIENT MUST NOT TRIM THE FIELD BEFORE SENDING IT. Trimming client-side would change the
+      value that becomes the salt, which is the same divergence moved one layer up. If a client
+      wants to help a user who pasted a trailing space, it may refuse the input in its own UI with
+      its own message BEFORE sending — it must not silently alter what it sends.
+    refusalIsNotANEXISTENCESIGNAL: >-
+      The floor is decided entirely from the shape of the submitted string, which the caller wrote
+      and already knows, before anything is hashed or looked up. It is identical for every string
+      of that shape and it is mapped onto the same fixed refusal every other failure produces.
+  theAcceptedCOST:
+    ruling: >-
+      AN RFC 6531 INTERNATIONALISED EMAIL ADDRESS CANNOT BE USED TO LOG IN. A non-ASCII local part
+      or a non-punycode domain fails the printable-ASCII rule and is refused. PUNYCODE DOMAINS
+      WORK, because punycode is ASCII.
+    itIsACCEPTEDANDNOTOVERLOOKED: >-
+      Stated as a present product limitation rather than discovered in testing. It excludes a real
+      class of user, and the trade is deliberate: the alternative is arbitrating Unicode
+      normalisation and case folding across three languages on the one path where a mismatch means
+      nobody can log in.
+    whatWOULDCHANGEIT: >-
+      A decision record, and shared test vectors for all three implementations, IN THAT ORDER.
+      Relaxing the character rule without the vectors would be swapping a known limitation for an
+      unknown divergence.
+
+# ---------------------------------------------------------------------------
+# wire — the exact request and response, for both clients
+# ---------------------------------------------------------------------------
+wire:
+  request: |
+    POST /auth/login/complete
+    Content-Type: application/json
+
+    { "email": "<address>", "derived_key": "<43 base64url characters>" }
+  requestNotes:
+    - >-
+      THE PATH IS ABSOLUTE AND IS NOT UNDER /api/v1. Core matches the five reserved
+      pre-authentication paths on the absolute request path, before the App router and before the
+      base path is even considered. A login endpoint whose address moved when an App was mounted
+      elsewhere would be a login endpoint that depended on which App was installed.
+    - >-
+      THE METHOD IS PART OF THE MATCH. GET /auth/login/complete is 404 not_found, exactly as an
+      unregistered path is. Answering 405 would confirm the path exists, which for a login endpoint
+      is small, free reconnaissance.
+    - >-
+      EXACTLY TWO FIELDS. Core rejects any undeclared field with 400 invalid_argument and the
+      detail token 'unknown_field', naming the field and never the value. There is no
+      organization_id, remember_me, device_name, redirect_uri, client_id, locale or totp field —
+      not undocumented, REJECTED.
+    - >-
+      NO CSRF TOKEN, NO STATE PARAMETER AND NO PRE-FLIGHT VALUE IS REQUIRED OR ACCEPTED. The
+      session cookie is SameSite=Lax, which withholds it on cross-site POST.
+    - >-
+      NEITHER CLIENT SENDS AN Authorization HEADER OR A dudo_session COOKIE ON THIS REQUEST. The
+      endpoint does not read one, and a client that ships a stale credential to the login endpoint
+      is sending a bearer secret it did not need to send.
+  successResponse: |
+    200 OK
+    Content-Type: application/json; charset=utf-8
+    Cache-Control: no-store
+    X-Request-Id: <22 characters>
+    X-Correlation-Id: <22 characters>
+    Set-Cookie: dudo_session=<opaque>; Max-Age=43200; Path=/; HttpOnly; Secure; SameSite=Lax
+
+    {"status":"ok"}
+  successNotes:
+    - >-
+      THE BODY CARRIES NO TOKEN AND NO IDENTIFIER OF ANY KIND, AND THAT IS A CONSTRAINT ON THE
+      APPLE CLIENT SPECIFICALLY. The credential arrives ONLY in Set-Cookie. An Apple client obtains
+      it by reading that header, or by letting URLSession's cookie store hold it, and may then
+      present it as 'Authorization: Bearer <value>' on later requests. The direction works that way
+      and not the other: HttpOnly means a web client cannot read the cookie from script and must
+      not try to construct the bearer form.
+    - >-
+      WHY THERE IS NO TOKEN IN THE BODY, STATED SO NOBODY 'FIXES' IT. Core renders ONE fixed body
+      for every pre-auth outcome, and the only per-request channel is Set-Cookie. A token in the
+      body would make the successful-login response and the did-nothing acknowledgement DIFFER IN
+      LENGTH, which is a response-size disclosure channel on a path an unauthenticated caller can
+      drive at will. Adding a body field here is breaking AND is a disclosure review.
+    - >-
+      THE COOKIE ATTRIBUTES ARE FORCED BY THE TRANSPORT AND ARE NOT PER-CLIENT, NOT CONFIGURABLE
+      AND NOT THE HANDLER'S TO CHOOSE. Max-Age is 43,200 seconds — twelve hours — from a single
+      constant shared with the session row's expiry, so a cookie cannot outlive its row.
+      SameSite=Lax rather than Strict is a real, stated trade: Strict withholds the session cookie
+      on the first navigation in from any external link, logging the user out of every inbound link
+      they follow; Lax withholds it on cross-site POST, which is the CSRF case that matters.
+    - >-
+      X-Request-Id IS ON EVERY RESPONSE, SUCCESS OR FAILURE, and it is 22 characters on every
+      response Dudo has ever sent. It is a fixed-width difference and the ONLY per-request
+      variation in a refusal. It is what makes a support conversation possible without asking a
+      user to share their data.
+  failureResponse: |
+    401 Unauthorized
+    Content-Type: application/json; charset=utf-8
+    Cache-Control: no-store
+    X-Request-Id: <22 characters>
+    X-Correlation-Id: <22 characters>
+
+    {"error":{"code":"unauthenticated","message":"Authentication is required.","request_id":"<22 characters>"}}
+  failureNotes:
+    - >-
+      ONE FIXED 401 FOR EVERY FAILURE, WITH NO DETAILS ARRAY AND NO VARIATION. The message is a
+      constant; Core's unauthenticated() constructor takes no arguments, so there is no parameter
+      through which a reason could travel even if a handler wanted to supply one.
+    - >-
+      THERE IS NO "account not found", NO "wrong password", NO "account suspended", NO "account
+      locked", NO "too many attempts for this account", NO remaining-attempt count and NO field any
+      of them could be written into. Every one of the following produces THE SAME BYTES: an unknown
+      address; a known address with the wrong password; a suspended account; a deleted principal; a
+      credential row this build cannot read; a malformed email; a wrongly sized derived_key; a
+      missing field; a non-string field. See disclosureRulings.
+    - >-
+      A CLIENT RENDERS ONE MESSAGE FOR A 401 FROM THIS ENDPOINT, AND BOTH CLIENTS RENDER THE SAME
+      ONE. It says the email or password is incorrect. It must not guess, must not offer "did you
+      mean to register", must not vary by input, and must not add a client-side account-existence
+      check of its own — a client that reintroduces the distinction has reopened the oracle Core
+      spent five separate controls closing.
+
+# ---------------------------------------------------------------------------
+# errorRulings — the parts a client gets wrong, and they are odd because Core is odd here
+# ---------------------------------------------------------------------------
+errorRulings:
+  fourHundredVersusFourHundredAndOne:
+    ruling: >-
+      400 invalid_argument MEANS THE BODY WAS NOT WELL FORMED AT CORE'S FLOOR. 401 unauthenticated
+      MEANS EVERYTHING ELSE, INCLUDING THINGS AN ORDINARY API WOULD CALL VALIDATION FAILURES.
+    the400Cases: |-
+      Produced by Core's pre-auth body floor, before any handler runs:
+        body is not valid JSON                    -> details [{ field: "",           issue: "must_be_valid_json" }]
+        body is not a JSON object                 -> details [{ field: "",           issue: "must_be_an_object" }]
+        body exceeds 4,096 BYTES                  -> details [{ field: "",           issue: "body_too_large" }]
+        more than 12 fields                       -> details [{ field: "",           issue: "too_many_fields" }]
+        a field Core did not declare              -> details [{ field: "<name>",     issue: "unknown_field" }]
+        a string value over 512 characters        -> details [{ field: "<name>",     issue: "too_long" }]
+        a non-finite number                       -> details [{ field: "<name>",     issue: "must_be_finite" }]
+        an array or object value                  -> details [{ field: "<name>",     issue: "must_be_a_primitive" }]
+      THE FIELD NAME IS ECHOED AND THE VALUE NEVER IS. Core's detail() has no parameter for a
+      value, so a rejected credential cannot be copied into a log by this path.
+    the401Cases: >-
+      EVERYTHING THE HANDLER OR THE VERIFIER DECIDES: a missing 'email', a missing 'derived_key',
+      either field present but not a string, either field an empty string, an email failing the
+      floor (too short, too long, non-printable-ASCII, no '@'), a derived_key that is not exactly
+      43 base64url characters, an unknown account, a wrong password, a suspended or deleted
+      principal, and a stored credential row this build cannot interpret.
+    whyTheSplitIsWhereItIs: >-
+      IT LOOKS INCONSISTENT AND IT IS NOT. The 400 cases are decided by the SHAPE of the request,
+      which the caller wrote and already knows, and they carry no information about any account.
+      The 401 cases are the ones where distinguishing between them would say something about an
+      account — so they are collapsed onto one answer. A missing field is answered 401 rather than
+      400 for exactly that reason: it would be the first crack in a table whose whole value is that
+      it has no exceptions.
+  theTwoLengthRegimes:
+    ruling: >-
+      AN 'email' OF 255 TO 512 CHARACTERS IS 401. AN 'email' OF MORE THAN 512 CHARACTERS IS 400
+      WITH issue 'too_long'. Both are correct and the boundary is real.
+    why: >-
+      512 is Core's per-field floor, applied to every pre-auth field before any handler runs; 254
+      is the identifier rule, applied by the credential path. They are different controls at
+      different layers. A CLIENT MUST NOT INFER ANYTHING FROM WHICH ONE IT GOT — it is a fact about
+      string length, which the caller chose, and about nothing else.
+    theCLIENTOBLIGATION: >-
+      Both clients apply the 3..254 bound in their own input validation, so a user is told about a
+      too-long address before a request is sent. That is a usability measure and NEVER a security
+      one: the server applies the bound whatever the client does.
+  rateLimited:
+    ruling: >-
+      429 rate_limited WITH A Retry-After HEADER. The body is the fixed rate_limited envelope; the
+      retry time is a HEADER and, on Core today, is NOT a body field.
+    theRetryTimeCARRIESNOSIGNAL: >-
+      It is seconds to the end of a FIXED 60-second window, so it is the same value for every
+      caller on the platform at that instant, computable from a clock alone. It never reflects
+      observed usage, remaining budget, attempt count or load. A retry time that is a function of
+      the calendar discloses nothing; a retry time that is a function of the system's state
+      discloses the system's state.
+    aCONTRACTGAPTHATISNOTMINETOCLOSE: >-
+      packages/contracts/common/error-envelope.schema.json declares an OPTIONAL
+      'retry_after_seconds' BODY field on rate_limited and quota_exceeded, and says the HTTP
+      adapter emits the header derived FROM it so that internal, SDK and MCP callers — none of
+      which see HTTP headers — receive the same value. platform/core/http/response.ts sets the
+      header and DOES NOT WRITE THE BODY FIELD. The two disagree. This contract describes what Core
+      does; the divergence is reported to the Team Lead as LG-2 and is not resolved here, because
+      the envelope is platform-wide surface and this contract must not settle it as a side effect.
+    theCLIENTOBLIGATION: >-
+      Honour Retry-After. Do not retry a 429 immediately, do not retry it in a loop, and do not
+      count a 429 as a failed password attempt in any client-side UI.
+  unavailable:
+    ruling: >-
+      503 unavailable MEANS DUDO COULD NOT COMPLETE, NOT THAT THE CREDENTIAL WAS WRONG, and this
+      distinction is deliberate and safe. It is reachable only by a caller WHOSE CREDENTIAL WAS
+      JUST VERIFIED — a store that could not answer, or the platform's daily control-plane write
+      ceiling. A wrong credential never sees it.
+    whyITISNOTCOLLAPSEDINTOTHE401: >-
+      Because it is visible only to the holder of a correct credential, and it says something about
+      DUDO'S availability rather than about any account. It also matters operationally: a user told
+      "wrong password" when the platform is at its daily write ceiling will change their password,
+      and then they will still not be able to log in.
+    theCLIENTOBLIGATION: >-
+      Render a "try again shortly" state, NOT a credential error, and do not clear the user's typed
+      email. A retry is reasonable; a retry loop is not.
+
+# ---------------------------------------------------------------------------
+# rateLimits — observable to a client, so they are contract surface
+# ---------------------------------------------------------------------------
+rateLimits:
+  perSource: >-
+    20 requests per 60-second window per source address, for /auth/login/complete and
+    /auth/login/start each; 60 for refresh and revoke. Keyed by a HASHED source address supplied by
+    the edge, which no caller controls. Core never sees the address itself — a raw address is
+    personal data about a tenant's staff, and the counter needs only equality.
+  perIdentifierBucket: >-
+    12 attempts per 60-second window per BUCKET, where the bucket is one of 4,096 assigned by a
+    keyed HMAC of the normalised submitted identifier. IT IS A BUCKET AND NOT AN ACCOUNT, and the
+    difference is the whole design: the bucket is computed before anything is looked up, from the
+    string the caller typed, so a string naming a real account and a string naming nothing take the
+    identical path and land in indistinguishable buckets. There is no existence input to the
+    limiter, so there is no existence output.
+  whatISNOTIMPLEMENTED: >-
+    THERE IS NO PER-ACCOUNT LOCKOUT AND THERE WILL NOT BE ONE OF THE OBVIOUS KIND. Per-account
+    throttling built the standard way is exactly the account-existence oracle 0014 §B forbids — a
+    real account locks after five attempts and a nonexistent one never locks — and it is a
+    per-account denial of service anyone can trigger by failing five times.
+  theHOLETHATSTAYSOPEN: >-
+    REPORTED RATHER THAN GLOSSED. A source limit does not bound attempts per account, and
+    per-account is the only dimension a guessing attack is expensive in. At 20 attempts per minute
+    per address, an attacker with a hundred addresses makes millions of attempts a day against one
+    password. The bucketed limiter narrows this and does not close it, and accounts sharing a
+    bucket share a limit — with 4,096 buckets and a small tenant base collisions are rare, and the
+    bucket count must grow with the user base. This is Core's own recorded finding, restated here
+    because it bounds what this contract may claim: THIS CONTRACT DOES NOT CLAIM RESISTANCE TO
+    DISTRIBUTED ONLINE PASSWORD GUESSING.
+  aCLIENTMUSTNOTRETRYAUTOMATICALLY: >-
+    A client that retries a 401 spends the user's own bucket allowance and can lock the user out of
+    a bucket they share with strangers. One attempt per user action.
+
+# ---------------------------------------------------------------------------
+# disclosureRulings — the account-existence oracle, and the five channels it arrives through
+# ---------------------------------------------------------------------------
+disclosureRulings:
+  theRuling: >-
+    A CALLER CANNOT LEARN WHETHER AN ACCOUNT EXISTS FROM THIS ENDPOINT, BY ANY MEANS THE ENDPOINT
+    OFFERS. That is a claim about five separate channels, and it is Core's design rather than this
+    contract's aspiration. It is stated here because both clients can BREAK it from outside, and
+    because qa-agent tests it.
+  channel1_bodyAndCode: >-
+    CLOSED. A handler returns a member of a four-value closed union with no message, no detail and
+    no field it could put a value in; Core maps that to a response from a fixed table. A handler
+    that has just discovered an account does not exist has nowhere to say so.
+  channel2_size: >-
+    CLOSED, and it follows from channel 1: a fixed body is a fixed length. The only per-request
+    variation in a refusal is the 22-character request id.
+  channel3_timing: >-
+    THE HARD ONE, AND IT IS CLOSED BY EQUAL WORK RATHER THAN BY PADDING. Core verifies with
+    identical work on the found and not-found branches: the miss branch derives against a fixed
+    dummy record with the same algorithm, iteration count, salt length and output length, there is
+    exactly one KDF call and exactly one return statement after the lookup, and an unrecognised
+    stored algorithm or a malformed stored row is treated as a MISS on the miss path so that a row
+    this build cannot use does not cost less than one it can.
+    A 250 ms QUANTISED RESPONSE FLOOR ALSO APPLIES AND IS NOT SUFFICIENT ALONE — it converts a
+    continuous timing signal into a discrete one rather than removing it. Both are present; neither
+    is claimed to be the whole answer.
+    WHY IT MATTERS TO A CLIENT: a login that returns in a quarter of a second is normal and is not a
+    bug to optimise away. A client must not report login latency as a defect, and must not add its
+    own "fast path" that skips the request.
+  channel4_theLimiter: >-
+    CLOSED by construction: the limiter's subject constructors have no parameter an account
+    identifier can arrive through, and the identifier level counts a bucket of a keyed hash
+    computed before anything is looked up.
+  channel5_theEvidenceTrail: >-
+    CLOSED. Denials are counted against a grouping of (entry point, category) whose cardinality is
+    fixed at build time — 15 groups. It is NOT grouped by the submitted identifier, which would
+    make Dudo's own database a durable list of the addresses an attacker probed, and NOT by source
+    address, which is server-derived but NOT bounded: an IPv6 /64 is eighteen quintillion addresses
+    at no cost, so one row per address restores per-attempt writes under another name.
+  whatBOTHCLIENTSMUSTNOTDO: >-
+    THE ORACLE IS EASIEST TO REOPEN FROM OUTSIDE CORE, IN A CLIENT, IN A CHANGE THAT LOOKS LIKE
+    GOOD PRODUCT WORK. Prohibited in both clients:
+      1. NO "this email is not registered" MESSAGE, EVER, from any source.
+      2. NO separate "check if this email exists" call before login, to this platform or any other.
+      3. NO client-side attempt counter that behaves differently for addresses it has seen before.
+      4. NO different message, screen, delay, animation or focus behaviour for different 401s from
+         this endpoint — there is only one 401 and it means one thing to the user.
+      5. NO logging, analytics event or crash-report field containing the submitted email or the
+         derived_key. The derived key is a bearer secret; the email is personal data on a path with
+         no tenant.
+    Recorded as LG-3, as a standing client obligation rather than a one-time review item.
+
+# ---------------------------------------------------------------------------
+# audit
+# ---------------------------------------------------------------------------
+audit:
+  auditRowOnLogin: false
+  ruling: >-
+    NEITHER A SUCCESSFUL NOR A FAILED LOGIN WRITES AN AUDIT ROW, AND THAT IS DECIDED RATHER THAN
+    MISSED. .claude/rules/security.md §6 requires money movement, permission changes, membership
+    changes, export and destructive actions to be audited; a login attempt is none of them. And the
+    audit_event table is TENANT-SCOPED while a login has no tenant — a login is what discovers the
+    tenant — so there is no tenant to file the row under and inventing one would be a fiction.
+  theSTRONGERREASON: >-
+    A D1 WRITE PER AUTHENTICATION ATTEMPT IS AN UNBOUNDED WRITE ON A PATH WITH NO AUTHORIZATION
+    ABOVE IT. That is the hole docs/decisions/0013 was written to close, reopened on the one path an
+    unauthenticated caller can drive at will.
+  whatISRECORDEDINSTEAD: >-
+    Bounded security evidence, grouped by (entry point, category) with an hourly window — at most
+    2,160 row-writes a day platform-wide, worst case, from the shared 'security' allocation. It
+    records that refusals happened and how many; it does not record who, from where, or for which
+    address. WHAT IS LOST IS STATED PLAINLY: there is no per-source attribution in the durable
+    evidence. That is the price of the boundedness argument, and per-source detail — if it is ever
+    needed — belongs in the limiter's own state or the edge's request logs, neither of which is a
+    row in an account-wide D1 allowance.
+  aFUTUREREVIEWPOINT: >-
+    "Who logged in, and when" is a question a business customer will eventually ask, and this
+    contract cannot answer it. Answering it needs a tenant-scoped record written AFTER an
+    Organization is selected — which is a different event on a different path — not an audit row on
+    login. Recorded as LG-4 so the gap is visible rather than discovered by a customer.
+
+# ---------------------------------------------------------------------------
+# events / mcp
+# ---------------------------------------------------------------------------
+events:
+  published: []
+  consumed: []
+  rationale: >-
+    NONE, AND CHECKED AGAINST packages/contracts/registries/event-catalog.yaml RATHER THAN ASSUMED.
+    No existing event concept is duplicated. A LoggedIn event is not reserved here and should not be
+    invented casually: it would be a platform-wide event with no tenant to scope it to, on the one
+    path where an unauthenticated caller controls the trigger rate.
+
+mcp:
+  tools: []
+  ruling: >-
+    NO ENTRY POINT IN THIS CONTRACT IS EVER EXPOSED AS AN MCP TOOL, AND THIS IS THE ONE PLACE THAT
+    IS NOT MERELY "not yet". Every other contract's mcp block says AI exposure is opt-in and
+    deferred to Phase 8. HERE IT IS PROHIBITED OUTRIGHT: an AI principal that could call login would
+    be an AI principal that mints session credentials, which is authentication delegated to a
+    non-human actor. AI reaches business logic through the same authorized Actions a human uses,
+    holding a credential a human's authorization produced — it never acquires one for itself.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — .claude/rules/architecture.md §6a, docs/decisions/0008
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  cost: "USD 0 / BD 0 per month. No new service, no new binding, no new product, no paid feature."
+  writesPerSuccessfulLogin: >-
+    3 ESTIMATED ROW-WRITES — one session INSERT, counted as 3 because the table's indexes are
+    counted with it. Drawn from the control plane's own daily ceiling of 3,000 estimated row-writes,
+    which is 1,000 SESSIONS A DAY PLATFORM-WIDE, with a per-principal share of 600 (200 sessions per
+    principal per UTC day). Verified against platform/core/identity/control-plane-admission.ts
+    rather than transcribed from a comment.
+  writesPerFAILEDLogin: >-
+    ZERO DURABLE WRITES, plus a bounded, shared contribution to the pre-auth evidence grouping. An
+    unauthenticated caller cannot cause a session write at all.
+  isOneThousandLoginsADayENOUGH: >-
+    FOR THE CLOSED BETA IT IS NOT CLOSE, and that is Core's own arithmetic: ten Organizations at ten
+    principals each, logging in twice a day, is 200 sessions. It is a ceiling to watch as the user
+    base grows, not one that binds today.
+  atTheLimit: >-
+    A login refused for control-plane budget answers 503 unavailable — NOT a credential error. See
+    errorRulings.unavailable. The twelve-hour session lifetime is itself a cost control: a shorter
+    one multiplies logins, and each login is 3 row-writes.
+
+# ---------------------------------------------------------------------------
+# dependencies — WHAT THIS CONTRACT DOES NOT DELIVER. Read before reporting login as done.
+# ---------------------------------------------------------------------------
+dependencies:
+  loginSucceedsANDTHENNOTHINGWORKSYET:
+    amendedOn20260905: >-
+      READ THIS FIRST: organization-selection-v1 ADDS AUTO-SELECTION, so the flat statement below —
+      that a freshly issued session never has an Organization — IS NO LONGER TRUE FOR EVERY
+      PRINCIPAL. When a principal has EXACTLY ONE ACTIVE MEMBERSHIP, Core writes that Organization
+      into the session INSERT and the session is usable immediately. Two or more, or zero, and the
+      original statement holds unchanged.
+      THE LOGIN REQUEST AND RESPONSE SHAPES DO NOT CHANGE. No field is added in either direction,
+      the success body stays the fixed constant, and login-v1's ruling that NO ORGANIZATION HINT IS
+      ACCEPTED AT LOGIN stands: auto-selection supplies no hint, because the value is read from the
+      principal's own membership rows server-side and there is no request field it could arrive
+      through. THE CLIENT CANNOT TELL WHICH HAPPENED and must not try — it attempts the ordinary
+      request and reacts to 422. See organization-selection-v1 -> autoSelection and
+      clientObligations.
+    finding: >-
+      A FRESHLY ISSUED SESSION HAS NO ORGANIZATION SELECTED — except in the auto-selection case
+      above — so it resolves to 'organization-not-selected' and every business Action answers
+      failed_precondition until an Organization is chosen. The client's next step is the
+      Organization picker followed by selectOrganization.
+    andTheREISNOTHINGTOPICK_CORRECTEDON20260905: >-
+      THIS WAS TRUE WHEN WRITTEN AND IS NOW FALSE. It said nothing in this repository creates an
+      organization_membership row, so the picker is empty for every principal. THE SEED TOOL
+      CREATES ONE: platform/core/identity/tools/seed-principal.ts writes principal, organization,
+      organization_membership and tenant_directory rows together, and the deployed platform has a
+      seeded principal with exactly one active membership. So there IS an Organization to select,
+      and under organization-selection-v1's auto-selection that principal's session is selected at
+      login without the picker being reached.
+      WHAT REMAINS TRUE: no REQUEST path creates a membership. Membership administration is still
+      the organization-structure slice's and is still not built, so memberships arrive only by an
+      operator running seeded SQL. A principal cannot be added to a second Organization through
+      any Dudo interface today — which is why the multi-membership paths in
+      organization-selection-v1 are untestable without a second seed, and why they will first be
+      exercised in production unless qa-agent seeds one.
+    theCLIENTCONSEQUENCE: >-
+      Both clients must treat "logged in, no Organization" as a FIRST-CLASS STATE with an
+      explanation — not as a loading failure, not as a login failure, and not as an error screen.
+      The two clients must render it the same way; a divergence is a contract defect under
+      docs/decisions/0016.
+  theSelectOrganizationCONTRACTNOWEXISTS: >-
+    CLOSED 2026-09-05 BY organization-selection-v1 IN THIS DIRECTORY, which is where the Organization
+    picker and selectOrganization are specified, with their own CO1 argument. LG-5 is answered.
+    THIS CONTRACT IS STILL NOT EXTENDED TO COVER THEM and a client must not read login's shapes as
+    covering selection: they are separate routes, on a separate route class, with separate errors.
+    WHAT THAT MEANS FOR A CLIENT, AND IT IS THE WHOLE FLOW: a 200 from this endpoint is NOT a usable
+    session. The client must then call the picker and select an Organization before any business
+    request will do anything but answer 422. See organization-selection-v1 -> clientObligations.
+  thereIsNoLogout: >-
+    See entryPoints identity.session.revoke and LG-1. It is the first follow-up owed.
+  thereIsNoRegistrationRESETORCHANGE: >-
+    See clientKdf.enrollmentISNOTINTHISCONTRACT. Enrollment is an out-of-band operator action;
+    the running Worker has no code path that writes a credential.
+  operationalPropertyTHECLIENTSCANNOTSEE: >-
+    RECORDED BECAUSE IT IS THE MOST DANGEROUS PROPERTY BEHIND THIS CONTRACT AND IT IS INVISIBLE AT
+    THE WIRE: the control plane stores a KEYED HASH of the normalised email as the credential's
+    lookup key and stores no email address at all. ROTATING THAT KEY LOCKS EVERY USER OUT
+    PERMANENTLY AND SILENTLY — the stored hashes cannot be recomputed without the plaintext
+    addresses, which are deliberately not stored, and there is no migration path that does not
+    involve every user re-enrolling. Rotating the session signing key signs every user out
+    immediately, which is the intended emergency control and not a routine operation. Neither key is
+    in either repository. This is stated in the contract because it bounds what a client can be
+    asked to do in an incident: NOTHING. Neither client can help, work around, or detect either
+    rotation.
+
+# ---------------------------------------------------------------------------
+# testObligations — qa-agent's. Several will pass vacuously today; a vacuous pass is reported
+# as vacuous, never as green.
+# ---------------------------------------------------------------------------
+testObligations:
+  crossClientVectors:
+    - >-
+      THE ONE THAT MATTERS MOST. Shared test vectors bind ALL THREE implementations of
+      normalizeIdentifier and the client KDF — Core's TypeScript, the web client's, and the Apple
+      client's Swift — to BYTE-IDENTICAL output. Same password and email in, same 43 characters out.
+      This is the test that would have caught the field-name guess, and it is the test that catches
+      a toLowerCase() substitution.
+    - >-
+      EMAIL vectors must include, at minimum: an ASCII address needing no change; a mixed-case
+      address; an address containing a character NFKC alters; U+0130 specifically, as the character
+      full Unicode case mapping disagrees about; an address with a leading space, which must be
+      REFUSED by all three rather than trimmed by any; and an address at exactly 3 and exactly 254
+      characters.
+    - >-
+      PASSWORD vectors are a SEPARATE SET AND THEY ARE A SECURITY CONTROL RATHER THAN A
+      CONVENIENCE, because Core cannot check password normalisation and never will be able to
+      (clientKdf.passwordNormalization.coreCANNOTENFORCETHIS). Shared test vectors binding both
+      clients are THE ONLY place this rule is enforced anywhere in the platform.
+      They must include, at minimum:
+        - the SAME password in composed and decomposed form — "é" as U+00E9 and as U+0065 U+0301 —
+          producing the IDENTICAL 43 characters. This is the vector the whole rule exists for.
+        - a password containing a character NFKC WOULD ALTER but NFC MUST NOT: a fullwidth Latin
+          letter, a superscript digit, a ligature, and a non-breaking space. Each must survive
+          into the derived key unchanged. A vector that passes under NFKC has proved the wrong
+          thing.
+        - a mixed-case password, asserting that case is PRESERVED. Case folding a password would
+          pass an equality test and halve its alphabet.
+        - a password with leading and trailing spaces, asserting they are PRESERVED and not
+          trimmed — the opposite of the email rule, in the same test file.
+        - an emoji and an astral-plane character, so surrogate-pair handling is exercised on both
+          platforms.
+    - >-
+      THE APPLE SWAP MUST BE TESTED FOR EXPLICITLY, because it is one word and it compiles:
+      precomposedStringWithCanonicalMapping (NFC, password) against
+      precomposedStringWithCompatibilityMapping (NFKC, email). At least one vector must FAIL if
+      the two are exchanged. An all-ASCII fixture set cannot distinguish them and would pass
+      either way, which is the vacuous pass to watch for here.
+  disclosure:
+    - >-
+      THE CENTRAL TEST OF THIS CONTRACT. An unknown address, a known address with a wrong password,
+      and a suspended account produce responses that are BYTE-IDENTICAL — status, body, size,
+      headers, everything but the request id — and land in the same response-timing quantum.
+    - "A malformed email, a wrongly sized derived_key, a missing field and a non-string field all produce that same 401 — never a 400, and never a distinct message."
+    - "No response, log line, metric label or evidence row on this path contains the submitted email or the derived_key."
+  wire:
+    - "A field neither declared nor expected — organization_id, remember_me, totp — is answered 400 unknown_field, not ignored."
+    - "GET /auth/login/complete is 404, not 405."
+    - "A successful login sets exactly one Set-Cookie, with all five attributes, and the body is exactly {\"status\":\"ok\"} with no token in it."
+    - "A request carrying both a dudo_session cookie and a different Authorization: Bearer value is refused unauthenticated rather than resolved by precedence."
+  clientBehaviour:
+    - "Both clients render the SAME single message for a 401 from this endpoint, and neither distinguishes any cause."
+    - "Neither client calls /auth/login/start, /auth/session/refresh or /auth/session/revoke."
+    - "Neither client retries a 401 automatically; both honour Retry-After on a 429."
+    - "Both clients render 'logged in, no Organization' as a first-class explained state, identically."
+
+# ---------------------------------------------------------------------------
+# versioning
+# ---------------------------------------------------------------------------
+versioning:
+  contractVersion: 1
+  changeClass: additive
+  note: >-
+    First version, no accepted predecessor. It documents shipped Core code, so the shapes are
+    already fixed by what runs — this contract's freedom was to describe them accurately, not to
+    choose them.
+  thereIsNoVersionInTHESEPATHS:
+    finding: >-
+      apiVersion IS null BECAUSE THE PRE-AUTHENTICATION PATHS ARE ABSOLUTE AND CARRY NO VERSION
+      SEGMENT: /auth/login/complete, not /api/v1/auth/login/complete. API_STANDARD.md §6 puts the
+      public API version in the path and requires /api/v2 for a breaking change. THERE IS NO SUCH
+      MECHANISM AVAILABLE HERE.
+    whyThePathsAreLIKETHAT: >-
+      It is deliberate and correct in Core: a login endpoint whose address moved when an App was
+      mounted elsewhere would be a login endpoint whose address depended on which App was
+      installed. The reservation is a property of the platform, not of an App's mount point.
+    theCONSEQUENCE: >-
+      A BREAKING CHANGE TO THE LOGIN WIRE FORM HAS NO VERSIONING ESCAPE HATCH TODAY. The options
+      would be a new reserved path (a sixth entry point, which is a change to an Accepted decision
+      and needs a decision record — the registry refuses to load with anything other than exactly
+      five), or a flag day on which both clients change at once. Both are expensive; neither is
+      designed here. Recorded as LG-6 for the Team Lead.
+    whyITMATTERSNOW: >-
+      Because the most likely breaking change is already foreseeable: raising the client KDF
+      iteration count, or relaxing the ASCII identifier rule, changes the derived value for every
+      user and cannot be done additively at all.
+  breaking:
+    - "Any change to the client KDF — the hash, the 600,000 iterations, the salt, the 32-byte length, or the base64url encoding."
+    - "Any change to PASSWORD normalisation: dropping NFC, moving to NFKC, adding case folding, adding trimming, or adding a character restriction. Every existing user's derived key changes, so it is breaking with no additive path and no migration that does not re-enrol everyone."
+    - "Any change to normalizeIdentifier, including relaxing the ASCII rule, adding trimming, or switching to full Unicode case folding."
+    - "Renaming 'email' or 'derived_key', or adding a required request field."
+    - "Adding any field to the success body — which is also a disclosure review, because it reintroduces a variable-length body."
+    - "Changing the cookie name, its attributes, or its twelve-hour Max-Age."
+    - "Making any 401 case distinguishable from any other."
+    - "Moving any path in this contract."
+  additive:
+    - "A new pre-authentication entry point — which is nevertheless a change to an Accepted decision, because the registry permits exactly five and refuses to load otherwise."
+    - "A handler for identity.session.revoke, which would make logout work without changing any shape a client sends."
+
+# ---------------------------------------------------------------------------
+# openQuestions — worked around, not buried. The assumption made is stated in every case.
+# ---------------------------------------------------------------------------
+openQuestions:
+  LG-1:
+    question: "There is no logout. identity.session.revoke is registered, has no handler, and answers 200 while revoking nothing."
+    assumptionMade: "Documented as a product gap and named as the first follow-up. Neither client may fake a logout that implies the session ended."
+    decides: "Team Lead"
+  LG-2:
+    question: "error-envelope.schema.json declares an optional retry_after_seconds BODY field; platform/core/http/response.ts emits only the Retry-After header and never writes the body field. The contract and the code disagree."
+    assumptionMade: "This contract describes Core's actual behaviour — header only. The envelope is platform-wide surface and is not settled as a side effect here."
+    decides: "Team Lead; the fix is Core's or the envelope's, not this contract's"
+  LG-3:
+    question: "The account-existence oracle is closed in Core and is easiest to reopen in a client, in a change that looks like good product work."
+    assumptionMade: "Written as a standing client obligation with five explicit prohibitions, and as a qa-agent test rather than a review item."
+    decides: "binding as written; the Team Lead may add to it"
+  LG-4:
+    question: "'Who logged in, and when' is a question a business customer will ask, and nothing records it."
+    assumptionMade: "Not added here. It needs a tenant-scoped record written after an Organization is selected, which is a different event on a different path — not an audit row on a tenantless login."
+    decides: "Team Lead / product"
+  LG-5:
+    status: "CLOSED 2026-09-05."
+    question: "The Organization picker and selectOrganization have no contract, and a session cannot do anything useful without them."
+    resolution: >-
+      Answered by organization-selection-v1 in this directory. It was not merely a gap: with no
+      route for either, the deployed platform returned 422 to every business request from every
+      successfully authenticated principal. The severity was under-read when this was first
+      recorded — selection is mandatory for every principal, not only for multi-Organization ones.
+    decides: "Team Lead accepts organization-selection-v1"
+  LG-6:
+    question: "The pre-authentication paths carry no version segment, so API_STANDARD.md §6's /api/v2 mechanism does not exist for login. How is a breaking change to the login wire form versioned?"
+    assumptionMade: "No mechanism assumed. The two available options — a sixth reserved path, or a flag day — are named and neither is designed here."
+    decides: "Team Lead"
+  LG-7:
+    question: "The bucketed identifier limiter narrows online password guessing and does not close it, and 4,096 buckets is a number that must grow with the user base."
+    assumptionMade: "Core's own recorded finding, restated so this contract does not claim protection it does not have. No client-side mitigation is invented."
+    decides: "Team Lead; it is a Core and operations question"

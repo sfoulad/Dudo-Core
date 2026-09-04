@@ -17,6 +17,30 @@ Three artifacts, all normative together:
 (ADR `0009`), no `package.json` and no `node_modules`, and AS1 is undecided. Every shape is
 normative and **hand-checked**. No report may describe any of it as validated.
 
+### Revision, 2026-09-04 — the resolve route's wire form was wrong and is changed
+
+As first authored, this contract bound `core.ResolveBusinessReferences` to
+`GET /businesses/names` with `business_ids` as a **repeated query parameter**.
+`platform/core/http/api.ts:253-266` rejects **any** repeated query parameter with
+`invalid_argument` / `repeated_parameter` — *"a repeated query parameter is ambiguous. Taking
+the first or the last is a precedence rule, and a precedence rule is a way for a caller to
+shadow a value a reviewer assumed was authoritative."*
+
+**So the Action could not succeed over HTTP for more than one identifier.** A one-element
+batch worked; every real call failed at the transport before any Action was reached.
+
+**Core's behaviour is correct and is not what changed.** The contract is what moves. The
+route is now **`POST /api/v1/businesses/names`** with the array in a JSON body. The **shapes
+did not change** — `business_ids` was always an array — and neither did `maxRowWrites: 0`,
+the tenant scoping, the permission, the evaluated scope, the unknown-identifier ruling, the
+positional guarantee, or the batch maximum of 25. Full ruling and what was verified in Core:
+§8 below, and `business-read-v1.contract.yaml → httpBinding.theBatchCarrier`.
+
+**It is a pre-approval revision, not a breaking change, and only because of the timing.**
+Nothing is accepted and nothing has shipped. Had either been true, changing a route's method
+and its request carrier would have been breaking under `API_STANDARD.md` §6 and would have
+needed `/api/v2`. Both client agents are building against this contract now.
+
 ---
 
 ## 1. What this is, and what it deliberately is not
@@ -376,7 +400,9 @@ still sees only its own Business, because the answer comes from the **set**, not
 - **The resolve batch maximum is 25, and it is a chosen number.** It is the documented default
   page size, so a client rendering one default page of customers can resolve every distinct
   Business on it in a single call; at page size 100 it makes at most four calls, and in
-  practice fewer. It is also what keeps the HTTP binding safe — see §8.
+  practice fewer. **The query-length half of this argument has gone** — the identifiers no
+  longer travel in a URL (§8) — and the maximum is deliberately **not** raised on the strength
+  of that. Raising it is additive and is not proposed here.
 - **Both maxima are disclosure controls as well as performance ones.** They are what stop a
   read permission from being an undeclared bulk export in one call, and `export` is a
   permission this contract deliberately does not declare.
@@ -389,8 +415,9 @@ still sees only its own Business, because the answer comes from the **set**, not
 routes are in the flat Core namespace by right, not by allocation request.
 
 ```
-GET /api/v1/businesses                                    core.ListAuthorizedBusinesses
-GET /api/v1/businesses/names?business_ids=…&business_ids=… core.ResolveBusinessReferences
+GET  /api/v1/businesses            core.ListAuthorizedBusinesses
+POST /api/v1/businesses/names      core.ResolveBusinessReferences
+     { "business_ids": ["<id>", "<id>", …] }
 ```
 
 **`GET /businesses` claims the canonical route, and the Team Lead should decide this
@@ -419,20 +446,62 @@ eight — and safe **by luck rather than by statement**, so the rule is written 
 > A sub-path segment under a collection whose members are addressed by an opaque identifier
 > must not be a syntactically valid identifier.
 
-**`GET` rather than `POST` for the batch**, because it is a read with no side effect and a
-POST would make a read look like a write to every intermediary, every reviewer and the
-write-budget admission port. The batch maximum of 25 is what keeps that choice safe: 25
-identifiers at the contract's 64-character maximum is ~1,900 characters of query string,
-against a realistic ~850 at the 22-character generated width. A maximum of 100 would not be
-safe at the same choice, and **the two decisions were made together**.
+### `POST` for the batch, and why the original `GET` could not work
 
-Identifiers in a query string reach access logs, proxy logs, browser history and `Referer`
-headers. That is accepted rather than overlooked, and it is already the platform's position —
-`GET …/customers/{customer_id}` puts a customer identifier in a path. A `business_id` is
-opaque, unguessable and tenant-internal, and `MULTITENANCY_STANDARD.md` §4's log carrier is
-about **tenant** identifiers, which appear nowhere in this contract. **What is prohibited**,
-because it is the version of this that would matter: no log, metric label or trace attribute
+The first version of this contract said *"`GET` rather than `POST`, because it is a read with
+no side effect and a POST would make a read look like a write to every intermediary, every
+reviewer and the write-budget admission port."* The instinct was right and **the form it
+chose was unusable**: the identifiers travelled as a repeated query parameter, and
+`platform/core/http/api.ts:253-266` rejects every repeated query parameter for every route.
+The Action could not resolve more than one identifier over HTTP.
+
+**Four facts read in Core's source, not inferred** — a contract that assumes a transport
+behaviour is how this defect happened the first time:
+
+1. `http/api.ts:253-266` — repeated query parameters are refused, with no exemption
+   mechanism. This is what made the previous form unusable.
+2. `http/api.ts:95` and `:227-251` — `POST` is in `METHODS_WITH_BODY`; the body is parsed as
+   a non-array JSON object and merged. **An array-valued property reaches the Action
+   unchanged.**
+3. `http/router.ts:208-241` — `mergeInputSources` coerces only the route's declared
+   `integerQueryParams`. No other coercion exists, and none is needed: a JSON array is
+   already the declared type.
+4. `action/pipeline.ts:593` — **the entire daily-write-admission path is gated on
+   `writes.length > 0`**, and the reserved cost comes from the Action's declared
+   `maxRowWrites`. The HTTP method reaches the write budget nowhere at all. The original
+   contract's "the write-budget admission port" concern was, on the code, unfounded.
+
+**A delimited query parameter was considered and refused**, and the delimiter was not the
+problem — the generated alphabet is base64url (`kernel/ids.ts`, `[A-Za-z0-9_-]`), so a comma
+is safe. It was refused because it puts a *splitting rule* at the transport, which is the
+same class of thing Core has just declined twice; because it needs a second coercion list on
+`Route` that this contract is not entitled to request; and because it multiplies the invalid
+cases — empty segments, trailing delimiter, encoded delimiter, whitespace, and duplicate
+detection *after* the split — each a new token both clients and `qa-agent` must hold
+identically. The JSON array has none of them.
+
+**What the POST costs, unsoftened:** a read behind POST looks like a write to a reviewer
+skimming a route table and to an intermediary, and `API_STANDARD.md` §5's own POST
+sub-resource example is a mutation. The controls against being read as one are declarative
+and all in the contract: sensitivity `read`, `maxRowWrites: 0`, `audit: false`, no event,
+and `freeTierImpact.notConsumed`. §5's "no verbs in paths" still holds — `names` is a noun,
+and the path did not change.
+
+**What it buys, beyond working at all: the identifiers leave the URL.** The previous form put
+up to 25 tenant-internal identifiers into access logs, proxy logs, browser history and
+`Referer` headers, and this contract had *accepted* that as a residual — reasonably, since a
+`business_id` is opaque, unguessable and tenant-internal, and `MULTITENANCY_STANDARD.md` §4's
+log carrier is about **tenant** identifiers, which appear nowhere here. The residual is now
+removed rather than argued, on the one route whose URL was composed entirely of
+caller-supplied values. **What is still prohibited:** no log, metric label or trace attribute
 may carry a `display_name`, which is tenant business-confidential data.
+
+**Idempotency.** Neither route accepts, requires or honours an `Idempotency-Key`. For the GET
+that follows from `API_STANDARD.md` §9 directly. For the POST it is a **ruling**, because §9
+defines an unsafe operation *by method* and this is a POST that is safe: there is no effect to
+suppress on a retry, so a key-store row would be a durable write bought for nothing by an
+Action declaring `maxRowWrites: 0`. Recorded as **BR-7** — whether §9 should define unsafety
+by the Action's sensitivity rather than by the method is the Team Lead's to decide.
 
 **No `Cache-Control` that permits shared caching.** Both responses are per-principal and
 tenant-scoped; a shared or edge cache keyed on the URL alone would serve one Organization's
@@ -453,6 +522,7 @@ Each was worked around to produce this contract. The assumption made is stated i
 | **BR-4** | Does `GET /api/v1/businesses` belong to this contract or to the organization-structure slice? | **Claimed here**, on the ground that a collection endpoint returns what the caller may see. §8. Breaking to change after either client ships. | Team Lead |
 | **BR-5** | `auditOnDenial` is `false` on both, while `customers.GetCustomer` is `true`. | The user's 2026-09-02 ruling named `GetCustomer` specifically and has not been widened; there is also materially less to detect here. §10. | User, via Team Lead |
 | **BR-6** | Should `ResolveBusinessReferences` be built in this slice, or deferred? | **Recommended for the slice, not ruled in or out** — `architecture-agent` does not rule its own contracts' implementation scope. If only one is built, build `ListAuthorizedBusinesses`. | Team Lead |
+| **BR-7** | `API_STANDARD.md` §9 defines an unsafe operation **by method** (`POST`, `PATCH`, `DELETE`). `POST /businesses/names` is a POST that is safe, so the standard's definition is now false for one route in this contract. | **No `Idempotency-Key` is required or honoured on either route.** The Action stays `idempotent: false`. Whether §9 should key on the Action's sensitivity instead is not decided here. §8. | Team Lead |
 
 **BR-6 in full.** At MVP scale a client can label every row from `ListAuthorizedBusinesses`
 alone, because a customer whose `business_id` is outside the authorized set is never visible
@@ -545,6 +615,21 @@ green.
     resolvable identifier sits between two unresolvable ones. **No entry is ever omitted.**
 13. Duplicates, an empty array, 26 identifiers, and a malformed identifier each return
     `invalid_argument` — **not** a success-path `unresolved` entry.
+
+**The wire form — the regression test for the defect §8 records.**
+
+13a. A resolve request carrying **more than one** identifier **succeeds over HTTP**. This is
+     the test the original contract would have failed: the repeated-query-parameter form
+     returned `invalid_argument` / `repeated_parameter` for every batch of two or more, and
+     no shape-level test would have caught it because the *shapes* were always correct. It
+     must be exercised **through the HTTP entry point**, not by calling the Action directly.
+13b. **No route in this contract sends a repeated query parameter, in either client.** A
+     client that builds `?business_ids=a&business_ids=b` is reintroducing the defect against
+     a route that no longer has that method. One grep per client.
+13c. The resolve route takes **no write reservation and never returns `quota_exceeded`**,
+     including when the Organization's daily write budget is exhausted — the POST method must
+     not have made a read into a write. This is test 11 pointed at the specific risk the
+     method introduces.
 
 **Ordering and paging.**
 

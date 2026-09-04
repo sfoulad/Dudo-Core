@@ -120,6 +120,14 @@ import type { CoreError, ErrorCode } from '../kernel/errors.ts';
 import { forbidden, internal, quotaExceeded, rateLimited, unavailable } from '../kernel/errors.ts';
 import { AUDIT_EVENT_ROW_WRITES } from '../storage/write-cost.ts';
 import type { ActionContext, AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
+import { sealAuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
+import type { BusinessDirectory } from '../tenancy/business-directory.ts';
+import type { BusinessSetFailureReporter } from '../tenancy/business-set-failure.ts';
+import { announceBusinessSetFailure } from '../tenancy/business-set-failure.ts';
+import {
+  MAX_AUTHORIZED_BUSINESSES,
+  createStoreBusinessDirectory,
+} from '../tenancy/business-directory.ts';
 import type { TenantStoreResolver } from '../tenancy/tenant-store-resolver.ts';
 import type { TenantScopedStore } from '../storage/store.ts';
 import type { Authorizer, AppPermissionEnvelope } from '../authorization/authorizer.ts';
@@ -144,6 +152,28 @@ import { bindCursorCodec } from '../pagination/cursor.ts';
 export type PipelineDependencies = {
   readonly resolver: TenantStoreResolver;
   readonly authorizer: Authorizer;
+  /**
+   * Reads the authorized business set after the tenant store resolves. `docs/decisions/0020`.
+   *
+   * OPTIONAL, AND THE DEFAULT IS THE REAL ONE. It is injected so a verification harness can
+   * observe the read without patching a global, exactly as `auditSinkFactory` is — not so that it
+   * can be omitted to disable the step. Omitting it does not skip the read; it uses
+   * `createStoreBusinessDirectory()`.
+   *
+   * IT IS ONLY CONSULTED FOR A PRINCIPAL WHOSE `businessScope` IS `'organization'`. A principal
+   * carrying an assigned set — which is what a harness constructs directly, and what a
+   * business-scope principal will carry when that model is built — is never widened by it.
+   */
+  readonly businesses?: BusinessDirectory;
+  /**
+   * An ADDITIONAL destination for authorized-business-set failure notices.
+   *
+   * Optional, and optional weakens nothing: `announceBusinessSetFailure` emits to a last-resort
+   * channel unconditionally BEFORE it consults this, so omitting it, supplying a broken one, or
+   * supplying one that throws all produce the same guarantee — the failure is announced. Same
+   * shape and same reasoning as `coordinationFailureReporter` and `auditFailureReporter`.
+   */
+  readonly businessSetFailureReporter?: BusinessSetFailureReporter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly cursors: CursorCodec;
@@ -258,7 +288,16 @@ export async function invokeAction(
   // Business from, only the authenticated principal. It is then the same value on every
   // branch below: the same on a success and a denial, and the same whether the identifier the
   // caller supplied belongs to another Organization or to nobody at all.
-  const actorBusinessIds = deriveActorBusinessContext(principal);
+  // IT IS A `let` BECAUSE `docs/decisions/0020` SPLIT THE AUTHORIZED CONTEXT IN TWO. For an
+  // organization-scope principal the business set is not knowable until the tenant store has
+  // resolved, so this is re-derived from the COMPLETED principal at that point. Until then it is
+  // the empty set the identity layer sealed.
+  //
+  // A DENIAL THAT HAPPENS BEFORE THE STORE RESOLVES THEREFORE RECORDS AN EMPTY ACTOR BUSINESS
+  // CONTEXT. That is honest rather than lossy — at that moment the set genuinely is unknown, and
+  // it is not a regression: before `0020` every audit record carried an empty set, because the
+  // authorization source had nothing to put in one.
+  let actorBusinessIds = deriveActorBusinessContext(principal);
 
   const nowMs = dependencies.clock.nowMs();
 
@@ -523,15 +562,69 @@ export async function invokeAction(
       return err(constrainToDeclaredErrors(action, unavailable()));
     }
 
+    // ===========================================================================================
+    // THE AUTHORIZED BUSINESS SET. `docs/decisions/0020`, and this line is the whole of the split.
+    // ===========================================================================================
+    //
+    // §C.5's order now reads: `... -> authorized ORGANIZATION context -> TenantStoreResolver ->
+    // authorized BUSINESS set -> business data`. THE DEPENDENCY WAS NEVER CIRCULAR — the resolver
+    // needs the ORGANIZATION, and only the business set needs the STORE. One step bundled two
+    // things with different dependencies; separating them reorders nothing and costs nothing.
+    //
+    // IT IS COMPUTED PER REQUEST AND NEVER CACHED BEYOND IT (`.claude/rules/security.md` §2).
+    // Caching it for the session is tempting and refused for a reason with a direction: a
+    // Business created mid-session would be invisible, and — the half that matters — A BUSINESS
+    // REMOVED MID-SESSION WOULD STAY AUTHORIZED FOR UP TO TWELVE HOURS. It is the same argument
+    // `session-resolution.ts` ruling 2 makes for re-validating membership on every request.
+    //
+    // THE COST IS ONE D1 READ, AND IT SPENDS THE ABUNDANT RESOURCE. Reads are bounded at
+    // 5,000,000/day; writes at 100,000 are what actually bind, and this adds none.
+    //
+    // A FAILED READ REFUSES THE REQUEST RATHER THAN CONTINUING WITH AN EMPTY SET. An empty set
+    // would be indistinguishable from "authorized over nothing" and would turn a storage blip
+    // into a silent, total `forbidden` that looks like a permissions problem.
+    let authorizedPrincipal = principal;
+    if (principal.businessScope === 'organization') {
+      const directory = dependencies.businesses ?? createStoreBusinessDirectory();
+      const businesses = await directory.listInTenant(
+        resolvedStore,
+        MAX_AUTHORIZED_BUSINESSES,
+      );
+      if (!businesses.ok) {
+        // ANNOUNCED INTERNALLY, AND THE RESPONSE IS UNCHANGED. Added 2026-09-05 after this exact
+        // branch produced a 503 that was indistinguishable — in the logs as well as at the wire —
+        // from a resolver failure, a directory failure, an inactive mapping and an unknown
+        // binding. Collapsing at the wire is deliberate and stays; collapsing in the log was
+        // simply an absence. See `tenancy/business-set-failure.ts`.
+        announceBusinessSetFailure(
+          {
+            organizationId: principal.organizationId,
+            cause: 'business_set_read_failed',
+            errorCode: businesses.error.code,
+          },
+          dependencies.businessSetFailureReporter,
+        );
+        return err(constrainToDeclaredErrors(action, unavailable()));
+      }
+      authorizedPrincipal = sealAuthenticatedPrincipal({
+        ...principal,
+        authorizedBusinessIds: businesses.value,
+        // `assigned` on the completed value, so nothing downstream can complete it twice.
+        businessScope: 'assigned',
+      });
+      // The audit record carries the CALLER's Businesses, and now it carries the real ones.
+      actorBusinessIds = deriveActorBusinessContext(authorizedPrincipal);
+    }
+
     const auditSink = (dependencies.auditSinkFactory ?? createStoreAuditSink)(
       resolvedStore,
       dependencies.ids,
     );
 
     const context: ActionContext = {
-      principalId: principal.principalId,
-      onBehalfOfPrincipalId: principal.onBehalfOfPrincipalId,
-      authorizedBusinessIds: principal.authorizedBusinessIds,
+      principalId: authorizedPrincipal.principalId,
+      onBehalfOfPrincipalId: authorizedPrincipal.onBehalfOfPrincipalId,
+      authorizedBusinessIds: authorizedPrincipal.authorizedBusinessIds,
       store: resolvedStore,
       audit: auditSink,
       // Bound to the authenticated Organization here, so the Action never holds the value.

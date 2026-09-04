@@ -22,6 +22,43 @@
 # consumer implements against it; architecture-agent does not accept its own contracts.
 #
 # ---------------------------------------------------------------------------------------
+# REVISION, 2026-09-04 — THE RESOLVE ROUTE'S WIRE FORM WAS WRONG AND IS CHANGED
+# ---------------------------------------------------------------------------------------
+# AS FIRST AUTHORED THIS CONTRACT MANDATED A WIRE FORM CORE REFUSES. It bound
+# core.ResolveBusinessReferences to GET /businesses/names with business_ids as a REPEATED
+# query parameter — ?business_ids=a&business_ids=b — and platform/core/http/api.ts:253-266
+# rejects ANY repeated query parameter with invalid_argument / repeated_parameter, on the
+# ground that "a repeated query parameter is ambiguous. Taking the first or the last is a
+# precedence rule, and a precedence rule is a way for a caller to shadow a value a reviewer
+# assumed was authoritative."
+#
+# The consequence was exact and total: THE ACTION COULD NOT SUCCEED OVER HTTP FOR MORE THAN
+# ONE IDENTIFIER. A one-element batch worked; every real call failed at the transport before
+# any Action was reached.
+#
+# CORE'S BEHAVIOUR IS CORRECT AND IS NOT WHAT CHANGED. It is a deliberate control against
+# parameter shadowing, it is the same refusal http/router.ts already applies to a field
+# arriving from two sources, and a per-route exemption would be the same shadowing risk with
+# a smaller blast radius and a worse precedent. THE CONTRACT WAS WRONG. It is the contract
+# that moves.
+#
+# WHAT CHANGED: the route is now POST /api/v1/businesses/names with the array in a JSON body.
+# See httpBinding.theBatchCarrier for the full ruling, the two alternatives that were
+# weighed, and what was verified in Core rather than assumed.
+#
+# WHAT DID NOT CHANGE, AND EACH ONE WAS CHECKED RATHER THAN ASSUMED: the input and output
+# SHAPES are untouched — business_ids was always an array and still is; maxRowWrites is still
+# 0 on both Actions and the Action still writes nothing on any path; the tenant scoping, the
+# permission, the evaluated scope, the unknown-identifier ruling, the positional guarantee and
+# the batch maximum of 25 are all unchanged.
+#
+# IT IS A PRE-APPROVAL REVISION, NOT A BREAKING CHANGE, AND ONLY BECAUSE OF THE TIMING. This
+# contract is status proposed with no accepted version and no shipped consumer, so there is no
+# published shape to break. Had it been accepted first, changing a route's METHOD and its
+# request carrier would have been breaking under API_STANDARD.md §6 and would have required
+# /api/v2. Both client agents are building against this contract now and must be told.
+#
+# ---------------------------------------------------------------------------------------
 # WHY THIS CONTRACT EXISTS
 # ---------------------------------------------------------------------------------------
 # app-agent found the gap while building the Apple client against the merged contract set,
@@ -574,6 +611,14 @@ actions:
       REJECTED AT VALIDATION AND IS NOT ANSWERED WITH 'unresolved' — the two are different
       facts, and answering a malformed value on the success path would let a caller probe the
       identifier grammar through a field designed to disclose nothing.
+      IT IS BOUND TO A POST AND IT IS STILL A READ, AND THE TWO STATEMENTS DO NOT CONFLICT.
+      maxRowWrites IS 0, sensitivity IS read, audit IS false, and no path in this Action writes
+      a row — none of which the HTTP method affects. platform/core/action/pipeline.ts:593 gates
+      the entire daily-write-admission path on the handler having produced writes, so this
+      Action takes no reservation and cannot return quota_exceeded whatever method reaches it.
+      AN IMPLEMENTATION THAT TAKES A WRITE RESERVATION FOR THIS ACTION BECAUSE IT IS A POST IS
+      WRONG, and it is named here because that is the mistake the method invites. The wire form
+      and the reasons for it are httpBinding.theBatchCarrier.
 
 # ---------------------------------------------------------------------------
 # implementationRecommendation — a RECOMMENDATION, not a ruling. The Team Lead decides
@@ -698,8 +743,92 @@ dependencies:
 httpBinding:
   basePath: "/api/v1"
   routes:
-    - { action: core.ListAuthorizedBusinesses,  method: GET, path: "/businesses",       surface: public }
-    - { action: core.ResolveBusinessReferences, method: GET, path: "/businesses/names", surface: public }
+    - { action: core.ListAuthorizedBusinesses,  method: GET,  path: "/businesses",       surface: public }
+    - { action: core.ResolveBusinessReferences, method: POST, path: "/businesses/names", surface: public }
+
+  # -------------------------------------------------------------------------
+  # theBatchCarrier — THE RULING THIS CONTRACT WAS REVISED TO MAKE. Read the REVISION note
+  # in the header first: the form this replaces could not succeed over HTTP at all.
+  # -------------------------------------------------------------------------
+  theBatchCarrier:
+    ruling: >-
+      THE BATCH TRAVELS AS A JSON BODY ON A POST:
+        POST /api/v1/businesses/names
+        Content-Type: application/json
+        { "business_ids": ["<id>", "<id>", ...] }
+      The body property name matches the input schema's property EXACTLY, so the Action
+      definition and the wire form still need no translation table — which is the one property
+      the repeated-parameter form had and the one this ruling had to keep. Order is preserved
+      and is the order of the response.
+    whatWasVerifiedInCore: >-
+      STATED SEPARATELY FROM THE REASONING, BECAUSE A CONTRACT THAT ASSUMES A TRANSPORT
+      BEHAVIOUR IS HOW THIS DEFECT HAPPENED THE FIRST TIME. Four facts, each read in the
+      source rather than inferred:
+        1. platform/core/http/api.ts:253-266 refuses every repeated query parameter, for any
+           route, with no exemption mechanism. This is what made the previous form unusable.
+        2. platform/core/http/api.ts:95 — METHODS_WITH_BODY is {POST, PATCH, PUT}, and
+           api.ts:227-251 parses a POST body as JSON, requires it to be a non-array object,
+           and passes it to mergeInputSources. An ARRAY-VALUED PROPERTY inside that object
+           reaches the Action unchanged; nothing flattens, splits or stringifies it.
+        3. platform/core/http/router.ts:208-241 — mergeInputSources coerces only the route's
+           declared integerQueryParams. It has no other coercion and needs none here, because
+           a JSON array is already the type the schema declares.
+        4. platform/core/action/pipeline.ts:593 — THE ENTIRE DAILY-WRITE-ADMISSION PATH IS
+           GATED ON `writes.length > 0`. The reservation is driven by what the handler
+           produced and by the Action's declared maxRowWrites, NEVER by the HTTP method. A
+           POST that writes nothing takes no reservation, consults no budget, and cannot
+           return quota_exceeded.
+    whyNotADelimitedQueryParameter: >-
+      CONSIDERED SERIOUSLY AND REFUSED, and the delimiter was not the problem. The generated
+      identifier alphabet is base64url — platform/core/kernel/ids.ts produces 22 characters
+      from [A-Za-z0-9_-], and the contract's own pattern is ^[A-Za-z0-9_-]{8,64}$ — so a comma
+      cannot appear in a business_id and would have been a safe separator. It was refused for
+      three reasons that are about the PARSER, not the character:
+        1. IT WOULD PUT A SPLITTING RULE AT THE TRANSPORT, which is the same class of thing
+           Core has just refused twice: api.ts refuses a precedence rule for a repeated
+           parameter, and router.ts refuses one for a field arriving from two sources. Asking
+           Core to accept a splitting rule instead is asking for a smaller version of what it
+           declined, and it would be Core's first caller-supplied-string parser on the
+           authenticated path.
+        2. IT WOULD NEED NEW CORE MACHINERY THIS CONTRACT IS NOT ENTITLED TO REQUEST. Route
+           carries integerQueryParams and nothing else; a delimited array needs a second
+           coercion list, and that is a Core surface change to serve one Action's wire form.
+        3. IT MULTIPLIES THE INVALID CASES. Empty segments, a trailing delimiter, a
+           percent-encoded delimiter, whitespace around a segment, and duplicate detection
+           AFTER the split are each a new invalid_argument condition with a new detail token,
+           each of which both clients and qa-agent would have to hold identically. The JSON
+           array has none of them: the shape is validated by the schema that already exists.
+    whatPostCostsAndWhatItBUYS: >-
+      THE COST IS REAL AND IS NOT SOFTENED. A read behind POST looks like a write to a
+      reviewer skimming a route table, to an intermediary, and to anyone reasoning about
+      retries; API_STANDARD.md §5's own example of a POST sub-resource (orders/{id}/cancel) is
+      a mutation, so this route is the first read to use the shape. The controls against being
+      read as a mutation are declarative and are all in this file: sensitivity read,
+      maxRowWrites 0, audit false, no event published, and freeTierImpact.notConsumed. §5's
+      "no verbs in paths" is still satisfied — 'names' is a noun, and the path did not change.
+      WHAT IT BUYS, BEYOND WORKING AT ALL: the identifiers leave the URL. The previous form
+      put up to 25 tenant-internal identifiers into access logs, proxy logs, browser history
+      and Referer headers, which this contract had ACCEPTED as a residual. A JSON body removes
+      that residual rather than mitigating it, and it removes it for the one route whose URL
+      was composed entirely of caller-supplied values — the route the contract also names as
+      the most cacheable-LOOKING and therefore the most dangerous to cache.
+    theBatchMaximumOfTwentyFiveIsUNCHANGED: >-
+      AND ITS JUSTIFICATION IS NOW NARROWER, WHICH IS WORTH STATING BECAUSE HALF OF IT HAS
+      GONE. 25 was chosen for two reasons together: it is the documented default page size, so
+      one page of customers resolves in one call; and 25 identifiers at 64 characters was
+      about 1,900 characters of query string, which 100 would not have survived. THE QUERY-
+      LENGTH HALF NO LONGER APPLIES — a JSON body is bounded by Core's request handling, not by
+      an intermediary's URL limit. The maximum is NOT raised on the strength of that, because
+      the other half stands and because the cap is also a disclosure and cost control: it is
+      what keeps a read permission from being an undeclared bulk export in one call, and it
+      bounds rows read per invocation once a name column exists. RAISING IT IS ADDITIVE AND IS
+      NOT PROPOSED HERE.
+    whatWouldMakeGETCORRECTAGAIN: >-
+      STATED SO A FUTURE READER DOES NOT REOPEN THIS WITHOUT NOTICING WHAT IT COSTS. Only a
+      Core change that gave the transport a safe, general array-in-query form — which is the
+      repeated parameter Core refused, or the delimiter above. Neither is proposed. A future
+      agent who wants GET back is asking for one of those two, and must argue against
+      api.ts:253-266 rather than against this contract.
 
   notes:
     - >-
@@ -730,28 +859,35 @@ httpBinding:
       is written down here: A SUB-PATH SEGMENT UNDER A COLLECTION WHOSE MEMBERS ARE ADDRESSED
       BY AN OPAQUE IDENTIFIER MUST NOT BE A SYNTACTICALLY VALID IDENTIFIER.
     - >-
-      THE BATCH TRAVELS AS A REPEATED QUERY PARAMETER: GET
-      /api/v1/businesses/names?business_ids=<id>&business_ids=<id>. The parameter name matches
-      the input schema's property exactly, so the Action definition and the wire form do not
-      need a translation table. Order is preserved and is the order of the response.
-      GET rather than POST because this is a read with no side effect, and because a POST would
-      make a read look like a write to every intermediary, every reviewer and the write-budget
-      admission port. The batch maximum of 25 is what keeps that choice safe: 25 identifiers at
-      the contract's 64-character maximum is roughly 1,900 characters of query string, against
-      a realistic 850 at the 22-character generated width. A maximum of 100 would not be safe
-      at the same choice, and the two decisions were made together.
+      THE BATCH TRAVELS IN A JSON BODY ON A POST. The full ruling, what was verified in Core,
+      the delimited-parameter alternative and what the choice costs are in
+      httpBinding.theBatchCarrier above rather than repeated here.
     - >-
-      IDENTIFIERS IN A QUERY STRING REACH ACCESS LOGS, PROXY LOGS, BROWSER HISTORY AND Referer
-      HEADERS. That is accepted rather than overlooked, and it is already the platform's
-      accepted position: GET /api/v1/apps/customers/customers/{customer_id} puts a customer
-      identifier in a path. A business_id is an opaque, unguessable, tenant-internal identifier
-      that discloses nothing on its own, and MULTITENANCY_STANDARD.md §4's log carrier is about
-      TENANT identifiers, which appear nowhere in this contract. WHAT IS PROHIBITED, because it
-      is the version of this that would matter: no log, no metric label and no trace attribute
-      may carry a display_name, which is tenant business-confidential data.
+      NO IDENTIFIER APPEARS IN EITHER ROUTE'S URL, AND THAT IS NOW A PROPERTY RATHER THAN AN
+      ACCEPTED RESIDUAL. GET /businesses takes no identifier at all, and the resolve route's
+      identifiers travel in a body. So no business_id reaches an access log, a proxy log,
+      browser history or a Referer header through this contract. The earlier version accepted
+      that exposure — reasonably, on the ground that a business_id is opaque, unguessable and
+      tenant-internal, and that MULTITENANCY_STANDARD.md §4's log carrier is about TENANT
+      identifiers, which appear nowhere in this contract — and the change to the wire form
+      removed the need for the argument. THE PROHIBITION THAT STILL BINDS, because it is the
+      version of this that would matter: no log, no metric label and no trace attribute may
+      carry a display_name, which is tenant business-confidential data.
     - >-
-      NEITHER ROUTE ACCEPTS OR HONOURS AN Idempotency-Key, because neither is an unsafe
-      operation (API_STANDARD.md §9 scopes the header to POST, PATCH and DELETE).
+      NEITHER ROUTE ACCEPTS, REQUIRES OR HONOURS AN Idempotency-Key. For GET /businesses that
+      follows directly from API_STANDARD.md §9, which scopes the header to POST, PATCH and
+      DELETE. FOR THE POST ROUTE IT IS A RULING RATHER THAN A CITATION, AND THE STANDARD IS
+      GENUINELY AMBIGUOUS HERE: §9 defines an unsafe operation BY METHOD — "every unsafe
+      operation (POST, PATCH, DELETE) accepts an Idempotency-Key header" — and this route is a
+      POST that is safe. THE RULING: no key is required, none is honoured, and offering one is
+      neither an error nor an effect. An idempotency key answers "have I seen this request
+      before"; this Action has no effect to suppress on a retry, writes nothing, and returns
+      the same answer for the same input, so a key store entry for it would be a durable row
+      bought for nothing on a path that declares maxRowWrites 0. The Action remains
+      idempotent: false, so §9's REQUIRES clause is not engaged either way. Recorded as BR-7:
+      §9's definition of unsafety by method is now false for one route in this contract, and
+      whether the standard should define it by the Action's sensitivity instead is the Team
+      Lead's to decide, not this contract's.
     - >-
       NO CACHE-CONTROL THAT PERMITS SHARED CACHING. Both responses are per-principal and
       tenant-scoped. A shared or edge cache keyed on the URL alone would serve one
@@ -848,6 +984,11 @@ freeTierImpact:
     nothing on any path — no record, no audit row, no denial summary, no session touch. It
     cannot contribute to the 80,000-row-write platform ceiling or to any Organization's
     10,000/day (0014 §A.3, §A.6).
+    THIS HOLDS FOR THE POST ROUTE TOO AND WAS VERIFIED RATHER THAN ASSUMED:
+    platform/core/action/pipeline.ts:593 gates the whole write-admission path on
+    `writes.length > 0`, and the reserved cost is computed from the Action's declared
+    maxRowWrites, so the HTTP method reaches the budget nowhere at all. See
+    httpBinding.theBatchCarrier.whatWasVerifiedInCore.
   queryBudget: >-
     TODAY: ZERO QUERIES FOR EITHER ACTION. Both are pure functions of
     ActionContext.authorizedBusinessIds — there is no name to read, so there is nothing to
@@ -893,7 +1034,13 @@ versioning:
     definition. The window in which these choices are free is exactly the window this contract
     was authored in, which is why the sort order, the nullable name, the two-member enum and
     the batch maximum are all settled now rather than when they are needed.
+    THE 2026-09-04 REVISION SPENT PART OF THAT WINDOW AND IS THE ARGUMENT FOR WHY THE WINDOW
+    MATTERS. Changing the resolve route from GET with repeated query parameters to POST with a
+    JSON body is a METHOD change and a request-carrier change: additive today only because
+    nothing has been accepted or shipped, and breaking under API_STANDARD.md §6 the moment
+    either is true. See the REVISION note in the header.
   breakingOnceEitherClientShips:
+    - "Changing the resolve route's METHOD, its path, or the carrier its identifiers travel in — the change made on 2026-09-04, which was free only because it was made before acceptance."
     - "Adding a third member to resolutionState — and this is the change that would reopen the unknown-identifier oracle."
     - "Making display_name non-nullable, or changing what null means."
     - "Changing the listing's sort order, including 'fixing' it to name order after names exist — the contract already specifies name order, so no change is needed and any change is breaking."

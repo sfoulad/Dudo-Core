@@ -80,6 +80,16 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 | `0010-admin-interface-frontend-stack.md` | **Accepted, not on `main`** | The admin interface stack — React, TypeScript, Vite, Tailwind, shadcn-admin, at `admin.dudo.work`. **Lives on branch `decision/admin-frontend` and has not been merged**, which is why the numbering jumps here. It is not lost and `0010` is not free. |
 | `0011-manifest-lifecycle-indefinite-retention.md` | **Accepted** | **`onUninstall: retain` means retained INDEFINITELY**, and `retentionDays` is **forbidden** under it, **required** under `archive`. The schema previously required a duration alongside `retain`, so the customer-retention decision could not be stated truthfully in a manifest. Decided while nothing consumes the schema — no SDK, no Studio, no published manifest. |
 | `0012-manifest-api-path-underscore.md` | **Accepted** | `apis[].path` widens to `^/[a-z0-9_\-/{}]*$` so **`snake_case` path parameters are expressible**. `API_STANDARD.md` §5 mandates `snake_case`, yet the schema rejected the standard's own example `/api/v1/orders/{order_id}`. Widening only; no existing manifest is invalidated. |
+| `0013-bounded-denial-auditing-and-rate-limits.md` | **Accepted** | Bounds the denied-read audit `D2` mandates. A SQLite-backed Durable Object coordinates summary writes on an emission ladder, grouped by `(organizationId, principalId, appId, actionId, category)` in 15-minute windows, with a platform ceiling of 5,000 summary writes/day. **One audit write per denial would let 100k probes exhaust D1's account-wide daily write limit** — the control would have become the outage. |
+| `0014-authentication-az2.md` | **Accepted** | Authentication in three parts: **§A** daily D1 write admission (80,000/day, split 60k business / 10k security / 10k system); **§B** the pre-authentication entry-point registry — a closed set of five, each permissionless route admitted only if it carries rate limiting; **§C** the identity control plane. Amended by `0017` for the closed beta. |
+| `0015-credential-format-and-session-credential.md` | **Accepted** | **§A** session credential `<session_id>.<HMAC truncated to 128 bits>`; **§B** 12-hour sessions, no rotation; **§C** timing controls; **§D** the **client-side KDF** — the browser runs 600,000 PBKDF2 iterations and the server hashes the result at 10,000, because the Workers 10 ms CPU budget cannot fit a properly tuned KDF (600,000 measured at ~72 ms). **Amended 2026-09-04:** the password is **NFC**-normalised (RFC 8265 PRECIS `OpaqueString`) — the identifier uses NFKC, the password must not, and confusing them destroys entropy the user believes they have. |
+| `0016-web-application-stack.md` | **Accepted** | React 19 · TypeScript · Vite · Tailwind v4 · shadcn/ui, built to static assets on Workers Static Assets. **Requests to static assets are free, unlimited, and do not invoke the Worker**, which inverts the usual SSR default under Dudo's ceilings. **First decision to approve npm dependencies.** **Amended 2026-09-04:** §5's blanket prohibition on `run_worker_first` was wrong — it was written against the boolean form; the scoped array form is required, or API routes are rewritten to the SPA shell and answered `200`. |
+| `0017-pre-auth-rate-limiting-for-closed-beta.md` | **Accepted** | Accepts the **in-process** pre-auth limiter for the closed beta, amending `0014` §B. Per-isolate limits are a real weakening, recorded rather than assumed. **The honest basis is that rate limiting is not what protects these accounts — password entropy is**, so seeded credentials must be machine-generated and the decision expires the moment any password is human-chosen. Staging only; the durable limiter must first address the 100,000/day DO budget it would share with the authenticated coordinator. |
+
+| `0018-session-revocation-carriers-and-cookie-clearing.md` | **Accepted** | Amends `0014` §B twice, for two contradictions already sitting in merged code. **§A** revocation accepts `Authorization: Bearer`, not cookies alone — a Bearer-only client could otherwise call logout and be told `acknowledged` while nothing was revoked. **§B** adds a `cleared` outcome emitting a constant, argument-free clearing cookie; today's clearing branch is **unreachable**, so logout deletes the session row and leaves a dead cookie for up to 12 hours. **Records the real budget: logout costs 3 row-writes like a login, so a login+logout cycle is 6 — 500 cycles/day platform-wide, not 1,000 sessions.** |
+
+| `0019-where-permission-grants-live.md` | **Accepted** | Closes the **grants** half of AZ5, open since `0001`. A `role` on the membership row — not a grant table, because one row per permission per principal is decisive against `0008`'s write ceiling while a column costs **zero additional rows**. Closed union of literals; each role maps to an explicit frozen list of Actions — **no wildcards, because a role is exactly where one gets smuggled back in**. On the *membership* row, never on `principal`, since a principal may belong to several Organizations. **Contains a struck, visible Team Lead error:** it claimed to be "the last thing" before a working business request and was not. |
+| `0020-authorized-business-set.md` | **Accepted** | The **second** half of AZ5, and completes `0019`. `authorizedBusinessIds` was `[]`, so a principal passed the permission check and failed every Action one step later. Amends `0014` §C.5 by **splitting** the authorized context — the resolver needs the *Organization*, only the business set needs the *store*, so the dependency was never circular. Computed **per request, never cached**: a 12-hour session cache would keep a removed Business authorized for half a day. Spends a D1 **read** (5M/day) rather than a **write** (100k/day). |
 
 ### Technology stack status
 
@@ -87,7 +97,9 @@ anything touching production. An agent's or the Team Lead's own judgment is not 
 |---|---|
 | `Dudo-Apple` | **Approved** (`0002`): Xcode, Swift, SwiftUI; iPhone, iPad, macOS; true native macOS destination, never Mac Catalyst |
 | `Dudo-Core` | **Approved** (`0003`): TypeScript on Cloudflare — Workers, D1, R2, Queues, Workflows, and Durable Objects only where real coordination is needed. Bindings, not REST |
-| Web / testing framework, npm dependencies | **Not selected** — `0003` approves a language and six services, nothing more |
+| Web framework and npm dependencies | **Decided** (`0016`, Accepted): React 19, TypeScript, Vite, Tailwind v4, shadcn/ui, served as static assets. **npm dependencies enter Dudo here** — previously reserved to the user, approved under explicit delegation |
+| Testing framework | **Still not selected.** Choosing Vite did **not** choose Vitest. `qa-agent`'s dependency-free runner stands until TS1 is decided on its own merits |
+| Pre-auth rate limiting | **Interim** (`0017`, Accepted): in-process, per-isolate, **closed beta and staging only**. The durable limiter is owed and must carry its own §6a free-tier impact check |
 | Other Cloudflare products | **Not approved.** Workers AI, AI Gateway, Agents SDK, Workers for Platforms, Analytics Engine, KV, Hyperdrive each need their own record |
 | App isolation mechanism | **Not selected** — `0001` bound it to the stack decision, but `0003` did not approve Workers for Platforms |
 | Tenancy model | **Decided** (`0006`, Accepted): **Option A**, one shared production D1 database with mandatory indirection, for the Zero-Cost MVP. B excluded; C is the migration candidate |
@@ -97,6 +109,38 @@ An approved stack for one repository is not approval for the other, and approvin
 and SwiftUI is not approving any package or third-party dependency.
 
 ### Scheduled but not yet written
+
+**Added 2026-09-04 from the AZ2 slice — recorded so they survive, not started.** The completion gate
+forbids beginning the next feature before the user accepts this one, so these are captured here and
+nowhere else:
+
+- **`selectOrganization` has no HTTP entry point. THIS BLOCKS THE PRODUCT TODAY.** It is a
+  `SessionResolver` method with no route. Found by `app-agent`; **severity corrected 2026-09-05
+  after deployment.**
+
+  The original entry here said it *"does not bite while every principal belongs to exactly one
+  Organization."* **That was wrong.** A session is created with `organization-not-selected`
+  regardless of how many Organizations the principal belongs to, and `login.ts:219` states the
+  consequence plainly: *"every business Action answers `failed_precondition` until an Organization
+  is selected."*
+
+  **Confirmed against the live deployment:** a seeded `owner` logs in successfully (200, session
+  cookie issued) and every Customer Directory request then returns **422 `failed_precondition`**.
+  Login works; the product does not. Needs a contract and therefore `architecture-agent`.
+
+  **The lesson is the estimate, not the gap.** A missing route was recorded as latent when it was
+  blocking, and only deploying it revealed which — the same reason the gate refuses to call a
+  stub-verified slice complete.
+- **`Idempotency-Key` on create (CD-4).** Recorded as owed. Without it, a retried create after a
+  network failure produces a **duplicate customer**, and the contract explicitly does not
+  deduplicate on name or email. Surviving the retry requires client-side persistence, so it is a
+  small slice of its own rather than a line of code.
+- **A durable pre-auth rate limiter**, owed by `0017`, which must first answer the shared
+  100,000/day Durable Object budget question recorded in `free-tier-register.md`.
+- **A reserved write allocation for revocation**, owed by `0018` — binding before any non-operator
+  user, so that logout cannot be starved by business writes.
+- **An audited path for role changes and for Organization creation.** `0019` and `0018` both record
+  that an operator applying SQL by hand produces no audit record, which `0007` rule 9 requires.
 
 1. ~~The logical App permission model~~ — **done.** `0007`, **Accepted 2026-09-01** with ten
    binding rules.

@@ -14,10 +14,38 @@ import { buildHash, matchPath, useLocation } from '@/lib/router';
 import { setLastListHash } from '@/lib/last-list';
 import { createCustomerDirectoryClient } from '@/api/client';
 import { createFixtureTransport } from '@/api/fixture-transport';
+import { createHttpTransport } from '@/api/http-transport';
+import { signalUnauthenticated } from '@/api/session-signal';
+import { createAuthClient } from '@/api/auth';
+import { AuthGate } from '@/components/AuthGate';
+import { useSession } from '@/lib/use-session';
+import { CONFIG } from '@/api/config';
+
+/**
+ * The transport seam.
+ *
+ * ONE TERNARY IS THE WHOLE OF THE SWAP, and it is deliberately here rather than
+ * hidden inside the client: which transport a build talks to is the single most
+ * consequential fact about it, and it should be visible in the file a reader
+ * opens first. `config.ts` refuses to start on an unrecognised value, so this
+ * never silently falls back to fixtures.
+ *
+ * It is built OUTSIDE the component and memoised on nothing, because a new
+ * transport identity would re-trigger every `useEffect` keyed on the client and
+ * re-issue every in-flight read.
+ */
+function createTransport() {
+  return CONFIG.transport === 'http'
+    ? createHttpTransport({ onUnauthenticated: signalUnauthenticated })
+    : createFixtureTransport();
+}
 
 export function App() {
   const { path, query } = useLocation();
-  const client = useMemo(() => createCustomerDirectoryClient(createFixtureTransport()), []);
+  const transport = useMemo(createTransport, []);
+  const client = useMemo(() => createCustomerDirectoryClient(transport), [transport]);
+  const auth = useMemo(createAuthClient, []);
+  const session = useSession(transport, auth);
   const [busy] = useState(false);
 
   // Remember the directory the person was looking at, so a record's back link
@@ -53,8 +81,15 @@ export function App() {
   }, [path]);
 
   return (
-    <AppShell busy={busy}>
-      <Screen path={path} client={client} />
+    <AppShell
+      busy={busy}
+      signedIn={session.state === 'authenticated'}
+      signingOut={session.signingOut}
+      onSignOut={session.signOut}
+    >
+      <AuthGate session={session} auth={auth}>
+        <Screen path={path} client={client} />
+      </AuthGate>
     </AppShell>
   );
 }

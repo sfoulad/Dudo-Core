@@ -51,6 +51,7 @@ import type { Result } from '../../../kernel/result.ts';
 import { err, ok } from '../../../kernel/result.ts';
 import { internal, unavailable } from '../../../kernel/errors.ts';
 import type { D1Database } from '../../../storage/adapters/d1/d1-store.ts';
+import { toMembershipRole } from '../../../authorization/roles.ts';
 import type {
   ControlPlanePrincipalType,
   ControlPlaneStores,
@@ -232,9 +233,14 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       // it would open the `organization` table on the failing path — one edit away from a LEFT
       // JOIN that reports "the Organization exists but you are not a member", which is the
       // oracle written out in full. Two statements with an early return cannot drift that way.
+      // `role` JOINS THE PROJECTION AND CHANGES NOTHING ELSE (docs/decisions/0019). It is still
+      // ONE statement against ONE table filtered on `status = 'active'`, so the anti-oracle
+      // argument above is untouched: a non-member, a suspended member and a caller naming a
+      // non-existent Organization still produce the same result from the same work. Adding a
+      // column to a projection reads no additional row.
       const membershipRows = await selectRows(
         database,
-        'SELECT principal_id, organization_id, status FROM organization_membership ' +
+        'SELECT principal_id, organization_id, status, role FROM organization_membership ' +
           "WHERE principal_id = ? AND organization_id = ? AND status = 'active' LIMIT 1",
         [principalId, organizationId],
       );
@@ -283,6 +289,14 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
           principalId: memberPrincipalId,
           organizationId: memberOrganizationId,
           status: membershipStatus,
+          // AN UNRECOGNISED ROLE COLLAPSES TO `null`, WHICH DENIES — it is NOT validated with
+          // `enumeration()` and NOT reported as `internal()` like the other stored enumerations
+          // in this file. The distinction is deliberate and it is the same one
+          // `d1-credential-store.ts` makes for an unrecognised credential algorithm: a value a
+          // FUTURE migration introduces must fail onto the safe path, so a build older than its
+          // data denies rather than erroring. Failing loudly here would turn a routine
+          // mid-migration state into an outage, and would do it for one principal at a time.
+          role: toMembershipRole(text(membershipRow, 'role')),
         },
         organization: {
           organizationId: memberOrganizationId,
@@ -303,7 +317,7 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       // `sql-compiler.ts` does, so it cannot carry caller-controlled text.
       const rows = await selectRows(
         database,
-        'SELECT principal_id, organization_id, status FROM organization_membership ' +
+        'SELECT principal_id, organization_id, status, role FROM organization_membership ' +
           `WHERE principal_id = ? ORDER BY organization_id ASC LIMIT ${String(limit)}`,
         [principalId],
       );
@@ -318,7 +332,12 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
         if (rowPrincipalId === null || organizationId === null || status === null) {
           return err(internal());
         }
-        memberships.push({ principalId: rowPrincipalId, organizationId, status });
+        memberships.push({
+          principalId: rowPrincipalId,
+          organizationId,
+          status,
+          role: toMembershipRole(text(row, 'role')),
+        });
       }
       return ok(memberships);
     },

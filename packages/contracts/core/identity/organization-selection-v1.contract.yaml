@@ -1,0 +1,964 @@
+---
+# Organization selection — contract of record, version 1
+#
+# The machine-readable half is organization-selection-v1.schema.json. BOTH ARE NORMATIVE
+# TOGETHER; a change to one not reflected in the other is the defect class that produced ADR 0012.
+# There is no README.md in this directory, by the same choice login-v1 records.
+#
+# Governed by: docs/decisions/0014-authentication-az2.md (Accepted) — §C.5 the resolution order,
+#                §C.6 the caller-supplied Organization as a validated hint, §A the write budget
+#              docs/decisions/0018-session-revocation-carriers-and-cookie-clearing.md (Accepted)
+#                — the per-cycle row-write arithmetic this contract changes
+#              docs/decisions/0019-where-permission-grants-live.md (Accepted)
+#              docs/decisions/0020-authorized-business-set.md (Accepted)
+#              docs/decisions/0016-web-application-stack.md (Accepted) — one contract, two clients
+#              docs/architecture/standards/{API,SECURITY,MULTITENANCY,AUTHORIZATION}_STANDARD.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# =========================================================================================
+# WHY THIS EXISTS: DUDO IS DEPLOYED AND THIS IS THE ROUTE THAT IS MISSING
+# =========================================================================================
+#
+# A seeded principal logs in successfully against real D1 and EVERY business request then returns
+# 422 failed_precondition. The cause is not a defect in any Action:
+# platform/core/identity/session-principal-resolver.ts:112-114 maps a session with no Organization
+# selected onto failedPrecondition(), and platform/core/http/api.ts:222-224 returns that at STEP 1,
+# authentication, BEFORE the router is consulted. So the failure is total and identical for every
+# route.
+#
+# SessionResolver.listEnterableOrganizations and SessionResolver.selectOrganization both exist
+# (session-resolution.ts:432-491). NEITHER HAS AN HTTP ROUTE. platform/core/identity/composition.ts
+# already exposes the resolver for exactly this reason, saying so at line 113: "Exposed because the
+# Organization picker and selectOrganization are reached through it." Nothing reaches through it.
+#
+# SELECTION IS MANDATORY FOR EVERY PRINCIPAL, NOT ONLY FOR MULTI-ORGANIZATION ONES. issueSession is
+# called with requestedOrganizationId: null on every login (login.ts:223), deliberately — accepting
+# an Organization at login would be an Organization-membership oracle available to anyone holding a
+# stolen credential. There is no "only one membership, so select it" fallback anywhere, and there
+# must not be: a silent default is an ambient tenant, which MULTITENANCY_STANDARD.md §3 forbids by
+# name. So a principal belonging to exactly one Organization is blocked exactly as hard as one
+# belonging to three.
+#
+# =========================================================================================
+# PROVENANCE, MARKED PER OPERATION BECAUSE IT IS MIXED
+# =========================================================================================
+#
+#   THE TWO SessionResolver METHODS          EXIST. TRANSCRIBED, NOT DESIGNED.
+#                                            session-resolution.ts:432-491 is the authority for
+#                                            every behaviour, error and ordering rule below. Where
+#                                            it and this contract disagree, IT WINS and this
+#                                            contract is the defect.
+#   THE HTTP ROUTES AND WIRE SHAPES          DO NOT EXIST. SPECIFIED HERE AS NEW WORK.
+#   THE ROUTE CLASS THAT CARRIES THEM        DOES NOT EXIST. SPECIFIED HERE, AND IT IS THE PART
+#                                            THIS CONTRACT MOST NEEDS REVIEWED — see routeClass.
+#
+# That split is why this file is neither purely contract-first nor purely a transcription, and
+# saying which half is which is the point login-v1 established.
+
+contractVersion: 1
+apiVersion: null            # These are absolute /auth/** paths. See login-v1 versioning.LG-6.
+namespace: core
+domain: identity
+status: proposed
+updated: "2026-09-05"
+documentsExistingImplementation: partial   # See PROVENANCE above. Per operation, below.
+#
+#   EXISTS, TRANSCRIBED    SessionResolver.selectOrganization and listEnterableOrganizations,
+#                          their error collapse, and the validate-then-reserve ordering.
+#   NEW WORK               both HTTP routes; the wire shapes; the session-route class;
+#                          AUTO-SELECTION; and the control-plane migration auto-selection's
+#                          second condition requires (autoSelection.theMigrationThisRequires).
+
+# ---------------------------------------------------------------------------
+# routeClass — THE ARCHITECTURAL DECISION THIS CONTRACT REQUIRES. READ FIRST.
+# ---------------------------------------------------------------------------
+routeClass:
+  theProblem: >-
+    THESE TWO OPERATIONS FIT NEITHER OF THE PLATFORM'S TWO EXISTING ROUTE CLASSES, AND THAT IS WHY
+    THEY HAVE NO ROUTE. It is not an oversight anyone can fix by adding a row to a table.
+      THEY ARE NOT ACTIONS. An Action is invoked through platform/core/action/pipeline.ts with an
+      ActionContext built from a sealed AuthenticatedPrincipal, which carries a non-null
+      organizationId and reaches a tenant-scoped store. A caller who needs these two routes HAS NO
+      ORGANIZATION — that is the entire reason they are calling. Worse, the refusal happens before
+      routing: handleRequest resolves the principal at step 1 and returns 422 immediately, so an
+      Action route for the picker would be unreachable through the very state it exists to repair.
+      THEY ARE NOT PRE-AUTHENTICATION ENTRY POINTS. docs/decisions/0014 §B's registry is a closed
+      set of exactly five, and assertRegistryIsCoherent refuses to load with a sixth. It is also
+      wrong on the merits: a pre-auth route admits an UNAUTHENTICATED caller, and these callers are
+      authenticated. Registering them there would apply pre-auth's collapsed disclosure rules to a
+      path that legitimately needs to distinguish outcomes for a session holder, and would put two
+      authenticated operations behind a mechanism built for anonymous ones. THIS CONTRACT DOES NOT
+      TOUCH THAT REGISTRY.
+  theRulingRequested: >-
+    A THIRD, SMALL, CORE-OWNED ROUTE CLASS: A SESSION ROUTE. Authenticated at the SESSION level
+    rather than at the AuthenticatedPrincipal level. It resolves a session identifier from the
+    presented credential, and it stops there — it never builds an AuthenticatedPrincipal, never
+    obtains a tenant store, never evaluates a permission, and never calls invokeAction.
+    IT IS architecture-agent's RECOMMENDATION AND IT IS THE TEAM LEAD's TO ACCEPT. It is a new
+    mechanism in Core's request path, which is not a thing a contract may introduce by implication.
+  whatItMustNOTBE:
+    - >-
+      NOT A PSEUDO-PRINCIPAL. The obvious repair — have the principal resolver return an
+      AuthenticatedPrincipal with organizationId null, or a sentinel, so these become ordinary
+      Actions — IS REFUSED, and it is refused for 0014 §B's own reason one layer up: "a
+      pseudo-principal holding a pseudo-permission would flow through the authorization pipeline
+      and could accumulate grants." A nullable organizationId on AuthenticatedPrincipal would also
+      make every tenant predicate in the platform depend on a value that is now sometimes absent,
+      which is the single most dangerous change anyone could make to this codebase. AuthenticatedPrincipal
+      is sealed and its organizationId must stay non-null and validated.
+    - >-
+      NOT A BYPASS FLAG ON AN ACTION. Nothing on ActionDefinition may gain a "works without a
+      tenant" field. assertDeclaredPermission already makes a blank permission a construction-time
+      failure precisely so that an Action cannot be quietly exempted from authorization; an
+      exemption from TENANCY would be strictly worse.
+    - >-
+      NOT REACHABLE BY AN APP, EVER. The route table must be a Core-owned literal with no
+      registration function and no manifest channel, exactly as the pre-auth registry is. An App
+      that could serve these paths could present itself as the Organization picker and harvest
+      tenant selections.
+  whatItMUSTHAVE:
+    - >-
+      THE PATHS ARE ABSOLUTE AND UNDER THE ALREADY-RESERVED /auth/ PREFIX, so
+      isReservedPreAuthPath already returns true for them and assertNoReservedPathCollision already
+      refuses any App route table that could resolve onto them. NO NEW RESERVATION MECHANISM IS
+      NEEDED — this is why /auth/ was made a prefix test rather than a membership test, and it is
+      the reason these paths are placed there rather than under /api/v1.
+    - >-
+      CORE MATCHES THEM BEFORE THE App ROUTER, in the same block that matches pre-auth entry
+      points, so an App route table cannot shadow them.
+    - >-
+      A SESSION IS REQUIRED. No credential, an unreadable credential, an unknown, expired or
+      revoked session, or a deleted or suspended principal all answer the same fixed 401
+      unauthenticated. This is liveSession's existing collapse (session-resolution.ts:294-324) and
+      the route class must not add a branch above it.
+    - >-
+      NO TENANT STORE, NO ActionContext, NO PERMISSION AND NO SCOPE ARE CONSTRUCTED, and the type
+      must make that impossible rather than merely absent — the device the pre-auth registry
+      already uses. These handlers receive a session identifier and the SessionResolver, and
+      nothing else.
+    - >-
+      ITS OWN INPUT VALIDATION, BECAUSE IT INHERITS NONE. This is the requirement most likely to be
+      assumed rather than built. Core's JSON body parsing, its unknown-field rejection and its
+      repeated-query-parameter refusal all live in the ACTION path (api.ts:227-266), BELOW the
+      block that matches absolute reserved paths — and the pre-auth floor (parsePreAuthBody) is
+      reached only through dispatchPreAuthRequest, which this class does not use. A SESSION ROUTE
+      MATCHED IN THE EARLY BLOCK REACHES NEITHER. So the class must itself: reject a body that is
+      not a JSON object, reject any undeclared field with invalid_argument, reject any query
+      parameter, and bound the body's size. Without that, the one route in Dudo that accepts a
+      tenant identifier would be the one route with no input validation.
+    - >-
+      RATE LIMITING. Both routes are reachable by anyone holding a valid session. The picker is a
+      read and cheap; SELECTION WRITES, and an unbounded selection loop is a caller spending the
+      platform's control-plane write budget three row-writes at a time. The per-principal daily
+      ceiling bounds the damage (see freeTierImpact) but a limiter is the control that should stop
+      it first, and its absence must be a stated gap rather than an assumption. Recorded as OS-1.
+  whyNotSimplyMOVETHECHECK: >-
+    AN ALTERNATIVE WAS CONSIDERED AND REFUSED: leave these as Actions and move the
+    organization-not-selected refusal from the principal resolver down into the pipeline, so that
+    two nominated Actions could run without a tenant. It would work, and it would put a
+    tenant-optional branch inside the one pipeline every business operation in Dudo flows through.
+    Every future reviewer of every future Action would then have to check which side of that branch
+    it lands on. A separate, tiny, tenant-free route class keeps the Action pipeline's invariant
+    absolute: AN ACTION ALWAYS HAS A TENANT. That invariant is worth more than the code it saves.
+
+# ---------------------------------------------------------------------------
+# permissionModel — THE SECOND DEADLOCK, ANSWERED. core-agent put this as a question and it
+# is answered here rather than during implementation, which is where it was asked not to be.
+# ---------------------------------------------------------------------------
+permissionModel:
+  theQuestion: >-
+    core-agent's finding: an Action requires a declared permission (0007 rule 4, and
+    assertDeclaredPermission makes a blank one a construction-time failure), and
+    authorization/roles.ts maps 'owner' and 'member' to Customer Directory permissions ONLY. So a
+    permissioned Action for the picker would be refused by 0019 for every principal on the
+    platform — A SECOND DEADLOCK SITTING BEHIND THE FIRST, and one that would only surface after
+    the first was fixed.
+  ruling: >-
+    NEITHER OPERATION DECLARES A PERMISSION, AND NO NEW PLATFORM PERMISSION IS CREATED. The
+    deadlock is not resolved by granting something; IT DOES NOT ARISE, because these are not
+    Actions. 0007 rule 4 binds Actions, and a session route is not one — it has no
+    ActionDefinition, no ActionContext, no scope and no place to declare a permission. THIS
+    CONTRACT PROPOSES NO AMENDMENT TO 0019 AND NO EDIT TO permission-catalog.yaml OR roles.ts.
+  whyTheALTERNATIVEISWORSE: >-
+    THE OBVIOUS FIX — a platform permission such as core.session.select that every seed role holds
+    — WAS CONSIDERED AND IS REFUSED. It is an amendment to 0019 to create a permission that is
+    granted to everyone, checked on every call, and can never be denied to anyone: a permission
+    that cannot be withheld is not an authorization decision, it is ceremony that makes the
+    catalog less meaningful. It would also be the first entry in the catalog that exists to
+    satisfy a mechanism rather than to protect a resource, and the next person to add one would
+    cite it.
+  soWHATAUTHORIZESTHESEROUTES:
+    theAnswer: >-
+      A VALID SESSION, AND NOTHING ELSE — WHICH IS SUFFICIENT BECAUSE NEITHER OPERATION CAN DO
+      ANYTHING THE SESSION HOLDER COULD NOT ALREADY DO. That is the test, and both operations pass
+      it for reasons that are structural rather than argued:
+        THE PICKER returns the caller's OWN memberships, to the caller, through a session the
+        caller holds. There is no field by which another principal can be named, so there is no
+        wider population to guard and no second disclosure for a permission to gate.
+        SELECTION grants NOTHING. It records a choice among Organizations the caller is ALREADY a
+        member of, on the caller's own session, and every subsequent request re-validates that
+        membership independently. A caller who selects an Organization it may not enter is refused
+        — not by this route's permission, but by the membership check inside it, and again on
+        every request afterwards.
+    theSTRONGESTFORMOFIT: >-
+      SELECTION CANNOT WIDEN ANY PRINCIPAL'S AUTHORITY BY ONE PERMISSION. What it may do is the
+      subset of what membership already permits, and membership is administered elsewhere. A
+      permission on this route would gate the ACT OF CHOOSING, never the ACCESS — the access is
+      gated where it already is, at every Action, on every call, deny by default.
+  thisIsNOTAPRECEDENTFORUNPERMISSIONEDROUTES: >-
+    STATED SO IT CANNOT BE CITED AS ONE. "No permission because it is not an Action" is available
+    to exactly the routes in the session-route class, and that class is a Core-owned literal whose
+    membership this contract fixes at two. A third member is a Core change with a Core reviewer,
+    and it must pass soWHATAUTHORIZESTHESEROUTES.theAnswer — it must be incapable of doing
+    anything the session holder could not already do. AN OPERATION THAT TOUCHES TENANT DATA CAN
+    NEVER PASS THAT TEST AND IS THEREFORE ALWAYS AN ACTION. 0007 D1 stands unweakened: a route
+    without a permission is unreachable unless it is in a closed, enumerated, Core-owned registry.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none-at-entry
+  ruling: >-
+    NEITHER OPERATION RUNS INSIDE A TENANT. The picker answers a question that SPANS tenants by
+    construction — "which Organizations may this principal enter" — which is precisely why
+    membership is a control-plane relationship and not a tenant-scoped row (0014 §C.1, and
+    control-plane-store.ts's opening argument that a tenant-scoped Session record is circular).
+    Selection ends with a tenant chosen, but the write it performs is a control-plane write to the
+    session row, not a tenant write.
+  theOneCallerSuppliedTenantIdentifierINTHEPLATFORM: >-
+    session-resolution.ts:21: "selectOrganization is the only place in the platform where a caller
+    names a tenant." THIS CONTRACT PUBLISHES THAT ROUTE, WHICH MAKES IT THE MOST
+    SECURITY-SENSITIVE ROUTE IN DUDO, AND THE CONTRACT SAYS SO RATHER THAN LEAVING IT TO BE
+    INFERRED. Everywhere else the platform's defence is that there is no value to pass:
+    tenancy/tenant-context.ts withholds the organization identifier from Action handlers entirely,
+    on the stated ground that "withholding the value is stronger than requiring its use". Here the
+    value must be accepted, so the defence has to be an active one — see theHintRuling.
+  theDeployedSystemALREADYPROVESTHEGENERALPROPERTY: >-
+    A caller-supplied Organization header does not change tenancy on the live deployment, verified
+    by the Team Lead. THIS ROUTE MUST NOT BECOME THE EXCEPTION THAT MAKES THAT VERIFICATION FALSE.
+    The difference between this route and that header is not that this one is trusted — it is that
+    this one is VALIDATED AGAINST MEMBERSHIP, writes only to the caller's own session, and grants
+    only what the caller already had.
+
+# ---------------------------------------------------------------------------
+# theHintRuling — the broadest anti-oracle property in the platform
+# ---------------------------------------------------------------------------
+theHintRuling:
+  ruling: >-
+    THE SUBMITTED organization_id IS A HINT. It is validated against the caller's own membership
+    before anything is reserved or written, and:
+    A CALLER NAMING AN ORGANIZATION IT DOES NOT BELONG TO IS INDISTINGUISHABLE FROM A CALLER NAMING
+    AN ORGANIZATION THAT DOES NOT EXIST. Both receive 404 not_found. So does a caller whose
+    membership exists but is not active.
+  whyItIsBROADERTHANEVERYOTHERORACLEINTHISCODEBASE: >-
+    Every other indistinguishability ruling in Dudo is confined to one tenant's records — whether
+    a customer exists, whether a Business is yours. THIS ONE IS PLATFORM-WIDE. If the two cases
+    could be told apart, any holder of any valid session could enumerate Dudo's entire customer
+    list by probing Organization identifiers, learning which tenants exist without belonging to
+    any of them. control-plane-store.ts names it: "an ORGANIZATION-EXISTENCE ORACLE ACROSS THE
+    WHOLE PLATFORM — the same shape as the five oracles already closed in this slice, and the
+    broadest of them, because it is not confined to one tenant's records."
+  itIsNOTENOUGHTORETURNTHESAMECODE: >-
+    THE SAME WORK MUST HAPPEN, OR THE DIFFERENCE REAPPEARS AS A TIMING SIGNAL AND AS A QUERY COUNT.
+    Core enforces this structurally rather than by discipline, and the mechanism is a single port
+    method: findMembershipWithOrganization, whose implementation contract is that IT DOES NOT QUERY
+    THE ORGANIZATION TABLE WHEN THERE IS NO ACTIVE MEMBERSHIP ROW. Two separate methods would leave
+    the distinction one call site away forever — check membership, then look up the Organization
+    "for a better error message", and the oracle is built by someone being helpful.
+    "ACTIVE" IS LOAD-BEARING AND IS WHERE THE FIRST VERSION WAS WRONG: filtering status above the
+    port left a suspended membership costing four statements and a non-member three. The error was
+    already identical; THE WORK WAS NOT, and work is measurable. The filter is inside the statement.
+  soAROUTEHANDLERMUSTNOT: >-
+    A PROHIBITION LIST, because this is where a well-meaning route handler would reopen it:
+      1. NO second lookup to improve an error message. Not "does this Organization exist", not
+         "are you perhaps suspended", not a count.
+      2. NO distinct message, code, detail token or response size for the three not_found cases.
+         notFound() takes no arguments; nothing may be added to it here.
+      3. NO early return that skips work on the failing path, and no logging that fires on one
+         branch and not another.
+      4. NO validation of organization_id against a list the handler fetched first — checking the
+         hint against the picker's output before calling selectOrganization would make the two
+         routes' work differ by membership, which is the timing signal moved up a layer.
+  theSUSPENDEDMEMBERSHIPCOST: >-
+    A SUSPENDED MEMBERSHIP RETURNS THE SAME 404, AND THE COST IS STATED RATHER THAN HIDDEN: a
+    suspended user is told "not found" rather than why. It is deliberate — the branch is
+    unreachable for a non-member, so a distinct answer would disclose nothing to the person seeing
+    it, but one answer is one branch, and a second branch here is a second thing a later edit can
+    get subtly wrong for a small usability gain. Recorded as OS-2 because a real user WILL hit this
+    and their administrator will need to be the one who explains it.
+  theSUSPENDEDORGANIZATIONEXCEPTION: >-
+    A SUSPENDED ORGANIZATION RETURNS 503 unavailable, NOT 404, AND THAT IS NOT A LEAK. The branch
+    is reachable ONLY by an active member of that Organization — a non-member never gets past the
+    membership check — so it discloses the Organization's state to someone who already knows it
+    exists. It is the same asymmetry resolve() applies on every subsequent request.
+
+# ---------------------------------------------------------------------------
+# co1 — the picker IS the one authorized path to a principal's Organization list
+# ---------------------------------------------------------------------------
+co1:
+  theOpenQuestion: >-
+    packages/contracts/registries/core-object-registry.yaml, CO1: "a user's list of Organizations
+    must never be visible to any of them."
+  ruling: >-
+    THIS CONTRACT PUBLISHES THE ONE LEGITIMATE PATH TO THAT LIST, AND PUBLISHING IT DOES NOT VIOLATE
+    CO1 — IT IS THE CASE CO1 WAS ALWAYS PHRASED TO PERMIT. Read the question precisely: the list
+    must not be visible to any of the ORGANIZATIONS. It is returned TO THE PRINCIPAL, through a
+    session the principal holds, about the principal's own memberships.
+    control-plane-store.ts:283-289 states the condition under which that stays true, and this
+    contract adopts it verbatim as a binding constraint: "there is no path from an Action, an App,
+    or an Organization administrator to this call. If this ever becomes reachable from
+    ActionContext, CO1 is violated in one line."
+  soTHEROUTEISBOUNDBY:
+    - >-
+      THE SESSION IS THE ONLY INPUT. The picker takes NO parameter of any kind — no principal_id,
+      no organization_id, no filter, no search. It cannot be asked about anyone but the caller,
+      because there is no field through which another principal could be named. This is the same
+      device derivePreAuthSourceSubject uses: the safety argument is in the signature.
+    - >-
+      NO ADMINISTRATIVE OR CROSS-PRINCIPAL VARIANT MAY BE ADDED TO THIS CONTRACT, EVER. "Show me
+      which Organizations this user belongs to" is a reasonable-sounding support and administration
+      request, it is the natural next ask from whoever operates the platform, and it is EXACTLY the
+      disclosure CO1 forbids. It is not an extension of this contract; it is a different contract
+      with its own CO1 argument that would have to defeat this paragraph. Recorded as OS-4.
+    - >-
+      NOTHING DERIVED FROM THIS RESPONSE MAY REACH AN Action, AN App, A LOG, A METRIC LABEL, A
+      TRACE ATTRIBUTE OR A SHARED CACHE. See loggingProhibitions.
+  aPRINCIPALINTHREEORGANIZATIONS: >-
+    receives one list of three identifiers, TO ITSELF, and none of the three Organizations learns
+    anything about the other two or about the fact that there are others. No response in this
+    contract is ever visible to an Organization, because no Organization can call either route on
+    another principal's behalf.
+
+# ---------------------------------------------------------------------------
+# autoSelection — THE TEAM LEAD'S RULING OF 2026-09-05, TRANSCRIBED, WITH ITS THREE BINDING
+# CONDITIONS AND THE THINGS IT COSTS. NEW WORK: nothing in Core does this today.
+# ---------------------------------------------------------------------------
+autoSelection:
+  ruling: >-
+    WHEN A PRINCIPAL HAS EXACTLY ONE ACTIVE MEMBERSHIP, CORE SELECTS THAT ORGANIZATION WITHOUT
+    THE CLIENT ASKING. Decided by the Team Lead on 2026-09-05, on the question core-agent put to
+    them. It is recorded here as the Team Lead's ruling, not as architecture-agent's proposal.
+  theReasoning: >-
+    THE TEAM LEAD'S ARGUMENT, TRANSCRIBED BECAUSE IT IS THE PART THAT HAS TO SURVIVE:
+    session-resolution.ts refuses a "first membership wins" fallback BY NAME, and it is right to.
+    "EXACTLY ONE" IS NOT "THE FIRST OF SEVERAL" — with one membership the selection is DETERMINED,
+    not DEFAULTED. The tenant is still derived server-side from the authenticated context; the
+    caller names nothing and can influence nothing. MULTITENANCY_STANDARD.md §3 forbids an AMBIENT
+    tenant — one arrived at without authenticated determination — and a value computed from the
+    authenticated principal's own membership rows is the opposite of ambient.
+  theThreeConditions:
+    one: >-
+      EXACTLY ONE ACTIVE MEMBERSHIP, OR THE PICKER IS MANDATORY. Never "the first of N", never
+      "the most recent", never "the only active one among several rows", never a tie-break of any
+      kind. Zero memberships selects nothing. Two or more selects nothing. IF ANY RULE IS EVER
+      NEEDED TO CHOOSE BETWEEN CANDIDATES, THE CONDITION HAS ALREADY FAILED and that rule is the
+      ambient default this ruling exists to avoid.
+    two: >-
+      THE SESSION RECORDS THAT THE SELECTION WAS AUTOMATIC, so it is auditable and distinguishable
+      from an explicit one. SEE theMigrationThisRequires — this is new stored state and it is the
+      one part of this ruling that cannot be implemented without a schema change.
+    three: >-
+      THE BEHAVIOURAL CLIFF IS STATED IN THE CONTRACT, WHICH IS THIS PARAGRAPH. A principal that
+      gains a second membership STOPS BEING AUTO-SELECTED at its next login. A client that came to
+      rely on auto-selection breaks at that moment — in production, for one user, on the day an
+      administrator adds them to a second Organization. See theCliffAndWhyACORRECTCLIENTSURVIVESIT.
+  whereItHAPPENS:
+    ruling: >-
+      AT LOGIN, INSIDE issueSession, WITH THE IDENTIFIER WRITTEN INTO THE SESSION INSERT — NOT AS A
+      SEPARATE UPDATE, AND NOT ON THE PICKER ROUTE.
+    whyNotOnThePicker: >-
+      A GET THAT WRITES IS A GET THAT WRITES. Auto-selecting as a side effect of listing would make
+      the picker unsafe, uncacheable in a way its own headers already claim, and would mean a
+      client that merely displays a screen has changed server state.
+    whyINTHEINSERT: >-
+      BECAUSE IT COSTS NOTHING, AND THIS IS THE FINDING THAT CHANGES THE ARITHMETIC.
+      control-plane-admission.ts: "LOGIN AND SESSION CREATION ARE THE SAME WRITE. A login that
+      names an Organization writes the validated identifier IN THE INSERT rather than following up
+      with an UPDATE, so there is no two-step that can half-complete and no second reservation."
+      issueSession already accepts and writes an Organization at creation. So AN AUTO-SELECTED
+      LOGIN IS STILL 3 ROW-WRITES, not 6. See freeTierImpact.
+    theCOSTITDOESADD: >-
+      ONE BOUNDED READ ON THE LOGIN PATH — listMembershipsForPrincipal — after credential
+      verification has already succeeded. It is a read, not a write, against an allowance fifty
+      times larger than the write allowance.
+      IT DOES NOT REOPEN THE LOGIN TIMING ORACLE, and the reason is the ordering: the read happens
+      only AFTER verification succeeded, so the work difference it introduces is visible only to
+      someone holding a correct credential, about their own account. credential-verifier.ts's
+      equal-work property covers the verification branch and is untouched. AN IMPLEMENTATION THAT
+      MOVED THIS READ ABOVE VERIFICATION WOULD BREAK THAT PROPERTY and is prohibited.
+  itIsSTILLNOTAHINT: >-
+    THE DISTINCTION FROM issueSession's EXISTING requestedOrganizationId MUST NOT BLUR. That
+    parameter is a CALLER-SUPPLIED HINT and login.ts deliberately passes null for it, because
+    accepting an Organization at login is an Organization-membership oracle for anyone holding a
+    stolen credential. AUTO-SELECTION SUPPLIES NO HINT: the value is read from the principal's own
+    membership rows server-side, and there is no request field it could arrive through. login-v1's
+    ruling that no Organization hint is accepted at login STANDS UNCHANGED, and the login request
+    shape does not gain a field.
+  theSUSPENDEDORGANIZATIONCASE:
+    ruling: >-
+      IF THE PRINCIPAL'S SINGLE ACTIVE MEMBERSHIP NAMES A SUSPENDED ORGANIZATION, THE SESSION IS
+      CREATED UNSELECTED AND THE LOGIN SUCCEEDS. Auto-selection simply does not apply.
+    why: >-
+      THE ALTERNATIVE IS WORSE IN BOTH DIRECTIONS. Failing the login would make a suspended
+      Organization look like a broken credential to its own users, who would then change their
+      passwords. Selecting it anyway would create a session whose every request answers
+      unavailable, with no picker to escape to. Leaving it unselected produces the ordinary 422,
+      the client calls the picker, and the picker's own filtering explains the situation as well as
+      anything can today.
+  theMigrationThisRequires:
+    finding: >-
+      CONDITION TWO CANNOT BE IMPLEMENTED WITHOUT NEW STORED STATE, AND THAT IS A MIGRATION.
+      SessionRecord (control-plane-store.ts:187-195) has sessionId, principalId,
+      activeOrganizationId, createdAt and expiresAt — AND NO FIELD IN WHICH "how this selection was
+      made" could be recorded. Reported rather than assumed, because it is the one part of this
+      ruling that is not a code change.
+    whatIsNeeded: >-
+      A forward-only, idempotent migration adding a column to `session` in the control-plane
+      database, carrying two values: 'explicit' and 'automatic'. It is NULL, or absent-meaning-
+      explicit, for a session with no Organization selected. THE MIGRATION AND THE COLUMN NAME ARE
+      core-agent's TO WRITE; this contract states the requirement and the values, not the DDL.
+    itDoesNOTCHANGETHEROWWRITECOST: >-
+      CHECKED RATHER THAN ASSUMED. control-plane-admission.ts counts a session write as 1 table row
+      + the primary-key autoindex + session_by_principal = 3. AN UNINDEXED COLUMN ADDS NO INDEX
+      ROW, so SESSION_ROW_WRITES stays 3 for both the INSERT and the selection UPDATE. IF ANYONE
+      EVER INDEXES THIS COLUMN, THAT NUMBER MUST MOVE WITH IT — the standing review obligation
+      control-plane-admission.ts and storage/write-cost.ts both record, because D1 exposes no
+      portable way to count a table's indexes through a binding.
+    theWARNINGMUSTBEINTHEDDLANDNOTONLYHERE:
+      requirement: >-
+        NORMATIVE ON THE MIGRATION FILE, AT THE TEAM LEAD'S DIRECTION (2026-09-05). The obligation
+        above must appear as a comment in the migration itself, beside the column, in
+        platform/core/migrations/control-plane/**. THE PERSON WHO LATER ADDS AN INDEX WILL BE
+        READING THE DDL, NOT THIS CONTRACT — a warning that lives only in a record is a warning
+        that is not where the mistake is made.
+      whyItIsStatedHereRATHERTHANWRITTENTHERE: >-
+        platform/core/** is core-agent's and read-only to architecture-agent. This contract cannot
+        author the migration and does not try to; it states the requirement so that the agent who
+        DOES author it has the text, and so the Team Lead has something specific to check the
+        migration against rather than a remembered instruction.
+      theTEXTTOCARRY: >-
+        Lift this, or wording that says the same three things: (1) this column is DELIBERATELY
+        UNINDEXED; (2) SESSION_ROW_WRITES in identity/control-plane-admission.ts is 3 and assumes
+        exactly the table row, the primary-key autoindex and session_by_principal; (3) ADDING AN
+        INDEX ON THIS COLUMN RAISES THE COST OF EVERY LOGIN, EVERY SELECTION AND EVERY LOGOUT, and
+        that constant must be raised in the same change — nothing in D1 or in this repository will
+        notice on your behalf.
+      andTHESAMEOBLIGATIONALREADYEXISTSTWICE: >-
+        0004_session.sql and storage/write-cost.ts each carry a version of it for the indexes they
+        already have. This is a third instance of one standing rule rather than a new rule, which
+        is the reason to phrase it the same way in all three places rather than freshly each time.
+    whatTheCOLUMNISFOR: >-
+      IT IS EVIDENCE, NOT A CONTROL. Nothing in the request path reads it, no authorization
+      decision consults it, and no client ever sees it — IT IS NOT ON THE WIRE, in either
+      direction, in any shape in this contract. Its purpose is that when session-lifecycle
+      auditing exists (OS-5), an automatic selection and a deliberate one are distinguishable
+      after the fact. A field that were read by the request path would be a second input to
+      tenancy, which is the last thing this path needs.
+    itIsNOTUPDATEDBYRESOLUTION: >-
+      A stale value is possible and is harmless. When membership is revoked mid-session, resolve()
+      collapses the session to organization-not-selected WITHOUT WRITING — nothing on the
+      authentication path writes to D1 (session-resolution.ts ruling 3) — so the column keeps
+      describing the selection that is no longer in force. It records how the STORED selection was
+      made, and it must not be read as describing the session's current state.
+  theCliffAndWhyACORRECTCLIENTSURVIVESIT:
+    theCliff: >-
+      A PRINCIPAL WITH ONE MEMBERSHIP IS AUTO-SELECTED. THE MOMENT AN ADMINISTRATOR ADDS A SECOND,
+      THAT PRINCIPAL'S NEXT LOGIN IS UNSELECTED AND EVERY BUSINESS REQUEST ANSWERS 422 UNTIL THE
+      PICKER IS USED. Nothing warns anyone; the change is in a table an administrator edited.
+    whyACORRECTCLIENTDOESNOTNOTICE: >-
+      AND THIS IS WHY THE RULING IS SAFE TO ACCEPT. AUTO-SELECTION IS INVISIBLE AT THE WIRE. The
+      login response is a fixed body with no field that could report it — deliberately, because a
+      body that varied would be a disclosure channel (login-v1). So a client CANNOT branch on it,
+      and the only correct client is one that makes its ordinary request and, on 422, goes to the
+      picker. THAT CLIENT WORKS IDENTICALLY BEFORE AND AFTER THE CLIFF, and never knows the cliff
+      exists.
+    whatBREAKS: >-
+      A client that concluded from experience that the picker is never needed and did not build
+      it — or built it but never routed 422 to it. THAT IS WHY clientObligations MAKES THE PICKER
+      MANDATORY TO IMPLEMENT EVEN THOUGH NO PRINCIPAL CAN REACH IT TODAY, and why qa-agent must
+      test the multi-membership path against a second seeded Organization rather than reporting a
+      pass that only holds because every principal has one membership.
+    theHONESTRESIDUAL: >-
+      TWO, STATED RATHER THAN LEFT FOR LATER. FIRST, auto-selection means a stolen credential
+      reaches tenant data in one request instead of two — which is a very thin loss, because the
+      attacker could simply call selection, and the picker would tell them what to name. SECOND,
+      a principal's login behaviour now depends on data an administrator controls, so "why does
+      this one user see a picker" becomes a support question whose answer is in a membership
+      table. Neither is a reason to refuse the ruling; both are reasons it is written down.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  # =======================================================================================
+  - id: identity.organizations.list
+    title: "The Organization picker"
+    method: GET
+    path: "/auth/session/organizations"
+    surface: public
+    provenance: >-
+      THE UNDERLYING METHOD EXISTS AND IS TRANSCRIBED: SessionResolver.listEnterableOrganizations
+      (session-resolution.ts:432-451). THE ROUTE AND THE WIRE SHAPE ARE NEW.
+    description: >-
+      Return the Organizations the authenticated principal may enter. Called by both clients
+      immediately after login, and again whenever any request answers 422 failed_precondition.
+    request: >-
+      NO BODY, NO QUERY PARAMETERS, NO PATH PARAMETERS. See co1.soTHEROUTEISBOUNDBY.
+      THE ROUTE CLASS MUST REJECT ANY QUERY PARAMETER, AND THIS IS A REQUIREMENT RATHER THAN AN
+      INHERITED BEHAVIOUR — the distinction matters and is easy to get wrong. Core's unknown-field
+      and repeated-parameter refusals (api.ts:253-266, and every Action input's
+      additionalProperties: false) live in the ACTION path, BELOW the block that matches absolute
+      reserved paths. A session route matched in that earlier block does not reach them and
+      inherits nothing. So a route class that does not refuse query parameters explicitly will
+      silently ACCEPT `?principal_id=...` on the one route CO1 depends on — accepted and ignored
+      today, and one careless edit away from being read. Refuse with invalid_argument.
+    response: { schemaRef: "urn:dudo:schema:organization-selection:1#/$defs/listEnterableOrganizationsOutput" }
+    successStatus: 200
+    errors: [unauthenticated, unavailable]
+    reads: >-
+      THREE POINT READS, ZERO WRITES: findSession, findPrincipal, listMembershipsForPrincipal
+      (bounded at 100). It writes nothing on any path, takes no reservation, and cannot return
+      quota_exceeded — reads remain available at the write ceiling (0014 §A.10).
+    notes: >-
+      NO not_found, EVER. A principal with no memberships receives 200 with data: [] — an empty
+      collection is not a missing one, and 404 here would be a statement about the principal.
+      NO forbidden. There is no permission on this path to be forbidden by.
+      unavailable IS THE STORE-FAILURE CASE ONLY, and it says something about Dudo rather than
+      about the caller.
+      THE LIST IS FILTERED TO ACTIVE MEMBERSHIPS. A suspended membership is omitted entirely, which
+      means a user whose membership was suspended sees the Organization DISAPPEAR from their picker
+      rather than appear-and-fail. That is the honest rendering and it is also what makes the
+      picker's output consistent with what selection will accept — with the one race in
+      raceBetweenTheTwoCalls.
+
+  # =======================================================================================
+  - id: identity.organization.select
+    title: "Select an Organization"
+    method: POST
+    path: "/auth/session/organization"
+    surface: public
+    provenance: >-
+      THE UNDERLYING METHOD EXISTS AND IS TRANSCRIBED: SessionResolver.selectOrganization
+      (session-resolution.ts:453-491), INCLUDING ITS ORDERING RULE. THE ROUTE AND THE WIRE SHAPE
+      ARE NEW.
+    description: >-
+      Record the caller's chosen Organization on its own session, after validating that the caller
+      may enter it. This is the operation that turns a 422-everything session into a working one.
+    request: { schemaRef: "urn:dudo:schema:organization-selection:1#/$defs/selectOrganizationInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-selection:1#/$defs/selectOrganizationOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, not_found, quota_exceeded, unavailable]
+    maxRowWrites: 3
+    writes: >-
+      ONE UPDATE TO THE CALLER'S OWN SESSION ROW. It writes no other row, in no other table, in no
+      database but the control plane, and it can only ever write the row its own credential
+      identifies. See freeTierImpact for the cost and the ceiling it moves.
+    theORDERINGCONSTRAINT:
+      ruling: >-
+        THE HINT IS VALIDATED BEFORE ANY CAPACITY IS RESERVED AND BEFORE ANY WRITE. THIS ORDER IS
+        NORMATIVE AND IS A SECURITY PROPERTY, NOT AN EFFICIENCY ONE. An implementation that
+        reserves first and validates second is a defect even though it returns identical codes.
+      why: >-
+        TRANSCRIBED FROM session-resolution.ts:460-468, because it is subtle enough that an
+        optimiser would reverse it. If reservation came first, a caller could deliberately exhaust
+        its OWN per-principal daily budget — which it controls completely — and thereafter
+        distinguish quota_exceeded ("I am a member of this Organization") from not_found ("I am
+        not"). THAT IS AN ORGANIZATION-EXISTENCE ORACLE BUILT OUT OF A CAPACITY CONTROL AND
+        SWITCHED ON AT WILL BY THE ATTACKER. Validating first means a non-member is refused before
+        the budget is consulted at all, so the budget's state can never depend on membership.
+      theTESTFORIT: >-
+        Mechanical and owed by qa-agent: with the per-principal daily budget exhausted, a NON-MEMBER
+        still receives 404 and not 429. If it receives 429, the order has been reversed and the
+        oracle is open.
+    notes: >-
+      not_found COVERS THREE CASES AND DISTINGUISHES NONE OF THEM: no membership row, a membership
+      that is not active, and an Organization that does not exist. See theHintRuling.
+      quota_exceeded IS REACHABLE AND IS NOT A LEAK, because it is reached only AFTER membership has
+      been validated — so it is visible only to a member, and only about Dudo's own capacity. It
+      carries a Retry-After derived from the next 00:00 UTC reset, which is the same value for every
+      caller at that instant.
+      SELECTING THE ALREADY-SELECTED ORGANIZATION SUCCEEDS AND COSTS THE SAME 3 ROW-WRITES. There is
+      no "already selected" short-circuit and none may be added: a read to decide whether to write
+      would make the work differ by current state, and it would save nothing measurable on an
+      operation this rare. A client should still avoid the redundant call.
+      A SUCCESSFUL CALL RECORDS THE SELECTION AS 'explicit', overwriting 'automatic' if the session
+      had been auto-selected at login. The value is stored and is on no wire in either direction.
+      See autoSelection.theMigrationThisRequires.
+      SELECTING A DIFFERENT ORGANIZATION IS PERMITTED AND IS AN ORGANIZATION SWITCH. It overwrites
+      the selection on the same session; the previous tenant context is simply gone from the next
+      request onwards. There is no confirmation step, no second session, and no way to hold two
+      tenants at once — which is what makes cross-tenant confusion structurally impossible here.
+
+# ---------------------------------------------------------------------------
+# wire
+# ---------------------------------------------------------------------------
+wire:
+  pickerRequest: |
+    GET /auth/session/organizations
+    Cookie: dudo_session=<opaque>            # web
+    Authorization: Bearer <opaque>           # Apple — one value, two carriers
+  pickerResponse: |
+    200 OK
+    Content-Type: application/json; charset=utf-8
+    Cache-Control: no-store
+    X-Request-Id: <22 characters>
+
+    {"data":[{"organization_id":"<id>","display_name":null}]}
+  selectRequest: |
+    POST /auth/session/organization
+    Content-Type: application/json
+    Cookie: dudo_session=<opaque>            # or Authorization: Bearer
+
+    {"organization_id":"<id>"}
+  selectResponse: |
+    200 OK
+    Content-Type: application/json; charset=utf-8
+    Cache-Control: no-store
+    X-Request-Id: <22 characters>
+
+    {"status":"ok"}
+  notes:
+    - >-
+      THE CREDENTIAL IS CARRIED EXACTLY AS IT IS ON EVERY OTHER AUTHENTICATED REQUEST — the
+      dudo_session cookie for web, Authorization: Bearer for Apple, one value and two carriers
+      (docs/decisions/0015 §A). A request presenting BOTH with DIFFERENT values is refused
+      unauthenticated rather than resolved by precedence. Neither route introduces a new carrier,
+      a new header, or a new credential.
+    - >-
+      Cache-Control: no-store ON BOTH RESPONSES, AND THE PICKER'S IS THE ONE THAT MATTERS. Its body
+      is a principal's Organization list — the CO1 value — and its URL is identical for every
+      caller on the platform, which makes it the most cacheable-LOOKING response in Dudo and the
+      most dangerous to cache. A shared or edge cache keyed on the URL alone would serve one
+      person's Organization list to another. NO CACHE-CONTROL PERMITTING SHARED CACHING MAY EVER BE
+      ADDED TO EITHER ROUTE.
+    - >-
+      THE TWO PATHS DIFFER BY ONE CHARACTER AND A METHOD — /organizations against /organization —
+      AND THAT NEAR-COLLISION IS NAMED RATHER THAN LEFT TO BE DISCOVERED. It is the ordinary REST
+      collection/singleton pair and it is deliberate, but a client typo produces a 404 rather than
+      an obvious error, and a route table typo produces a route nobody reaches. qa-agent asserts
+      both paths independently, and asserts that GET on the singular path and POST on the plural
+      path are both 404 rather than 405 — answering 405 would confirm the path exists.
+    - >-
+      NEITHER PATH IS UNDER /api/v1, for the same reason the login paths are not: a route that
+      moved when an App was mounted elsewhere would be a session route whose address depended on
+      which App was installed. Both are under the already-reserved /auth/ prefix, so no new
+      reservation mechanism is required.
+
+# ---------------------------------------------------------------------------
+# clientObligations — both clients, identically. This is the flow that makes the product work.
+# ---------------------------------------------------------------------------
+clientObligations:
+  theFlow: >-
+    1. POST /auth/login/complete. On 200 the session exists. IT MAY OR MAY NOT ALREADY HAVE AN
+       ORGANIZATION, AND THE CLIENT CANNOT TELL — the login response is a fixed body with no field
+       that reports it, deliberately (login-v1). DO NOT BRANCH HERE.
+    2. MAKE THE ORDINARY REQUEST THE USER ASKED FOR. If it succeeds, the session was auto-selected
+       and there was never anything to choose.
+    3. ON 422 failed_precondition: GET /auth/session/organizations, present the choice, then
+       POST /auth/session/organization, then retry the original request ONCE.
+    THE CLIENT ATTEMPTS THE WORK AND REACTS TO 422; IT DOES NOT INSPECT THE SESSION FIRST. That is
+    the whole flow, it is the same code before and after auto-selection exists, and it is the same
+    code for a one-membership and a ten-membership principal. A client written this way never has
+    to know auto-selection happened.
+  whyTheClientMUSTNOTPREEMPTIVELYCALLTHEPICKER: >-
+    IT LOOKS TIDIER AND IT IS WRONG. Calling the picker after every login to "find out what to
+    select" adds three point reads to every cold start for the overwhelming majority of principals,
+    who have exactly one membership and were already selected before the client asked. It also
+    tempts the client into selecting explicitly what the server already selected — a redundant
+    call that costs the full 3 row-writes, because there is deliberately no already-selected
+    short-circuit. THE 422 IS THE SIGNAL. Waiting for it costs one failed request in the rare case
+    and nothing in the common one.
+  autoSelectionIsINVISIBLEANDMUSTSTAYSO: >-
+    A CLIENT MUST NOT INFER, RECORD, DISPLAY OR BRANCH ON WHETHER A SELECTION WAS AUTOMATIC. There
+    is no field for it in any shape in this contract and none may be added: the value exists in the
+    control plane as evidence for a future audit trail, not as an input to a user interface. A
+    client that inferred it from "I did not have to call the picker" has built a dependency on the
+    number of memberships a user happens to have.
+  the422Rule: >-
+    A 422 failed_precondition FROM ANY ROUTE MEANS "NO ORGANIZATION SELECTED" AND THE CORRECT
+    RESPONSE IS TO RETURN TO STEP 2 — NOT to log in again, NOT to show a credential error, and NOT
+    to retry the same request. session-principal-resolver.ts:73-84 states why the code is 422 and
+    not 401: "the credential is good; there is simply no tenant context, and the client's correct
+    next move is to call the Organization picker rather than to log in again. unauthenticated would
+    send it round a loop that cannot terminate." A CLIENT THAT TREATS 422 AS AN AUTHENTICATION
+    FAILURE BUILDS EXACTLY THAT LOOP.
+  the422CanHappenMIDSESSION: >-
+    AND THIS IS THE CASE CLIENTS WILL GET WRONG. Membership is re-validated on EVERY request
+    (session-resolution.ts ruling 2), so a membership revoked or suspended while the user is
+    working collapses the session back to unselected AT THE NEXT REQUEST. A user mid-task suddenly
+    receives 422. The client must return to the picker and explain, not crash, not silently retry,
+    and not present it as a login failure. This is the mechanism that makes revoking someone's
+    access take effect immediately rather than at expiry, so it is a feature being observed, not an
+    error.
+  raceBetweenTheTwoCalls: >-
+    THE PICKER'S ANSWER CAN BE STALE BY THE TIME SELECTION IS CALLED. A membership revoked between
+    step 2 and step 4 produces a 404 for an Organization the client just displayed. The client
+    handles it by refreshing the picker and saying the option is no longer available — NOT by
+    reporting a bug, and NOT by concluding the Organization does not exist, which is a distinction
+    the client cannot make and must not try to.
+  thePickerISMANDATORYTOIMPLEMENTEVENTHOUGHNOBODYCANREACHITTODAY: >-
+    EVERY PRINCIPAL ON THE DEPLOYED PLATFORM HAS EXACTLY ONE MEMBERSHIP, SO EVERY SESSION IS
+    AUTO-SELECTED AND NO CLIENT WILL EVER SEE A 422 IN TESTING. THAT IS EXACTLY WHY THE PICKER MUST
+    BE BUILT AND ROUTED NOW. The day an administrator adds a second membership to one user, that
+    user's next login is unselected and every request answers 422 — and a client that never built
+    the picker, or built it but never routed 422 to it, fails for that one user, in production,
+    with no warning and no deploy having occurred. A client that omits it is not "deferring an edge
+    case"; it is shipping a defect on a timer whose fuse an administrator lights.
+  neitherClientMayINVENT:
+    - "NO client-side memory of 'the Organization I picked last time' that is applied without calling the selection route. The server holds the selection; a client-side copy is an ambient tenant in the one place the platform has none."
+    - "NO assumption that a successful login means a usable session, and NO assumption that it does not. Attempt the work; react to 422."
+    - "NO ordering assumption about the picker's array — sort locally if a stable presentation is wanted."
+    - "NO inference from the list's LENGTH about anything other than what to render."
+    - "NO placeholder name. display_name null renders the organization_id verbatim, in both clients."
+    - "NO retry loop on 404 from selection. A 404 is final for that identifier until the picker says otherwise."
+
+# ---------------------------------------------------------------------------
+# loggingProhibitions — MULTITENANCY_STANDARD.md §4
+# ---------------------------------------------------------------------------
+loggingProhibitions:
+  ruling: >-
+    THE organization_id IS THE TENANT IDENTIFIER, AND THESE ARE THE ONLY TWO ROUTES ON WHICH IT
+    APPEARS IN A REQUEST OR A RESPONSE BODY ANYWHERE IN DUDO. MULTITENANCY_STANDARD.md §4's carrier
+    rules therefore apply here and nowhere else on the wire.
+  prohibited:
+    - "No log line, metric label, trace attribute, error message or error detail may carry an organization_id from either route. The error envelope already cannot: notFound() takes no arguments, and detail() has no parameter for a value."
+    - "No analytics event, crash report or client-side breadcrumb in either client may carry it, and neither may carry the picker's list — a list of a person's Organizations in a third-party analytics pipeline is the CO1 disclosure, exported."
+    - "No display_name, once names exist, may appear in any log, metric or trace: it is tenant business-confidential data."
+  permitted: >-
+    X-Request-Id, as on every response. It is 22 characters, is the only identifier an error
+    carries, and is what makes a support conversation possible without asking a user to share their
+    data.
+
+# ---------------------------------------------------------------------------
+# audit
+# ---------------------------------------------------------------------------
+audit:
+  auditRow: false
+  ruling: >-
+    NEITHER OPERATION WRITES AN AUDIT ROW, and it is the same structural reason login does not:
+    audit_event is TENANT-SCOPED, and at the moment these operations run there is either no tenant
+    or the tenant is only just being chosen. There is no tenant-scoped handle to write through and
+    inventing one would be a fiction.
+  whatISLOSTSTATEDPLAINLY: >-
+    THERE IS NO RECORD ANYWHERE THAT A PRINCIPAL ENTERED AN ORGANIZATION, OR WHEN, OR HOW OFTEN.
+    "Who was in our books yesterday" is a question a business customer will ask and this contract
+    cannot answer it. This is the same gap login-v1 records as LG-4 and it is the same answer: it
+    needs a tenant-scoped record written AFTER selection succeeds — which is now a well-defined
+    moment, and this contract is the first thing in the platform that HAS such a moment. Recorded
+    as OS-5, and it is the most natural place in Dudo to put session-lifecycle auditing when the
+    Team Lead decides to.
+  whyNOTJUSTADDITNOW: >-
+    Because a write on this path is 5 more row-writes in the tenant database against a budget this
+    contract already moves (see freeTierImpact), and because an audit design decided as a side
+    effect of unblocking a deployment is an audit design nobody reviewed.
+
+# ---------------------------------------------------------------------------
+# events / mcp
+# ---------------------------------------------------------------------------
+events:
+  published: []
+  consumed: []
+  rationale: >-
+    NONE, checked against packages/contracts/registries/event-catalog.yaml rather than assumed. An
+    OrganizationEntered event is not reserved here: it would be a control-plane event about a
+    principal, published at a moment when the tenant scope is still being established, and naming
+    it would be this contract taking a position on the organization-structure slice's event
+    vocabulary without owning it.
+
+mcp:
+  tools: []
+  ruling: >-
+    NEITHER OPERATION IS EVER EXPOSED AS AN MCP TOOL, and like login-v1's this is a prohibition
+    rather than a deferral. An AI principal that could call the picker could enumerate the
+    Organizations a human principal belongs to — the CO1 value — and one that could call selection
+    could move a session between tenants. AI reaches business logic through the same authorized
+    Actions a human uses, inside a tenant a human's session already selected. It does not choose
+    the tenant.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — this contract CHANGES A PUBLISHED NUMBER
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  cost: "USD 0 / BD 0 per month. No new service, no new binding, no new table, no new index."
+  pickerCost: >-
+    ZERO WRITES. Three indexed point reads per call, against a daily row-READ allowance fifty times
+    larger than the write allowance. Called once per cold start and once per mid-session 422.
+  selectionCost: >-
+    3 CHARGED ROW-WRITES, 1 TRUE. Verified in control-plane-admission.ts's costing table, which
+    lists "Organization switch — 1 statement, 1 true, 3 charged, OVER-CHARGED BY 2 (200%)". The
+    UPDATE touches no indexed column, so D1 bills one row; it is charged SESSION_ROW_WRITES, three.
+    THE OVER-CHARGE IS DELIBERATE AND IS NOT TO BE OPTIMISED AWAY: a separate
+    SESSION_UPDATE_ROW_WRITES = 1 would be correct today and silently wrong the first time someone
+    indexes a column this statement sets, and §A.12 makes over-reserving the correct direction.
+  theNUMBERTHISCONTRACTCHANGES:
+    finding: >-
+      IT DEPENDS ON WHETHER THE SELECTION WAS AUTOMATIC, AND THAT SPLITS THE ANSWER IN TWO. The
+      Team Lead's estimate of 9 row-writes per cycle is correct for an EXPLICIT selection and is
+      pessimistic for the case every principal is in today.
+        AUTO-SELECTED (exactly one active membership): login 3 + selection 0 + revocation 3 = 6.
+          The identifier is written IN THE SESSION INSERT, so there is no second write and no
+          second reservation. THE 0018 ARITHMETIC IS UNCHANGED FOR THESE PRINCIPALS.
+        EXPLICITLY SELECTED (two or more memberships): login 3 + selection 3 + revocation 3 = 9.
+          Each mid-session Organization switch adds 3 more.
+    againstTheCeilings: >-
+      CONTROL_PLANE_DAILY_ROW_WRITES is 3,000 and PER_PRINCIPAL_DAILY_ROW_WRITES is 600.
+        At 6 per cycle: 500 full cycles a day platform-wide, 100 per principal — 0018's figures,
+          and the ones that hold today.
+        At 9 per cycle: 333 platform-wide, 66 per principal.
+      A REAL PLATFORM IS A MIX OF THE TWO and the true figure sits between them, moving toward 333
+      as principals acquire second memberships.
+    isITENOUGH: >-
+      FOR THE CLOSED BETA, YES, AND WITH MORE ROOM THAN THE PESSIMISTIC FIGURE SUGGESTED. Core's
+      own sizing is ten Organizations at ten principals logging in twice a day = 200 sessions.
+      Every one of those principals has exactly one membership today, so that is 1,200 row-writes
+      against 3,000 — 40% of the sub-ceiling, unchanged from 0018. Only if every principal
+      acquired a second membership would it become 1,800 and 60%.
+      THE MOST EXPENSIVE MISTAKE WOULD BE A CLIENT THAT SELECTS UNNECESSARILY — a redundant call
+      costs the full 3 row-writes because there is deliberately no already-selected
+      short-circuit — which is why clientObligations forbids it.
+    theTEAMLEADSHOULDUPDATE: >-
+      docs/operations/free-tier-register.md's system-allocation row, WHICH IS ACCURATE ABOUT LOGINS
+      AND IS NOW INCOMPLETE ABOUT SESSIONS. It reads "1,000 logins/day platform-wide, 200 per
+      principal, at 3 row-writes per session"; a login is still 3, but a SESSION now costs 6 or 9
+      depending on how its Organization was selected. THIS CONTRACT DOES NOT EDIT IT — docs/** is
+      the Team Lead's — and the correction is reported rather than assumed to be noticed.
+      The Team Lead's own note that they will correct the register is recorded here so that the
+      6-versus-9 split above is what gets written into it, rather than a flat 9.
+  atTheLimit: >-
+    SELECTION IS REFUSED WITH quota_exceeded AND A Retry-After, WHICH MEANS THAT AT THE CEILING A
+    USER WHO IS LOGGED IN CANNOT ENTER THEIR ORGANIZATION AND THE PRODUCT IS UNUSABLE FOR THEM
+    UNTIL THE UTC RESET. That is a materially worse failure than a refused logout (0018's case) or a
+    delayed write, and it is stated rather than left to be discovered. The picker keeps working, so
+    the user can see what they cannot enter. Recorded as OS-6.
+    AUTO-SELECTION NARROWS THIS AND DOES NOT CLOSE IT, WHICH IS WORTH STATING PRECISELY. A
+    single-membership principal never calls the writing route at all, so at the ceiling it is
+    refused at LOGIN — where the whole login is refused as one unit and nothing half-succeeds —
+    rather than stranded holding a valid session it cannot use. THE STRANDED STATE IS THEREFORE
+    REACHABLE ONLY BY A MULTI-MEMBERSHIP PRINCIPAL, which today is nobody. It becomes reachable the
+    day the first second membership is created, and it will not have been tested by then unless
+    qa-agent seeds one.
+
+# ---------------------------------------------------------------------------
+# testObligations — qa-agent's
+# ---------------------------------------------------------------------------
+testObligations:
+  theOracle:
+    - >-
+      THE CENTRAL TEST OF THIS CONTRACT. Selecting an Organization that EXISTS but the caller is
+      not a member of, and selecting an identifier that names NO Organization anywhere, produce
+      byte-identical responses — status, body, size, headers, everything but X-Request-Id — and the
+      same number of database statements. Three inputs including a suspended membership, one
+      observable answer.
+    - >-
+      THE ORDERING TEST. With the caller's per-principal daily budget exhausted, a NON-MEMBER still
+      receives 404 and never 429. A 429 here means reservation happened before validation and the
+      oracle is open.
+    - "A suspended ORGANIZATION returns 503 to an active member, and 404 to a non-member. The asymmetry is correct and must be asserted in both directions."
+  co1:
+    - "The picker accepts no parameter that could name another principal — asserted against the route's own signature, not only against its behaviour."
+    - "The grep: no module implementing either route is reachable from ActionContext, and platform/core/action/** and apps/** do not import the control-plane store."
+    - "Neither response body, in either client, reaches a log, a metric label, a trace attribute, or a third-party analytics pipeline."
+  tenancy:
+    - >-
+      A principal of Organization A selects A, then presents the SAME session and a request naming
+      B's records: it must not reach B. Selection changes the caller's own session and nothing else.
+    - >-
+      A caller-supplied Organization header, query parameter or body field on ANY OTHER route still
+      does not change tenancy. This contract's route must not have made that verification false —
+      it is the property the deployed system already demonstrates and the regression that would
+      matter most.
+    - "Two sessions of the same principal select different Organizations independently; neither observes the other's selection."
+  flow:
+    - "The deployed end-to-end path: login 200 -> picker 200 with at least one row -> select 200 -> a Customer Directory request that previously returned 422 now returns its ordinary answer. THIS IS THE ACCEPTANCE TEST FOR THE BLOCKER."
+    - "A revoked membership mid-session produces 422 on the next request, and the picker then omits that Organization."
+    - "Selecting the same Organization twice succeeds both times."
+    - "GET on the singular path and POST on the plural path are both 404, not 405."
+  autoSelection:
+    - "A principal with EXACTLY ONE active membership logs in and its first ordinary business request succeeds with no picker call and no selection call. This is the acceptance test for the deployed blocker."
+    - "That login writes 3 row-writes and NOT 6 — the identifier is in the INSERT. Assert the reservation count, not only the outcome."
+    - "A principal with TWO active memberships logs in and is NOT auto-selected: the next business request is 422, and neither membership was chosen by any tie-break."
+    - "A principal with ZERO active memberships logs in successfully and is not auto-selected; the picker returns data: []."
+    - "A principal whose single active membership names a SUSPENDED Organization logs in successfully, is not auto-selected, and receives 422 — the login is not failed and the suspended Organization is not selected."
+    - "A principal with one ACTIVE and one SUSPENDED membership IS auto-selected into the active one — 'exactly one ACTIVE' is the condition, not 'exactly one row'."
+    - "THE CLIFF: a principal that was auto-selected gains a second membership, and its next login is unselected. Assert the transition, because it is the failure that will otherwise be found in production."
+    - "The membership read happens AFTER credential verification, never before. A wrong password must not cause a membership lookup — that would reopen the equal-work property credential-verifier.ts exists to hold."
+    - "The stored selection-mode value is 'automatic' after an auto-selected login and 'explicit' after a selection call, and it appears in NO response body on any route."
+  vacuousPasses: >-
+    STATE ANY TEST THAT PASSES ONLY BECAUSE THE SEEDED PRINCIPAL BELONGS TO EXACTLY ONE
+    ORGANIZATION — AND WITH AUTO-SELECTION THAT IS NOW MOST OF THIS CONTRACT. The picker, the
+    switch path, the 422 flow, the cliff and the stranded-at-quota case are ALL unreachable for a
+    one-membership principal, which is every principal on the deployed platform. A SECOND SEEDED
+    ORGANIZATION AND A SECOND MEMBERSHIP ARE REQUIRED TO TEST THIS CONTRACT AT ALL, and a report
+    that does not say whether they existed has tested the auto-selection path only and must say so.
+
+# ---------------------------------------------------------------------------
+# versioning
+# ---------------------------------------------------------------------------
+versioning:
+  contractVersion: 1
+  changeClass: additive
+  note: >-
+    First version. The two routes do not exist, so nothing can break; the two SessionResolver
+    methods do, so their behaviour is fixed by what runs.
+  breaking:
+    - "Moving either path, or changing either method."
+    - "Adding a required field to the selection body."
+    - "Making the three not_found cases distinguishable — which is also a platform-wide disclosure defect, not merely a version change."
+    - "Specifying, or changing, the picker's ordering — API_STANDARD.md §6 counts pagination and sort semantics as breaking, which is why v1 specifies none."
+    - "Reversing the validate-then-reserve order — a security regression that no version number makes acceptable."
+  additive:
+    - "AUTO-SELECTION ITSELF, which changes no shape in either contract: no field is added to the login request or response, none to either route here, and the selection-mode column is on no wire. A correctly written client — attempt the work, react to 422 — needs no change at all. That is the property that made it safe to add after login-v1 was authored."
+    - "display_name beginning to carry values. The field is already contracted as nullable, so nothing changes shape the day Organization names exist."
+    - "Real pagination on the picker: a new optional request field plus a new response field."
+    - "A rate limit on either route (OS-1) — a new error code for a new condition."
+  theVersioningGAP: >-
+    THESE PATHS CARRY NO VERSION SEGMENT, exactly as the login paths do not, so API_STANDARD.md
+    §6's /api/v2 mechanism does not exist for them either. This is login-v1's LG-6 and this contract
+    inherits it rather than restating a second answer to it.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  OS-1:
+    question: "Neither route is rate limited. Selection WRITES, so a caller holding one valid session can spend control-plane write budget three row-writes at a time until its per-principal daily ceiling stops it."
+    assumptionMade: "Specified as a requirement of the route class and NOT designed here. The per-principal ceiling bounds the damage to one principal's own budget, which is why this is a gap rather than a hole, but a limiter is the control that should stop it first."
+    decides: "Team Lead; the mechanism is Core's"
+  OS-2:
+    question: "A suspended member is told 'not found' rather than that their membership is suspended."
+    assumptionMade: "Transcribed from Core and kept. One answer is one branch; a second branch is a second thing an edit can get wrong. A real user will hit this and their administrator will have to explain it."
+    decides: "Team Lead / product"
+  OS-3:
+    question: "The picker truncates silently at 100 memberships, with no field by which a client could detect it."
+    assumptionMade: "Contracted as it behaves, with no lying next_cursor. Inherited from Core, not introduced here. Real pagination is additive."
+    decides: "Team Lead; not urgent at closed-beta scale"
+  OS-4:
+    question: "An administrative or support variant of the picker — 'which Organizations does this user belong to' — will be asked for."
+    assumptionMade: "Out of scope permanently for this contract. It is exactly the CO1 disclosure and needs its own contract and its own argument against co1.soTHEROUTEISBOUNDBY."
+    decides: "Team Lead"
+  OS-5:
+    question: "Nothing records that a principal entered an Organization. This contract creates the first well-defined moment at which such a record could be written."
+    assumptionMade: "Not added. It is 5 tenant row-writes against a budget this contract already moves, and an audit design decided as a side effect of unblocking a deployment is one nobody reviewed."
+    decides: "Team Lead / product"
+  OS-6:
+    question: "At the daily control-plane ceiling, selection is refused and a logged-in user cannot enter their Organization at all until the UTC reset."
+    assumptionMade: "Stated as a consequence, not mitigated. This contract makes a mandatory WRITE stand between a valid credential and any use of the product, which is a materially worse exhaustion failure than 0018's refused logout."
+    decides: "Team Lead"
+  OS-7:
+    question: "seed-principal.ts accepts an operator-supplied organizationId of arbitrary shape, while this contract constrains organization_id to ^[A-Za-z0-9_-]{8,64}$."
+    assumptionMade: "The pattern holds and the DEPLOYED Organization identifier must be checked against it before this contract is accepted. If it does not match, the row is re-seeded — the grammar is not relaxed to fit one hand-typed value."
+    decides: "Team Lead, and it is a pre-acceptance check rather than a decision"
+  OS-8:
+    question: "Auto-selection condition 2 — recording that a selection was automatic — needs a column the session table does not have. That is a control-plane migration, not a code change."
+    assumptionMade: "Specified as a requirement with its two values and its no-index constraint; the DDL and the column name are core-agent's. The contract does NOT make the column readable on the wire, so it can be added without any client change."
+    decides: "Team Lead approves the migration; core-agent writes it"
+  OS-9:
+    question: "Auto-selection makes a principal's login behaviour depend on membership data an administrator controls, and it lets a stolen credential reach tenant data in one request instead of two."
+    assumptionMade: "Accepted, as the Team Lead ruled. The second residual is thin — an attacker could simply call selection, and the picker would name the target. The first is a real support burden and is why the cliff is written into the contract rather than left in a changelog."
+    decides: "Team Lead has decided; recorded so the residual is visible"
+  OS-10:
+    question: "With auto-selection, every principal on the deployed platform bypasses the picker, the 422 flow, the switch path and the stranded-at-quota case. None of it will be exercised by any test that uses the current seed."
+    assumptionMade: "A second seeded Organization and a second membership are stated as a prerequisite for testing this contract at all, and a report that lacks them must declare the coverage it did not have."
+    decides: "qa-agent executes; Team Lead provides the seed"

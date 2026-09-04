@@ -40,6 +40,12 @@ and response shapes; and a `*.contract.yaml` carrying the Action definitions, pe
 tenancy, audit, HTTP binding and free-tier impact. **A type alone is not a contract**, which
 is why the shapes file is never the whole set.
 
+`core/identity` uses **two** files rather than three — the reasoning lives in its
+`*.contract.yaml` — and says so in its own header, so a reader does not conclude a `README.md`
+was lost. It is also the one set that describes **pre-authentication entry points rather than
+Actions**: no permission, no scope, no `ActionContext`, no tenant. That is not a gap in the
+set; it is what `docs/decisions/0014` §B's admission rule is.
+
 `core/**` and `apps/**` differ in what they may contain, not in form. A Core contract covers
 an object in `registries/core-object-registry.yaml` under a `core.*` permission, and is served
 from Core's flat reserved API namespace. An App contract covers the App's own entities and is
@@ -52,7 +58,9 @@ concept — `Core stays small` is a boundary this directory records rather than 
 | Contract | Version | Status |
 |---|---|---|
 | `apps/customers` — Customer Directory | 1 | **Proposed.** Awaiting Team Lead agreement; no consumer implements against it yet. |
-| `core/organization` — Business Read | 1 | **Proposed.** Awaiting Team Lead agreement. Resolves `business_id` to a name and lists a principal's authorized Businesses — the gap `app-agent` found while building against the Customer Directory. Closes the *contract* gap only: no Business name is stored anywhere yet and the authorized business set is empty for every principal, both of which belong to the organization-structure slice. See its `README.md` §2 before reporting it as unblocking anything. |
+| `core/organization` — Business Read | 1 | **Proposed.** Awaiting Team Lead agreement. Resolves `business_id` to a name and lists a principal's authorized Businesses — the gap `app-agent` found while building against the Customer Directory. Closes the *contract* gap only: no Business name is stored anywhere yet and the authorized business set is empty for every principal, both of which belong to the organization-structure slice. See its `README.md` §2 before reporting it as unblocking anything. **Revised 2026-09-04:** the resolve route moved from `GET` with repeated query parameters — a form Core refuses outright, so the Action could not succeed for more than one identifier — to `POST` with a JSON body. Shapes unchanged. |
+| `core/identity` — Login | 1 | **Proposed.** Awaiting Team Lead agreement. **This one documents an implementation that preceded it** — `platform/core/identity/login.ts` was built with no contract, out of order under `.claude/rules/workflow.md` §3, and two client agents had to guess the field names from source. It is a transcription, not a specification: where it and Core disagree, Core is what runs. Two files, not three, and it describes pre-authentication entry points rather than Actions. Carries the **normative** client-side KDF parameters and `normalizeIdentifier` definition that both clients must implement byte-identically — including the **NFC** password rule (amended into `0015` §D on 2026-09-04), which is the one rule in any Dudo contract that **Core cannot enforce**, because Core never receives a password. Its only enforcement is shared client test vectors. Note the deliberate asymmetry: **NFC** for the password, **NFKC** plus ASCII-only case folding for the email. **A 200 from login is not a usable session** — see the row below. |
+| `core/identity` — Organization selection | 1 | **Proposed.** Awaiting Team Lead agreement, and it **unblocks the deployed platform**: a seeded principal logs in and every business request returns 422 `failed_precondition`, because `selectOrganization` and the Organization picker exist as `SessionResolver` methods with **no HTTP route**. Selection is mandatory for every principal, not only multi-Organization ones. **Mixed provenance** — the two resolver methods are transcribed, the routes and wire shapes are new, and it requires a **third route class** (authenticated at the session level, no `ActionContext`, no tenant) that does not exist yet. Publishes the one route in Dudo where a caller names a tenant. |
 
 ## Form, and what is not yet decided
 

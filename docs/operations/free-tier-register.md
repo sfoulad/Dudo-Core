@@ -55,6 +55,65 @@ official source, not the date usage was measured.
 | **GitHub Packages** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not publish packages. Not verified in detail because it is prohibited, not merely unused | Team Lead | 2026-09-01 (prohibited) |
 | **GitHub Codespaces** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not use. Prohibited by `0008` | Team Lead | 2026-09-01 (prohibited) |
 
+> ## ⚠ THE DURABLE OBJECT BUDGET IS SHARED, AND THAT IS A HAZARD, NOT AN ALLOWANCE
+>
+> Added 2026-09-04 from `0017`. The Durable Objects row above states **100,000 requests/day**
+> correctly. What it did not state is that the figure is **account-wide and shared**, and that the
+> sharing has a specific failure mode.
+>
+> `0013`'s coordinator serves the **authenticated** path. A durable pre-auth rate limiter would
+> serve the **unauthenticated** one. A naive one-DO-call-per-request limiter therefore lets **an
+> unauthenticated flood exhaust the allowance the authenticated path depends on** — the rate
+> limiter becomes the denial-of-service vector it was added to prevent.
+>
+> **Consequence for §6a:** a free-tier impact check on a new Durable Object may not stop at "does
+> it fit inside 100,000". It must state **which other consumer it shares with, and what happens to
+> that consumer at the limit.** "Add a DO" is not a design.
+>
+> `0017` defers the durable limiter for exactly this reason. The deferral is not a scheduling
+> convenience — the capacity question is genuinely unanswered.
+
+> ## ⚠ THE LOGIN BUDGET IS A CYCLE, NOT A LOGIN
+>
+> Added 2026-09-04 from `0018`, measured by `core-agent` rather than estimated.
+>
+> `0014` §C's headline figure is **1,000 logins/day platform-wide** (3,000 control-plane row-writes
+> at 3 per login) and 200 per principal. **Read alone, that number misleads by half.**
+>
+> **Logout costs 3 row-writes too.** A `DELETE` removes the row from every index, so the table row,
+> the primary key and `session_by_principal` are each written — identical to a login.
+>
+> **CORRECTED 2026-09-05: A FULL SESSION COSTS 6 OR 9, DEPENDING ON HOW THE ORGANIZATION WAS
+> SELECTED.** Selecting is **not optional** — `login.ts:219` records that a session is created
+> `organization-not-selected` and every business Action answers `failed_precondition` until a
+> selection is made (`0021`).
+>
+> **A full session costs 9 — login + select + logout — with no exception.**
+>
+> | | Charged per full cycle | Platform/day | Per principal/day |
+> |---|---|---|---|
+> | Login only (`0014` §C as written) | 3 | 1,000 | 200 |
+> | Login + logout (`0018`) | 6 | 500 | 100 |
+> | **Full session (`0021`)** | **9** | **333** | **66** |
+>
+> Selection is always a separate request: `0021` records that server-side auto-selection was ruled
+> and then **withdrawn** — a client with one Organization may skip *showing a picker*, but the
+> request is still made and the server still has no fallback.
+>
+> **This number has been published five times in two days: 1,000 → 500 → 333 → 6-or-9 → 333.**
+>
+> The first three corrections were measurement. **The last two were not.** They were one unsettled
+> design question published twice as though it were arithmetic.
+>
+> **The rule this yields, and it is the useful part: a number that depends on an undecided design is
+> not a number yet.** Publishing it as one converts an open question into apparent fact, and the
+> eventual correction then looks like new evidence when it is really the design finally settling.
+> Before quoting a figure from this register, check whether the behaviour it counts is decided.
+>
+> Verified in the harness: revocation reserves exactly 3, while a forged credential, an absent
+> cookie, an unknown session and a replay each reserve **zero** — so failed logout attempts cannot
+> be used to burn the budget.
+
 > ## ⚠ D1 DAILY ROW LIMITS ARE ENFORCED, AND EXCEEDING THEM IS AN OUTAGE — NOT A BILL
 >
 > Verified 2026-09-02 against `d1/platform/pricing/`. **These limits are not on the `limits/`

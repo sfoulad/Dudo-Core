@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-selection:1",
+  "title": "Organization selection — contract v1",
+  "description": "The request and response shapes of the two operations that stand between a successful login and a usable session: listing the Organizations a principal may enter, and selecting one. SHAPES ONLY. The rulings, the error semantics, the ordering constraint that keeps the budget from becoming an oracle, and the CO1 argument are in organization-selection-v1.contract.yaml, and the two are normative together.\n\nWHY THIS CONTRACT EXISTS, AND IT IS NOT A FUTURE CONCERN. Dudo is deployed. A seeded principal logs in successfully and every business request then returns 422 failed_precondition, because platform/core/identity/session-principal-resolver.ts maps a session with no Organization selected onto failedPrecondition() at authentication. SessionResolver.selectOrganization and SessionResolver.listEnterableOrganizations both exist and NEITHER HAS AN HTTP ROUTE. Selection is mandatory for every principal regardless of how many Organizations they belong to, so this is not a multi-Organization edge case — it blocks every principal on the platform.\n\nMIXED PROVENANCE, MARKED PER OPERATION. The two SessionResolver methods exist and are transcribed here, not designed: platform/core/identity/session-resolution.ts:432-491 is the authority for their behaviour, and where it and this file disagree, it wins. The HTTP routes, the wire shapes and the route class that carries them DO NOT EXIST and are specified here as new work for core-agent.\n\nTHESE ARE AUTHENTICATED ROUTES AND THEY ARE NOT ACTIONS. The principal is authenticated; it merely has no tenant. So there is no ActionContext, no tenant-scoped store, no permission and no scope — and equally these are NOT pre-authentication entry points, because a valid session is required. docs/decisions/0014 §B's registry is a closed set of five and this contract does not touch it. See the contract's routeClass section, which is the load-bearing part of this specification.\n\nONE CONTRACT SET, TWO CLIENTS. Both clients hit this path on every cold start, so a divergence here is a divergence in whether the application works at all (docs/decisions/0016).\n\nNOT EXECUTED. No JSON Schema implementation exists in this repository (ADR 0009). These schemas are normative and HAND-CHECKED and must not be reported as validated.",
+  "$defs": {
+
+    "organizationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "An Organization the authenticated principal may enter. Opaque, and the ONLY tenant identifier that ever appears on a Dudo wire.\n\nplatform/core/identity/session-resolution.ts:21 states the property this pattern sits underneath: 'selectOrganization is the only place in the platform where a caller names a tenant.' Everywhere else, MULTITENANCY_STANDARD.md §3 forbids deriving a tenant from anything the caller controls, and Core enforces that by withholding the value — an Action handler is never given an organization identifier at all. This field is the single deliberate exception, and it is a HINT that is validated against membership, never an assertion that is trusted. See the contract's theHintRuling.\n\nTHE PATTERN MATCHES THE PLATFORM'S GENERATED IDENTIFIER GRAMMAR: 128 bits of base64url at the generated width (platform/core/kernel/ids.ts), 22 characters, against a contract maximum of 64. It is the same definition as businessId in urn:dudo:schema:business-read:1 and urn:dudo:schema:customer-directory:1, and it is now the THIRD restatement of that grammar in this contract set. All three must stay identical; they are duplicated because no URN resolver exists (AS1), and a pattern changed in one file and not the others is a contract defect of the same class as cross-client drift.\n\nCHECK THIS AGAINST THE DEPLOYED DATA BEFORE ACCEPTING THIS CONTRACT. platform/core/identity/tools/seed-principal.ts:288 generates a 22-character base64url identifier BY DEFAULT but accepts an operator-supplied one of arbitrary shape. If the Organization already seeded into the live control plane does not match this pattern, the row is what changes — by re-seeding — not the pattern. Relaxing an identifier grammar to fit one hand-typed value would put an unconstrained caller-supplied string on the one route that names a tenant.\n\nIT IS NOT A SECRET AND IT IS NOT A CAPABILITY. Holding this value grants nothing: every use of it is validated against the caller's own membership on every call. It is nevertheless the tenant identifier, so MULTITENANCY_STANDARD.md §4's carrier rules apply — see the contract's loggingProhibitions."
+    },
+
+    "organizationDisplayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "description": "The name the user knows this Organization by.\n\nWHEREVER THIS APPEARS IT IS NULLABLE, AND TODAY IT IS ALWAYS NULL. platform/core/identity/control-plane-store.ts's OrganizationRecord is an identifier and a status and nothing else, and it declines a name column in terms: the organization-structure slice owns the Organization data model, and adding a display name there 'would be deciding Core's shape as a side effect of unblocking a login'. It names this exact consequence: 'an Organization picker built on this port can list identifiers and not names.'\n\nTHE FIELD IS CONTRACTED ANYWAY, for the reason business-read-v1 contracted display_name before anything could produce it: a nullable response field costs nothing today and is ADDITIVE the day it starts carrying values, whereas leaving it uncontracted makes each client invent its own name source and its own fallback. That drift is what this contract set exists to prevent.\n\nCLASSIFICATION: business-confidential once it carries a value. Maximum 200 characters, matching businessDisplayName and the Customer display_name so that names rendered side by side in one interface share one bound."
+    },
+
+    "organizationDisplayNameOrNull": {
+      "oneOf": [
+        { "$ref": "#/$defs/organizationDisplayName" },
+        { "type": "null" }
+      ],
+      "description": "The Organization's name, or null.\n\nNULL HAS EXACTLY ONE MEANING: no name is recorded for this Organization. It never means 'you may not see the name' and never means 'this Organization does not exist' — nothing in this contract can say the second thing, by construction.\n\nPRESENT AND NULL, NEVER ABSENT. Absent-versus-null is a distinction two clients resolve differently, and 'the web app shows a blank and the iPhone app shows nothing' is exactly the divergence the one-contract rule exists to prevent.\n\nNORMATIVE CLIENT RENDERING, BINDING ON BOTH CLIENTS: when this is null the client renders the organization_id VERBATIM. Not a blank, not a dash, not 'Unnamed Organization', not a locale string, and not an index like 'Organization 1'. This is the identical rule business-read-v1 states for a nameless Business, and it is stated again rather than cross-referenced because this is the FIRST screen a user sees after logging in — today, on the deployed system, an Organization picker showing raw identifiers is the entire experience, and two clients inventing two different placeholders would be visible on day one."
+    },
+
+    "enterableOrganization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id", "display_name"],
+      "description": "One row of the Organization picker.\n\nTWO FIELDS, AND THE NARROWNESS IS THE POINT. There is no status, no role, no member count, no created_at, no last-entered timestamp, no settings and no 'is_current' flag. Every row in this list is an ACTIVE membership in an ACTIVE-or-suspended Organization the principal may attempt to enter, so a status field would be either constant or a disclosure.\n\nNO ROLE FIELD, DELIBERATELY. OrganizationMembershipRecord carries a role (docs/decisions/0019), and putting it here would publish the caller's authority level on a pre-tenant path, before any permission has been evaluated, in a response the client would then be tempted to make authorization decisions from. Authorization is decided in Core on every call; UI-level hiding is presentation, never security. A client that needs to know what it may do asks after selecting.",
+      "properties": {
+        "organization_id": { "$ref": "#/$defs/organizationId" },
+        "display_name": { "$ref": "#/$defs/organizationDisplayNameOrNull" }
+      }
+    },
+
+    "listEnterableOrganizationsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data"],
+      "description": "The Organizations this principal may enter.\n\nNO next_cursor, AND ITS ABSENCE IS HONEST RATHER THAN TIDY. platform/core/identity/session-resolution.ts caps the underlying read at MAX_ENTERABLE_ORGANIZATIONS = 100 and returns a plain array, so there is no cursor to return and nothing that could produce one. A next_cursor field that was always null would be a field that starts lying the first time a principal exceeds 100 memberships. Adding real pagination later is ADDITIVE (a new response field, plus a new optional request field); adding a null placeholder now would not be.\n\nTHE TRUNCATION IS THEREFORE SILENT AND UNDETECTABLE BY A CLIENT, which is a defect and is recorded as OS-3 rather than hidden behind the word 'limit'. At 100 memberships a principal simply stops seeing Organizations 101 and beyond, with no indication. This is inherited from Core, not introduced here, and it is not a reason to remove the bound: an unbounded read on a single-threaded database is every Organization's latency.\n\nAN EMPTY ARRAY IS A VALID, REACHABLE RESPONSE AND IS NOT AN ERROR. It means the principal holds no active membership in any Organization: a user whose access was revoked, a newly created principal nobody has added to anything, or every membership suspended at once. Both clients MUST render it as a first-class explained state — 'your account is not a member of any organization, contact your administrator' — and NEVER as a loading failure, a login failure, or an empty screen. Getting this wrong strands a real user with no way to understand why.\n\nORDER IS NOT SPECIFIED IN v1 AND CLIENTS MUST NOT DEPEND ON IT. Core builds the array by filtering the store's membership read, whose ordering is not stated by any port or migration, so a contracted order here would be a promise this contract cannot keep. A client that wants a stable presentation sorts by organization_id itself. Specifying an order later is a change to pagination and sort semantics and is therefore BREAKING under API_STANDARD.md §6 — it is left unspecified deliberately rather than pinned to whatever the current adapter happens to do.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/enterableOrganization" }
+        }
+      }
+    },
+
+    "selectOrganizationInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id"],
+      "description": "The body of the selection request. EXACTLY ONE FIELD.\n\nadditionalProperties IS false AND THIS IS THE ONE INPUT SCHEMA IN DUDO WHERE THAT MATTERS MOST, because this is the one route that accepts a tenant identifier at all. There is no principal_id, no tenant_id, no role, no business_id, no scope, no 'as' or 'on_behalf_of', and no expiry override — not undocumented, REJECTED with invalid_argument. In particular there is no field by which a caller could select an Organization FOR ANOTHER PRINCIPAL: the principal is derived from the session credential, server-side, and this body cannot name one.\n\nTHE VALUE IS A HINT AND IS NEVER TRUSTED. docs/decisions/0014 §C.6, transcribed: it is validated against the caller's own membership before anything is reserved or written, and a caller naming an Organization it does not belong to is INDISTINGUISHABLE from one naming an Organization that does not exist. See the contract's theHintRuling — that indistinguishability is the broadest anti-oracle property in the platform, because unlike every other one it is not confined to a single tenant.",
+      "properties": {
+        "organization_id": { "$ref": "#/$defs/organizationId" }
+      }
+    },
+
+    "selectOrganizationOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "description": "The selection succeeded. The session row now carries the Organization and the caller's next ordinary request will be authorized inside it.\n\nIT DOES NOT ECHO THE SELECTION, AND THAT IS DELIBERATE RATHER THAN MINIMAL. Echoing organization_id would invite a client to treat this response as the record of what is selected. It is not: the session row is, the selection is re-validated against membership on EVERY subsequent request (session-resolution.ts ruling 2), and a membership revoked one second later silently returns the session to unselected. A client that cached this response as truth would show a tenant the user can no longer enter.\n\nTHERE IS NO Set-Cookie ON THIS RESPONSE AND THE CREDENTIAL DOES NOT CHANGE. The same session identifier remains valid; only the row behind it moved. A client must not expect a new credential, must not clear the old one, and must not re-authenticate.\n\nNO NEW EXPIRY. Selection does not extend the session: expiry is absolute and nothing extends it (session-resolution.ts ruling 3).",
+      "properties": {
+        "status": {
+          "const": "ok",
+          "description": "The literal string 'ok'. Deliberately the same success body the pre-authentication endpoints render, so the platform has one success shape for an operation with nothing to return, rather than two that differ for no reason."
+        }
+      }
+    }
+  }
+}

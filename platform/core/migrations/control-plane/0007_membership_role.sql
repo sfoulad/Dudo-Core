@@ -1,0 +1,110 @@
+-- Control-plane migration 0007 — the membership role. docs/decisions/0019, closing AZ5.
+--
+-- Read `0001_principal.sql` first for the shared header of this directory, and
+-- `0003_organization_membership.sql` for the table this alters and for the comment that
+-- deliberately refused to add this column until there was a decision to point at.
+--
+-- IT BELONGS TO `DB_CONTROL`. `wrangler.jsonc` routes this directory there and does not recurse;
+-- a control-plane migration saved one directory too high is applied to the TENANT database,
+-- silently and successfully. Confirm which database this went to.
+--
+-- NOT APPLIED. There is no migration runner in this repository (CLOUDFLARE_STANDARD.md CF5) and
+-- no agent may run a migration against real data (.claude/rules/security.md §7).
+--
+-- ROLLBACK PATH (CLOUDFLARE_STANDARD.md §4 rule 10): SQLite supports `ALTER TABLE ... DROP
+-- COLUMN` for a column with no index and no constraint dependency, so the rollback is
+--   ALTER TABLE organization_membership DROP COLUMN role;
+-- and its effect is that every principal is refused every Action again — the state this migration
+-- exists to leave. It destroys no membership and signs nobody out. If DROP COLUMN is refused by
+-- the engine version in use, the equivalent is `UPDATE organization_membership SET role = NULL`,
+-- which denies just as completely and leaves the column in place.
+--
+-- =============================================================================================
+-- THIS FILE IS NOT IDEMPOTENT, AND THAT IS A DEPARTURE FROM THIS DIRECTORY'S CONVENTION.
+-- =============================================================================================
+--
+-- Every other migration here says "FORWARD-ONLY and idempotent, so a partially-completed run is
+-- re-runnable" and backs it with `CREATE TABLE IF NOT EXISTS`. **SQLite HAS NO
+-- `ADD COLUMN IF NOT EXISTS`**, so this file cannot make that claim and does not.
+--
+-- VERIFIED AGAINST A REAL ENGINE rather than assumed: re-running the statement below fails with
+-- `duplicate column name: role`. That is a LOUD, SAFE FAILURE — nothing is written, nothing is
+-- corrupted, and no row changes — but it IS a failure, and a re-run of the whole directory after
+-- a partial application will stop here rather than skipping past.
+--
+-- IN PRACTICE `wrangler d1 migrations apply` RECORDS APPLIED MIGRATIONS AND WILL NOT RE-RUN THIS
+-- ONE. The note is here for the operator who applies a file by hand, which is exactly what the
+-- seeding path already asks them to do.
+--
+-- =============================================================================================
+-- WHY A ROLE COLUMN AND NOT A GRANT TABLE — row-writes, and under 0008 it decides
+-- =============================================================================================
+--
+-- `0003_organization_membership.sql` recorded the refusal that made this decision possible:
+--
+--   "NO ROLE, PERMISSION, OR GRANT. docs/decisions/0007 records the logical permission model but
+--    does not say where a principal's grants are stored... A `role` column here would settle it
+--    in a migration, as a side effect of unblocking a login."
+--
+-- That refusal was right, and it is why the decision now exists as `0019` instead of as a column
+-- somebody found later. The comment is updated to point here rather than deleted: the reasoning
+-- should outlive the thing it was blocking.
+--
+-- A `principal_permission` table costs ONE ROW PER PERMISSION PER PRINCIPAL PER ORGANIZATION —
+-- fifteen rows to grant and fifteen to revoke — against the 3,000 row-writes/day control-plane
+-- sub-ceiling that `0018` has just shown is tighter than it looks once logout is counted. THIS
+-- COLUMN COSTS ZERO ADDITIONAL ROWS: it sits on a row that already exists and is already read
+-- during Organization selection. `ORGANIZATION_MEMBERSHIP_ROW_WRITES` STAYS AT 2, because no
+-- index is added and the row count does not change.
+--
+-- =============================================================================================
+-- NULL DENIES, AND THERE IS DELIBERATELY NO DEFAULT
+-- =============================================================================================
+--
+-- The column is NULLABLE with NO DEFAULT, so every membership row that already exists gets NULL
+-- and continues to grant nothing. A `DEFAULT 'member'` would have silently granted read access to
+-- every existing membership at the moment of migration — a privilege change performed by a schema
+-- change, which is the class of thing `0007` rule 9's audit requirement exists to make visible.
+--
+-- AN UNRECOGNISED VALUE ALSO DENIES, and that is enforced in code rather than here. The adapter
+-- collapses any value outside the union to NULL on read (`identity/adapters/d1/
+-- d1-control-plane-store.ts`), so a row written by a future migration this build does not
+-- understand denies rather than erroring. The CHECK below stops such a value being written by
+-- THIS build; the read-side collapse is what protects a build that is older than the data.
+--
+-- THE CHECK CONSTRAINT DOES NOT VALIDATE EXISTING ROWS. SQLite applies a CHECK added by
+-- ADD COLUMN to subsequent writes only. Every existing row is NULL, which the constraint permits,
+-- so there is nothing for it to have caught — stated because "the constraint is on the column"
+-- and "the constraint has been checked against the data" are different claims.
+--
+-- =============================================================================================
+-- WHAT THIS DOES NOT DECIDE, AND MUST NOT BE READ AS DECIDING
+-- =============================================================================================
+--
+-- HOW A ROLE IS CHANGED AFTER SEEDING. There is no UI, no Action, and no audited path. `0007`
+-- rule 9 requires permission changes to be audited, and AN OPERATOR EDITING THIS COLUMN BY HAND
+-- PRODUCES NO AUDIT RECORD — the same gap `0018` recorded for operator-run seed SQL. A
+-- role-change Action must carry an audit write when it is built. It is not built here and must
+-- not be smuggled in.
+--
+-- PER-PRINCIPAL OVERRIDES, and roles beyond these two. `0019` defers both.
+--
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008).
+--   ALLOWANCES CONSUMED: d1-storage only. No new table, no new index, no new query.
+--   STORAGE: five or six bytes per row. At the closed beta's few hundred membership rows this is
+--   under 2 KB against a 500 MB per-database ceiling.
+--   ROWS READ: unchanged. The column is returned by the two membership SELECTs that already run;
+--   adding a column to a projection reads no additional row.
+--   ROWS WRITTEN: unchanged at 2 per membership. No index is added.
+--   AT THE LIMIT: nothing to degrade.
+--   COST: USD 0 / BD 0 per month.
+
+ALTER TABLE organization_membership
+  ADD COLUMN role TEXT CHECK (role IS NULL OR role IN ('owner', 'member'));
+
+-- NO INDEX ON `role`, and it is not an omission. There is no query that filters by role: the
+-- column is read as part of the membership row that is already fetched by primary key during
+-- Organization selection. An index would serve "who are the owners of this Organization" — an
+-- administration question with no surface to ask it from — and would cost a third row-write on
+-- every membership write. Add it with the slice that builds role administration, and raise
+-- ORGANIZATION_MEMBERSHIP_ROW_WRITES to 3 in the same change.
