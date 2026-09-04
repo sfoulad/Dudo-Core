@@ -283,6 +283,49 @@ export function buildBusinessSetSuite(): Suite {
     }
   });
 
+  suite.test(
+    'RECORDED LIMIT: the authorized-business list is UNPAGED, so above 100 is unreachable',
+    () => {
+      // ===========================================================================================
+      // MEASURED AGAINST THE LIVE DEPLOYMENT 2026-09-05, then written down here so it is not
+      // rediscovered as a support ticket.
+      // ===========================================================================================
+      //
+      // `GET /api/v1/businesses` returned `"next_cursor": null` for a principal whose set fits on
+      // one page — and `core-agent` reports it is ALWAYS null, because paging would need a stable
+      // offset into a set `0020` deliberately rebuilds per request. There is nothing to offset
+      // into.
+      //
+      // Two bounds therefore compose into a ceiling neither of them states:
+      //
+      //   MAX_AUTHORIZED_BUSINESSES = 500   how many the set can hold  (0020)
+      //   page_size maximum         = 100   how many one page returns  (business-read-v1)
+      //
+      // A principal authorized over more than 100 Businesses CANNOT REACH THE REST — not by
+      // paging, because there is no cursor, and not by asking for more, because page_size is
+      // capped. No tenant is near this at closed-beta scale, and the failure direction is safe
+      // (a tenant loses sight of its OWN Businesses; it can never see another's). But it is a
+      // real truncation and it is silent: the response looks complete, because `next_cursor:
+      // null` is exactly what "there is no more" looks like.
+      //
+      // ASSERTED AS THE RELATIONSHIP BETWEEN THE TWO CONSTANTS, which is what is checkable here.
+      // The `next_cursor` behaviour itself is HTTP-level and there is no HTTP suite for the core
+      // routes yet — stated rather than faked with a weaker assertion in the wrong layer.
+      const PAGE_SIZE_MAXIMUM = 100;
+      assertEqual('the set is bounded at 500', MAX_AUTHORIZED_BUSINESSES, 500);
+      assertTrue(
+        'and one page cannot return the whole set, so the gap is real rather than theoretical',
+        PAGE_SIZE_MAXIMUM < MAX_AUTHORIZED_BUSINESSES,
+        `page maximum ${String(PAGE_SIZE_MAXIMUM)} vs set bound ${String(MAX_AUTHORIZED_BUSINESSES)}`,
+      );
+      assertEqual(
+        'the unreachable range is Businesses 101 through 500',
+        MAX_AUTHORIZED_BUSINESSES - PAGE_SIZE_MAXIMUM,
+        400,
+      );
+    },
+  );
+
   suite.test('RECORDED: the bound is the STORE\'s to enforce, not the directory\'s', () => {
     // Asserted so the dependency is written down rather than discovered by whoever writes the
     // second `TenantScopedStore`. The failure direction is safe either way — truncation loses a

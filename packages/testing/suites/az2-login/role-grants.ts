@@ -42,7 +42,20 @@ import {
 } from '../../../../platform/core/identity/principal-authorization-source.ts';
 import { expectOk } from '../../harness/runner.ts';
 
+/**
+ * UPDATED 2026-09-05 FOR `docs/decisions/0023`, WHICH ADDED `core.business.read` TO BOTH ROLES.
+ *
+ * These two cases went red when `0023` landed. They were updated because **the intended set
+ * changed**, not to make a test pass — `business-read-v1`'s operations turned out never to have
+ * been built, and `0023` created a Core-owned Action with its own permission envelope.
+ *
+ * THE NEW FACT IS ADDED RATHER THAN THE COUNTS BUMPED, and the properties a count cannot express
+ * are untouched and still green: member remains a strict subset of owner, no identifier carries a
+ * wildcard, every grant is organization-scoped, and delete and restore-deleted are still granted
+ * to nobody. Those are what would have caught a widening dressed up as an update.
+ */
 const OWNER_EXPECTED = [
+  'core.business.read',
   'customers.customer.archive',
   'customers.customer.create',
   'customers.customer.list',
@@ -52,7 +65,14 @@ const OWNER_EXPECTED = [
   'customers.customer.update',
 ];
 
-const MEMBER_EXPECTED = ['customers.customer.list', 'customers.customer.read'];
+const MEMBER_EXPECTED = [
+  'core.business.read',
+  'customers.customer.list',
+  'customers.customer.read',
+];
+
+/** `0023`: the first permission that is Core's rather than an App's. */
+const CORE_OWNED = 'core.business.read';
 
 /** `0019`: granted to nobody. Permanent deletion and its cancellation are outside MVP scope. */
 const GRANTED_TO_NOBODY = [
@@ -84,6 +104,30 @@ export function buildRoleGrantsSuite(): Suite {
     assertEqual('two roles, no more', [...MEMBERSHIP_ROLES].sort().join(','), 'member,owner');
     assertEqual('owner grants the seven MVP Actions', permissionsOf('owner').join(','), OWNER_EXPECTED.join(','));
     assertEqual('member grants read and list only', permissionsOf('member').join(','), MEMBER_EXPECTED.join(','));
+  });
+
+  suite.test('0023 — core.business.read is granted to BOTH roles, and is Core-owned', () => {
+    // The new fact, asserted in its own right rather than absorbed into the two lists above.
+    // Both roles need it: `member` is read-only and still has to render the business picker,
+    // so withholding it there would leave a read-only user unable to see which Business they
+    // are looking at.
+    for (const role of MEMBERSHIP_ROLES) {
+      assertTrue(
+        `${role} holds ${CORE_OWNED}`,
+        permissionsOf(role).includes(CORE_OWNED),
+        `${role} cannot read its own Businesses, so the picker cannot populate for it`,
+      );
+    }
+    // It is the first permission whose first segment is not an App id. That is the whole point of
+    // 0023 — Core gained its own permission envelope — so it is asserted rather than assumed.
+    assertEqual('its namespace is core, not an App', CORE_OWNED.split('.')[0], 'core');
+    assertTrue(
+      'and every other granted permission still belongs to an App',
+      permissionsOf('owner')
+        .filter((permission) => permission !== CORE_OWNED)
+        .every((permission) => permission.startsWith('customers.')),
+      'a second Core-owned permission appeared without this case being updated',
+    );
   });
 
   suite.test('no granted permission contains a wildcard or a prefix form', () => {
