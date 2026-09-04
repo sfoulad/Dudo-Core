@@ -1,0 +1,84 @@
+{
+  // Dudo-Core — the PLATFORM ADMINISTRATION Worker, serving admin.dudo.work.
+  //
+  // OWNER: Team Lead (root-level shared configuration).
+  //
+  // ===========================================================================================
+  // WHY THIS IS A SECOND WORKER AND NOT A SECOND ROUTE
+  // ===========================================================================================
+  //
+  // Cloudflare: "Only one collection of static assets can be configured in each Worker." The
+  // admin console is a SECOND single-page application, so it cannot share dudo-core's assets
+  // binding. One Worker per application is Cloudflare's own recommendation. See the amendment
+  // in docs/decisions/0022-subdomain-structure.md.
+  //
+  // ===========================================================================================
+  // IT RUNS THE SAME CORE. IT IS NOT A STATIC SHELL.
+  // ===========================================================================================
+  //
+  // The tempting shape — an assets-only Worker whose console calls api.dudo.work — DOES NOT
+  // WORK. The session cookie is host-only (pre-auth-http.ts sets no Domain attribute), so a
+  // console on admin.dudo.work calling api.dudo.work would authenticate and then be refused on
+  // every call after, because the cookie is never sent cross-host.
+  //
+  // So this Worker serves its own API on its own origin, exactly as app.dudo.work does. Same
+  // `main`, same bindings, same secrets. The two deployments differ in what they serve to a
+  // browser, not in what they are.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dudo-admin",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-04",
+
+  "routes": [{ "pattern": "admin.dudo.work", "custom_domain": true }],
+
+  // The admin console's build output, NOT platform/web/dist. That difference is the entire
+  // reason this file exists.
+  //
+  // run_worker_first carries the same pre-auth prefixes as the main Worker: /auth/ and /health
+  // are absolute paths outside /api/, so without listing them a POST to /auth/login/complete is
+  // rewritten to the SPA shell and answered 200 with HTML. That cost a day to find once.
+  "assets": {
+    "directory": "./platform/admin/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/auth/*", "/health"]
+  },
+
+  // The same two databases. A platform operator holds ZERO membership rows (0024), so binding
+  // the tenant database here grants nothing: with no membership there is no Organization
+  // selection, no TenantStoreResolver handle, no whereWithTenant, and therefore no rows. The
+  // isolation is structural and does not depend on which Worker is asking.
+  "d1_databases": [
+    {
+      "binding": "DB_TENANT",
+      "database_name": "dudo-tenant",
+      "database_id": "23c905c6-ab95-482b-a278-3058e2f5a5a2",
+      "migrations_dir": "platform/core/migrations"
+    },
+    {
+      "binding": "DB_CONTROL",
+      "database_name": "dudo-control-plane",
+      "database_id": "ee01839d-1e38-47e7-a7df-0c8814b12869",
+      "migrations_dir": "platform/core/migrations/control-plane"
+    }
+  ],
+
+  // The coordinator Durable Object class is defined and migrated by dudo-core. This Worker binds
+  // to the EXISTING namespace via script_name rather than declaring its own migration — two
+  // Workers each claiming to create the same class would be two namespaces with one name, and
+  // the daily budget 0013 bounds would be split without anyone noticing.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COORDINATION",
+        "class_name": "DudoCoordinatorObject",
+        "script_name": "dudo-core"
+      }
+    ]
+  }
+
+  // Secrets are set separately for this Worker with `wrangler secret put -c wrangler.admin.jsonc`.
+  // They are the SAME VALUES as dudo-core's — in particular IDENTITY_LOOKUP_KEY, which keys the
+  // hash that turns an email into a credential's primary key. A different value here means every
+  // login on admin.dudo.work is refused, silently and permanently, because a miss and a wrong
+  // password are deliberately indistinguishable.
+}

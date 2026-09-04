@@ -76,6 +76,41 @@ separately, not inherited from an ordinary session that happens to be open in an
   Workers requests already counted against 100,000/day, and asset requests remain free and
   unlimited.
 
+## Amendment, 2026-09-05 — admin IS a second Worker, and the reason is a hard limit
+
+`0022` left this open: *"Whether admin is a second Worker. Today one Worker serves all three hosts.
+Splitting it is a deployment decision, not a naming one."*
+
+**It is now forced.** Cloudflare's documentation, verified directly: *"Only one collection of static
+assets can be configured in each Worker."* The admin console is a **second SPA**, and one Worker
+cannot serve two asset directories. Cloudflare's own recommendation is one Worker per application.
+
+**Decision: a second Worker, `dudo-admin`, serving `admin.dudo.work`.**
+
+### It runs the same Core, not a static shell
+
+The tempting shape — an assets-only Worker whose SPA calls `api.dudo.work` — **does not work, for the
+reason this ADR already established.** The session cookie is **host-only**. A console on
+`admin.dudo.work` calling `api.dudo.work` would authenticate and then be refused on every subsequent
+call, because the cookie is never sent cross-host.
+
+So `dudo-admin` serves **its own API on its own origin**, exactly as `app.dudo.work` does. Same
+`main`, same D1 bindings, same secrets, **different `assets.directory` and different route.** The
+two deployments differ in what they serve to a browser, not in what they are.
+
+### What this preserves
+
+- **The host-only cookie stays untouched.** No `Domain` attribute, no CORS. The property that made
+  the three-host split safe is the same property that forces this shape.
+- **`0024`'s isolation holds independently of deployment.** A platform operator is memberless and
+  therefore cannot reach tenant data — that is structural, and it would be true on one Worker or
+  five.
+- **An operator's session is not replayable against `app.dudo.work`**, which `0022` already
+  established and which matters more now that the console exists.
+
+**Free-tier impact: USD 0 / BD 0.** Two Workers, one account. Requests count against the same
+100,000/day; asset requests remain free and unlimited on both.
+
 ## What this does NOT decide
 
 - **The apex `dudo.work`.** Left with no record. A marketing surface is a different problem with a

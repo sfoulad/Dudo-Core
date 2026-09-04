@@ -1,0 +1,116 @@
+# 0025 — Platform authority, Templates, and the fourth request class
+
+- **Status:** **Accepted**
+- **Date:** 2026-09-05
+- **Deciders:** Dudo Team Lead, under authority the user delegated 2026-09-04, on the user's
+  instruction to build the super-admin surface
+- **Closes:** `CO4`/`AZ9` (where platform authority lives) · `CO5` (is a business type a Template) ·
+  the fourth request class
+- **Builds on:** `0024`'s two invariants, which are load-bearing here
+- **Owning agent:** Team Lead records. `architecture-agent` contracts, `core-agent` implements.
+
+## Context
+
+`architecture-agent` produced the super-admin analysis and **deliberately declined to author a
+contract**, because three things were undecided and *"a contract is precisely the artifact other
+agents are then required to build against without re-litigating."* That was the right call. This
+record settles the three so the contract can be written.
+
+## Decision 1 — Platform authority lives in its own table, and its existence IS the authority
+
+**`platform_operator(principal_id, platform_role, created_at)` in the control-plane database.**
+
+A row in that table makes a principal a platform operator. There is no flag on `principal`, no
+membership row, and no platform value in `MembershipRole`.
+
+**Why a separate table rather than a column or a role:** `0024` requires that a platform principal
+hold **zero membership rows**, because a membership row carrying platform authority assembles
+cross-tenant access out of legitimate parts. **An invariant that depends on nobody adding a row is
+not an invariant** — so the two must live in different tables, where "appears in both" is a
+question a machine can ask.
+
+**Binding, and enforced in code rather than documented:**
+
+- **A `principal_id` present in `platform_operator` MUST NOT appear in `organization_membership`,
+  and the reverse.** Checked on write, and checked at authorization. Not a constraint the schema
+  can express across two tables, so it is Core's to enforce — and it must **fail closed**: a
+  principal appearing in both is refused everywhere, not resolved in favour of either.
+- **`MembershipRole` never gains a platform-tier value** (`0024`).
+  `assertRoleMappingIsCoherent` is the home for it.
+
+## Decision 2 — A business type IS a `Template`. No new name.
+
+`ARCHITECTURE.md` §1 already records **Template** as the fifth extension type: *"a pre-configured
+combination of Apps and settings for a business type: Salon, Dental Clinic, Gym. Carries no code"*
+— followed by *"the user selects a business type, not a set of technical modules."*
+
+**That is exactly what the user asked for.** It is a Phase 6 concept arriving five phases early,
+which is a scheduling change rather than a new idea. **The five extension types are closed and a
+sixth requires a Constitution amendment**, so inventing a parallel name would fork the model to
+avoid reading the one that exists.
+
+**What a Template carries in this slice:**
+
+| | |
+|---|---|
+| A name | "School", "Clinic", "Retail" |
+| **Display labels for each level** | so a school renders "Campus" where a shop renders "Branch" |
+| *(later)* which Apps are installable | out of scope until there is a second App |
+
+**The boundary, in `architecture-agent`'s words, and it is the whole rule:** `CORE_BOUNDARIES.md`
+rule 6.1 governs **types, tables, columns, functions and routes — not rows.** *"A row reading
+'Dental Clinic' is data; a `dental_clinic` column is a defect."*
+
+**A Template may NAME Apps and CARRY labels. It may never CONTAIN logic.** The moment it carries a
+workflow, a validation rule or a pricing rule, business-specific behaviour is inside Core
+permanently and cannot be removed.
+
+## Decision 3 — The fourth request class: **platform routes**
+
+| Class | Principal | Tenant | Permission |
+|---|---|---|---|
+| Pre-auth (`0014` §B) | none | none | none |
+| Session (`0021`) | session only | none | **none** |
+| Action | full, tenant-scoped | **required** | yes |
+| **Platform (this record)** | **principal-level** | **none** | **yes** |
+
+A platform route authenticates a principal, evaluates a permission against a **platform envelope**,
+and **never obtains a tenant store**.
+
+**It is not an Action with the tenant made optional**, and `0021`'s sentence is the reason:
+*"the invariant that an Action always has a tenant is worth more than the code it saves."* A
+tenant-optional branch would force every future reviewer of every future Action to check which side
+of it they are on.
+
+**Binding properties:**
+
+- **No `TenantStoreResolver` is reachable from this class.** As with `0021`'s session routes, the
+  guarantee should be structural — nothing in the class *can* reach a tenant, rather than nothing
+  *does*.
+- **Input validation belongs to the class, not to its routes** (`0021`'s finding). A platform route
+  accepts identifiers naming tenants; it must not be the one class without validation.
+- **The platform envelope is Core's**, following `0023`. It is not an App's, and no App may declare
+  a platform permission.
+- **Every platform route writes an audit record.** These are operator actions on other people's
+  data-adjacent objects; `0007` rule 9 and the four separate records of "no auditable home" make
+  this the moment to stop deferring it.
+
+## Consequences
+
+- **Onboarding costs 10 control-plane row-writes** (`0024`), not the 6 `control-plane-admission.ts`
+  records. That constant is wrong in the code and must be corrected with the count of what
+  onboarding actually writes.
+- **The inner unit is renamed `Workspace`** per `architecture-agent`'s ruling — `Branch` was
+  unavailable because it already names a level *below* it. **The rename lands before onboarding and
+  Templates are built**, or both are built on the old name and renamed twice.
+- **Free-tier impact: USD 0 / BD 0.** New control-plane tables, no new service. 300 onboardings/day
+  platform-wide at the corrected cost.
+
+## What this does NOT decide
+
+- **Break-glass access to tenant data (AZ3).** Nothing here permits a platform operator to read a
+  customer's records, and `0024`'s invariants are what any such proposal must argue against.
+- **The per-business-type role vocabulary** beyond display labels. `architecture-agent` established
+  that three of four school roles are vocabulary and only "parent" needs new mechanism — a
+  **delegation edge between two records**, recorded as `AZ10`/`CO6`, and not a role at all.
+- **Self-service signup.** The console is the onboarding path; nothing here creates a public one.
