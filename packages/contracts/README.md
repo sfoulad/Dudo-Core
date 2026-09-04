@@ -26,24 +26,33 @@ Contract-first sequencing: `CONTRIBUTING.md`
 ## Layout
 
 ```
-common/        platform-wide shapes every contract reuses — the error envelope, pagination
-registries/   the five machine-readable registries (permissions, events, Core objects,
-              manifest schemas)
-validation/   zero-dependency validators (docs/decisions/0009)
-apps/<app-id>/ one directory per App, holding that App's contract set
+common/         platform-wide shapes every contract reuses — the error envelope, pagination
+registries/     the five machine-readable registries (permissions, events, Core objects,
+                manifest schemas)
+validation/     zero-dependency validators (docs/decisions/0009)
+core/<domain>/  Core's own published contracts, one directory per Core domain
+apps/<app-id>/  one directory per App, holding that App's contract set
 ```
 
-Each App contract set is three artifacts, all normative together: a `README.md` carrying the
+Each contract set is three artifacts, all normative together: a `README.md` carrying the
 reasoning, the state machines and the open questions; a `*.schema.json` carrying the request
 and response shapes; and a `*.contract.yaml` carrying the Action definitions, permissions,
 tenancy, audit, HTTP binding and free-tier impact. **A type alone is not a contract**, which
 is why the shapes file is never the whole set.
+
+`core/**` and `apps/**` differ in what they may contain, not in form. A Core contract covers
+an object in `registries/core-object-registry.yaml` under a `core.*` permission, and is served
+from Core's flat reserved API namespace. An App contract covers the App's own entities and is
+served under `/api/v1/apps/<app_id>/...` unless the Team Lead allocates it a flat segment. An
+App may never publish a contract over Core's data, and Core contracts carry no business-domain
+concept — `Core stays small` is a boundary this directory records rather than one it relaxes.
 
 ## Contracts on record
 
 | Contract | Version | Status |
 |---|---|---|
 | `apps/customers` — Customer Directory | 1 | **Proposed.** Awaiting Team Lead agreement; no consumer implements against it yet. |
+| `core/organization` — Business Read | 1 | **Proposed.** Awaiting Team Lead agreement. Resolves `business_id` to a name and lists a principal's authorized Businesses — the gap `app-agent` found while building against the Customer Directory. Closes the *contract* gap only: no Business name is stored anywhere yet and the authorized business set is empty for every principal, both of which belong to the organization-structure slice. See its `README.md` §2 before reporting it as unblocking anything. |
 
 ## Form, and what is not yet decided
 

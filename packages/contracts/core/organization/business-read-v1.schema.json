@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:business-read:1",
+  "title": "Business Read — contract v1",
+  "description": "Every request and response shape of the Business READ contract, contract version 1. This file defines SHAPES ONLY. A type alone is not a contract: the authorization expectation, the tenant scoping, the resolution semantics and the error conditions are in business-read-v1.contract.yaml and README.md in this directory, and all three are normative together.\n\nWHAT THIS CONTRACT IS FOR, AND WHAT IT IS DELIBERATELY NOT. It answers exactly two questions the Customer Directory needs and cannot answer for itself: which Businesses may this principal file a customer into, and what is a business_id called. It is NOT the organization-structure slice. There is deliberately no full 'business' object, no create, no update, no lifecycle, no hierarchy, no Branch, no membership, no settings and no Organization shape anywhere in this file. Each of those is a decision about Core's organization data model, none is settled by any accepted record, and defining one here would be deciding Core's shape as a side effect of unblocking an App — the same shortcut platform/core/migrations/0002_business.sql refused.\n\nONE CONTRACT SET, TWO CLIENTS. The responsive web client and the Apple client consume these shapes unchanged. A shape one client has and the other does not is a contract defect, not a client-local workaround (docs/decisions/0016). This contract exists because app-agent found the gap while building against the merged contract set and refused to invent a wire shape for it; Dudo-Apple's Dudo/Contracts/CustomerDirectory/BusinessReference.swift is a client-local PLACEHOLDER that this contract replaces.\n\nNOT EXECUTED. No JSON Schema implementation exists in this repository — there is no package.json, no node_modules, AS1 (the contract's executable form) is undecided and TS1 (the test framework) is undecided. These schemas are normative and hand-checked. Nothing in the repository validates against them, and no report may describe them as validated.\n\nCROSS-FILE $ref. References to urn:dudo:schema:pagination:1 and urn:dudo:schema:error-envelope:1 require a schema registry that resolves URNs. No such resolver exists yet; see AS1 in API_STANDARD.md §13.",
+  "$defs": {
+
+    "businessId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "A Business/Workspace inside the authenticated Organization. Opaque, non-sequential, unguessable — 128 bits of base64url at the generated width (platform/core/kernel/ids.ts), 22 characters, against a contract maximum of 64.\n\nTHIS IS THE SAME DEFINITION AS urn:dudo:schema:customer-directory:1#/$defs/businessId AND THE TWO MUST NOT DRIFT. It is restated rather than $ref'd for one reason: cross-file URN $refs need a resolver that does not exist (AS1), so a $ref here would be a reference nothing can follow. If the resolver lands, this definition should become a $ref to the one canonical businessId. A pattern changed in one file and not the other is a contract defect of the same class as cross-client drift.\n\nBUSINESS IS AN AUTHORIZATION SCOPE, NOT A SECOND TENANT BOUNDARY (MULTITENANCY_STANDARD.md §2). organization_id remains the isolation boundary, is never on the wire, and appears nowhere in this file. There is no organization_id property in any shape here, and none may be added.\n\nUNIQUENESS PREVENTS COLLISION; IT HAS NEVER PREVENTED REACHABILITY. Business identifiers are unique platform-wide by generation, not by constraint (platform/core/migrations/0002_business.sql). A query carrying business_id that has lost its tenant predicate does not fail and does not return empty — it returns another Organization's row. Neither Action in this contract writes a predicate: see business-read-v1.contract.yaml -> tenancy.whereTheseReadsAreServedFrom."
+    },
+
+    "businessDisplayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "description": "The name the Organization calls this Business. Leading and trailing whitespace is trimmed by the server before storage and before ordering; a value that is empty after trimming is not a name, which is what the \\S pattern asserts. Maximum 200 characters, matching the Customer display_name so that two names rendered side by side in one interface have one bound.\n\nCLASSIFICATION: business-confidential. It is the tenant's own organizational structure. It is NOT sensitive-personal: a Business is a workspace, not a person, and nothing forces a personal name into it. If the organization-structure slice later permits a sole trader's own name here, that slice reclassifies this field — it is not reclassified in advance on the strength of a case that does not exist yet.\n\nWHEREVER THIS APPEARS IT IS NULLABLE, AND TODAY IT IS ALWAYS NULL. Nothing in Dudo stores a Business name. platform/core/migrations/0002_business.sql defines the business table as exactly (tenant_id, business_id) and states in terms that it declined a name column because that belongs to the organization-structure slice. So every response from both Actions in this contract carries display_name null until that slice adds the column and something writes it. This is stated as a present fact, not as a caveat: see README.md §2 and business-read-v1.contract.yaml -> dependencies."
+    },
+
+    "displayNameOrNull": {
+      "oneOf": [
+        { "$ref": "#/$defs/businessDisplayName" },
+        { "type": "null" }
+      ],
+      "description": "The Business's name, or null.\n\nNULL HAS EXACTLY ONE MEANING: no name is recorded for this Business. It never means 'you may not see the name', and it never means 'this Business does not exist' — those are carried by 'resolution', which is why that field exists as well as this one.\n\nPRESENT AND NULL, NEVER ABSENT. Absent-versus-null is a distinction two clients will resolve differently, and 'the web app shows a blank and the iPhone app shows nothing' is exactly the cross-client divergence the one-contract rule exists to prevent.\n\nNORMATIVE CLIENT RENDERING, BINDING ON BOTH CLIENTS: when this is null, the client renders the business_id VERBATIM. Not a blank, not a dash, not an invented placeholder such as 'Unnamed Business', and not a locale string. Reasons, in order: an opaque identifier is the honest rendering of a reference whose name is unknown; a placeholder is indistinguishable from a real name and is ambiguous the moment a principal is authorized over two nameless Businesses; and a blank makes a required field look unset. This is a rendering rule in a contract deliberately — it is what stops the two clients from choosing two different fallbacks for a field that is null on every response today. Dudo-Apple's placeholder already renders this way (BusinessReference.displayLabel), and this rule makes that behaviour contracted rather than local."
+    },
+
+    "resolutionState": {
+      "type": "string",
+      "enum": ["resolved", "unresolved"],
+      "description": "Whether a requested business_id could be resolved FOR THIS PRINCIPAL.\n\n  resolved   — this business_id is in the authenticated principal's authorized business set.\n  unresolved — it is not.\n\nTWO MEMBERS, AND THE ABSENCE OF A THIRD IS THE WHOLE SECURITY PROPERTY OF THIS CONTRACT. 'unresolved' covers all three of: a Business of another Organization; a Business of this Organization that the principal is not authorized over; and an identifier that names no Business anywhere. They are not distinguished, and the reason they cannot be distinguished is structural rather than a rule someone must remember: ResolveBusinessReferences tests membership of a set that arrives with the authenticated context and NEVER READS STORAGE, so the implementation has no fact available with which to tell the three apart. See business-read-v1.contract.yaml -> authorizationModel.theUnknownIdentifierRuling.\n\nTHIS DELIBERATELY DIFFERS FROM THE CUSTOMER DIRECTORY'S step-5c ANSWER, which returns forbidden for an in-tenant unauthorized Business and not_found otherwise. That ruling was decided by a DATA-CORRUPTION argument — a user told 'no such customer' re-enters the customer and the tenant's own directory silently duplicates. There is no analogue here: nobody re-creates a Business because a name failed to render, and this contract has no create at all. Where the corruption argument does not reach, the fail-closed answer is the right one. The two Actions are different Actions with different answer sets, and the difference is reasoned rather than inconsistent.\n\nADDING A THIRD MEMBER LATER IS A BREAKING CHANGE (API_STANDARD.md §6 — widening a returned value set that callers switch on) AND IT IS ALSO THE ONE CHANGE THAT WOULD REOPEN THE ORACLE. Both facts are recorded so that a future 'better error message' proposal has to pass a version gate and a security review rather than a patch release."
+    },
+
+    "businessSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "display_name"],
+      "description": "One row of the authorized-business listing, returned by core.ListAuthorizedBusinesses.\n\nTWO FIELDS, AND THE NARROWNESS IS THE POINT. There is no status, no lifecycle, no parent, no Branch, no member count, no created_at, no settings and no Organization reference. This shape is what a picker and a row label need, and nothing else. Every one of those omitted fields belongs to the organization-structure slice, and each is ADDITIVE to this shape when that slice lands (API_STANDARD.md §6 — a new response field is additive, and clients must ignore unknown fields).\n\nNO 'resolution' FIELD, DELIBERATELY. Every row in this listing is in the principal's authorized set by construction, so a constant field asserting so would be noise on every row. The shapes are kept separate for that reason rather than merged into one with a field that is always the same value.\n\nNO ORGANIZATION IDENTIFIER, AND NONE MAY BE ADDED. See businessId.",
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "display_name": { "$ref": "#/$defs/displayNameOrNull" }
+      }
+    },
+
+    "businessReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "display_name", "resolution"],
+      "description": "One entry of a resolution response, returned by core.ResolveBusinessReferences. Exactly one entry exists for every business_id in the request, in request order.\n\nbusiness_id IS ECHOED, and it is echoed for a reason rather than for symmetry: a client must not have to depend on positional alignment alone to attribute an answer, and echoing a value the caller itself supplied discloses nothing.\n\nWHEN resolution IS 'unresolved', display_name IS ALWAYS null. When it is 'resolved', display_name may still be null — no name is recorded for any Business today. A CLIENT THEREFORE MUST NOT INFER EXISTENCE FROM display_name: null carries no information about whether the reference resolved. That is what 'resolution' is for, and it is why the two fields are not collapsed into one nullable name.",
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "display_name": { "$ref": "#/$defs/displayNameOrNull" },
+        "resolution": { "$ref": "#/$defs/resolutionState" }
+      }
+    },
+
+    "listAuthorizedBusinessesInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "description": "All parameters are optional, and there are only paging parameters. There is NO filter of any kind and none may be added in v1.\n\nTHERE IS NO business_id FILTER, NO NAME SEARCH AND NO organization_id. The listing already returns exactly the principal's authorized set and nothing wider, so a filter could only narrow a set the caller can already see in full — buying nothing, and adding an input that a future revision could accidentally let widen the response. The Customer Directory accepts a business_id filter because its rows span Businesses; this listing's rows ARE the Businesses.\n\nUnknown fields are REJECTED with invalid_argument, not ignored (API_STANDARD.md §7). This is what makes 'organization_id', 'tenant_id' and 'principal_id' unsettable rather than merely undocumented: they are not properties here, and additionalProperties is false, so supplying one fails the request.\n\nSupplying 'cursor' together with a 'page_size' that differs from the value the cursor was issued under is rejected with invalid_argument — a page 2 under a different page size is not page 2.",
+      "properties": {
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      }
+    },
+
+    "listAuthorizedBusinessesOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "description": "The standard collection envelope. No total count — see urn:dudo:schema:pagination:1#/$defs/collectionEnvelope, and note that the reason there is a tenant-isolation reason, not a performance one.\n\nAN EMPTY PAGE IS A VALID, REACHABLE AND CURRENTLY UNIVERSAL RESPONSE. A principal authorized over no Business gets data: [] and next_cursor: null. That is not an error, and it is what every principal receives today: platform/core/identity/principal-authorization-source.ts ships a deny-all PrincipalAuthorizationSource whose authorizedBusinessIds is the empty array for everyone. Both clients must render the empty case as a first-class state — a picker with no options, and an explanation — rather than treating it as a loading failure. See README.md §2.\n\nORDER IS FIXED AND TOTAL: display_name ascending by Unicode code point WITH NULLS LAST, then business_id ascending as the tiebreaker. There is no sort parameter in v1. A total order is what makes a cursor correct; ordering on a non-unique or nullable field alone silently duplicates and skips rows across pages. Because display_name is null on every row today, the order degenerates to business_id ascending — which is the observable behaviour now and becomes name order, with no contract change, the day names exist. Code-point order is not locale-correct for Arabic or for accented Latin scripts; that is the same root cause as the Customer Directory's CD-6 and it is recorded as BR-3 rather than solved here.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/businessSummary" }
+        },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      }
+    },
+
+    "resolveBusinessReferencesInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_ids"],
+      "description": "Resolve up to 25 business_ids to their names, for rendering.\n\nTHE BATCH MAXIMUM IS 25 AND IT IS A CHOSEN NUMBER, NOT A ROUND ONE. It is the documented default page size (urn:dudo:schema:pagination:1#/$defs/pageSize), so a client rendering one default page of customers can resolve every distinct Business on that page in a single call. A client using the maximum page size of 100 makes at most four calls, and in practice fewer, because the distinct Businesses on a page are far fewer than its rows. 25 is also what keeps the HTTP binding safe: these identifiers travel as repeated query parameters, and 25 at the contract's 64-character maximum is roughly 1,900 characters of query string against a 22-character generated width that puts the realistic figure near 850 — comfortably inside every intermediary limit, which 100 at the maximum width would not be. See business-read-v1.contract.yaml -> httpBinding.\n\nminItems IS 1. A request naming no reference is a client defect and is rejected with invalid_argument rather than answered with an empty array, on the same reasoning that makes a Customer update with nothing to change invalid_argument rather than an accepted no-op.\n\nuniqueItems IS true. A duplicate identifier is a client defect; rejecting it keeps the response a set in request order, so positional attribution is unambiguous without a rule about which of two identical entries is which.\n\nORDER IS PRESERVED. The response contains exactly one entry per requested identifier, at the same index. THIS IS A SECURITY REQUIREMENT AND NOT AN ERGONOMIC ONE: a response that omitted the identifiers it could not resolve would disclose, by absence, which of the caller's identifiers exist — the same oracle the 'resolution' field and the absent third enum member exist to close, rebuilt out of array length. It is stated in the input schema as well as the output schema because it constrains both.",
+      "properties": {
+        "business_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 25,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/businessId" }
+        }
+      }
+    },
+
+    "resolveBusinessReferencesOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data"],
+      "description": "One entry per requested business_id, in request order, always.\n\nTHIS IS NOT A PAGINATED COLLECTION AND HAS NO next_cursor. The response length is fixed by the request length, the request is capped at 25, and there is nothing to page through. Borrowing the collection envelope here would imply a next page that can never exist and would give a client a null field to branch on for no reason.\n\nTHE POSITIONAL GUARANTEE IS NORMATIVE. data has exactly the same length as the request's business_ids array, and data[i].business_id equals business_ids[i]. An entry is NEVER omitted, reordered, deduplicated or collapsed, whatever its resolution. See resolveBusinessReferencesInput for why absence would be a disclosure.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 25,
+          "items": { "$ref": "#/$defs/businessReference" }
+        }
+      }
+    }
+  }
+}
