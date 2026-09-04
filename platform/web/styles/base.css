@@ -1,0 +1,227 @@
+/* ---------------------------------------------------------------------------
+   Dudo web — element defaults and primitives
+   --------------------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, p, figure, blockquote, dl, dd { margin: 0; }
+ul, ol { margin: 0; padding: 0; }
+li { list-style: none; }
+
+img, svg { display: block; max-width: 100%; }
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+a { color: var(--navy-600); }
+a:hover { color: var(--navy-700); }
+
+/* --- Focus ---------------------------------------------------------------
+   Never removed. The ring is drawn outside the element so it survives on
+   inputs with their own border. */
+:focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+:focus:not(:focus-visible) { outline: none; }
+
+/* --- Screen-reader-only ------------------------------------------------- */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--s-4);
+  top: -4rem;
+  z-index: 100;
+  padding: var(--s-3) var(--s-4);
+  background: var(--surface);
+  color: var(--navy-800);
+  font-weight: 600;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  transition: top 120ms ease-out;
+}
+.skip-link:focus { top: var(--s-3); }
+
+.boot,
+.noscript {
+  padding: var(--s-12) var(--s-6);
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons
+   --------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 2.375rem;
+  padding: 0 var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btn--primary {
+  background: var(--scarlet-600);
+  border-color: var(--scarlet-600);
+  color: #fff;
+}
+.btn--primary:hover:not(:disabled) { background: var(--scarlet-700); border-color: var(--scarlet-700); }
+
+.btn--secondary {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.btn--secondary:hover:not(:disabled) { background: var(--surface-sunk); border-color: var(--ink-faint); }
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--navy-600);
+}
+.btn--ghost:hover:not(:disabled) { background: var(--navy-050); }
+
+.btn--sm { min-height: 2rem; padding: 0 var(--s-3); font-size: var(--text-sm); }
+
+.btn__spinner {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: dudo-spin 620ms linear infinite;
+}
+
+@keyframes dudo-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+/* ---------------------------------------------------------------------------
+   Form fields
+   --------------------------------------------------------------------------- */
+
+.field { display: grid; gap: var(--s-2); }
+
+.field__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+}
+
+.field__optional {
+  font-weight: 400;
+  color: var(--ink-muted);
+}
+
+.field__required {
+  color: var(--scarlet-600);
+  font-weight: 700;
+}
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--ink);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.input:hover, .textarea:hover, .select:hover { border-color: var(--ink-faint); }
+
+.input::placeholder, .textarea::placeholder { color: var(--ink-faint); }
+
+.textarea { min-height: 6rem; resize: vertical; line-height: var(--leading-relaxed); }
+
+.select {
+  appearance: none;
+  padding-right: var(--s-8);
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-muted) 50%),
+                    linear-gradient(135deg, var(--ink-muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.input[aria-invalid="true"],
+.textarea[aria-invalid="true"],
+.select[aria-invalid="true"] {
+  border-color: var(--scarlet-600);
+  box-shadow: inset 0 0 0 1px var(--scarlet-600);
+}
+
+.field__hint {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.field__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--scarlet-700);
+}
+.field__error::before { content: "!"; flex: none; display: inline-grid; place-items: center; width: 1.05rem; height: 1.05rem; border-radius: 50%; background: var(--scarlet-600); color: #fff; font-size: var(--text-xs); }
+
+.field__count {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.field__count[data-over="true"] { color: var(--scarlet-700); font-weight: 700; }
