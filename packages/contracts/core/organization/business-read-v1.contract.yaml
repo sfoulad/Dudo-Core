@@ -1,0 +1,927 @@
+---
+# Business Read — Action contract, version 1
+#
+# The machine-readable half of the contract. Shapes live in business-read-v1.schema.json;
+# the reasoning, the rulings and the open questions live in README.md. All three are
+# normative together, and a change to one that is not reflected in the others is a contract
+# defect.
+#
+# Governed by: docs/architecture/standards/API_STANDARD.md (the Action definition, §1)
+#              docs/architecture/standards/AUTHORIZATION_STANDARD.md
+#              docs/architecture/standards/MULTITENANCY_STANDARD.md
+#              docs/architecture/standards/CORE_BOUNDARIES.md
+#              docs/decisions/0006-tenancy-model.md (Accepted)
+#              docs/decisions/0007-logical-permission-model.md (Proposed)
+#              docs/decisions/0014-authentication-az2.md (Accepted) — §A and §C both bind
+#              docs/decisions/0016-web-application-stack.md (Accepted) — one contract, two clients
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS
+# status: proposed. NOT YET APPROVED and NOT YET BUILT. No code exists for either Action.
+# Per .claude/rules/workflow.md §3 the Team Lead reviews and agrees this contract before any
+# consumer implements against it; architecture-agent does not accept its own contracts.
+#
+# ---------------------------------------------------------------------------------------
+# WHY THIS CONTRACT EXISTS
+# ---------------------------------------------------------------------------------------
+# app-agent found the gap while building the Apple client against the merged contract set,
+# and refused to invent a wire shape for it. business_id is REQUIRED on
+# customers.CreateCustomer and is displayed on every customer row and every customer record
+# in both clients. It is opaque. Nothing published resolved it to a name, and nothing
+# published listed the Businesses a principal may file into. Business exists in
+# packages/contracts/registries/core-object-registry.yaml as tenant-scoped with appAccess
+# read-via-contract — and there was no contract, so the one appAccess value the registry
+# gives it was unrealisable.
+#
+# This contract answers those two questions and stops.
+#
+# ---------------------------------------------------------------------------------------
+# SCOPE — WHAT THIS IS NOT. READ THIS BEFORE ADDING ANYTHING.
+# ---------------------------------------------------------------------------------------
+# THIS IS NOT THE ORGANIZATION-STRUCTURE SLICE AND MUST NOT GROW INTO ONE. There is
+# deliberately no Business create, update, delete, archive or lifecycle; no hierarchy; no
+# Branch; no Team; no membership or assignment management; no settings; no Organization
+# shape and no Organization Action; and no full 'business' entity anywhere in the shapes
+# file. Each of those is a decision about Core's organization data model, none is settled by
+# an accepted record, and defining one here would be deciding Core's shape as a side effect
+# of unblocking an App — the same shortcut platform/core/migrations/0002_business.sql
+# refused, in the same words, when it declined a Business name column.
+#
+# If a future task finds itself designing organization structure in this file, that is the
+# signal to stop and request a separate contract, not to extend this one.
+#
+# ---------------------------------------------------------------------------------------
+# THIS IS A CORE CONTRACT, AND THAT IS NOT A JUDGEMENT CALL
+# ---------------------------------------------------------------------------------------
+# Business is in core-object-registry.yaml, domain 'organization', owned by Core. Its
+# permission core.business.read is already registered in permission-catalog.yaml. The
+# Customer Directory is an App and may not own a Core object, may not reach Core storage,
+# and may not publish a contract over Core's data (.claude/rules/security.md §4,
+# CORE_BOUNDARIES.md). So the contract lives under packages/contracts/core/organization/,
+# not under packages/contracts/apps/customers/, and the Customer Directory consumes it
+# exactly as the Apple and web clients do.
+#
+# CORE STAYS SMALL AND THIS DOES NOT GROW IT. Nothing business-specific enters Core here.
+# Two read Actions over an object Core already owns, under a permission Core already
+# declares, is Core answering a question about its own data — which is what
+# read-via-contract means. No customer concept, no directory concept and no App concept
+# appears in this contract.
+#
+# ---------------------------------------------------------------------------------------
+# NOTHING HERE IS EXECUTED
+# ---------------------------------------------------------------------------------------
+# There is no JSON Schema implementation in this repository (ADR 0009), no package.json and
+# no node_modules, and AS1 — the executable form and transport of a Dudo contract — is
+# undecided. Every shape in business-read-v1.schema.json is normative and HAND-CHECKED. No
+# report may describe any of it as validated.
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: organization
+status: proposed
+updated: "2026-09-04"
+
+# ---------------------------------------------------------------------------
+# tenancy — applies to both Actions, without exception
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: >-
+    MULTITENANCY_STANDARD.md §2. The Organization is the isolation boundary. A Business
+    belongs to exactly one Organization and is an AUTHORIZATION SCOPE inside it, never a
+    second isolation boundary. This contract reads Businesses; it never crosses, widens or
+    substitutes for the Organization boundary.
+  model: >-
+    docs/decisions/0006, Accepted — Option A, ONE SHARED PRODUCTION D1 DATABASE holding
+    every Organization's rows, with mandatory TenantStoreResolver indirection. There is no
+    infrastructure boundary underneath this contract: a query missing its tenant predicate
+    does not fail and does not return empty, it returns another Organization's Business.
+
+  # -------------------------------------------------------------------------
+  # whereTheseReadsAreServedFrom — REQUIRED BY THE REQUEST, AND IT IS THE LOAD-BEARING
+  # ANSWER IN THIS CONTRACT. Checked against docs/decisions/0014 §C.
+  # -------------------------------------------------------------------------
+  whereTheseReadsAreServedFrom:
+    ruling: >-
+      BOTH ACTIONS ARE SERVED FROM THE ORDINARY ACTION PIPELINE, FROM ActionContext, IN THE
+      TENANT DATA PLANE. NEITHER TOUCHES THE IDENTITY CONTROL PLANE. Neither is given, and
+      neither may be given, an IdentityControlPlaneStore handle, a TenantDirectoryStore
+      handle, a D1 binding or an Env.
+    theSourceOfTheAnswer: >-
+      THE AUTHORIZED BUSINESS SET IS ALREADY ON ActionContext AND THAT IS THE WHOLE
+      IMPLEMENTATION OF THIS CONTRACT'S AUTHORIZATION. platform/core/tenancy/tenant-context.ts
+      declares ActionContext.authorizedBusinessIds — "the Businesses of that Organization this
+      principal is authorized over, derived from the authenticated context and NOT from the
+      request". It is placed there by platform/core/action/pipeline.ts from the sealed
+      AuthenticatedPrincipal, which the identity layer produced BEFORE the tenant store was
+      resolved (0014 §C.5). Both Actions read that array. Neither computes it, neither
+      supplements it, and neither may add to it.
+    whyThisSatisfiesTheSeparation: >-
+      CHECKED AGAINST 0014 §C AND platform/core/identity/control-plane-store.ts, WHICH IS
+      EXPLICIT: the port is split in two, "the directory-backed TenantStoreResolver gets
+      TenantDirectoryStore and cannot read a session, a principal or a membership", and
+      "nothing puts either half on ActionContext, and an App cannot build one". This contract
+      does not disturb either statement. It asks no question the control plane answers: it
+      never resolves an Organization, never reads a session, never reads a membership, and
+      never enumerates anything keyed by a principal across tenants. It consumes a value the
+      identity layer had already computed and handed forward, one step later in §C.5's
+      order — session -> principal -> memberships -> AUTHORIZED ORGANIZATION/BUSINESS CONTEXT
+      -> TenantStoreResolver -> business data. These Actions sit at the far right of that
+      order, where every other Action sits.
+    theNameLookupIsTheOnlyStorageRead: >-
+      When display_name eventually has a source, it is read from Core's tenant-scoped
+      business table through ActionContext.store — the same TenantScopedStore every other
+      Action uses, whose tenant predicate is applied CENTRALLY by the storage boundary and
+      is never hand-written (platform/core/storage/store.ts, which rejects any caller spec
+      that so much as names the tenant column). That read is narrowed to identifiers already
+      proven to be in the caller's authorized set, so it can neither widen the answer nor
+      probe. TODAY THERE IS NO SUCH READ AT ALL, because there is no name column: both
+      Actions are pure functions of ActionContext and touch storage zero times. See
+      dependencies.theNameHasNoSource.
+    theNegativeControl: >-
+      CHEAP AND MECHANICAL, AND IT IS OWED BY qa-agent RATHER THAN BY A REVIEWER'S GOOD
+      INTENTIONS. Whatever module implements these two Actions must not import
+      platform/core/identity/control-plane-store.ts, must not import
+      platform/core/identity/session-resolution.ts, and must not name Env or a D1 binding.
+      That is one grep, it is the same negative control control-plane-store.ts already
+      specifies for platform/core/action/** and apps/**, and this contract extends it to
+      itself rather than assuming it is inherited.
+
+  rules:
+    - >-
+      Tenant identity is derived from the authenticated server-side context on EVERY call.
+      Never from a request body field, path segment, query string, header, cookie, cursor,
+      SDK argument, hostname, unverified token claim, or ambient default.
+    - >-
+      NEITHER ACTION HAS A TENANT PARAMETER, AND NONE MAY BE ADDED. There is no
+      organization_id property in any input or output shape in this contract. A request
+      carrying one is rejected by the input schema (additionalProperties false) as a
+      malformed request — and that rejection proves input validation, NOT isolation.
+    - >-
+      NO RESPONSE IN THIS CONTRACT CARRIES AN ORGANIZATION IDENTIFIER. That is structural
+      rather than a rule to be honoured: an Action handler is never given the organization
+      identifier at all (tenancy/tenant-context.ts), so there is no value available to put
+      into a response, a log line, an error message or a cursor.
+    - >-
+      A Business returned by either Action is always a Business of the authenticated
+      Organization. There is no path in this contract by which a Business of another
+      Organization can appear in a response, because the only Businesses either Action can
+      name are those in ActionContext.authorizedBusinessIds, which the identity layer derived
+      for one validated membership in one Organization.
+    - >-
+      An unknown, unmapped, suspended or malformed Organization mapping FAILS CLOSED before
+      either Action is reached — TenantStoreResolver returns unavailable without
+      distinguishing the cases. No fallback binding, no default database.
+    - >-
+      Cache keys are prefixed t:<tenant_id>:. THIS CONTRACT DEFINES NO CACHE, and the
+      temptation is real enough to name: a Business name map looks like the ideal thing to
+      cache in a client or an edge layer, and a Business-name cache keyed by business_id
+      alone is a cross-tenant read waiting to be written. Any cache added later inherits this
+      rule and a new tenant-isolation test obligation.
+
+# ---------------------------------------------------------------------------
+# authorizationModel — applies to both Actions
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: >-
+    Core, and only Core, at every entry point, on every call (0007 rule 1). No client, App,
+    SDK or Connector decides authorization. UI hiding is presentation, never security.
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate the principal. Failure -> unauthenticated."
+    - >-
+      2. Derive the tenant from the authenticated context, and derive the principal's
+      AUTHORIZED BUSINESS SET within that tenant from the same context. Neither comes from
+      the request. FOR THIS CONTRACT THIS STEP IS NOT ONLY THE AUTHORIZATION INPUT, IT IS
+      THE ANSWER: the authorized set computed here is what both Actions return or test
+      against.
+    - >-
+      3. Authorize core.business.read at the Action's declared scope, WITHOUT reference to
+      any record. Failure -> forbidden. This step is record-independent, so this forbidden
+      can never be correlated with any Business's existence.
+    - "4. Validate the input schema. Unknown fields rejected. Failure -> invalid_argument."
+    - >-
+      5. Answer from the authorized set. FOR ListAuthorizedBusinesses: page the set. FOR
+      ResolveBusinessReferences: test each requested identifier for membership of the set.
+      THERE IS NO RECORD-RESOLUTION STEP AND THEREFORE NO STEP 5b OR 5c EQUIVALENT. The
+      Customer Directory needs those steps because it resolves a row and must then authorize
+      the row's business_id; this contract resolves nothing, so the record-dependent
+      authorization decision that produces its forbidden simply does not exist here.
+    - >-
+      6. Read display_name for the identifiers already admitted at step 5, through the
+      tenant-scoped storage boundary. THIS STEP IS UNREACHABLE TODAY — there is no name
+      column. When it exists, it can neither widen nor narrow the answer set fixed at step 5;
+      a missing row yields display_name null and NEVER changes a 'resolved' to an
+      'unresolved'. See dependencies.aMissingRowIsNotAnAuthorizationFact.
+    - >-
+      7. Return. NO AUDIT RECORD IS WRITTEN ON EITHER PATH, AND NO ROW IS WRITTEN ON EITHER
+      PATH. See audit and freeTierImpact.
+
+  # -------------------------------------------------------------------------
+  # theUnknownIdentifierRuling — the ruling the request asked for, in full.
+  # -------------------------------------------------------------------------
+  theUnknownIdentifierRuling:
+    ruling: >-
+      A business_id THAT IS NOT IN THE PRINCIPAL'S AUTHORIZED SET RESOLVES TO
+      resolution: 'unresolved', display_name: null — IDENTICALLY, WHETHER IT NAMES A BUSINESS
+      OF ANOTHER ORGANIZATION, A BUSINESS OF THIS ORGANIZATION THE PRINCIPAL IS NOT
+      AUTHORIZED OVER, OR NOTHING AT ALL. The entry is ALWAYS present, at the requested
+      index, with the requested business_id echoed. It is never omitted, and
+      ResolveBusinessReferences never returns not_found or forbidden for an identifier.
+    whyOmissionWouldHaveBeenTheDefect: >-
+      THE REQUEST NAMED THIS TRAP AND IT IS THE RIGHT ONE TO NAME. A bulk resolve that
+      returned only the entries it could resolve would disclose, by the length and membership
+      of its response, exactly which of the caller's identifiers exist — the same oracle a
+      per-identifier not_found would build, reconstructed out of array length, and harder to
+      see in review because no error code appears anywhere. The positional guarantee in
+      resolveBusinessReferencesOutput is the control, and it is stated in the input schema as
+      well as the output schema because it constrains both ends.
+    whyTheRulingIsStructuralAndNotAPromise: >-
+      THIS IS THE PART THAT MATTERS, AND IT IS STRONGER THAN THE EQUIVALENT RULING IN THE
+      CUSTOMER DIRECTORY. ResolveBusinessReferences tests membership of an array that arrived
+      with the authenticated context. IT PERFORMS NO LOOKUP OF ANY KIND FOR AN IDENTIFIER
+      OUTSIDE THAT ARRAY — no storage read, no directory call, no existsInTenant, nothing. So
+      the implementation does not merely decline to distinguish the three cases: IT HAS NO
+      FACT WITH WHICH TO DISTINGUISH THEM. Indistinguishability is a property of the data flow
+      rather than of a branch someone wrote correctly, which is the same reason
+      tenancy/tenant-context.ts withholds the organization identifier instead of requiring
+      every query to carry it: "withholding the value is stronger than requiring its use."
+    theStrongestStatementOfIt: >-
+      RESOLVE RETURNS STRICTLY NOTHING THAT LIST DOES NOT ALREADY RETURN. Everything in a
+      ResolveBusinessReferences response is derivable, by the caller, from a full paging of
+      ListAuthorizedBusinesses: the resolution state is set membership, and the name is the
+      row's name. The Action is a convenience over a set the caller may already enumerate in
+      full. THAT IS THE PROOF THAT IT IS NOT AN ORACLE — not the reasoning about error codes,
+      which is downstream of it. Any future change that makes Resolve able to say something
+      List cannot say has broken this property and must be reviewed as a new disclosure, not
+      as a better error message.
+    whyNotTheThirdState: >-
+      A third member — distinguishing 'a Business of your Organization you may not see' from
+      'unknown' — WAS CONSIDERED AND REFUSED. It would be consistent with the Customer
+      Directory's step-5c ruling, which returns forbidden in exactly that case, so the
+      refusal needs a reason rather than a preference.
+      THAT RULING WAS DECIDED BY A DATA-CORRUPTION ARGUMENT, AND THE ARGUMENT DOES NOT REACH
+      HERE. Its reasoning is explicit: told not_found, a business-admin concludes the customer
+      is not in the system, has staff re-enter it, and the tenant's own directory silently
+      acquires a duplicate with a divergent address and its own future invoices. The failure
+      mode of the fail-closed answer there was CORRUPTION OF THE TENANT'S OWN DATA. Here there
+      is no analogue: nobody re-creates a Business because a name failed to render, this
+      contract has no create at all, and the client's response to 'unresolved' is to render
+      the identifier — which is what it renders for a nameless resolved Business too. Where
+      the corruption argument does not reach, the fail-closed answer is the right one.
+      IT WOULD ALSO COST THE STRUCTURAL PROPERTY ABOVE. Answering 'exists but not yours' needs
+      a storage lookup for identifiers outside the authorized set, which is precisely the
+      lookup this Action does not perform. The third state would not be a new label on an
+      existing answer; it would be a new query path, a new disclosure, and a new thing to get
+      right on every future edit.
+      RECORDED AS BR-1 so the choice is visible to the Team Lead rather than buried, and so
+      that a later proposal to add it has to argue against this paragraph.
+    itIsBreakingToAddLater: >-
+      Adding a third member to resolutionState is BREAKING under API_STANDARD.md §6 —
+      "widening a returned value set that callers switch on" — and both clients switch on it.
+      That is deliberate: the one change that would reopen this oracle now requires /api/v2, a
+      Team Lead review and a decision record, rather than a patch release.
+
+  # -------------------------------------------------------------------------
+  # co1 — the constraint the request singled out, answered explicitly.
+  # -------------------------------------------------------------------------
+  co1TheCrossTenantOrganizationList:
+    theRuleBeingProtected: >-
+      core-object-registry.yaml open question CO1: "a user's list of Organizations must never
+      be visible to any of them." platform/core/identity/control-plane-store.ts names
+      listMembershipsForPrincipal as the reason CO1 stays answerable — the list is returned TO
+      THE PRINCIPAL, through a session the principal holds, and "there is no path from an
+      Action, an App, or an Organization administrator to this call. If this ever becomes
+      reachable from ActionContext, CO1 is violated in one line."
+    ruling: >-
+      NEITHER ACTION IN THIS CONTRACT IS A SECOND ROUTE TO THAT LIST, AND NEITHER MAY BECOME
+      ONE. ListAuthorizedBusinesses is NOT a smaller listMembershipsForPrincipal and must
+      never be implemented on top of one.
+    whatItCanReturn: >-
+      Business identifiers, and eventually Business names, of Businesses inside THE ONE
+      Organization the authenticated session has selected — and, within that Organization,
+      only those in the principal's own authorized business set. For a business-scope
+      principal that is the single Business it is assigned; for an organization-scope
+      principal it is every Business in that Organization. Nothing else.
+    whatItCanNeverReturn: >-
+      AN EXPLICIT PROHIBITION LIST, because a prohibition that is only implied is a
+      prohibition somebody optimises away.
+        1. NO organization_id, ever, in any field, of any shape, including a compound or
+           prefixed identifier from which one could be recovered.
+        2. NO list, count, hint or existence signal concerning any Organization — not the
+           caller's other Organizations, not any other Organization, not the number of them.
+        3. NO Business of any Organization other than the authenticated one.
+        4. NO membership, principal, session, role or grant of any kind, for the caller or
+           for anyone else.
+        5. NO field derived, however indirectly, from listMembershipsForPrincipal,
+           findMembershipWithOrganization, findSession, findPrincipal or findEntry.
+        6. NO cross-Organization uniqueness, ordering or adjacency signal — the listing is
+           ordered within one Organization and its cursor is tenant-bound.
+      A PRINCIPAL BELONGING TO THREE ORGANIZATIONS CALLS ListAuthorizedBusinesses AND LEARNS
+      NOTHING ABOUT THE OTHER TWO. It receives one page of one Organization's Businesses,
+      indistinguishable in shape and in size class from the response a principal belonging to
+      exactly one Organization would receive.
+    whyThatHoldsStructurally: >-
+      Three independent reasons, and the contract does not rely on any single one.
+      FIRST, THE HANDLE DOES NOT EXIST. An Action receives only ActionContext, which carries
+      no organizationId, no binding, no Env and no control-plane port; constructing a control-
+      plane adapter requires a D1 binding an Action never sees. The disclosure is not
+      prevented by a check — there is no method to call.
+      SECOND, THE VALUE IS ALREADY SCOPED. authorizedBusinessIds is computed for ONE validated
+      membership in ONE Organization (principal-authorization-source.ts takes a
+      PrincipalAuthorizationRequest carrying that membership, not a caller-supplied
+      Organization identifier). A cross-tenant answer would have to be manufactured after the
+      fact from a value that never contained one.
+      THIRD, THE SHAPES CANNOT CARRY IT. No shape in business-read-v1.schema.json has an
+      Organization property, and additionalProperties is false throughout.
+    theOneWayToBreakIt: >-
+      STATED SO IT IS RECOGNISABLE IN REVIEW. It is a change that will look like a feature:
+      an Organization switcher. "Show me every Business I can reach, across my Organizations"
+      is a reasonable-sounding product request, it is the natural next ask from whoever builds
+      the picker this contract serves, and satisfying it inside this Action requires exactly
+      the control-plane handle CO1 forbids. IT IS NOT AN EXTENSION OF THIS CONTRACT. An
+      Organization switcher is an identity-layer feature answered by the session's own
+      selectOrganization path (0014 §C.6), through a session the principal holds, and it needs
+      its own contract, its own review and its own CO1 argument. Recorded as BR-2.
+
+  notFoundVersusForbidden:
+    rule: >-
+      Outside the tenant boundary a caller must NOT be able to distinguish 'exists but is not
+      yours' from 'does not exist'. THIS CONTRACT SATISFIES THAT REQUIREMENT BY HAVING NO
+      IDENTIFIER-ADDRESSED READ AT ALL. There is no route of the form
+      GET /businesses/{business_id} in v1, neither Action declares not_found, and neither can
+      return it.
+    forbiddenIsRecordIndependent: >-
+      forbidden is returned by both Actions at evaluationOrder step 3 ONLY — the caller does
+      not hold core.business.read at the required scope. It is decided before any input is
+      validated and before any identifier is looked at, so it carries no information about any
+      Business. A caller cannot vary a request to change whether it gets forbidden, because the
+      decision does not depend on the request.
+    noNotFoundAnywhere: >-
+      NEITHER ACTION DECLARES not_found AND NEITHER MAY. For ResolveBusinessReferences the
+      answer to an unknown identifier is a success-path 'unresolved' entry, not an error.
+      For ListAuthorizedBusinesses a collection endpoint never 404s for its contents: a
+      principal authorized over no Business receives data: [] with next_cursor null, which is
+      the response every principal receives today (see dependencies).
+    thereIsNoInTenantExistenceDisclosure: >-
+      CHECK THIS PROPERTY, BECAUSE IT IS THE ONE A LATER EDIT WOULD BREAK. Nothing in either
+      Action's answer varies with the existence of a Business outside the caller's authorized
+      set. Response size varies only with the requested batch size and the page size, both of
+      which the caller chose. Latency does not branch on existence, because no lookup on the
+      unauthorized path occurs to branch.
+
+  budgetExhaustion:
+    ruling: >-
+      NEITHER ACTION EVER RETURNS quota_exceeded, AND NEITHER DECLARES IT. This is normative,
+      not an omission.
+    basis: >-
+      docs/decisions/0014 §A.10, Accepted: "On exhaustion: mutations return 429 with a retry
+      time after the next UTC reset. READS REMAIN AVAILABLE." Both Actions are reads. The
+      request asked for this to be stated rather than left unstated, and it is stated in the
+      form the Customer Directory already uses (readsAreNeverRefused): a read consumes no
+      write budget, so refusing one buys back nothing it spent, and refusing reads at a write
+      ceiling converts a write-capacity control into a total outage — the mistake
+      docs/decisions/0013 control 9 was written to avoid.
+    andItWouldBeANewSignal: >-
+      A read that could return quota_exceeded would carry a new signal about the Organization's
+      budget on a path that currently carries none. That is the second half of the Customer
+      Directory's reasoning and it applies here unchanged.
+    rowWrites: >-
+      maxRowWrites IS 0 FOR BOTH ACTIONS, DECLARED PER ACTION BELOW. Neither reserves write
+      capacity, neither writes a row, and neither writes an audit record on any path. There is
+      no index to write, no summary to write and no session row to touch. An implementation
+      that takes a write reservation for either Action is wrong and is spending an
+      account-wide ceiling on a read.
+
+  # -------------------------------------------------------------------------
+  # permissions — REGISTERED ALREADY. No catalog change is requested by this contract.
+  # -------------------------------------------------------------------------
+  permissionRuling:
+    bothActionsUse: core.business.read
+    alreadyRegistered: >-
+      core.business.read exists in packages/contracts/registries/permission-catalog.yaml,
+      group 'organization', sensitivity 'read', scopes [organization, business], status
+      proposed, phase 1. THIS CONTRACT REQUESTS NO NEW PERMISSION AND NO CATALOG EDIT. It is
+      the first contract to actually use a permission the catalog already declared, which is
+      what that catalog is for.
+      Seed-role holdings, unchanged and not proposed to change: business-owner holds it at
+      organization scope; business-admin holds it at business scope; member holds it at
+      business scope; developer, platform-admin and marketplace-moderator hold nothing here.
+      A MEMBER CAN THEREFORE SEE ITS OWN BUSINESS'S NAME AND CANNOT CREATE A CUSTOMER —
+      member holds core.business.read and holds none of the nine customers.* permissions.
+      Those are two independent decisions and this contract changes neither.
+    whyListAndResolveShareTheSamePermission:
+      theRuleItIsTestedAgainst: >-
+        permission-catalog.yaml, model.rules: "list is a separate permission from read.
+        Enumeration is its own disclosure." There is NO core.business.list in the catalog, so
+        gating ListAuthorizedBusinesses on core.business.read is a judgement that has to be
+        argued rather than assumed.
+      ruling: >-
+        BOTH ACTIONS ARE GATED ON core.business.read. No core.business.list is declared.
+      reasoning: >-
+        THE RULE PROTECTS AGAINST ENUMERATING A POPULATION YOU MAY OTHERWISE ONLY READ ONE AT
+        A TIME. That is a real risk in the Customer Directory: customers.customer.list is
+        separate from customers.customer.read because the identifiers and the shape of a
+        tenant's customer base are information even when the records are not readable, and
+        because a directory is a population much larger than what any one principal needs.
+        NEITHER CONDITION HOLDS HERE. ListAuthorizedBusinesses returns EXACTLY the set the
+        caller's core.business.read grant already covers, at the scope it holds it, and not one
+        Business more. For a business-scope principal that is one row. For an organization-scope
+        principal it is the Organization's Businesses — which is precisely what holding
+        core.business.read at organization scope means. There is no wider population the Action
+        could reach, so there is no second disclosure for a second permission to guard.
+        ENUMERATING PRECISELY WHAT YOU MAY READ, AND NOTHING MORE, IS NOT A SECOND DISCLOSURE.
+        AND THE FAIL-CLOSED ALTERNATIVE IS NOT ACTUALLY SAFER. A new core.business.list would
+        be held by nobody until the Team Lead granted it, which would leave a principal unable
+        to discover any valid business_id — and business_id is REQUIRED on CreateCustomer. The
+        result is not a narrower system; it is a system in which a principal cannot be told what
+        it is authorized over, and the practical repair is for each client to invent its own
+        source for the picker, which is the drift this contract was requested to end.
+      theBoundaryOfThisRuling: >-
+        STATED SO THE RULING CANNOT BE STRETCHED. It covers listings whose row set IS the
+        caller's own authorized set. An Action that lists Businesses BEYOND that set — an
+        organization-structure administration screen showing every Business including those the
+        principal is not assigned to, a platform-scope view, or a cross-Organization view — is
+        a genuine enumeration of a wider population and IS NOT COVERED. That Action needs
+        core.business.list, declared and registered at that time, and it is a different Action
+        in a different contract.
+      deliberatelyNotDeclared: >-
+        core.business.list and core.business.export are DELIBERATELY NOT DECLARED, so that
+        nobody can hold either. AUTHORIZATION_STANDARD.md §3.2 requires export to be separate
+        from read, and the way to keep it separate is to not declare it until an export Action
+        exists. This contract has no export and no bulk download; the batch maximum of 25 and
+        the page maximum of 100 are what keep a read permission from being an undeclared bulk
+        export in one call.
+  permissionsDeliberatelyNotDeclared: [core.business.list, core.business.export]
+
+  scopeRuling:
+    bothActionsDeclareScope: business
+    reasoning: >-
+      THE ACTION'S 'scope' IS THE LEVEL ITS PERMISSION IS EVALUATED AT, AND IT IS A SINGLE
+      VALUE — not the list of scopes the permission may be declared at. Confusing the two is
+      the silent privilege escalation AUTHORIZATION_STANDARD.md §4 warns about.
+      A grant at a level implies the levels beneath it and never above it (§4), so declaring
+      'business' means: business-owner, holding core.business.read at organization scope,
+      satisfies it for every Business in its Organization and loses nothing; business-admin
+      and member, holding it at business scope, satisfy it too.
+      DECLARING 'organization' WOULD HAVE LOCKED OUT EVERY BUSINESS-SCOPE PRINCIPAL, which is
+      exactly the error the Customer Directory contract records: had its record-level Actions
+      declared organization scope, "business-admin would still be locked out, and the decision
+      would have been recorded in the permission catalog while changing nothing at the entry
+      point." A business-admin that cannot list its own Business cannot fill in the one
+      required field on CreateCustomer, an Action it does hold.
+      THE SCOPE DECLARATION IS THE FLOOR, NEVER THE WHOLE CHECK. Whatever scope the grant is
+      held at, the response is still bounded by ActionContext.authorizedBusinessIds, which is
+      derived from the authenticated context. A business-scope principal satisfying a
+      business-scope Action still sees only its own Business, because the answer comes from the
+      set and not from the scope.
+
+# ---------------------------------------------------------------------------
+# actions — API_STANDARD.md §1. One definition per operation; the internal API, public API,
+# OpenAPI schema, SDK method, MCP tool and documentation all derive from it.
+#
+# schemaRef values resolve into business-read-v1.schema.json.
+# ---------------------------------------------------------------------------
+actions:
+
+  - id: core.ListAuthorizedBusinesses
+    title: "List my businesses"
+    description: >-
+      Return the Businesses of this Organization that the signed-in principal is authorized
+      over, with their names, in a stable order. Use to fill the Business picker on a create
+      form, to label rows that name a Business, and to offer a Business filter. Returns only
+      what the caller is authorized over — never the whole Organization for a principal that
+      is not authorized over the whole Organization.
+    input: { schemaRef: "urn:dudo:schema:business-read:1#/$defs/listAuthorizedBusinessesInput" }
+    output: { schemaRef: "urn:dudo:schema:business-read:1#/$defs/listAuthorizedBusinessesOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.business.read
+    scope: business
+    sensitivity: read
+    idempotent: false
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200
+    notes: >-
+      NO not_found AND NO quota_exceeded, AND BOTH ABSENCES ARE NORMATIVE. A collection
+      endpoint never 404s for its contents — a principal authorized over no Business receives
+      data: [] and next_cursor null. quota_exceeded is excluded because this is a read
+      (0014 §A.10 and authorizationModel.budgetExhaustion).
+      AN EMPTY PAGE IS THE RESPONSE EVERY PRINCIPAL RECEIVES TODAY, because the deny-all
+      PrincipalAuthorizationSource returns an empty authorized set for everyone
+      (dependencies.theAuthorizedSetIsEmptyToday). Both clients must treat empty as a
+      first-class state, not as a failure to load.
+      ORDER IS FIXED AND TOTAL: display_name ascending by Unicode code point with NULLS LAST,
+      then business_id ascending. No sort parameter exists in v1 and adding one that changes
+      the default order is breaking. Because every name is null today the order degenerates to
+      business_id ascending, and it becomes name order — with no contract change — the day
+      names exist. THAT IS WHY THE ORDER NAMES A FIELD THAT DOES NOT YET HAVE A SOURCE: the
+      sort is the cheapest thing to settle now and a breaking change to settle later.
+      THE CURSOR RECORDS page_size AND THE TENANT IT WAS ISSUED FOR. Malformed, expired,
+      forged, wrong-tenant and wrong-page-size cursors all return the same invalid_argument,
+      with the same message and the same detail token. The cursor is a position, never a
+      scope.
+      NO TOTAL COUNT — urn:dudo:schema:pagination:1#/$defs/collectionEnvelope. The product
+      consequence is concrete and accepted: neither client can show "12 businesses".
+
+  - id: core.ResolveBusinessReferences
+    title: "Resolve business names"
+    description: >-
+      Given up to 25 business identifiers, return each one's name so that a customer row or a
+      customer record can be labelled. Use when identifiers are already in hand — a page of
+      customers, a deep link, a stored selection — rather than listing every Business. An
+      identifier the signed-in principal is not authorized over is returned marked
+      unresolved, never omitted and never an error.
+    input: { schemaRef: "urn:dudo:schema:business-read:1#/$defs/resolveBusinessReferencesInput" }
+    output: { schemaRef: "urn:dudo:schema:business-read:1#/$defs/resolveBusinessReferencesOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.business.read
+    scope: business
+    sensitivity: read
+    idempotent: false
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200
+    notes: >-
+      NO not_found AND NO forbidden FOR AN IDENTIFIER. An identifier outside the authorized
+      set is answered on the SUCCESS path with resolution 'unresolved', at its requested index,
+      with the requested business_id echoed. forbidden on this Action means one thing only —
+      the caller does not hold core.business.read — and it is decided at evaluationOrder step 3
+      before any identifier is looked at. Full reasoning:
+      authorizationModel.theUnknownIdentifierRuling.
+      THE RESPONSE IS POSITIONAL AND COMPLETE. Exactly one entry per requested identifier, in
+      request order, always. An entry is never omitted, reordered, deduplicated or collapsed.
+      Omitting unresolvable entries would rebuild the existence oracle out of array length,
+      with no error code anywhere to make it visible in review.
+      THIS ACTION READS NO STORAGE TODAY AND WILL NEVER READ STORAGE FOR AN IDENTIFIER OUTSIDE
+      THE AUTHORIZED SET. That is what makes the three unresolvable cases indistinguishable
+      structurally rather than by a branch someone wrote correctly.
+      IT COULD BE DEFERRED AND IT IS NOT PROPOSED FOR DEFERRAL — see
+      implementationRecommendation. At MVP scale a client can label every row from
+      ListAuthorizedBusinesses alone, because a customer whose business_id is outside the
+      authorized set is never visible to that caller: ListCustomers filters those rows out and
+      GetCustomer returns forbidden. This Action earns its place on deep links, on detail
+      screens reached without a listing, and when the authorized set is large enough that
+      paging all of it to label three rows is wasteful.
+      invalid_argument covers an empty array, more than 25 identifiers, a duplicate identifier,
+      and an identifier that does not match the business_id pattern. A MALFORMED IDENTIFIER IS
+      REJECTED AT VALIDATION AND IS NOT ANSWERED WITH 'unresolved' — the two are different
+      facts, and answering a malformed value on the success path would let a caller probe the
+      identifier grammar through a field designed to disclose nothing.
+
+# ---------------------------------------------------------------------------
+# implementationRecommendation — a RECOMMENDATION, not a ruling. The Team Lead decides
+# implementation scope; architecture-agent does not rule its own contracts in or out.
+# ---------------------------------------------------------------------------
+implementationRecommendation:
+  recommendBuildingBoth: >-
+    BOTH ACTIONS ARE RECOMMENDED FOR THE SLICE, and the reason is the same one that put
+    'pending_deletion' into the Customer Directory's wire shapes before anything could produce
+    it: the shapes are settled while settling them still costs nothing. Both clients are
+    building against this contract now — app-agent has a placeholder to replace and web-agent
+    is building the same screens — and a shape added after either ships is breaking.
+  ifOnlyOneIsBuilt: >-
+    BUILD ListAuthorizedBusinesses. It is the one that unblocks the create form, which is the
+    blocking defect: business_id is required and there is currently no authorized way to obtain
+    a valid one. ResolveBusinessReferences is a convenience over a set the caller may already
+    enumerate in full, and adding an Action later is ADDITIVE under API_STANDARD.md §6.
+  whatMustNotHappenIfResolveIsDeferred: >-
+    THE CONTRACT STAYS AS AUTHORED. Neither client may substitute a local resolution rule for
+    the deferred Action, and in particular neither may invent its own fallback for an
+    unresolvable business_id: the normative rendering — the identifier, verbatim — is in
+    displayNameOrNull and binds both clients whether or not Resolve is built.
+
+# ---------------------------------------------------------------------------
+# dependencies — WHAT THIS CONTRACT CANNOT SATISFY ITSELF.
+#
+# READ THIS BEFORE REPORTING THAT THE GAP IS CLOSED. It is not. This contract closes the
+# CONTRACT gap; it does not and cannot close the DATA gap, and the difference is the whole
+# honest statement of what was delivered.
+# ---------------------------------------------------------------------------
+dependencies:
+
+  theNameHasNoSource:
+    finding: >-
+      NOTHING IN DUDO STORES A BUSINESS NAME. platform/core/migrations/0002_business.sql
+      defines the business table as exactly two columns, (tenant_id, business_id), and states
+      in terms that it declined a name: "There is deliberately NO Business name, NO lifecycle
+      or status, NO parent, NO Branch, NO membership, NO settings, and NO Organization table
+      ... They belong to the organization-structure slice, with its own contract."
+      platform/core/identity/control-plane-store.ts records the same refusal one level up for
+      the Organization, and names the consequence: "an Organization picker built on this port
+      can list identifiers and not names."
+    consequence: >-
+      display_name IS NULL ON EVERY RESPONSE FROM BOTH ACTIONS, TODAY AND UNTIL THE
+      ORGANIZATION-STRUCTURE SLICE LANDS. Both clients render the raw business_id, which is
+      what Dudo-Apple's placeholder already does. THIS CONTRACT THEREFORE SETTLES THE SHAPE OF
+      THE ANSWER TO THE TEAM LEAD'S QUESTION 1 WITHOUT PRODUCING THE DATA FOR IT. That is
+      stated here rather than discovered in testing.
+    whyTheFieldIsContractedAnyway: >-
+      Because contracting it is free now and breaking later, and because NOT contracting it is
+      what produces drift. A nullable response field costs nothing to add today and is
+      ADDITIVE the day it starts carrying values. Left uncontracted, each client invents its
+      own name source and its own fallback — which is the exact state app-agent reported and
+      refused to entrench.
+    whatWouldCloseIt: >-
+      A name column on Core's business table, plus something that writes a Business row. BOTH
+      BELONG TO THE ORGANIZATION-STRUCTURE SLICE AND NEITHER IS DESIGNED HERE. This contract
+      states the dependency and stops, exactly as 0002_business.sql did. Adding a column to
+      that table is additive; this contract does not request it, does not specify it, and must
+      not be read as authorizing it.
+    aMissingRowIsNotAnAuthorizationFact: >-
+      NORMATIVE, AND IT IS THE TRAP IN THE NAME LOOKUP. When the name read at evaluationOrder
+      step 6 exists, a business_id in the caller's AUTHORIZED SET with NO ROW in the business
+      table is returned WITH display_name null AND resolution 'resolved'. It is NOT downgraded
+      to 'unresolved' and it is NOT omitted from the listing.
+      WHY: the authorized set is the authorization truth and the table is a name store. Making
+      authorization depend on the presence of a metadata row would mean a missing row silently
+      removes a principal's access to a Business it is genuinely authorized over — and today,
+      when the table is empty for every tenant, it would make BOTH ACTIONS RETURN NOTHING TO
+      ANYONE while looking like they worked. That is a failure that reads as fail-closed and is
+      actually a false statement to the tenant about its own Organization.
+
+  theAuthorizedSetIsEmptyToday:
+    finding: >-
+      REPORTED BECAUSE IT DETERMINES WHAT THE TEAM LEAD CAN TRUTHFULLY TELL THE CLIENT AGENTS.
+      platform/core/identity/principal-authorization-source.ts ships
+      createDenyAllPrincipalAuthorizationSource, whose authorizedBusinessIds is the empty array
+      for every principal, and it is the only implementation that exists. Its own header states
+      why: grants have no defined storage under 0007, and an organization-scope principal's
+      Business set "can only be computed by reading the tenant's business table — which is
+      behind TenantStoreResolver, which is AFTER this step in §C.5's order."
+    consequence: >-
+      EVERY PRINCIPAL TODAY GETS AN EMPTY PAGE FROM ListAuthorizedBusinesses AND 'unresolved'
+      FOR EVERY IDENTIFIER FROM ResolveBusinessReferences. This is not caused by this contract
+      and is not repaired by it. It is the same reason customers.CreateCustomer cannot succeed
+      today for any business_id, and it is correct fail-closed behaviour, not a defect to fix
+      with a permissive default — a permissive default here "would be an authorization bypass
+      wearing the word default."
+    whatWouldCloseIt: >-
+      A real PrincipalAuthorizationSource, which is blocked on where a principal's grants are
+      stored (0007) and on the organization-structure slice's Business assignment. NEITHER IS
+      DESIGNED HERE. Both are Core and organization-structure work.
+    theHonestStatementOfWhatThisContractDelivers: >-
+      IT CLOSES THE CONTRACT GAP AND NOT THE DATA GAP. Both clients now have one agreed shape,
+      one agreed source of truth and one agreed fallback, and app-agent's placeholder can be
+      deleted rather than kept in step with a second client's guess. Neither client will show a
+      Business name, or a non-empty picker, until the two dependencies above are met. Any
+      report that describes this contract as unblocking the Customer Directory end to end is
+      overstating it.
+
+  as1: >-
+    The executable form and transport of a Dudo contract is undecided (API_STANDARD.md §13).
+    This file follows the precedent already set in packages/contracts/ — JSON Schema draft
+    2020-12 for shapes, YAML for Action metadata — rather than selecting a new one. Nothing
+    here selects a framework, library, ORM or npm package, and nothing may be installed to
+    consume it.
+
+  urnResolver: >-
+    business-read-v1.schema.json $refs urn:dudo:schema:pagination:1 for page_size, cursor and
+    next_cursor. No URN resolver exists, so those references are normative and unfollowable
+    today — the same state every other contract in this directory is in. businessId is
+    RESTATED rather than $ref'd from urn:dudo:schema:customer-directory:1 for this reason, and
+    the duplication is a named drift surface: see versioning.driftSurfaces.
+
+# ---------------------------------------------------------------------------
+# httpBinding — API_STANDARD.md §5.
+#
+# 'businesses' IS an allocated segment in core-object-registry.yaml's
+# reservedApiPathSegments, owner 'core'. These routes are therefore in the flat Core
+# namespace by right, not by allocation request.
+# ---------------------------------------------------------------------------
+httpBinding:
+  basePath: "/api/v1"
+  routes:
+    - { action: core.ListAuthorizedBusinesses,  method: GET, path: "/businesses",       surface: public }
+    - { action: core.ResolveBusinessReferences, method: GET, path: "/businesses/names", surface: public }
+
+  notes:
+    - >-
+      GET /businesses CLAIMS THE CANONICAL ROUTE, AND THE TEAM LEAD SHOULD DECIDE THIS
+      DELIBERATELY BECAUSE IT BINDS THE ORGANIZATION-STRUCTURE SLICE. That slice will want
+      GET /businesses too. The claim is made on the ground that a collection endpoint always
+      returns what the caller is authorized to see — which is exactly what ListCustomers does
+      when it silently filters rows in unauthorized Businesses — so "the Businesses you may
+      see" IS the correct meaning of GET /businesses and is not a narrower thing wearing a
+      general name.
+      THE CONSEQUENCE, STATED: the organization-structure slice may ADD fields to
+      businessSummary, which is additive, and may NOT widen the row set beyond the caller's
+      authorization, which would be both a breaking change and an authorization defect. If the
+      Team Lead would rather reserve GET /businesses for that slice, the alternative is a
+      narrower path decided NOW — changing it after either client ships is breaking under
+      API_STANDARD.md §6 for a cosmetic path. Recorded as BR-4. This is the same
+      cheap-now-breaking-later timing finding the Customer Directory recorded as CD-7.
+    - >-
+      /businesses/names IS A SUB-RESOURCE READ, NOT A VERB IN A PATH, and 'names' rather than
+      'resolve' or 'lookup' is deliberate on both counts.
+      THE SEGMENT IS ALSO FIVE CHARACTERS, AND THAT IS LOAD-BEARING RATHER THAN COSMETIC.
+      businessId's pattern is ^[A-Za-z0-9_-]{8,64}$, so ANY sub-path segment of eight or more
+      word characters is a syntactically valid business_id and would collide with a future
+      GET /businesses/{business_id} — which the organization-structure slice will certainly
+      add. 'references', 'resolution' and 'authorized' all collide; 'names' cannot. The
+      Customer Directory's /customers/search is safe by the same arithmetic — six characters
+      against a minimum of eight — and it is safe by luck rather than by statement, so the rule
+      is written down here: A SUB-PATH SEGMENT UNDER A COLLECTION WHOSE MEMBERS ARE ADDRESSED
+      BY AN OPAQUE IDENTIFIER MUST NOT BE A SYNTACTICALLY VALID IDENTIFIER.
+    - >-
+      THE BATCH TRAVELS AS A REPEATED QUERY PARAMETER: GET
+      /api/v1/businesses/names?business_ids=<id>&business_ids=<id>. The parameter name matches
+      the input schema's property exactly, so the Action definition and the wire form do not
+      need a translation table. Order is preserved and is the order of the response.
+      GET rather than POST because this is a read with no side effect, and because a POST would
+      make a read look like a write to every intermediary, every reviewer and the write-budget
+      admission port. The batch maximum of 25 is what keeps that choice safe: 25 identifiers at
+      the contract's 64-character maximum is roughly 1,900 characters of query string, against
+      a realistic 850 at the 22-character generated width. A maximum of 100 would not be safe
+      at the same choice, and the two decisions were made together.
+    - >-
+      IDENTIFIERS IN A QUERY STRING REACH ACCESS LOGS, PROXY LOGS, BROWSER HISTORY AND Referer
+      HEADERS. That is accepted rather than overlooked, and it is already the platform's
+      accepted position: GET /api/v1/apps/customers/customers/{customer_id} puts a customer
+      identifier in a path. A business_id is an opaque, unguessable, tenant-internal identifier
+      that discloses nothing on its own, and MULTITENANCY_STANDARD.md §4's log carrier is about
+      TENANT identifiers, which appear nowhere in this contract. WHAT IS PROHIBITED, because it
+      is the version of this that would matter: no log, no metric label and no trace attribute
+      may carry a display_name, which is tenant business-confidential data.
+    - >-
+      NEITHER ROUTE ACCEPTS OR HONOURS AN Idempotency-Key, because neither is an unsafe
+      operation (API_STANDARD.md §9 scopes the header to POST, PATCH and DELETE).
+    - >-
+      NO CACHE-CONTROL THAT PERMITS SHARED CACHING. Both responses are per-principal and
+      tenant-scoped. A shared or edge cache keyed on the URL alone would serve one
+      Organization's Business names to another, and the resolve route's URL is composed
+      entirely of caller-supplied identifiers, which makes it the most cacheable-looking and
+      most dangerous of the two. This contract defines no cache; see tenancy.rules.
+    - >-
+      Every route is served by the same Action definition that the internal API and the SDK
+      use. There is no route handler containing logic — an operation with a handler but no
+      Action has no permission, no schema, no audit and no AI surface.
+
+# ---------------------------------------------------------------------------
+# audit — AUTHORIZATION_STANDARD.md §11, SECURITY_STANDARD.md §6
+# ---------------------------------------------------------------------------
+audit:
+  auditedActions: []
+  unauditedOnSuccess:
+    actions: [core.ListAuthorizedBusinesses, core.ResolveBusinessReferences]
+    meaning: >-
+      A successful call writes no audit record. Both Actions are sensitivity 'read', and this
+      is consistent with the Customer Directory's three read Actions.
+  auditedOnDenialOnly:
+    actions: []
+    reasoning: >-
+      auditOnDenial IS false ON BOTH, AND THE OMISSION IS REASONED RATHER THAN INHERITED.
+      The user's 2026-09-02 ruling introduced denied-read auditing and it named
+      customers.GetCustomer specifically. It has not been widened to the Customer Directory's
+      own collections — that is the open CD-15 — and widening a ruling nobody made to a
+      contract the user has not seen would be worse here than there.
+      THERE IS ALSO LESS TO DETECT. The control on GetCustomer exists to catch cross-tenant
+      identifier probing. ListAuthorizedBusinesses takes no identifier at all, so there is
+      nothing to probe with. ResolveBusinessReferences takes identifiers but is structurally
+      incapable of answering differently for a foreign, an unauthorized or a fabricated one
+      (authorizationModel.theUnknownIdentifierRuling), so a probing campaign against it learns
+      nothing and there is no signal for an audit record to carry. Recorded as BR-5 so the
+      asymmetry with GetCustomer is visible rather than silent.
+    whatWouldChangeThis: >-
+      If the Team Lead or the user widens the denied-read ruling to read Actions generally,
+      these two are in scope of that widening and this block is what should be revisited. It
+      is not pre-emptively applied, because an audit write on a denial is itself a write on a
+      single-threaded shared database and the write-amplification risk the Customer Directory
+      records as CD-17 is unbounded and unclosed.
+  exceptionsTaken: >-
+    NONE. This contract takes no exception to AUTHORIZATION_STANDARD.md. The Customer
+    Directory needed the documented readAuditException because §6 classes explicit access to
+    CUSTOMER INFORMATION as sensitive at minimum; a Business identifier and a Business name
+    are the tenant's own organizational structure and are not customer information, so
+    sensitivity 'read' is the correct classification and no exception is required to hold it.
+
+# ---------------------------------------------------------------------------
+# events — NONE in this slice, stated explicitly rather than omitted
+# ---------------------------------------------------------------------------
+events:
+  published: []
+  consumed: []
+  rationale: >-
+    No event is published and none is consumed. Both Actions are reads: a read publishes
+    nothing, and there is no state change here for anything to observe.
+    NO EXISTING EVENT IS DUPLICATED, checked against
+    packages/contracts/registries/event-catalog.yaml. Apps may not invent a duplicate event
+    concept, so the check is stated rather than assumed.
+  reservedNames: >-
+    NONE RESERVED, DELIBERATELY, AND THIS IS THE ONE PLACE THIS CONTRACT MUST NOT BE HELPFUL.
+    The obvious names — BusinessCreated, BusinessRenamed, BusinessArchived — describe
+    lifecycle facts this contract has no view of and no authority over. Reserving them would
+    be this contract taking a position on the organization-structure slice's event vocabulary
+    without owning it, which is the same boundary violation as defining its shapes. The slice
+    that owns Business lifecycle names its own events.
+
+# ---------------------------------------------------------------------------
+# mcp — NONE in this slice
+# ---------------------------------------------------------------------------
+mcp:
+  tools: []
+  rationale: >-
+    Neither Action declares 'mcp' in its exposure. Exposure is opt-in and nothing becomes an
+    AI tool by default or by accident (API_STANDARD.md §1). AI and MCP are Phase 8.
+    WHEN THAT PHASE ARRIVES THESE TWO ARE AMONG THE SAFEST CANDIDATES IN THE PLATFORM, and
+    saying so is useful rather than idle: both are reads, both are bounded by the acting
+    principal's own authorized set, neither can be widened by any argument, neither writes
+    anything, and neither returns personal data. An AI principal resolving a Business name is
+    resolving a label for a scope it already holds. Adding 'mcp' to a read Action's exposure
+    is the ordinary additive change (API_STANDARD.md §6). It is still not done here, because
+    exposing anything to an AI principal is a data-processing decision the user makes.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — .claude/rules/architecture.md §6a, docs/decisions/0008
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [worker-invocations, d1-queries-per-invocation, d1-rows-read]
+  notConsumed: >-
+    NO d1-storage AND NO d1-daily-writes. This contract adds no table, no column, no index
+    and no row. Both Actions declare maxRowWrites 0, take no write reservation, and write
+    nothing on any path — no record, no audit row, no denial summary, no session touch. It
+    cannot contribute to the 80,000-row-write platform ceiling or to any Organization's
+    10,000/day (0014 §A.3, §A.6).
+  queryBudget: >-
+    TODAY: ZERO QUERIES FOR EITHER ACTION. Both are pure functions of
+    ActionContext.authorizedBusinessIds — there is no name to read, so there is nothing to
+    read. This is the cheapest Action pair in the platform.
+    ONCE A NAME COLUMN EXISTS: exactly ONE query each. ListAuthorizedBusinesses reads at most
+    page_size rows (maximum 100) from the business table for the page's identifiers;
+    ResolveBusinessReferences reads at most 25. Both are point lookups against the existing
+    (tenant_id, business_id) primary-key index — no new index is required and none is
+    proposed. Against the 50-queries-per-Worker-invocation limit
+    (MULTITENANCY_STANDARD.md §7.3) that is 1.
+  rowsRead: >-
+    Bounded by construction and by a bound the caller cannot raise: at most 100 rows per
+    listing page and at most 25 per resolve call, and only for identifiers already proven to
+    be in the caller's authorized set. There is no unbounded read, no scan, and no query for
+    an identifier outside the set. The maximum page size is a disclosure control as well as a
+    performance one — it is what stops a read permission from being an undeclared bulk export
+    in one call.
+  workerInvocations: >-
+    +1 or +2 per directory screen load, against the 100,000/day free allowance. Under 0016 the
+    web client is a static-asset SPA whose page loads do not invoke the Worker at all, so
+    these are the API calls the allowance is being preserved for. Both responses are small —
+    a listing page is at most 100 rows of two short fields — so neither carries a meaningful
+    egress or CPU term against the 10 ms budget.
+  atTheLimit: >-
+    NOTHING TO DEGRADE, AND THIS CONTRACT MUST NOT BE THE THING THAT DEGRADES. Both Actions
+    are reads and 0014 §A.10 keeps reads available when the write budget is exhausted. If
+    Worker invocations become the binding constraint, the correct response is to reduce how
+    often clients call — a client that has just listed its authorized Businesses does not need
+    to resolve identifiers from that same set — and NEVER to refuse these reads, which would
+    convert a capacity control into an outage and would add a budget-dependent signal to a
+    path that currently carries none.
+  cost: "USD 0 / BD 0 per month. No new service, no new product, no new binding, no new table, no paid feature."
+
+# ---------------------------------------------------------------------------
+# versioning
+# ---------------------------------------------------------------------------
+versioning:
+  contractVersion: 1
+  apiVersion: v1
+  changeClass: additive
+  note: >-
+    This is the first version of a contract with no consumers, so it is additive by
+    definition. The window in which these choices are free is exactly the window this contract
+    was authored in, which is why the sort order, the nullable name, the two-member enum and
+    the batch maximum are all settled now rather than when they are needed.
+  breakingOnceEitherClientShips:
+    - "Adding a third member to resolutionState — and this is the change that would reopen the unknown-identifier oracle."
+    - "Making display_name non-nullable, or changing what null means."
+    - "Changing the listing's sort order, including 'fixing' it to name order after names exist — the contract already specifies name order, so no change is needed and any change is breaking."
+    - "Lowering the batch maximum of 25, or the page maximum of 100."
+    - "Changing either Action's permission or its evaluated scope."
+    - "Moving GET /businesses to another path, or reserving it for the organization-structure slice after the fact."
+    - "Widening GET /businesses to return Businesses beyond the caller's authorized set — breaking, and an authorization defect as well."
+    - "Adding a required request field to either Action."
+  additive:
+    - "New response fields on businessSummary and businessReference — which is exactly how the organization-structure slice extends this contract."
+    - "A new optional request field with a backward-compatible default."
+    - "A new Action in this contract set."
+    - "Raising the batch maximum above 25, if the HTTP binding's length arithmetic is redone with it."
+    - "Adding 'mcp' to either Action's exposure."
+    - "display_name beginning to carry values — the field is already contracted as nullable, so nothing changes shape on the day names exist."
+  driftSurfaces: >-
+    NAMED, BECAUSE A DUPLICATION NOBODY NAMED IS A DEFECT NOBODY CATCHES.
+      1. businessId IS DEFINED TWICE — here and in urn:dudo:schema:customer-directory:1. The
+         pattern, the length bounds and the opacity rules must stay identical. It is duplicated
+         because no URN resolver exists (dependencies.urnResolver); it should become one
+         canonical definition and one $ref the day one does. A pattern changed in one file and
+         not the other is a contract defect of the same class as cross-client drift, and it is
+         a qa-agent check rather than a reviewer's good intentions.
+      2. THE NORMATIVE CLIENT FALLBACK — render the identifier verbatim when display_name is
+         null — is stated in displayNameOrNull and must hold in BOTH clients. A client that
+         renders a blank, a dash or an invented placeholder has diverged, and under 0016 that
+         is a defect rather than a local style choice.
+      3. THIS CONTRACT DECLARES NO MANIFEST AND NEEDS NONE. It is Core's, not an App's;
+         app-manifest.schema.json describes Apps. There is therefore no manifest-versus-contract
+         restatement to drift, which is one drift surface the Customer Directory has and this
+         contract does not.
