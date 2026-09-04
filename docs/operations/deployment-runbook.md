@@ -309,6 +309,63 @@ expensive.
 "no end-to-end call has ever been made" appears in the release notes as the residual risk rather
 than as a footnote.
 
+## 8c. Adding a custom domain: two traps, both hit on 2026-09-05
+
+**Trap 1 — enabling custom domains silently disables `workers.dev`.** The moment `routes` with
+`custom_domain: true` are added, wrangler turns off the `*.workers.dev` hostname **by default**, and
+says so only in a warning. The old URL starts returning **404 for everything, including the SPA
+root.** Anyone mid-test against it sees a total outage.
+
+**Sequence the announcement before the deploy, not after.** A verification run was in flight when
+this happened here, and it reported "the deployment is unreachable" — accurately, about a hostname
+that had ceased to exist thirty seconds earlier.
+
+**Trap 2 — a negatively cached NXDOMAIN outlives the fix, and looks exactly like a failed deploy.**
+The records are created at Cloudflare's authoritative nameservers within seconds. But any resolver
+that was asked for the hostname **before** it existed caches the "does not exist" answer for the
+zone's SOA minimum — **1800 seconds, thirty minutes, for `dudo.work`.**
+
+On this machine the local router (`192.168.100.1`) held that answer, so `curl` failed for half an
+hour while the origin served `200` worldwide. **Both the Team Lead and `qa-agent` reported a
+provisioning failure that did not exist**, in opposite directions and an hour apart.
+
+**The diagnostic, and it takes ten seconds:**
+
+```
+dig +short A app.dudo.work @sage.ns.cloudflare.com   # authoritative — the truth
+dig +short A app.dudo.work                            # your resolver — may be stale
+curl --resolve app.dudo.work:443:104.21.12.54 https://app.dudo.work/health
+```
+
+**If the authoritative server answers and yours does not, the deployment is fine and your resolver
+is stale.** `--resolve` reaches it immediately. Do not re-deploy, do not re-create the domain, and
+do not conclude anything about the Worker.
+
+**"Unreachable from here" and "down" are different claims**, and only one of them is measurable from
+a single machine.
+
+> **The two errors were not the same size, and `qa-agent` insisted on the distinction against its own
+> interest.** The Team Lead said *"not resolving"* — accurate about what was observed. `qa-agent`
+> wrote *"the custom domains have no DNS records"* — **a claim about Cloudflare's zone, inferred from
+> its own resolver's answer.**
+>
+> In its words: *"That's the stronger error, and it's the same shape as the three wrong diagnoses in
+> my script: a specific conclusion drawn from something that only looked like evidence for it."*
+>
+> **The generalisation worth keeping: the distance between what you measured and what you asserted is
+> the size of the error, and it is not visible in the assertion itself.** Both statements read as
+> confident reports of a broken deployment. Only one of them was about something the author had
+> actually looked at.
+
+> **On working around a stale resolver.** `qa-agent` used a scratchpad preload redirecting
+> `dns.lookup` for `*.dudo.work`, deleted immediately after, **and disclosed it** — on the grounds
+> that *"a verification run that quietly rewired its own networking is exactly the unstated
+> environmental difference this project keeps getting caught by."*
+>
+> **Prefer that to an `/etc/hosts` entry.** A hosts entry never expires and nothing reminds you it is
+> there; a preload cannot outlive the process. **Either way, say so in the report** — a green run on
+> rewired networking is not the same evidence as a green run without it.
+
 ## 9. Rollback
 
 `npx wrangler rollback` reverts the Worker. **It does not revert a migration.** D1
