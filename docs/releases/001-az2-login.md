@@ -268,6 +268,32 @@ is not diligence:
 the actual value is before deciding what the assertion should be.** Reaching for the assertion first
 is how a test comes to describe the harness rather than the code.
 
+### A tenth, and it is a different failure entirely — describing your own work in the wrong frame
+
+`core-agent` implemented `0020`, which computes the authorized-business set **through the tenant
+handle**. Two days later it predicted the live response would show *"the two Businesses you seeded"*.
+
+**The correct answer is one.** There are two Businesses on the deployment, one per Organization, and
+the principal belongs to one Organization. The set is scoped by **tenant**, not by seed count — which
+is precisely the property that agent built.
+
+Its own account:
+
+> *"Not an inference about state I couldn't see, but a mis-description of a scoping rule I wrote
+> myself two days ago. **The set being smaller than the seed is the property working** — and if my
+> own expectation had gone unchallenged, 'one instead of two' is exactly the shape of result someone
+> investigates as a bug. Authoring a property does not make me immune to describing it in the wrong
+> frame."*
+
+**This is not the empty-assertion class and not the over-conclusion class.** Nothing was unmeasured
+and nothing was inferred beyond the evidence. The author knew the rule, had written the rule, and
+still described its output in the units of the input.
+
+**The danger is specific: a correct result that contradicts a stated expectation gets investigated as
+a defect**, and the investigation starts in the code that is working. The cheapest guard is the one
+that caught it here — **state what a property predicts in the property's own units**, and let someone
+who did not write it check the arithmetic.
+
 ### The ninth, and the most literal one
 
 Found by `qa-agent` while adopting a harness into `packages/testing/**`:

@@ -135,6 +135,20 @@ nowhere else:
   network failure produces a **duplicate customer**, and the contract explicitly does not
   deduplicate on name or email. Surviving the retry requires client-side persistence, so it is a
   small slice of its own rather than a line of code.
+- **The role / permission-catalog vocabulary fork — `0023`, and it has a trigger.** The catalog
+  describes six seed roles; `roles.ts` implements two. **This has now caused three deadlocks**
+  (`0019`, `0021`, `0023`), each closed by adding a permission to both roles. **It must be
+  reconciled before a second App exists**, because that is the point at which "add it to both
+  roles" stops being a small change and becomes a fork.
+- **No audited path for a role or permission change.** `0007` rule 9 requires it; `0018`, `0019`,
+  `0020` and `0023` each record its absence. Operator SQL and Organization creation have the same
+  gap.
+- **The authorized-business list is unpaged** (`0023`). `next_cursor` is always null, because paging
+  needs an offset into a set `0020` rebuilds per request. Bounded at 500 and 100, so **a principal
+  authorized over more than 100 Businesses cannot reach the rest** — a real truncation, invisible
+  to the caller.
+- **OS-1 — no rate limit on the session route class** (`0021`), owed before any non-operator user
+  alongside `0018`'s reserved allocation for revocation.
 - **A durable pre-auth rate limiter**, owed by `0017`, which must first answer the shared
   100,000/day Durable Object budget question recorded in `free-tier-register.md`.
 - **A reserved write allocation for revocation**, owed by `0018` — binding before any non-operator
