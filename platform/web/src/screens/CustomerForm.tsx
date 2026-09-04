@@ -22,7 +22,7 @@
  * person is shown when the two disagree.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { Field, Input, ReadOnlyValue, Select, Textarea } from '@/components/ui/field';
 import { ErrorBlock, Panel, Skeleton, StateBlock } from '@/components/StateBlock';
@@ -39,6 +39,8 @@ import {
   type UpdateCustomerChanges,
 } from '@/contracts/customer-directory';
 import type { CustomerDirectoryClient } from '@/api/client';
+import { makeBusinessLabeller, useAuthorizedBusinesses } from '@/lib/use-businesses';
+import { businessLabel } from '@/contracts/business-read';
 
 const LABELS: Record<string, string> = {
   business_id: 'Business',
@@ -175,7 +177,8 @@ function Form({
   record: Customer | null;
   mode: 'create' | 'edit';
 }) {
-  const businesses = useMemo(() => client.listBusinesses(), [client]);
+  const { businesses, loading: businessesLoading, isEmpty: noBusinesses } =
+    useAuthorizedBusinesses(client);
   const [values, setValues] = useState<FormValues>(record ? valuesFrom(record) : EMPTY);
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
   const [touched, setTouched] = useState<Partial<Record<string, boolean>>>({});
@@ -329,6 +332,49 @@ function Form({
     return touched[field] && errors[field] ? errors[field]! : null;
   }
 
+  /**
+   * A principal authorized over no Business cannot create a customer, because
+   * `business_id` is required on CreateCustomer and there is nothing valid to
+   * put in it.
+   *
+   * The contract requires both clients to render the empty authorized set as a
+   * first-class state rather than as a loading failure, and it is not a corner
+   * case: it is what every principal receives today, because Core ships a
+   * deny-all authorization source. Showing an empty picker and letting someone
+   * fill in the whole form before the server refuses it would be the worse
+   * interface — this says so before any effort is spent.
+   */
+  if (mode === 'create' && noBusinesses) {
+    return (
+      <div>
+        <a
+          href={getLastListHash()}
+          className="mb-4 inline-block text-[0.8125rem] font-semibold text-ink-muted no-underline"
+        >
+          ← Customers
+        </a>
+        <Panel>
+          <StateBlock
+            title="You are not authorized over any Business"
+            body={
+              <>
+                <p>
+                  Every customer is filed under a Business, and your account is not currently
+                  authorized over one. Ask an owner of this Organization to give you access.
+                </p>
+                <p className="text-[0.8125rem] text-ink-faint">
+                  Nothing is wrong with this page — it is showing you an empty result, not a
+                  failure.
+                </p>
+              </>
+            }
+            actions={<ButtonLink href={getLastListHash()}>Back to customers</ButtonLink>}
+          />
+        </Panel>
+      </div>
+    );
+  }
+
   return (
     <div>
       <a
@@ -397,13 +443,18 @@ function Form({
                 <Select
                   {...aria}
                   value={values.business_id}
+                  disabled={businessesLoading}
                   onChange={(event) => set('business_id', event.target.value)}
                   onBlur={() => blur('business_id')}
                 >
-                  <option value="">Choose a Business</option>
+                  <option value="">
+                    {businessesLoading ? 'Loading your Businesses…' : 'Choose a Business'}
+                  </option>
                   {businesses.map((business) => (
                     <option key={business.business_id} value={business.business_id}>
-                      {business.display_name}
+                      {/* Null name renders as the identifier, verbatim — the
+                          contract's normative rendering rule. */}
+                      {businessLabel(business)}
                     </option>
                   ))}
                 </Select>
@@ -413,8 +464,7 @@ function Form({
             <div className="grid gap-2">
               <span className="text-[0.8125rem] font-semibold text-ink-soft">Business</span>
               <ReadOnlyValue>
-                {businesses.find((b) => b.business_id === record?.business_id)?.display_name ??
-                  record?.business_id}
+                {makeBusinessLabeller(businesses)(record?.business_id ?? '')}
               </ReadOnlyValue>
               <p className="text-[0.8125rem] text-ink-muted">
                 Filed under this Business. Moving a customer to a different Business is a separate,

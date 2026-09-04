@@ -26,6 +26,7 @@ import { toast } from '@/components/Toaster';
 import { countryLabel, formatDate, formatTimestamp, statusLabel } from '@/contracts/format';
 import { toApiError, type ApiError } from '@/api/errors';
 import type { Customer } from '@/contracts/customer-directory';
+import { businessLabel, type BusinessReference } from '@/contracts/business-read';
 import type { CustomerDirectoryClient } from '@/api/client';
 import { getLastListHash } from '@/lib/last-list';
 import { navigate } from '@/lib/router';
@@ -42,6 +43,7 @@ export function CustomerDetail({
   const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<'archive' | 'restore' | null>(null);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [businessRef, setBusinessRef] = useState<BusinessReference | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
@@ -78,6 +80,38 @@ export function CustomerDetail({
   useEffect(() => {
     if (confirmingArchive) confirmRef.current?.focus();
   }, [confirmingArchive]);
+
+  /**
+   * Resolve this record's Business name.
+   *
+   * The response carries exactly one entry per requested identifier at the same
+   * index, with the identifier echoed. This reads `data[0]` and then checks the
+   * echoed identifier rather than trusting position alone — the contract echoes
+   * it precisely so a client need not depend on alignment.
+   *
+   * A failure here is deliberately swallowed: a name that will not load must
+   * not take down a record the person can otherwise read in full. The fallback
+   * is the identifier, which is what the contract says to render anyway.
+   */
+  useEffect(() => {
+    if (!customer) return;
+    let cancelled = false;
+
+    client
+      .resolveBusinessReferences([customer.business_id])
+      .then((response) => {
+        if (cancelled) return;
+        const entry = response.data[0];
+        if (entry && entry.business_id === customer.business_id) setBusinessRef(entry);
+      })
+      .catch(() => {
+        /* Falls back to the identifier. */
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, customer]);
 
   async function runTransition(kind: 'archive' | 'restore') {
     if (!customer) return;
@@ -136,9 +170,14 @@ export function CustomerDetail({
     );
   }
 
-  const businessName =
-    client.listBusinesses().find((b) => b.business_id === customer.business_id)?.display_name ??
-    customer.business_id;
+  // One record needs one Business name, so this screen uses
+  // ResolveBusinessReferences rather than fetching the caller's whole
+  // authorized set — which is the case that Action exists for.
+  const businessName = businessRef
+    ? businessLabel(businessRef)
+    : // Not yet resolved, or unresolved. Either way the identifier is the
+      // honest rendering; a client must never infer existence from a name.
+      customer.business_id;
 
   return (
     <div>

@@ -17,7 +17,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { configureFaults } from './api/fixture-transport';
+import { configureBusinesses, configureFaults } from './api/fixture-transport';
 import './styles/index.css';
 
 /**
@@ -33,6 +33,16 @@ const startupParams = new URLSearchParams(window.location.search);
 if (startupParams.has('fault')) {
   configureFaults(startupParams.get('fault'), startupParams.get('faultCode'));
 }
+
+/**
+ * `?businesses=none` makes the authorized Business set empty.
+ *
+ * Not a hypothetical state to play with: the Business Read contract states this
+ * is what every principal receives today, because Core ships a deny-all
+ * authorization source. Both clients are required to render it as a
+ * first-class state, so it has to be reachable to be demonstrated and reviewed.
+ */
+configureBusinesses(startupParams.get('businesses'));
 
 const container = document.getElementById('root');
 if (!container) throw new Error('Root container is missing from index.html');

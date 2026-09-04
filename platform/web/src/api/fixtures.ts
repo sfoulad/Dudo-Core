@@ -27,15 +27,30 @@ const P = {
 } as const;
 
 /**
- * ⚠ FIXTURE-ONLY. No contract publishes the Businesses a principal is
- * authorized over — see the note on `BusinessRef`. Reported to the Team Lead;
- * a `core/organization/business-read-v1` contract now exists on another branch
- * and replaces this the moment it is readable.
+ * The Businesses this fixture principal is authorized over.
+ *
+ * NOW CONTRACTED. These are `businessSummary` rows from
+ * `core.ListAuthorizedBusinesses` (business-read-v1) — the contract that closed
+ * the gap this client previously filled with a local placeholder.
+ *
+ * `display_name` IS NULL ON EVERY ROW, AND THAT IS NOT LAZINESS IN THE FIXTURE
+ * — IT IS THE CONTRACT'S STATED PRESENT REALITY. Nothing in Dudo stores a
+ * Business name: `platform/core/migrations/0002_business.sql` defines the
+ * business table as exactly (tenant_id, business_id) and declined a name column
+ * because that belongs to the organization-structure slice. So every response
+ * from both Actions carries `display_name: null` today.
+ *
+ * Inventing names here would have made this client's screens show a state that
+ * cannot occur, and would have made the web and Apple clients look different
+ * for a reason that is not in the contract. Instead the fixture is truthful and
+ * the contracted fallback — render the `business_id` verbatim — is the path
+ * actually exercised. The day the organization-structure slice adds names, the
+ * same code renders them with no change here.
  */
 export const FIXTURE_BUSINESSES: readonly BusinessRef[] = Object.freeze([
-  { business_id: 'biz_marina_ops', display_name: 'Marina Trading W.L.L.' },
-  { business_id: 'biz_atlas_logi', display_name: 'Atlas Logistics' },
-  { business_id: 'biz_northgate1', display_name: 'Northgate Studio' },
+  { business_id: 'biz_marina_ops', display_name: null },
+  { business_id: 'biz_atlas_logi', display_name: null },
+  { business_id: 'biz_northgate1', display_name: null },
 ]);
 
 const B = {

@@ -25,17 +25,23 @@
  */
 
 import type { Transport } from './fixture-transport';
-import type {
-  BusinessRef,
-  CollectionEnvelope,
-  CreateCustomerInput,
-  Customer,
-  CustomerAction,
-  CustomerSummary,
-  ListCustomersInput,
-  SearchCustomersInput,
-  UpdateCustomerChanges,
+import { ApiError } from './errors';
+import {
+  PAGE_SIZE_MAX,
+  type CollectionEnvelope,
+  type CreateCustomerInput,
+  type Customer,
+  type CustomerAction,
+  type CustomerSummary,
+  type ListCustomersInput,
+  type SearchCustomersInput,
+  type UpdateCustomerChanges,
 } from '../contracts/customer-directory';
+import {
+  RESOLVE_BATCH_MAX,
+  type BusinessSummary,
+  type ResolveBusinessReferencesOutput,
+} from '../contracts/business-read';
 
 /**
  * The HTTP binding, transcribed from
@@ -76,7 +82,8 @@ export interface CustomerDirectoryClient {
   archiveCustomer(customerId: string): Promise<Customer>;
   restoreCustomer(customerId: string): Promise<Customer>;
   moveCustomerToBusiness(customerId: string, businessId: string): Promise<Customer>;
-  listBusinesses(): BusinessRef[];
+  listAuthorizedBusinesses(): Promise<BusinessSummary[]>;
+  resolveBusinessReferences(businessIds: string[]): Promise<ResolveBusinessReferencesOutput>;
 }
 
 export function createCustomerDirectoryClient(transport: Transport): CustomerDirectoryClient {
@@ -142,12 +149,63 @@ export function createCustomerDirectoryClient(transport: Transport): CustomerDir
     },
 
     /**
-     * FIXTURE ONLY. The Businesses a principal may file a customer under are
-     * not published by any contract in packages/contracts/**. This method
-     * exists so the gap is visible in code rather than papered over.
+     * core.ListAuthorizedBusinesses — GET /api/v1/businesses.
+     *
+     * Pages through the whole authorized set. That is correct here rather than
+     * lazy: the caller is a Business picker and a row-label map, both of which
+     * need the complete set, and the set is the principal's own authorization
+     * — not the Organization's directory. A principal authorized over more than
+     * one page of Businesses is rare; a picker missing options is wrong.
+     *
+     * An EMPTY RESULT IS A VALID ANSWER, not a failure, and every caller must
+     * render it as a first-class state.
      */
-    listBusinesses() {
-      return transport.listBusinesses ? transport.listBusinesses() : [];
+    async listAuthorizedBusinesses(): Promise<BusinessSummary[]> {
+      const all: BusinessSummary[] = [];
+      let cursor: string | undefined;
+
+      // Bounded: the page size is capped at 100 by the contract, and the guard
+      // stops a malformed cursor chain from looping forever.
+      for (let page = 0; page < 20; page += 1) {
+        const response = (await transport.invoke(
+          'core.ListAuthorizedBusinesses',
+          compact({ page_size: PAGE_SIZE_MAX, cursor }),
+        )) as CollectionEnvelope<BusinessSummary>;
+        all.push(...response.data);
+        if (!response.next_cursor) break;
+        cursor = response.next_cursor;
+      }
+      return all;
+    },
+
+    /**
+     * core.ResolveBusinessReferences — GET /api/v1/businesses/names.
+     *
+     * Use when a screen needs names for a known, bounded set of identifiers —
+     * one record's Business, or the distinct Businesses on one page — rather
+     * than the caller's whole authorized set.
+     *
+     * The response carries one entry per requested identifier AT THE SAME
+     * INDEX, with the identifier echoed, whatever its resolution. A caller must
+     * not treat a missing name as a missing Business: `resolution` is the only
+     * field that says whether the reference resolved, and a resolved reference
+     * may still have a null name.
+     */
+    resolveBusinessReferences(businessIds: string[]): Promise<ResolveBusinessReferencesOutput> {
+      if (businessIds.length < 1 || businessIds.length > RESOLVE_BATCH_MAX) {
+        // Stated rather than silently sliced: the caller chose the batch, and
+        // quietly dropping identifiers would make the positional guarantee a
+        // lie one level up.
+        return Promise.reject(
+          new ApiError({
+            code: 'invalid_argument',
+            message: `business_ids must name between 1 and ${RESOLVE_BATCH_MAX} Businesses.`,
+          }),
+        );
+      }
+      return transport.invoke('core.ResolveBusinessReferences', {
+        business_ids: businessIds,
+      }) as Promise<ResolveBusinessReferencesOutput>;
     },
   };
 }

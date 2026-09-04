@@ -219,19 +219,8 @@ export type CustomerAction =
   | 'customers.MoveCustomerToBusiness';
 
 /**
- * A Business of the authenticated Organization.
- *
- * ⚠ NO CONTRACT PUBLISHES THIS YET. `business_id` is required on
- * CreateCustomer and returned on every row, but nothing in
- * packages/contracts/** publishes the Businesses a principal is authorized
- * over, or a display name for one. This shape is a FIXTURE-ONLY placeholder,
- * reported to the Team Lead as a missing contract, and a
- * `core/organization/business-read-v1` contract now exists on another branch.
- * When it lands this type is replaced by the contracted one and
- * `listBusinesses()` stops being a local invention. No view may depend on a
- * field of it beyond these two.
+ * Re-exported for convenience. The gap this client once filled with a local
+ * placeholder is closed: a Business reference is now `businessSummary` from
+ * `core/organization/business-read-v1`. See contracts/business-read.ts.
  */
-export interface BusinessRef {
-  business_id: BusinessId;
-  display_name: string;
-}
+export type { BusinessSummary as BusinessRef } from './business-read';

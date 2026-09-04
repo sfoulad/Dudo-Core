@@ -37,7 +37,6 @@ import {
   PAGE_SIZE_DEFAULT,
   PAGE_SIZE_MAX,
   STATUS_FILTERS,
-  type BusinessRef,
   type CollectionEnvelope,
   type Customer,
   type CustomerAction,
@@ -46,11 +45,19 @@ import {
   type EditableField,
   type StatusFilter,
 } from '../contracts/customer-directory';
+import {
+  RESOLVE_BATCH_MAX,
+  type BusinessReference,
+  type BusinessSummary,
+  type CoreAction,
+  type ResolveBusinessReferencesOutput,
+} from '../contracts/business-read';
+
+export type DudoAction = CustomerAction | CoreAction;
 
 export interface Transport {
   readonly name: string;
-  invoke(action: CustomerAction, input?: Record<string, unknown>): Promise<unknown>;
-  listBusinesses?(): BusinessRef[];
+  invoke(action: DudoAction, input?: Record<string, unknown>): Promise<unknown>;
 }
 
 /* -------------------------------------------------------------------------
@@ -75,6 +82,26 @@ export function configureFaults(scope: string | null, code?: string | null): voi
     ? (scope as FaultScope)
     : null;
   if (code) faults.code = code as ErrorCode;
+}
+
+/**
+ * A principal authorized over NO Business.
+ *
+ * This is not a hypothetical: the contract states it is what every principal
+ * receives today, because Core ships a deny-all authorization source whose
+ * authorized business set is empty for everyone. Both clients are required to
+ * render it as a first-class state rather than as a loading failure, so it has
+ * to be reachable to be demonstrated. Set from the URL: `?businesses=none`.
+ */
+let authorizedBusinessesEmpty = false;
+
+export function configureBusinesses(mode: string | null): void {
+  authorizedBusinessesEmpty = mode === 'none';
+}
+
+function authorizedBusinesses(): BusinessSummary[] {
+  if (authorizedBusinessesEmpty) return [];
+  return FIXTURE_BUSINESSES.map((business) => ({ ...business }));
 }
 
 const FAULT_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -309,7 +336,7 @@ function collect(
     // A business_id naming a Business of another Organization and one naming no
     // Business at all are indistinguishable: both are not_found. That is what
     // stops this call being a probe for another Organization's structure.
-    if (!FIXTURE_BUSINESSES.some((b) => b.business_id === businessId)) {
+    if (!authorizedBusinesses().some((b) => b.business_id === businessId)) {
       throw error('not_found', 'No such Business.');
     }
   }
@@ -455,7 +482,123 @@ function transition(
    Actions
    ------------------------------------------------------------------------- */
 
-const ACTIONS: Record<CustomerAction, (input: Record<string, unknown>) => unknown> = {
+const ACTIONS: Record<DudoAction, (input: Record<string, unknown>) => unknown> = {
+  /**
+   * core.ListAuthorizedBusinesses — business-read-v1.
+   *
+   * Returns only what the caller is authorized over, never the whole
+   * Organization. An EMPTY PAGE IS VALID AND REACHABLE, not an error.
+   *
+   * Order is fixed and total: display_name ascending by code point WITH NULLS
+   * LAST, then business_id ascending as the tiebreaker. Because display_name is
+   * null on every row today the order degenerates to business_id ascending —
+   * which is the observable behaviour now and becomes name order, with no
+   * contract change, the day names exist.
+   */
+  'core.ListAuthorizedBusinesses'(input) {
+    maybeFail('list');
+    rejectUnknownFields(input, ['page_size', 'cursor'], 'ListAuthorizedBusinesses');
+    const pageSize = resolvePageSize(input.page_size);
+
+    let rows = authorizedBusinesses().sort((a, b) => {
+      // Nulls last, so a named Business never sorts among the unnamed ones.
+      if (a.display_name === null && b.display_name !== null) return 1;
+      if (a.display_name !== null && b.display_name === null) return -1;
+      if (a.display_name !== null && b.display_name !== null) {
+        const byName = compareCodePoints(normalise(a.display_name), normalise(b.display_name));
+        if (byName !== 0) return byName;
+      }
+      return compareCodePoints(a.business_id, b.business_id);
+    });
+
+    if (typeof input.cursor === 'string' && input.cursor) {
+      const payload = decodeCursor(input.cursor);
+      if (payload.p !== pageSize) {
+        throw invalid('The cursor is not valid for this request.', [
+          { field: 'cursor', issue: 'invalid_cursor' },
+        ]);
+      }
+      const index = rows.findIndex((row) => row.business_id === payload.a);
+      if (index === -1) {
+        throw invalid('The cursor is not valid for this request.', [
+          { field: 'cursor', issue: 'invalid_cursor' },
+        ]);
+      }
+      rows = rows.slice(index + 1);
+    }
+
+    const page = rows.slice(0, pageSize);
+    const last = page[page.length - 1];
+    const nextCursor =
+      rows.length > pageSize && last
+        ? encodeCursor({ a: last.business_id, s: 'all', b: null, p: pageSize })
+        : null;
+
+    return { data: page, next_cursor: nextCursor };
+  },
+
+  /**
+   * core.ResolveBusinessReferences — business-read-v1.
+   *
+   * THE POSITIONAL GUARANTEE IS THE SECURITY PROPERTY OF THIS ACTION, not an
+   * ergonomic nicety. Exactly one entry exists per requested identifier, at the
+   * same index, with the identifier echoed — NEVER omitted, reordered,
+   * deduplicated or collapsed, whatever its resolution. Omitting the ones that
+   * did not resolve would disclose by absence which of the caller's
+   * identifiers exist, rebuilding the existence oracle out of array length.
+   *
+   * `unresolved` covers all three of: a Business of another Organization, a
+   * Business of this Organization the principal is not authorized over, and an
+   * identifier that names no Business anywhere. They are indistinguishable
+   * STRUCTURALLY rather than by a rule someone must remember — this tests
+   * membership of the authorized set and never reads storage, so it has no fact
+   * available with which to tell them apart.
+   */
+  'core.ResolveBusinessReferences'(input) {
+    maybeFail('detail');
+    rejectUnknownFields(input, ['business_ids'], 'ResolveBusinessReferences');
+
+    const ids = input.business_ids;
+    if (!Array.isArray(ids)) {
+      throw invalid('business_ids is required.', [{ field: 'business_ids', issue: 'required' }]);
+    }
+    if (ids.length < 1) {
+      throw invalid('business_ids must name at least one Business.', [
+        { field: 'business_ids', issue: 'too_short' },
+      ]);
+    }
+    if (ids.length > RESOLVE_BATCH_MAX) {
+      throw invalid(`business_ids may name at most ${RESOLVE_BATCH_MAX} Businesses.`, [
+        { field: 'business_ids', issue: 'too_long' },
+      ]);
+    }
+    if (new Set(ids).size !== ids.length) {
+      throw invalid('business_ids must not repeat an identifier.', [
+        { field: 'business_ids', issue: 'not_unique' },
+      ]);
+    }
+    for (const id of ids) {
+      const issue = validateField('business_id', id as string, { required: true });
+      if (issue) {
+        throw invalid('business_ids contains an invalid identifier.', [
+          { field: 'business_ids', issue: issue.issue },
+        ]);
+      }
+    }
+
+    const authorized = authorizedBusinesses();
+    const data: BusinessReference[] = (ids as string[]).map((id) => {
+      const found = authorized.find((b) => b.business_id === id);
+      return found
+        ? { business_id: id, display_name: found.display_name, resolution: 'resolved' }
+        : { business_id: id, display_name: null, resolution: 'unresolved' };
+    });
+
+    // No next_cursor: the length is fixed by the request, so there is nothing
+    // to page through and no null field for a client to branch on.
+    return { data } satisfies ResolveBusinessReferencesOutput;
+  },
+
   'customers.ListCustomers'(input) {
     maybeFail('list');
     return collect(input, () => true);
@@ -492,7 +635,7 @@ const ACTIONS: Record<CustomerAction, (input: Record<string, unknown>) => unknow
     }
     const businessIssue = validateField('business_id', businessId);
     if (businessIssue) throw invalid('business_id is not a valid identifier.', [businessIssue]);
-    if (!FIXTURE_BUSINESSES.some((b) => b.business_id === businessId)) {
+    if (!authorizedBusinesses().some((b) => b.business_id === businessId)) {
       throw error('not_found', 'No such Business.');
     }
 
@@ -594,7 +737,7 @@ const ACTIONS: Record<CustomerAction, (input: Record<string, unknown>) => unknow
       required: true,
     });
     if (businessIssue) throw invalid('business_id is not a valid identifier.', [businessIssue]);
-    if (!FIXTURE_BUSINESSES.some((b) => b.business_id === input.business_id)) {
+    if (!authorizedBusinesses().some((b) => b.business_id === input.business_id)) {
       throw error('not_found', 'No such Business.');
     }
     if (record.status === 'pending_deletion') {
@@ -651,14 +794,6 @@ export function createFixtureTransport(): Transport {
         // A defect in this file must not leak a stack to a screen.
         throw error('internal', 'The request could not be completed.');
       }
-    },
-
-    /**
-     * FIXTURE ONLY — no contract publishes this yet. See the note on
-     * `BusinessRef`.
-     */
-    listBusinesses() {
-      return FIXTURE_BUSINESSES.map((business) => ({ ...business }));
     },
   };
 }

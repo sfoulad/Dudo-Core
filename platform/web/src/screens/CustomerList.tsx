@@ -32,6 +32,8 @@ import { LIMITS } from '@/contracts/field-rules';
 import { PAGE_SIZE_DEFAULT, type CustomerSummary, type StatusFilter } from '@/contracts/customer-directory';
 import { toApiError, type ApiError } from '@/api/errors';
 import type { CustomerDirectoryClient } from '@/api/client';
+import { makeBusinessLabeller, useAuthorizedBusinesses } from '@/lib/use-businesses';
+import { businessLabel } from '@/contracts/business-read';
 import { cn } from '@/lib/cn';
 
 const SEARCH_DEBOUNCE_MS = 260;
@@ -71,7 +73,12 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
   const businessId = query.business ?? '';
   const cursor = query.cursor ?? '';
 
-  const businesses = useMemo(() => client.listBusinesses(), [client]);
+  // The authorized set fills the Business filter and labels every row. An
+  // empty set is valid and is simply a filter with no options — the directory
+  // itself still renders, because a principal's Business authorization and the
+  // customers it can see are answered by different Actions.
+  const { businesses } = useAuthorizedBusinesses(client);
+  const businessName = useMemo(() => makeBusinessLabeller(businesses), [businesses]);
   const searching = searchTerm.trim().length >= LIMITS.search_query.min;
 
   const pageIndex = trailIndexFor(`${searchTerm}|${status}|${businessId}`, cursor || null);
@@ -146,12 +153,6 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
       cancelled = true;
     };
   }, [client, searchTerm, searching, status, businessId, cursor, reloadNonce]);
-
-  function businessName(id: string): string {
-    // Falls back to the identifier rather than to a blank: the Business name
-    // has no contract behind it, so the true value is the one on the wire.
-    return businesses.find((b) => b.business_id === id)?.display_name ?? id;
-  }
 
   const announcement = loading
     ? 'Loading customers.'
@@ -254,7 +255,10 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
               <option value="">All my Businesses</option>
               {businesses.map((business) => (
                 <option key={business.business_id} value={business.business_id}>
-                  {business.display_name}
+                  {/* Null name renders as the identifier, verbatim — the
+                      contract's normative rendering rule, binding on both
+                      clients. */}
+                  {businessLabel(business)}
                 </option>
               ))}
             </Select>
