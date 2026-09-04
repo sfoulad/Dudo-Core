@@ -203,7 +203,30 @@ web and the enrolment tool agree on all nine KDF vectors.
 
 - **No end-to-end call against a deployed Core has ever been made.** Both halves of every binding
   have been tested only against stubs.
-### Gate step 5: **NOT SATISFIED.** `qa-agent`'s judgement, 2026-09-04, in its own terms
+### The three-way collapse, demonstrated rather than argued
+
+`business-read-v1` requires that "does not exist", "belongs to another Organization" and "not
+authorized" be indistinguishable. The Team Lead tested it with two identifiers — one authorized, one
+belonging to the other tenant — and got `resolved` / `unresolved`.
+
+**That test was insufficient and `qa-agent` said so.** Two entries show that filtering does not
+happen. **They do not show that `unresolved` is uninformative** — with only those two, it could still
+have meant *"exists, but not yours."*
+
+It asked for **three**: the authorized Business, the other tenant's **real** Business, and a
+**fabricated identifier that exists nowhere.**
+
+```json
+[{"business_id":"Z8YNRb…","display_name":null,"resolution":"resolved"},
+ {"business_id":"E6ufCC…","display_name":null,"resolution":"unresolved"},
+ {"business_id":"ZZZZZZ…","display_name":null,"resolution":"unresolved"}]
+```
+
+**A real Business in another Organization and a string that has never existed are byte-identical** —
+same resolution, same null name, same position. **The fabricated control is what makes it evidence
+rather than illustration**, and it is the entry the Team Lead's version omitted.
+
+### Gate step 5: `qa-agent`'s judgement, 2026-09-05 — satisfied for two clients, blocked at step 4 for the third
 
 Asked whether Apple's now-re-runnable evidence closed step 5, QA answered no — **and gave a reason
 that has nothing to do with Apple.** Recorded verbatim in substance because the Team Lead would not
@@ -462,7 +485,7 @@ local override, at the cost of reproducible deploys. **Not decided here.**
 | 2 — Core passes tests | **Yes** |
 | 3 — web deployed to test environment | **YES** — https://dudo-core.sameh-0d2.workers.dev, live and exercised end to end |
 | 4 — Apple on internal TestFlight | **No** — blocked on app-icon artwork, a user decision. A test target exists; that is no longer a reason |
-| 5 — QA evidence for both | **Partial.** Core and web have full evidence and the deployment is now exercised — but `verify-staging.ts` was written before session routes existed and **never performs the Organization selection step**, so its session stays `organization-not-selected` and it misreads every downstream result as "no authorized Business". Its remaining failures are that one stale assumption, not defects. **`qa-agent` must add the selection step and re-run before step 5 can be judged.** |
+| 5 — QA evidence for both | **SATISFIED for Core and the web client. BLOCKED for Apple at step 4.** `qa-agent` re-ran both principals against version `0b9b397b`: **20 passed / 0 failed** (auto-select path) and **18 passed / 0 failed** (picker path), with `CHECK 3b` finally answering — **`0019` and `0020` are live on the deployment, not merely in the harness.** The remaining gap is **not a testing gap**: Apple has no deployed artifact, so no evidence about the shipped app talking to this Worker can exist. `qa-agent` explicitly objected to recording this as satisfied outright, because *"a user reading 'evidence for both clients' would reasonably conclude someone had run the Apple app against Dudo, and nobody has."* |
 | 6 — this package | **Partial** — URL and build number pending |
 | 7 — **user acceptance** | **Not sought, and cannot be** |
 
