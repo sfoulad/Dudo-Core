@@ -95,6 +95,63 @@ of it they are on.
   data-adjacent objects; `0007` rule 9 and the four separate records of "no auditable home" make
   this the moment to stop deferring it.
 
+## Decision 4 — the bootstrap exception to `0007` D11, declared rather than discovered
+
+**Raised by `architecture-agent` as `PO-2`, and it is right that an exception to the rule which
+makes the permission model non-escalating must not live only in a contract.**
+
+**The tension.** `0007` D11 condition 1: *"the granting principal holds the permission it is
+granting, at a scope that contains the scope of the grant. **You cannot grant what you do not
+have.**"*
+
+**Onboarding violates that on its face.** A platform operator creates an Organization's first
+membership at role `owner` — which carries seven `customers.*` permissions plus
+`core.business.read`. **The operator holds none of them, and could not**: it has no membership
+anywhere (`0024`), and `MembershipRole` may never carry platform authority (`0024`, Decision 1
+above).
+
+**Ruling: this is a bounded bootstrap exception, and it is declared as one.**
+
+**D11 governs delegation between tenant principals** — one member granting another, which is where
+classic RBAC escalation lives. **Onboarding is not delegation: there is no principal in the
+Organization yet to delegate from.** The operator is not passing on its own authority; it is
+establishing the tenant's first.
+
+**Four bounds, every one checkable in code**, because *"an unbounded exception to D11 is a hole in
+the permission model wearing the word bootstrap"*:
+
+1. **Only at Organization creation**, in the same operation that creates it. Never to an
+   Organization that already exists.
+2. **Exactly one membership, at exactly one role, `owner`.** Not a chosen role, not a list, and
+   **not a role named in the request.**
+3. **Unavailable the moment the Organization has any membership row.** From then on, adding members
+   is ordinary tenant administration under D11 unchanged, performed by that Organization's own
+   owner.
+4. **No other platform operation may grant a tenant permission, ever.** Credential reset changes a
+   credential and grants nothing; Template operations touch no tenant.
+
+## Decision 5 — the platform-operator action log
+
+**Raised as `PO-1`, and it blocks every route in the class**, so it is settled here rather than
+deferred again.
+
+Every platform route writes to a **platform-operator action log** in the control plane: a new
+object, distinct from the tenant audit trail, recording **which operator did what, to which
+Organization, when.**
+
+**Why it cannot be the tenant audit trail.** An operator action **spans tenants by nature** — it
+creates an Organization that has no audit trail yet, or resets a credential for one tenant while
+belonging to none. A purely tenant-side record leaves **the platform with no account of what its own
+operators did**, which is precisely the thing an operator log exists to provide.
+
+**What it must not contain:** any tenant business data. It records the *operation and its target
+identifiers*, never the contents of what was touched. This is the same discipline `0013` applied to
+denial summaries and `0023`'s marker applied to failure announcements — **an operator log that
+accumulates customer data is a second copy of the tenant database with weaker access rules.**
+
+**Ordering resolves the circularity** `0014` §A.2 recorded: write `tenant_directory` first, then the
+store handle resolves, then the record is written.
+
 ## Consequences
 
 - **Onboarding costs 10 control-plane row-writes** (`0024`), not the 6 `control-plane-admission.ts`
