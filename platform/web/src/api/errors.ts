@@ -117,8 +117,31 @@ const BODIES: Partial<Record<ErrorCode, string>> = {
   forbidden:
     'Your permissions do not cover this customer. Ask an owner of this Organization for access.',
   not_found: 'It may have been moved, or the link may be wrong.',
+  /*
+   * THIS WORDING DESCRIBED A MECHANISM DUDO DOES NOT HAVE, AND IT WAS THE FIRST
+   * THING A REAL USER SAW. Recorded rather than quietly replaced, because the
+   * way it was wrong is the useful part.
+   *
+   * It read: "The record has moved on since this page was loaded. Reload it to
+   * see where it stands now." That is a stale-record conflict — and
+   * `customer-directory-v1` carries NO optimistic-concurrency token at all
+   * ("LAST WRITE WINS", open question CD-3), so it is a condition this platform
+   * cannot detect and therefore cannot be reporting.
+   *
+   * What it was actually shown for was a session with no Organization selected,
+   * on every request, for every principal — where "reload" cannot help and
+   * sends the reader in a circle. That state is now intercepted before it
+   * reaches any wording: see `lib/use-organization.ts`.
+   *
+   * WHAT IS LEFT IS THE CUSTOMER STATE MACHINE, and that is what this now
+   * describes. Core renders both with the same constant message and no details
+   * (`kernel/errors.ts`), so this text can never be more specific than the
+   * error is — but it can at least be about the right thing, and a message
+   * confidently describing the wrong cause is worse than a general one.
+   */
   failed_precondition:
-    'The record has moved on since this page was loaded. Reload it to see where it stands now.',
+    'This record is not in a state that allows it — an archived customer cannot be edited, and ' +
+    'one awaiting deletion cannot be archived. Open it again to see where it stands.',
   rate_limited: 'Wait a moment and try again.',
   unavailable: 'This is usually brief. Try again in a moment.',
   timeout: 'The request did not finish. Try again.',

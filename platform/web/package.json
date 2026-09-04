@@ -12,7 +12,8 @@
     "verify:kdf": "node --experimental-strip-types scripts/verify-kdf.mjs",
     "verify:transport": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-transport.mjs",
     "verify:auth": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-auth.mjs",
-    "verify": "npm run typecheck && npm run verify:kdf && npm run verify:transport && npm run verify:auth"
+    "verify:organization": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-organization.mjs",
+    "verify": "npm run typecheck && npm run verify:kdf && npm run verify:transport && npm run verify:auth && npm run verify:organization"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

@@ -54,6 +54,20 @@ export interface Session {
   readonly state: SessionState;
   /** Set only when the probe failed for a reason that is NOT `401`. */
   readonly probeError: ApiError | null;
+  /**
+   * The probe has answered — either way. `useOrganization` gates its 422
+   * listener on this so a cold start with no Organization selected does not run
+   * two identical probes: the session probe's own 422 fires that signal.
+   */
+  readonly settled: boolean;
+  /**
+   * The credential is good and NO ORGANIZATION IS SELECTED — reported by the
+   * probe, and never inferred from a login. It is NOT an authentication
+   * failure: `0021` is explicit that answering this with a login screen builds
+   * a loop that cannot terminate, because a fresh login produces another
+   * session with nothing selected either.
+   */
+  readonly organizationRequired: boolean;
   readonly signingOut: boolean;
   /**
    * The last sign-out did not reach Core, so the credential was NOT cleared and
@@ -76,6 +90,8 @@ export function useSession(transport: Transport, auth: AuthClient): Session {
   const [signingOut, setSigningOut] = useState(false);
   const [signOutUncleared, setSignOutUncleared] = useState(false);
   const [probeNonce, setProbeNonce] = useState(0);
+  const [settled, setSettled] = useState(false);
+  const [organizationRequired, setOrganizationRequired] = useState(false);
 
   useEffect(() => {
     /*
@@ -87,6 +103,7 @@ export function useSession(transport: Transport, auth: AuthClient): Session {
      */
     if (CONFIG.transport !== 'http') {
       setState(readSessionHint() ? 'authenticated' : 'anonymous');
+      setSettled(true);
       return;
     }
 
@@ -96,6 +113,8 @@ export function useSession(transport: Transport, auth: AuthClient): Session {
       if (cancelled) return;
       setState(result.state);
       setProbeError(result.error);
+      setOrganizationRequired(result.organizationRequired);
+      setSettled(true);
       if (result.state === 'anonymous') writeSessionHint(false);
       if (result.state === 'authenticated') writeSessionHint(true);
     });
@@ -116,6 +135,7 @@ export function useSession(transport: Transport, auth: AuthClient): Session {
     () =>
       onUnauthenticated(() => {
         writeSessionHint(false);
+        setOrganizationRequired(false);
         setState('anonymous');
       }),
     [],
@@ -126,6 +146,15 @@ export function useSession(transport: Transport, auth: AuthClient): Session {
     // here would spend a request confirming what the `200` already said.
     setProbeError(null);
     setSignOutUncleared(false);
+    /*
+     * NOT `organizationRequired: true`, and not `false` as a claim either — the
+     * flag is cleared because nothing has been probed for THIS session yet.
+     * `login-v1` says a `200` may or may not carry a selected Organization and
+     * the response has no field that reports it, deliberately. The client's
+     * next move is to attempt the work and react to the refusal, not to branch
+     * here on a fact it does not have.
+     */
+    setOrganizationRequired(false);
     setState('authenticated');
   }, []);
 
@@ -174,6 +203,8 @@ export function useSession(transport: Transport, auth: AuthClient): Session {
   return {
     state,
     probeError,
+    settled,
+    organizationRequired,
     signingOut,
     signOutUncleared,
     signedIn,

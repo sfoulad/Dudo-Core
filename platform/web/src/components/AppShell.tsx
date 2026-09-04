@@ -44,7 +44,16 @@ export function AppShell({
       <header className="on-navy sticky top-0 z-20 bg-navy-800 text-white">
         <div className="mx-auto flex min-h-14 max-w-[1180px] items-center gap-4 px-4 py-2">
           <a href="#/customers" className="flex items-center gap-3 rounded-[7px] text-inherit no-underline">
-            <img src="/dudo-mark.svg" alt="" width={28} height={28} className="size-7 shrink-0" />
+            {/* Decorative: the "Dudo" wordmark beside it carries the name, so `alt` is
+                empty. The mark ships with its own navy field, which matches the header
+                — the rounding is what keeps it reading as an icon rather than a patch. */}
+            <img
+              src="/dudo-mark.png"
+              alt=""
+              width={28}
+              height={28}
+              className="size-7 shrink-0 rounded-[6px]"
+            />
             <span className="font-serif text-lg leading-none tracking-[0.01em]">Dudo</span>
             <span className="ms-1 hidden border-s border-white/20 ps-3 text-[0.8125rem] tracking-[0.02em] text-[#b9c0dd] sm:inline">
               Customers

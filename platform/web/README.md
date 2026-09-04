@@ -143,7 +143,9 @@ not.
 
 ```
 index.html                       Vite entry
-public/dudo-mark.svg             the identity, taken from the app icon
+public/dudo-mark.png             the identity — the scarlet macaw from the app icon
+public/favicon-{16,32}.png       browser tab, downscaled from the same 1254 px source
+public/apple-touch-icon.png      iOS home screen (180 px)
 src/main.tsx                     entry point
 src/App.tsx                      route table
 src/styles/index.css             Tailwind v4 @theme tokens + the directory table rules
@@ -304,6 +306,61 @@ On XSS, stated precisely: an injected script **cannot exfiltrate** the credentia
 for as long as the page is open, via same-origin requests the browser attaches the cookie
 to. `HttpOnly` removes credential theft, not session abuse.
 
+## Choosing an Organization
+
+**A `200` from login is not a usable session.** Every session is created with no
+Organization selected, and until one is recorded *server-side* every business request
+answers `422 failed_precondition` — for every principal, not only for people who belong to
+more than one Organization. Contract:
+`packages/contracts/core/identity/organization-selection-v1.contract.yaml`; decision:
+`docs/decisions/0021-session-routes.md`.
+
+The client attempts the work and reacts to the refusal. It **does not** call the picker
+after login:
+
+1. `POST /auth/login/complete`. Do not branch here — the response has no field saying
+   whether an Organization is selected, deliberately.
+2. Make the request the person asked for.
+3. On `failed_precondition`, resolve it, then `GET /auth/session/organizations`, present
+   the choice, `POST /auth/session/organization`, and let the screen re-read.
+
+With **exactly one** Organization the picker is not drawn and it is selected immediately.
+That skips the *menu*, never the *call*: the request is byte-identical to the one a drawn
+picker would send, which is why the server cannot tell and does not record the difference.
+There is no server-side fallback and no client-side memory of a previous choice — a local
+copy of the selected tenant would be an ambient tenant in the one place Dudo has none.
+
+**Step 3 needs a probe, and this is the part that is easy to get wrong.** The contract says
+a 422 from any route means "no Organization selected". That is not true of the deployed
+platform: `customer-directory-v1` uses `failed_precondition` for its own state machine, and
+`kernel/errors.ts` builds both with no arguments and a constant message, so **the two are
+byte-identical**. A 422 therefore opens nothing by itself. It triggers `probeSession`, which
+calls `core.ListAuthorizedBusinesses` — an Action that declares *no* `failed_precondition`,
+so a 422 from it cannot have come from the Action and must have come from authentication,
+before the router. Only that answer opens the picker. Without it, archiving an
+already-archived customer would draw an Organization picker.
+
+The **mid-session** case is the same code and is not a special case: membership is
+re-validated on every request, so a revoked membership collapses the session back to
+unselected at the *next* request and the person returns to the picker with an explanation —
+not to a login screen, which `0021` notes would be a loop that cannot terminate.
+
+**Organizations have no names.** `display_name` is always `null` because
+`0002_organization.sql` declined a name column, so the picker lists 22-character
+identifiers and says so. No placeholder name is invented, in either client.
+
+Reviewing it locally, with no backend — this is what was missing when the step shipped
+unbuilt:
+
+```
+VITE_DUDO_FIXTURE_ORGANIZATIONS=2 npm run dev   # the picker
+VITE_DUDO_FIXTURE_ORGANIZATIONS=1 npm run dev   # auto-select, no picker drawn (default)
+VITE_DUDO_FIXTURE_ORGANIZATIONS=0 npm run dev   # the no-membership state
+```
+
+The fixture transport refuses with the same constant `failed_precondition` until a
+selection is made, so the same client code runs in both builds.
+
 ## Verifying
 
 No test framework is approved (`architecture.md` §6, TS1 open), and an agent may not
@@ -311,10 +368,11 @@ install one. These run on Node's own WebCrypto with **zero dependencies** and im
 **real modules**, not copies:
 
 ```
-npm run verify           # typecheck + all three below
-npm run verify:kdf       # the KDF, and the shared cross-client test vectors
-npm run verify:transport # what the HTTP transport puts on the wire
-npm run verify:auth      # the login request body, field by field
+npm run verify              # typecheck + all four below
+npm run verify:kdf          # the KDF, and the shared cross-client test vectors
+npm run verify:transport    # what the HTTP transport puts on the wire
+npm run verify:auth         # the login request body, field by field
+npm run verify:organization # the two session routes, and the 422 discriminator
 ```
 
 `verify:kdf` prints the **shared test vectors** ADR 0015 §D requires QA to bind both

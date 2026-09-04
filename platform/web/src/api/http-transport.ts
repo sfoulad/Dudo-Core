@@ -199,8 +199,17 @@ const CODE_BY_STATUS: Record<number, ErrorCode> = {
   404: 'not_found',
   408: 'timeout',
   409: 'conflict',
+  // Core never emits 412. Kept because something in FRONT of the Worker might,
+  // and 412 has exactly one conventional meaning.
   412: 'failed_precondition',
-  422: 'invalid_argument',
+  // 422 IS `failed_precondition`, NOT `invalid_argument`, and this was wrong
+  // until 2026-09-05. `platform/core/kernel/errors.ts` maps invalid_argument to
+  // 400 and failed_precondition to 422 — so this entry claimed the one status
+  // Core uses for the unselected-Organization state meant a malformed request.
+  // It only bites when the body is not Dudo's envelope, because the envelope's
+  // own code wins; that is precisely the edge-proxy case where the status is
+  // all there is to go on.
+  422: 'failed_precondition',
   429: 'rate_limited',
   500: 'internal',
   502: 'unavailable',
@@ -235,6 +244,17 @@ function readRetryAfter(response: Response, envelope: Record<string, unknown>): 
     if (Number.isFinite(seconds) && seconds >= 0) return seconds;
   }
   return null;
+}
+
+/**
+ * Exported so `organization.ts` decodes envelopes identically.
+ *
+ * The session routes are not Actions and do not go through this transport, but
+ * they answer with the SAME error envelope, and two decoders for one envelope
+ * is the drift `0012` is named after.
+ */
+export function decodeErrorResponse(response: Response, payload: unknown): ApiError {
+  return decodeError(response, payload);
 }
 
 function decodeError(response: Response, payload: unknown): ApiError {
@@ -282,6 +302,15 @@ export interface HttpTransportOptions {
    * Core, which is where the decision was made and the only place it counts.
    */
   onUnauthenticated?: () => void;
+  /**
+   * Called for every `failed_precondition`, before the `ApiError` is thrown.
+   *
+   * IT REPORTS AN AMBIGUITY, NOT A DIAGNOSIS. See the call site: Core's 422 for
+   * "no Organization selected" and its 422 for "that customer is archived" are
+   * the same bytes. A listener that opened an Organization picker on this alone
+   * would draw one when somebody archived an archived customer.
+   */
+  onPreconditionFailed?: () => void;
   /** Overridable for tests. Defaults to the global. */
   fetchImpl?: typeof fetch;
   baseUrl?: string;
@@ -378,7 +407,18 @@ export function createHttpTransport(options: HttpTransportOptions = {}): Transpo
         if (response.status === 401) {
           options.onUnauthenticated?.();
         }
-        throw decodeError(response, payload);
+        const error = decodeError(response, payload);
+        if (error.code === 'failed_precondition') {
+          // "SOMETHING was refused as a precondition" — NOT "no Organization is
+          // selected". This transport cannot tell those apart and must not
+          // pretend to: `failedPrecondition()` in Core takes no arguments and
+          // carries a constant message, so the unselected-Organization refusal
+          // and an attempt to archive an already-archived customer are
+          // byte-identical here. The listener resolves the ambiguity with a
+          // probe; all this does is say "worth checking".
+          options.onPreconditionFailed?.();
+        }
+        throw error;
       }
 
       // Success bodies are the contract's own shapes — the customer object, or

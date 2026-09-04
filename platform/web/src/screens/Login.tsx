@@ -157,7 +157,9 @@ export function Login({
   return (
     <div className="mx-auto grid w-full max-w-[26rem] gap-6 py-4 sm:py-10">
       <div className="grid justify-items-center gap-3 text-center">
-        <img src="/dudo-mark.svg" alt="" width={44} height={44} className="size-11" />
+        {/* Unlike the header, this sits on light paper, so the mark's navy field is
+            visible and reads as an app-icon tile. Rounded to match. */}
+        <img src="/dudo-mark.png" alt="" width={44} height={44} className="size-11 rounded-[10px]" />
         <h1 className="font-serif text-2xl text-ink">Sign in to Dudo</h1>
         <p className="text-[0.9375rem] text-ink-muted">
           Your password is prepared on this device and never sent to Dudo.

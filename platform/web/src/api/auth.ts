@@ -98,6 +98,7 @@
 import { ApiError, toApiError } from './errors';
 import { CONFIG } from './config';
 import { deriveLogin, type DerivationProgress } from './kdf-client';
+import { setFixtureOrganizationSelected } from './fixture-session-state';
 import type { Transport } from './fixture-transport';
 
 /** The two fields `login.ts` declares. Undeclared fields are refused by Core. */
@@ -195,21 +196,61 @@ export function writeSessionHint(active: boolean): void {
  * unreachable for every real user. The status code is the answer; the body is
  * not consulted at all.
  */
-export async function probeSession(
-  transport: Transport,
-): Promise<{ state: SessionState; error: ApiError | null }> {
+export interface SessionProbe {
+  readonly state: SessionState;
+  /**
+   * The credential is good and NO ORGANIZATION IS SELECTED. Only ever `true`
+   * alongside `state: 'authenticated'`.
+   */
+  readonly organizationRequired: boolean;
+  readonly error: ApiError | null;
+}
+
+export async function probeSession(transport: Transport): Promise<SessionProbe> {
   try {
     await transport.invoke('core.ListAuthorizedBusinesses', { page_size: 1 });
-    return { state: 'authenticated', error: null };
+    return { state: 'authenticated', organizationRequired: false, error: null };
   } catch (thrown) {
     const error = toApiError(thrown);
     if (error.code === 'unauthenticated') {
-      return { state: 'anonymous', error: null };
+      return { state: 'anonymous', organizationRequired: false, error: null };
+    }
+    /*
+     * `failed_precondition` HERE MEANS "NO ORGANIZATION SELECTED", AND THIS
+     * PROBE IS THE ONLY PLACE IN THE CLIENT THAT CAN SAY SO SOUNDLY.
+     *
+     * Core's 422 is a constant: `failedPrecondition()` takes no arguments and
+     * carries a fixed message, so an unselected Organization and an archived
+     * customer are indistinguishable on the wire — everywhere except here.
+     * What makes this call different is the Action it uses:
+     * `core.ListAuthorizedBusinesses` declares
+     * `[invalid_argument, unauthenticated, forbidden, rate_limited, internal,
+     * unavailable, timeout]` and NO `failed_precondition` of its own
+     * (business-read-v1). It is a read with no state machine, so it has no
+     * business precondition to fail.
+     *
+     * A 422 from it therefore cannot have come from the Action at all. It came
+     * from `api.ts` STEP 1, where `session-principal-resolver.ts` maps
+     * `organization-not-selected` onto `failedPrecondition()` BEFORE the router
+     * is consulted. That is a sound inference from the contract rather than a
+     * guess at a message string, and it is why every other 422 in the
+     * application is resolved by calling this function instead of being read
+     * directly.
+     *
+     * IT IS `authenticated`, NOT `unknown`. Treating it as `unknown` is what
+     * made a reload show "Dudo is confirming you are still signed in" and then
+     * an error panel, for a person whose credential was perfectly good. And it
+     * must not be `anonymous`: `0021` is explicit that answering a 422 with a
+     * login screen builds a loop that cannot terminate, because logging in
+     * again produces another session with no Organization selected.
+     */
+    if (error.code === 'failed_precondition') {
+      return { state: 'authenticated', organizationRequired: true, error: null };
     }
     // Unreachable, rate limited, forbidden, internal — none of these says
     // anything about whether a session exists, so none of them may be reported
     // as `anonymous`. The caller shows the error and offers a retry.
-    return { state: 'unknown', error };
+    return { state: 'unknown', organizationRequired: false, error };
   }
 }
 
@@ -473,6 +514,12 @@ export function createFixtureAuthClient(): AuthClient {
         });
       }
       writeSessionHint(true);
+      // A NEW SESSION HAS NO ORGANIZATION SELECTED, in the fixture exactly as
+      // in Core: `login.ts` creates the session `organization-not-selected` and
+      // selection is a separate request every time. A fixture that carried the
+      // previous session's selection across a login would hide the one step
+      // this build exists to exercise.
+      setFixtureOrganizationSelected(false);
       return {
         email: derived.email,
         derivationMs: derived.elapsedMs,
@@ -487,6 +534,7 @@ export function createFixtureAuthClient(): AuthClient {
       // not as a stand-in for a success it did not have.
       await new Promise((resolve) => setTimeout(resolve, 120));
       writeSessionHint(false);
+      setFixtureOrganizationSelected(false);
       return { cleared: true };
     },
   };

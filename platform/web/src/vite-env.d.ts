@@ -40,6 +40,17 @@ interface ImportMetaEnv {
    * Optional, and clamped; a malformed value falls back to the default.
    */
   readonly VITE_DUDO_API_TIMEOUT_MS?: string;
+
+  /**
+   * FIXTURE BUILDS ONLY — how many Organizations the fixture picker offers.
+   * Ignored when `VITE_DUDO_TRANSPORT=http`, where the real session routes
+   * answer. Default `1`.
+   *
+   * `1` takes the auto-select path and draws no picker; `2` or more draws it;
+   * `0` renders the "you are not a member of any Organization" state. It is a
+   * review aid, not a product setting, and it decides nothing on the server.
+   */
+  readonly VITE_DUDO_FIXTURE_ORGANIZATIONS?: string;
 }
 
 interface ImportMeta {

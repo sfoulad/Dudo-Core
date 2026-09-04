@@ -113,11 +113,34 @@ function readTimeoutMs(raw: string | undefined): number {
   return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, parsed));
 }
 
+/**
+ * How many Organizations the FIXTURE build offers. Ignored entirely when the
+ * transport is `http`.
+ *
+ * It exists because the Organization picker was shipped unbuilt once already,
+ * and the reason it was missed is that nothing local could reach it: every
+ * check of that flow was performed by hand against a deployment. `1` exercises
+ * the auto-select path where no picker is drawn, `2` or more exercises the
+ * picker itself, and both are one build flag apart.
+ */
+const DEFAULT_FIXTURE_ORGANIZATIONS = 1;
+const MAX_FIXTURE_ORGANIZATIONS = 20;
+
+function readFixtureOrganizations(raw: string | undefined): number {
+  const value = (raw ?? '').trim();
+  if (value === '') return DEFAULT_FIXTURE_ORGANIZATIONS;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_FIXTURE_ORGANIZATIONS;
+  return Math.min(MAX_FIXTURE_ORGANIZATIONS, parsed);
+}
+
 export interface WebConfig {
   readonly transport: TransportName;
   /** `''` means same origin. Never carries a trailing slash and never a path. */
   readonly apiBaseUrl: string;
   readonly requestTimeoutMs: number;
+  /** Fixture builds only. `0` renders the "no memberships" state. */
+  readonly fixtureOrganizations: number;
 }
 
 /**
@@ -139,6 +162,7 @@ export const CONFIG: WebConfig = Object.freeze({
   transport: readTransport(env('VITE_DUDO_TRANSPORT')),
   apiBaseUrl: readApiBaseUrl(env('VITE_DUDO_API_BASE_URL')),
   requestTimeoutMs: readTimeoutMs(env('VITE_DUDO_API_TIMEOUT_MS')),
+  fixtureOrganizations: readFixtureOrganizations(env('VITE_DUDO_FIXTURE_ORGANIZATIONS')),
 });
 
 /**

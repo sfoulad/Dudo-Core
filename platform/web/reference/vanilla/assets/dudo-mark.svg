@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Dudo">
-  <rect width="32" height="32" rx="8" fill="#071342"/>
-  <g transform="translate(16 26)">
-    <path d="M0 0C-4-5-4-11.5 0-16 4-11.5 4-5 0 0Z" fill="#1f6fb2" transform="rotate(-30)"/>
-    <path d="M0 0C-4-5-4-11.5 0-16 4-11.5 4-5 0 0Z" fill="#f5b301" transform="rotate(30)"/>
-    <path d="M0 0C-5-6-5-14 0-20 5-14 5-6 0 0Z" fill="#e0301e"/>
-  </g>
-</svg>
