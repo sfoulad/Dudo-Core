@@ -8,8 +8,18 @@ fields step 6 requires and this document cannot yet contain are marked `PENDING`
 
 | Field | Value |
 |---|---|
-| **Web URL** | **https://dudo-core.sameh-0d2.workers.dev** — live 2026-09-05 |
-| Worker version | `f10bdef0-7fb7-451a-aa65-9b688afa7d1b` |
+| **Web URL** | **https://app.dudo.work** — the application **and its API**, same origin |
+| Admin | **https://admin.dudo.work** (`0010`) — serves, no admin interface built yet |
+| Machine API | **https://api.dudo.work** — non-browser clients, `Authorization: Bearer` (`0022`) |
+| Worker version | `baa833a6-70f8-4b4a-a19c-a7d8735d77c3` |
+
+> **`dudo-core.sameh-0d2.workers.dev` is GONE.** Enabling custom domains automatically disabled
+> `workers.dev`; that hostname now returns 404. Any earlier reference to it in this document or in
+> a terminal history is dead.
+>
+> **Point browser clients at `app.dudo.work`, never `api.dudo.work`.** The session cookie is
+> host-only, so a cookie-based client authenticates against `api.` and is then refused on every
+> subsequent call — which looks like a Bearer defect and is not one. See `0022`.
 | TestFlight build | **PENDING** — blocked on app-icon artwork, a user decision |
 | `Dudo-Core` commit | **PENDING** — everything deployed came from an **uncommitted working tree** off `d35c22b` |
 | `Dudo-Apple` commit | **PENDING** — uncommitted, off `555a81f` |

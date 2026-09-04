@@ -32,6 +32,32 @@
   // Team Lead change, not an implementation detail.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dudo-core",
+
+  // Three hostnames, one Worker (docs/decisions/0022).
+  //
+  // WHY THE API IS NOT SPLIT OFF FROM THE APP. The session cookie is host-only —
+  // pre-auth-http.ts sets HttpOnly/Secure/SameSite=Lax/Path and NO Domain attribute — so a
+  // browser at app.dudo.work would never send it to api.dudo.work. Serving each browser-facing
+  // host its own API on its own origin keeps the cookie unmodified. The alternative, a
+  // Domain=dudo.work cookie, would broadcast a session credential for a business's customer
+  // records to every subdomain that ever exists.
+  //
+  //   app.dudo.work    the web application AND its API      cookie, host-only
+  //   admin.dudo.work  the admin interface (0010)           cookie, host-only, SEPARATE session
+  //   api.dudo.work    the API only, for NON-browser clients  Authorization: Bearer
+  //
+  // api.dudo.work is not an alias. It is where the Apple client and future integrations talk to
+  // Dudo — that client disabled URLSession's cookie store entirely, so it has no cookie to lose
+  // across origins and already carries its credential as Bearer (0018 §A). The split follows a
+  // line the system already had.
+  //
+  // The apex dudo.work is deliberately left with no record: a marketing surface is a different
+  // problem, and pointing the apex at the application would decide it by accident.
+  "routes": [
+    { "pattern": "app.dudo.work", "custom_domain": true },
+    { "pattern": "admin.dudo.work", "custom_domain": true },
+    { "pattern": "api.dudo.work", "custom_domain": true }
+  ],
   // The deployment entry module is at the ROOT, not inside platform/core.
   //
   // Mounting an App requires importing `apps/customers/**`, and CORE_BOUNDARIES.md §6 rule 2
