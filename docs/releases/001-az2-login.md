@@ -20,7 +20,7 @@ fields step 6 requires and this document cannot yet contain are marked `PENDING`
 > **Point browser clients at `app.dudo.work`, never `api.dudo.work`.** The session cookie is
 > host-only, so a cookie-based client authenticates against `api.` and is then refused on every
 > subsequent call — which looks like a Bearer defect and is not one. See `0022`.
-| TestFlight build | **PENDING** — blocked on app-icon artwork, a user decision |
+| TestFlight build | **PENDING — and NOT on artwork.** The icon has been in place since 2026-09-01; the user's re-supplied file was measured **bit-identical** to it. **This document claimed artwork was the blocker for two days after it was cleared**, and `app-agent` flagged the stale line rather than leaving it. The real blockers are the **unconfirmed macOS platform** on the App Store Connect record, and an upload nobody has attempted |
 | `Dudo-Core` commit | **PENDING** — everything deployed came from an **uncommitted working tree** off `d35c22b` |
 | `Dudo-Apple` commit | **PENDING** — uncommitted, off `555a81f` |
 
