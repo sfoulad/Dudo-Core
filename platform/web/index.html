@@ -1,31 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>Customers · Dudo</title>
   <meta name="description" content="Dudo — the customer directory for startups and small businesses.">
-
-  <link rel="icon" href="assets/dudo-mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles/tokens.css">
-  <link rel="stylesheet" href="styles/base.css">
-  <link rel="stylesheet" href="styles/app.css">
-
-  <script type="module" src="src/main.js"></script>
+  <link rel="icon" href="/dudo-mark.svg" type="image/svg+xml">
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to main content</a>
-
-  <div id="app" class="app" data-state="booting">
-    <p class="boot">Loading Dudo…</p>
-  </div>
-
+  <!--
+    `dir` is on <html> and every style uses logical properties, so switching to
+    RTL is an attribute change rather than a stylesheet rewrite (ADR 0010, and
+    0016 carries the rule forward).
+  -->
+  <div id="root"></div>
   <noscript>
-    <div class="noscript">
+    <div style="padding: 3rem 1.5rem; text-align: center; font-family: system-ui, sans-serif">
       <h1>Dudo</h1>
       <p>The customer directory needs JavaScript to run. Enable it and reload the page.</p>
     </div>
   </noscript>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

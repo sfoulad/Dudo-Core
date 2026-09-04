@@ -4,9 +4,6 @@
 
 The browser client for Dudo, across desktop, tablet, and phone widths.
 
-> Moved here from `apps/` by `docs/decisions/0004-repository-structure.md`. `apps/` is now
-> reserved for installable business Apps.
-
 The native Apple application is **not** here — it lives in the separate `Dudo-Apple`
 repository and is owned by `app-agent`.
 
@@ -27,6 +24,59 @@ Boundaries: `docs/architecture/boundaries.md` · Delivery:
 
 ---
 
+## Stack
+
+**React 19 · TypeScript · Vite · Tailwind CSS v4 · shadcn/ui**, built to static assets
+and served by Cloudflare Workers Static Assets — `docs/decisions/0016-web-application-stack.md`.
+
+The reason shapes how this is built, so it is repeated here rather than left in the ADR:
+**requests for static assets are free and unlimited.** They do not invoke the Worker,
+consume no CPU, and do not count against the 100,000 requests/day allowance. An SPA
+therefore preserves the entire Workers allowance for the API, which is the only thing
+that genuinely needs the server.
+
+**`run_worker_first` must not be enabled for asset routes.** It converts free, unlimited
+asset requests into billed Worker invocations under a daily cap, and past that cap they
+return `429` rather than falling back to serving the asset.
+
+### Dependencies, and why each one
+
+Twelve direct packages, 84 in the tree. Every one is a supply-chain surface, so each is
+justified:
+
+| Package | Why |
+|---|---|
+| `react`, `react-dom` | The decision (`0016`) |
+| `clsx`, `tailwind-merge` | The `cn()` helper every shadcn/ui component expects, so copy-in components work unmodified and this surface can share components with admin (`0010`) |
+| `class-variance-authority` | The variant helper shadcn/ui components are written against |
+| `vite`, `@vitejs/plugin-react` | The build (`0016`) |
+| `tailwindcss`, `@tailwindcss/vite` | The styling (`0016`) |
+| `typescript`, `@types/react`, `@types/react-dom` | The language (`0003`) |
+
+**Deliberately NOT installed**, and each is a decision rather than an omission:
+
+- **No component library as a package.** shadcn/ui is copy-in source — `src/components/ui/`
+  is ours to edit. `0016` is explicit about this.
+- **No router.** Five routes, and `src/lib/router.ts` is about ninety lines. If admin
+  standardises on one, that file is the thing to replace.
+- **No Radix.** Native `input`, `textarea` and `select` are already accessible and already
+  use the phone's system picker. When a rich combobox is genuinely needed, that is the
+  moment to add Radix.
+- **No notification library.** `src/components/Toaster.tsx` is about forty lines.
+- **No test framework. TS1 is still open** — choosing Vite does not choose Vitest, and
+  `qa-agent`'s dependency-free runner stands until TS1 is decided on its own merits.
+
+### RTL
+
+`0010`'s rule applies here and it is not cosmetic: **logical properties only** —
+`ps`/`pe`, `ms`/`me`, `start`/`end`, `text-start`, `border-s`/`border-e`. Never
+`left`/`right`.
+
+This is **verified, not asserted**: the directory was rendered with `dir="rtl"` and the
+whole layout mirrors with no stylesheet change. That pass also found a real bug —
+a phone number begins with a neutral `+`, so the bidi algorithm reordered
+`+973 3901 2244` into `2244 3901 973+`. Contact values now carry `dir="ltr"`.
+
 ## What is built
 
 The **Customer Directory**, contract `customer-directory-v1`, running against fixture
@@ -42,41 +92,33 @@ data. Five screens:
 
 `MoveCustomerToBusiness` has a client method and no screen. `DeleteCustomer` and
 `RestoreDeletedCustomer` have **neither** — they are contracted and deliberately out of
-scope for this slice (contract §11.1), so nothing in this application offers them.
-
-## Zero dependencies, by constraint and by choice
-
-**No web framework and no npm package is approved for `Dudo-Core`.** ADR `0003` approves
-TypeScript and six Cloudflare services; it approves no framework, no bundler and no
-library, and adding one is a user decision (`.claude/rules/security.md` §7).
-
-So this is plain HTML, plain CSS and vanilla JavaScript ES modules, served as static
-assets. **There is no `package.json`, no `node_modules`, no build step and no bundler.**
-Open `index.html` from a static server and it runs. That is not a workaround — a CRUD
-directory is comfortably within the web platform, it deploys as Worker assets at zero
-cost against `0008`, and it starts instantly.
+scope for this slice (contract §11.1). They are absent from the `CustomerAction` union,
+so calling either is a **compile error** rather than a code-review question.
 
 ## Running it
 
-ES modules are blocked over `file://` by browser CORS rules, so it needs a static server.
-Anything will do:
-
 ```
 cd platform/web
-python3 -m http.server 8931 --bind 127.0.0.1
+npm install
+npm run dev          # http://127.0.0.1:5173
 ```
 
-Then open `http://127.0.0.1:8931/`.
+Or against the production build:
+
+```
+npm run build        # tsc --noEmit && vite build  ->  dist/
+npm run preview
+```
 
 ### Seeing the error states
 
 Nothing fails on its own — a directory that failed at random would teach people to click
-through real problems. Faults are injected explicitly from the page's query string:
+through real problems. Faults are injected explicitly from the query string:
 
 ```
-http://127.0.0.1:8931/?fault=list#/customers
-http://127.0.0.1:8931/?fault=detail&faultCode=forbidden#/customers/cus_7Kq2mVx4
-http://127.0.0.1:8931/?fault=write#/customers/new
+/?fault=list#/customers
+/?fault=detail&faultCode=forbidden#/customers/cus_7Kq2mVx4
+/?fault=write#/customers/new
 ```
 
 `fault` is one of `list`, `detail`, `write`, `all`. `faultCode` is any platform error
@@ -85,59 +127,64 @@ code; it defaults to `unavailable`.
 ## Layout
 
 ```
-index.html                    the only page
-assets/dudo-mark.svg          the identity, taken from the app icon
-styles/tokens.css             colour, type, space and shape tokens
-styles/base.css               element defaults, buttons, form fields
-styles/app.css                shell, directory, record, form
-src/main.js                   entry point — wires shell, router and client
-src/router.js                 hash routing
-src/dom.js                    element construction; textContent only, no innerHTML
-src/api/client.js             the contract-shaped client, and the HTTP route table
-src/api/fixture-transport.js  the stand-in for Core
-src/api/fixtures.js           synthetic data
-src/api/errors.js             the error envelope, client side
-src/domain/field-rules.js     schema constraints, transcribed
-src/domain/format.js          presentation formatting
-src/ui/                       shell, shared components, toasts
-src/views/                    the four screens
+index.html                       Vite entry
+public/dudo-mark.svg             the identity, taken from the app icon
+src/main.tsx                     entry point
+src/App.tsx                      route table
+src/styles/index.css             Tailwind v4 @theme tokens + the directory table rules
+src/lib/                         cn(), hash router, last-list memory
+src/contracts/                   contract-derived TYPES, field rules, formatting
+src/api/                         client, fixture transport, fixtures, error envelope
+src/components/ui/               copy-in shadcn-style primitives
+src/components/                  shell, toaster, state blocks
+src/screens/                     the four screens
+reference/vanilla/               the zero-dependency build (see below)
 ```
+
+## `reference/vanilla/`
+
+The **zero-dependency build this application replaced**, preserved intact and runnable.
+`0016` records it as the fallback if the dependency footprint ever becomes unacceptable,
+and a working reference is worth having. Plain HTML, CSS and ES modules; no build step.
+
+```
+cd platform/web/reference/vanilla
+python3 -m http.server 8931 --bind 127.0.0.1
+```
+
+It is **not** part of the Vite build and is excluded from `tsconfig.json`.
 
 ## Swapping the fixture for the real API
 
-One file. `src/api/client.js` takes a transport with a single
-`invoke(action, input)` method; `fixture-transport.js` implements it from memory today,
-and an `http-transport.js` will implement it against the routes already transcribed in
-`client.js` (`BASE_PATH` + `ROUTES`). **No view changes**, because no view knows which
-transport it is talking to.
+One file. `src/api/client.ts` takes a `Transport` with a single `invoke(action, input)`
+method; `fixture-transport.ts` implements it from memory today, and an `http-transport.ts`
+will implement it against the routes already transcribed in `client.ts` (`BASE_PATH` +
+`ROUTES`). **No screen changes**, because no screen knows which transport it is talking to.
 
 Two fixture-only things must go at the same time, and both are marked in the code:
 
-- `FIXTURE_ACTING_PRINCIPAL` in `fixture-transport.js` — the real
+- `FIXTURE_ACTING_PRINCIPAL` in `fixture-transport.ts` — the real
   `updated_by_principal_id` is derived server-side and is never chosen by a client.
-- `listBusinesses()` on the client and `FIXTURE_BUSINESSES` in `fixtures.js` — **no
-  contract publishes the Businesses a principal may file a customer under**, and
-  `business_id` is required on `CreateCustomer`. This is an open contract request, not a
-  shape this client intends to keep.
+- `listBusinesses()` and `FIXTURE_BUSINESSES` — **no contract published the Businesses a
+  principal may file a customer under** when this was built, and `business_id` is required
+  on `CreateCustomer`. A `core/organization/business-read-v1` contract now exists; this
+  goes away when it is consumable.
 
 ## What this application does not do
 
 - **It makes no network call.** Nothing authenticates and no environment is deployed
-  (contract §11, item 1 — AZ2).
+  (contract §11 item 1 — AZ2).
 - **It decides nothing.** Permission, tenant resolution and the authorized-business set
   are decided in `platform/core/**` on every call. Client-side validation exists so a
   person is told about a mistake before they submit it; the server validates again and
   its answer wins.
-- **It never renders customer text as markup.** `src/dom.js` sets text with
-  `textContent` and has no `innerHTML` path, so that is a property of the helper rather
-  than a rule each view has to remember.
 - **It shows no total count.** The contract returns none, and the reason is tenant
-  isolation rather than performance (`packages/contracts/common/pagination.schema.json`).
-  "Showing 25 customers" is true; "25 of 247" is not available and is not invented.
+  isolation rather than performance. "Showing 25 customers" is true; "25 of 247" is not
+  available and is not invented.
 
 ## Data
 
-`src/api/fixtures.js` holds 34 synthetic customers across three Businesses of one
+`src/api/fixtures.ts` holds 34 synthetic customers across three Businesses of one
 Organization. Every name is invented, every email uses a reserved example domain, and
 every address and phone number is made up. **Nothing resembling real customer data may
 ever be added** (`.claude/rules/security.md` §6). State lives in memory for the life of

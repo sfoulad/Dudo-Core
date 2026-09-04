@@ -1,0 +1,272 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Dudo — design tokens
+   ---------------------------------------------------------------------------
+   Ported unchanged in value from the zero-dependency build's tokens.css, now
+   expressed as a Tailwind v4 `@theme` so every token also generates utilities.
+   The palette is not invented: it is the Dudo app icon — deep navy #071342
+   with a scarlet macaw. Navy is the frame, scarlet is the single accent that
+   means "this is the action", and the macaw's gold and blue carry the two
+   remaining signals.
+
+   RTL: every style in this application uses LOGICAL properties — start/end,
+   ps/pe, ms/me, border-s/border-e, text-start/text-end — and never left/right.
+   ADR 0010's rule, carried forward by 0016. It is not cosmetic; Dudo will need
+   Arabic, and switching is then a `dir` attribute rather than a rewrite.
+   --------------------------------------------------------------------------- */
+
+@theme {
+  /* Brand */
+  --color-navy-900: #040b2b;
+  --color-navy-800: #071342;
+  --color-navy-700: #142057;
+  --color-navy-600: #23327a;
+  --color-navy-100: #e7e9f3;
+  --color-navy-50: #f2f3f9;
+
+  --color-scarlet-700: #a5161f;
+  --color-scarlet-600: #c81e28;
+  --color-scarlet-500: #e0301e;
+  --color-scarlet-50: #fdedec;
+
+  --color-gold-700: #8a6100;
+  --color-gold-500: #f5b301;
+  --color-gold-50: #fdf4dc;
+
+  --color-azure-700: #14588f;
+  --color-azure-500: #1f6fb2;
+  --color-azure-50: #e9f2fa;
+
+  --color-green-700: #14624b;
+  --color-green-500: #1d7a5f;
+  --color-green-50: #e7f3ee;
+
+  /* Neutrals — warm. A warm paper under navy reads as a considered document;
+     a cool grey under navy reads as a dashboard template. */
+  --color-paper: #faf8f5;
+  --color-surface: #ffffff;
+  --color-sunk: #f4f1ec;
+  --color-line: #e6e1d9;
+  --color-line-strong: #d3ccc0;
+  --color-ink: #191b22;
+  --color-ink-soft: #40444f;
+  --color-ink-muted: #5e6472;
+  --color-ink-faint: #8a8f9c;
+
+  /* Type */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+                "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  --radius-sm: 4px;
+  --radius-DEFAULT: 7px;
+  --radius-lg: 12px;
+
+  --shadow-card: 0 1px 2px rgb(7 19 66 / 0.06);
+  --shadow-raised: 0 1px 3px rgb(7 19 66 / 0.08), 0 6px 18px -8px rgb(7 19 66 / 0.16);
+  --shadow-float: 0 2px 6px rgb(7 19 66 / 0.10), 0 24px 48px -20px rgb(7 19 66 / 0.28);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* The `hidden` attribute must win. Any component that sets `display` would
+     otherwise override the UA's `display: none` and leave an empty error slot
+     under every form field — a bug this application has already had once. */
+  [hidden] {
+    display: none !important;
+  }
+
+  /* One visible focus ring, never removed, redrawn in gold inside dark
+     surfaces so it cannot disappear against navy. */
+  :focus-visible {
+    outline: 3px solid var(--color-navy-600);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  .on-navy :focus-visible {
+    outline-color: var(--color-gold-500);
+  }
+
+  ::placeholder {
+    color: var(--color-ink-faint);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The directory table
+   ---------------------------------------------------------------------------
+   Plain CSS rather than utilities, deliberately. Turning a semantic <table>
+   into a stack of record cards means changing `display` on five elements and
+   re-placing two of them on a grid; expressed as arbitrary Tailwind variants it
+   is both unreadable and — as this build proved — easy to get wrong. These
+   exact rules were verified working in the zero-dependency build and are
+   carried over unchanged in behaviour.
+
+   Logical properties throughout: padding-inline, text-align: start,
+   margin-inline-end. Nothing here needs editing for RTL.
+   --------------------------------------------------------------------------- */
+
+@layer components {
+  .directory {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .directory thead th {
+    padding: var(--spacing, 0.25rem) 0;
+    padding-block: 0.75rem;
+    padding-inline: 1rem;
+    background: var(--color-sunk);
+    border-bottom: 1px solid var(--color-line);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-ink-muted);
+    text-align: start;
+    white-space: nowrap;
+  }
+
+  .directory tbody tr {
+    border-bottom: 1px solid var(--color-line);
+    cursor: pointer;
+  }
+  .directory tbody tr:last-child { border-bottom: 0; }
+  .directory tbody tr:hover,
+  .directory tbody tr:focus-within { background: var(--color-navy-50); }
+
+  .directory td {
+    padding-block: 0.75rem;
+    padding-inline: 1rem;
+    vertical-align: middle;
+    color: var(--color-ink-soft);
+  }
+
+  .cell-label { display: none; }
+
+  /* Email and Business may be shortened in the directory — the whole value is
+     on the record, one click away, and a row that grows to three lines makes
+     the directory harder to scan than a shortened value does. */
+  .directory td.cell-email > .cell-value,
+  .directory td.cell-business > .cell-value {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .directory td.cell-phone { white-space: nowrap; }
+
+  /* Below the table breakpoint each row becomes a record card carrying its own
+     labels, so no column meaning is lost when the header row disappears. The
+     labels are real DOM rather than CSS pseudo-content, so they stay in the
+     accessibility tree. */
+  @media (max-width: 55rem) {
+    .directory,
+    .directory tbody,
+    .directory tr,
+    .directory td {
+      display: block;
+      width: 100%;
+    }
+
+    .directory colgroup { display: none; }
+
+    .directory thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+
+    .directory tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.25rem 0.75rem;
+      padding: 1rem;
+    }
+
+    /* min-width: 0 on both the cell and its value is what stops a long email
+       address — a single unbreakable token — from forcing the whole page wider
+       than the phone it is being read on. */
+    .directory td {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      padding: 0;
+      min-width: 0;
+    }
+    .directory td > .cell-value {
+      min-width: 0;
+      overflow: visible;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .directory td.cell-name { grid-column: 1; grid-row: 1; }
+    .directory td.cell-status {
+      grid-column: 2;
+      grid-row: 1;
+      justify-self: end;
+    }
+    .directory td.cell-type,
+    .directory td.cell-email,
+    .directory td.cell-phone,
+    .directory td.cell-business {
+      grid-column: 1 / -1;
+    }
+
+    .cell-label {
+      display: inline;
+      flex: none;
+      min-width: 4.5rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--color-ink-faint);
+    }
+  }
+}
+
+/* The route-change progress bar in AppShell. Named rather than inlined so the
+   reduced-motion rule below can reach it. */
+@keyframes dudo-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
