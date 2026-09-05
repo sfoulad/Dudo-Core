@@ -117,16 +117,21 @@ work escaping notice.**
 
 ## Known gaps, stated before you find them
 
-**HIGH — the Action half of "refused everywhere" is not enforced.** `platform-operator-v1` says a
-principal appearing in **both** `platform_operator` and `organization_membership` is refused on
-platform routes **and** on Actions. The platform half is enforced; **the Action half is not.**
+**CLOSED — the Action half of "refused everywhere" is now enforced.** It was the review's blocking
+HIGH finding: `platform-operator-v1` requires a principal appearing in **both** tables to be refused
+on platform routes **and** on Actions, and only the platform half was implemented.
 
-**This is not cross-tenant access** — such a principal receives exactly the grants its own
-membership carries, scoped to that one Organization — and reaching the state requires direct
-database access, because `0010`'s four triggers refuse it in both directions on INSERT and UPDATE
-(**verified against a real D1, all four, with negative controls passing**). It is owed because **a
-normative rule in an accepted contract that the code does not implement is a defect regardless of
-reachability.**
+**Fixed at zero cost.** Both facts ride the `findPrincipal` statement that already runs on every
+authenticated request, as correlated `EXISTS` subqueries — statement count unchanged. The check sits
+where the resolution algorithm is read, so it covers `resolve`, the Organization picker,
+`selectOrganization` and `resolvePrincipalId` at once.
+
+**And the refusal code is per request class**, which took two attempts to get right: `unauthenticated`
+on the Action path, `forbidden` on a platform route. **Neither code is globally safer** — `forbidden`
+hides among permission denials, `unauthenticated` among credential failures — so *"identical to an
+unknown principal"* resolves differently per class. Rendering one code everywhere produced a status-code
+oracle, twice, once in each direction. QA caught both because it keeps *"it is refused"* and *"it is
+refused with the code the contract names"* as **separate cases**.
 
 **RESOLVED — the host binding works, and the Team Lead's contrary measurement was invalid.** A
 `wrangler dev --local` run reported 401 on every host including `evil.example.com`. The cause:
