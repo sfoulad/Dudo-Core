@@ -21,7 +21,10 @@ testing can begin the moment they are given, rather than being written afterward
 **The deploys are ordered and the order matters.** A custom domain is claimed by exactly one Worker.
 `admin.dudo.work` has been removed from `wrangler.jsonc`, so:
 
-1. **Apply migrations `0008`–`0012` FIRST.** See below — this is not merely "before you test."
+1. **Apply the pending migrations FIRST.** See below — this is not merely "before you test."
+   **`0008`–`0010` are already applied** (2026-09-05). **Pending: `0011_confirmation.sql` and
+   `0012_template.sql`**, verified against the remote control plane. The tenant database needs
+   nothing.
 2. Deploy `dudo-core` — this **releases** `admin.dudo.work`
 3. Deploy `dudo-admin` — this **claims** it
 
