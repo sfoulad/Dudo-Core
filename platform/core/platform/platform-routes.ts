@@ -90,11 +90,25 @@
  * request to a response that does not pass through `audit.record`, and a handler cannot opt out
  * because it is never asked. See `platform-audit.ts` for what is recorded, what is refused, and
  * which callers cause no record at all.
+ *
+ * *** "NO CODE PATH" INCLUDES A THROWN ONE, AND FOR TWO VISITS IT DID NOT. *** A handler that
+ * threw propagated past the recorder and was caught at `fetchHandler`'s outer boundary, which
+ * rendered `internal()` and disclosed nothing — so the hole was invisible from outside and the
+ * operation simply left no trace. Both the handler call and the `audit.record` call are now
+ * wrapped; see each for why. It is stated here rather than quietly fixed, because the sentence
+ * above was the claim the omission falsified.
  */
 
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
-import { detail, forbidden, invalidArgument, unauthenticated, unavailable } from '../kernel/errors.ts';
+import {
+  detail,
+  forbidden,
+  internal,
+  invalidArgument,
+  unauthenticated,
+  unavailable,
+} from '../kernel/errors.ts';
 import type { Authorizer } from '../authorization/authorizer.ts';
 import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
 import {
@@ -1264,19 +1278,51 @@ export async function dispatchPlatformRoute(
     );
   }
 
-  const outcome = await handler(
-    {
-      routeId: route.id,
-      authority: authority.value,
-      query: query.value,
-      objects,
-      pathParams: request.pathParams,
-      sessionId: sessionId.value,
-      requestId: request.requestId,
-      correlationId: request.correlationId,
-    },
-    parsedBody.value,
-  );
+  // ===========================================================================================
+  // A THROWN VALUE IS CAUGHT **HERE**, BECAUSE OTHERWISE IT WOULD BYPASS THE AUDIT RECORD.
+  // ===========================================================================================
+  //
+  // Without this, a handler that throws propagates past `recordThen`, past `http/api.ts`, and is
+  // caught only at `fetchHandler`'s outer boundary — which renders `internal()` and discloses
+  // nothing, so it LOOKS handled. **What it loses is the record**: an authorized operator reached
+  // an authorized handler and the operator action log says it never happened.
+  //
+  // THAT IS THE ONE THING `0025` DECISION 5 EXISTS TO PREVENT, and `0028` leans on this log for
+  // its whole visibility argument. P4 is stated as "every route writes an audit record" — a
+  // handler able to throw its way out of one is the exception that makes the property untrue in
+  // exactly the case somebody would most want the trail.
+  //
+  // `pipeline.ts` HAS DONE THIS SINCE IT WAS WRITTEN and this class had not: *"A thrown value is a
+  // programming defect — a tenant-column reference, an audit value leak, an unhandled predicate
+  // kind. It becomes `internal`, which discloses nothing."* Same treatment, same reasoning, and
+  // the divergence was an omission rather than a decision.
+  //
+  // `internal()` AND NOT THE THROWN VALUE. A thrown object may carry a SQL fragment, a column
+  // name, a stack, or a row — `cause` is deliberately not read, not logged and not rendered.
+  //
+  // `NO_TARGET`, for the reason the failure branch below gives: a handler that threw may not know
+  // what it was about to touch, and inventing a target would make the log assert more than the
+  // code knows.
+  let outcome: Result<PlatformRouteOutcome>;
+  try {
+    outcome = await handler(
+      {
+        routeId: route.id,
+        authority: authority.value,
+        query: query.value,
+        objects,
+        pathParams: request.pathParams,
+        sessionId: sessionId.value,
+        requestId: request.requestId,
+        correlationId: request.correlationId,
+      },
+      parsedBody.value,
+    );
+  } catch {
+    return recordThen(dependencies, authority.value, route, request, 'failed', NO_TARGET, () =>
+      err(internal()),
+    );
+  }
 
   // ---- 7. The record, then the answer. Never the other way round.
   if (!outcome.ok) {
@@ -1321,13 +1367,35 @@ async function recordThen(
   target: PlatformActionTarget,
   answer: () => Result<unknown>,
 ): Promise<Result<unknown>> {
-  const recorded = await dependencies.audit.record({
-    actor,
-    actionId: route.id,
-    target,
-    outcome,
-    correlationId: request.correlationId,
-  });
+  // ===========================================================================================
+  // THE RECORDER'S OWN THROW IS CAUGHT TOO, AND CATCHING ONLY THE HANDLER WOULD HAVE BEEN HALF A
+  // FIX POINTED AT THE WRONG HALF.
+  // ===========================================================================================
+  //
+  // `platform-audit.ts` promises *"no `catch {}`... every failure path returns `unavailable()`"* —
+  // and that is a promise about the RECORDER, not about the store beneath it. A D1 adapter, a
+  // binding that is missing at runtime, or an admission port can throw, and a throw from THIS call
+  // escapes to the same outer boundary the handler's did.
+  //
+  // IT IS THE WORSE OF THE TWO, because this is the code whose entire job is to make sure the
+  // operation left evidence. A silent escape here is an unaudited operation on the audit path.
+  //
+  // A THROWN RECORD IS AN UNWRITTEN RECORD, so it is answered exactly as a returned failure is:
+  // `unavailable`, and the caller's operation fails with it. `answer()` IS DELIBERATELY OUTSIDE
+  // THE `try` — it only constructs a `Result`, and putting it inside would let this `catch` mean
+  // two different things.
+  let recorded: Result<void>;
+  try {
+    recorded = await dependencies.audit.record({
+      actor,
+      actionId: route.id,
+      target,
+      outcome,
+      correlationId: request.correlationId,
+    });
+  } catch {
+    return err(unavailable());
+  }
   if (!recorded.ok) {
     return err(recorded.error);
   }
