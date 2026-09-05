@@ -174,10 +174,35 @@ export const PLATFORM_PERMISSION_ENVELOPE: AppPermissionEnvelope = Object.freeze
  * permission gates nothing and MUST NOT ACQUIRE A ROUTE by someone noticing it is unused.
  * `core.marketplace.moderate` has no marketplace to moderate; AZ8 records that the platform-scope
  * view of published Apps that moderation needs does not exist as a permission at all.
+ *
+ * ===========================================================================================
+ * IT GREW FROM TWO TO FOUR ON 2026-09-05, AND THE TWO NEW ONES ARE A DIFFERENT KIND
+ * ===========================================================================================
+ *
+ * The original two are unreachable **permanently and by design** — one gates an operation `0025`
+ * refuses to publish, the other a product that does not exist.
+ *
+ * **`core.platform-audit.read` and `core.principal.revoke-platform-scope` are unreachable only
+ * because their routes are not built yet.** `platform-audit-read-v1` and `platform-operators-v1`
+ * are both accepted, and each will move its permission into `PLATFORM_PERMISSION_ENVELOPE` as its
+ * routes land. **That is the ceiling rising deliberately, one contract at a time**, which is the
+ * shape `0023` established and the opposite of trimming the floor to fit.
+ *
+ * THEY ARE LISTED HERE RATHER THAN AT THE BOTTOM OF THE ROLE so that the file's structure states
+ * which grants are inert. A permission sitting in the role list beside six reachable ones, with
+ * nothing marking it, is one a reader assumes works.
+ *
+ * *** DO NOT "TIDY" THE FIRST TWO INTO THE ENVELOPE WHEN ADDING THE LAST TWO. *** They look
+ * identical from here — four permissions the role holds and no route uses — and they are not.
+ * `core.principal.grant-platform-scope` acquiring a route is the single most dangerous change
+ * anyone could make to this file.
  */
 const HELD_BUT_UNREACHABLE: readonly string[] = Object.freeze([
   'core.principal.grant-platform-scope',
   'core.marketplace.moderate',
+  // ---- Unreachable UNTIL BUILT, not by design. See above.
+  'core.platform-audit.read',
+  'core.principal.revoke-platform-scope',
 ]);
 
 function platformGrant(permissionId: string): PermissionGrant {
@@ -185,12 +210,39 @@ function platformGrant(permissionId: string): PermissionGrant {
 }
 
 /**
- * `platform-admin` — the eight permissions `permission-catalog.yaml` gives the role, verbatim.
+ * `platform-admin` — the **ten** permissions `permission-catalog.yaml:914` gives the role.
+ *
+ * ===========================================================================================
+ * IT SAID "THE EIGHT... VERBATIM" AND IT WAS NEITHER. CORRECTED 2026-09-05.
+ * ===========================================================================================
+ *
+ * The catalog gives ten; this list held eight. Missing: **`core.platform-audit.read`** and
+ * **`core.principal.revoke-platform-scope`**, both added to the catalog on 2026-09-05 and never
+ * transcribed here.
+ *
+ * Both arrive through `HELD_BUT_UNREACHABLE`, which is where they belong — see that constant for
+ * why the four entries in it are now two different kinds of unreachable.
+ *
+ * **THIS DIRECTION FAILS CLOSED** — a permission absent from the floor is a permission the role
+ * does not hold, so nothing was over-granted and no route was reachable that should not have been.
+ * **The defect is the claim, not the consequence.** *"Verbatim"* and *"eight"* were both false in a
+ * file whose entire job is being a faithful transcription, and a comment asserting fidelity is
+ * exactly what stops the next reader from opening the catalog to check. Same shape as a route
+ * comment citing a `successStatus` the contract does not declare.
+ *
+ * **AND ONE OF THE TWO IS THE PERMISSION `0028` IS ABOUT.** `core.platform-audit.read` gates the
+ * audit feeds that decision publishes; without it here, `platform-audit-read-v1` would have been
+ * built against a role that could not reach it, and the failure would have looked like an
+ * authorization bug rather than a missing line.
+ *
+ * THE COUNT IS IN THE SENTENCE ON PURPOSE, WITH THE LINE NUMBER. A number is checkable against the
+ * catalog in one glance; "the permissions the catalog gives the role" is not, and unfalsifiable
+ * prose is how the first version stayed wrong.
  *
  * IT IS NOT TRIMMED TO THE SIX THE ENVELOPE DECLARES, and that is the same judgement `worker.ts`
  * records for `CUSTOMERS_APP_PERMISSIONS`: the ceiling and the floor are different objects, and
  * narrowing one to match the other conflates them and makes a future widening silently
- * insufficient. The two extra permissions are unreachable through the ceiling, which is
+ * insufficient. The extra permissions are unreachable through the ceiling, which is
  * `authorizer.ts` working as designed rather than a gap.
  */
 const PLATFORM_ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
