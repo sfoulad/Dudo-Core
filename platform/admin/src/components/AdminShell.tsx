@@ -186,26 +186,63 @@ export function AdminShell({
           aria-label="Sections"
           className={cn(
             'on-navy bg-navy-800 text-white',
-            // Below `lg`: an overlay drawer pinned to the inline start, sliding
-            // in from whichever side that is in the current writing direction.
-            //
-            // `inset-y-0` is the BLOCK axis (top and bottom) and is RTL-safe:
-            // horizontal writing modes mirror the inline axis only, so there is
-            // no logical variant to prefer here. `start-0` beside it IS the
-            // logical inline property, and that is the one that matters.
-            //
-            // IT WAS `inset-block-0` AND THAT IS NOT A TAILWIND UTILITY. It
-            // compiled to nothing at all, leaving the drawer `fixed` with no
-            // vertical bounds — so it collapsed to the height of its own list
-            // instead of the viewport. Caught by grepping the built CSS for the
-            // class rather than by looking at the source, which is the only way
-            // a silently-dropped utility can be caught.
-            'fixed inset-y-0 start-0 z-20 w-64 max-w-[80vw] overflow-y-auto',
-            'transition-transform duration-200 ease-out',
-            drawerOpen ? 'translate-x-0' : 'ltr:-translate-x-full rtl:translate-x-full',
-            // `lg` and wider: in the document, permanent, no transform.
-            'lg:sticky lg:top-14 lg:z-0 lg:h-[calc(100dvh-3.5rem)] lg:w-60 lg:shrink-0',
-            'lg:translate-x-0 lg:border-e lg:border-navy-700',
+
+            /*
+             * ===============================================================
+             * EVERY DRAWER STYLE IS SCOPED `max-lg:`. IT MUST STAY THAT WAY.
+             * ===============================================================
+             *
+             * THIS SHIPPED BROKEN AND THE SIDEBAR WAS INVISIBLE ON DESKTOP.
+             * The previous version applied the drawer styles unconditionally and
+             * tried to cancel them at the breakpoint: an unscoped direction-
+             * variant negative x-translation to park the drawer off-screen, plus
+             * a breakpoint-scoped zero x-translation to bring it back at `lg`.
+             *
+             * THE BREAKPOINT ONE NEVER WON. In the built sheet the breakpoint
+             * rule sits inside `@media(min-width:64rem)` with specificity
+             * (0,1,0), and the direction-variant rule comes LATER with the SAME
+             * specificity, because Tailwind wraps the direction test in
+             * `:where()`, which contributes zero. Equal specificity, later wins —
+             * so the nav was translated -100% at every width, including 1600px.
+             * It still occupied its column (the sticky rule did win), which is
+             * why the page showed an empty gutter rather than a collapsed
+             * layout.
+             *
+             * THE EXACT CLASS NAMES ARE NOT WRITTEN OUT ANYWHERE IN THIS COMMENT,
+             * AND THAT IS DELIBERATE. Tailwind v4 scans raw file text for
+             * candidates, so quoting a utility in prose COMPILES IT INTO THE
+             * BUNDLE. The first draft of this comment did exactly that and
+             * reintroduced both dead rules — `verify-css.mjs` failed on the
+             * fixed component, because the hazard really was still in the
+             * stylesheet even though no element referenced it.
+             *
+             * A `lg:` utility CANNOT be relied on to override an `ltr:`/`rtl:`
+             * one. The media query adds no specificity and the variant order in
+             * the sheet is not something this file controls. SO THE OVERRIDE IS
+             * REMOVED RATHER THAN REORDERED: below `lg` the drawer styles exist,
+             * at `lg` they are never emitted onto the element at all, and there
+             * is no contest to lose.
+             *
+             * `scripts/verify-css.mjs` asserts this against the BUILT stylesheet
+             * — that the drawer transform lives inside a max-width media query —
+             * because "the class is present" is what I checked last time and it
+             * was true while the layout was broken.
+             *
+             * `inset-y-0` is the BLOCK axis and is RTL-safe: horizontal writing
+             * modes mirror the inline axis only. `start-0` is the logical inline
+             * property, and that is the one that matters here. (It was once
+             * `inset-block-0`, which is not a Tailwind utility and compiled to
+             * nothing — same family of defect, same detection method.)
+             */
+            'max-lg:fixed max-lg:inset-y-0 max-lg:start-0 max-lg:z-20',
+            'max-lg:w-64 max-lg:max-w-[80vw] max-lg:overflow-y-auto',
+            'max-lg:transition-transform max-lg:duration-200 max-lg:ease-out',
+            drawerOpen ? '' : 'max-lg:ltr:-translate-x-full max-lg:rtl:translate-x-full',
+
+            // `lg` and wider: an ordinary in-document column. No position
+            // override, no transform to cancel, nothing to out-specify.
+            'lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:w-60 lg:shrink-0',
+            'lg:overflow-y-auto lg:border-e lg:border-navy-700',
           )}
         >
           <ul className="grid gap-1 p-3">

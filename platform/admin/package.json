@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "verify:kdf": "node --experimental-strip-types scripts/verify-kdf.mjs",
     "verify:platform": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-platform.mjs",
-    "verify": "npm run typecheck && npm run verify:kdf && npm run verify:platform"
+    "verify:css": "node scripts/verify-css.mjs",
+    "verify": "npm run typecheck && npm run verify:kdf && npm run verify:platform && npm run build && npm run verify:css"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

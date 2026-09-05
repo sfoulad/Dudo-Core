@@ -1,4 +1,32 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+
+/* ---------------------------------------------------------------------------
+   WHAT TAILWIND IS ALLOWED TO SCAN, AND WHY IT IS RESTRICTED
+   ---------------------------------------------------------------------------
+   `source(none)` turns OFF Tailwind v4's automatic content detection, and the
+   two `@source` lines below replace it with exactly the files that can contain a
+   real class attribute.
+
+   THIS IS NOT AN OPTIMISATION. Tailwind v4 scans raw file TEXT for candidate
+   class names — it does not parse JSX and does not know what a comment is. With
+   automatic detection on, it also scanned `scripts/`, `README.md` and every
+   other file in the project, so WRITING A UTILITY NAME IN PROSE COMPILED THAT
+   UTILITY INTO THE BUNDLE.
+
+   That is not hypothetical. The sidebar-invisible defect was a direction-variant
+   translate rule beating a breakpoint-scoped one. After the component was fixed,
+   both dead rules were STILL in the stylesheet — emitted from the explanatory
+   comment in the component and from the header of `scripts/verify-css.mjs`,
+   which quoted the offending class names in order to explain them. The checker
+   was re-injecting the exact hazard it existed to catch, and it correctly failed
+   on a component that was already correct.
+
+   Restricting the scan makes prose inert. A class name now reaches the
+   stylesheet only from a file that can actually apply it.
+   --------------------------------------------------------------------------- */
+
+@source "../**/*.{ts,tsx}";
+@source "../../index.html";
 
 /* ---------------------------------------------------------------------------
    Dudo platform administration — design tokens

@@ -22,6 +22,30 @@ import { NotBuiltYet } from '@/components/NotBuiltYet';
  * it": the shape is now settled and safe to build against — `core-agent` has not
  * implemented it yet. `platform-routes.ts` currently declares exactly two route
  * ids, and none of the three template operations is among them.
+ *
+ * ===========================================================================
+ * TWO VOCABULARIES FOR ONE CONCEPT, AND NEITHER IS TO BE "CORRECTED"
+ * ===========================================================================
+ *
+ * This screen's own blocker list used to say the `Workspace` rename had to land
+ * before Templates were built. `0025` was AMENDED on 2026-09-05 and that
+ * requirement is struck (`0025:161-163`). It shipped stale to a live console and
+ * an operator read it as current — `workflow.md` §12 in its user-visible form:
+ * the decision moved, nothing failed, and the claim survived.
+ *
+ * THE AMENDED RULING, because this is the screen most likely to trip on it —
+ * Templates carry the display labels for each level, so whoever builds it will
+ * be looking straight at the naming:
+ *
+ *   - The new PLATFORM surface is written in `Workspace` terms natively.
+ *   - The customer WIRE FIELD and the DATABASE COLUMN keep `business_id`.
+ *   - NEITHER IS TO BE CORRECTED TOWARD THE OTHER.
+ *
+ * The reason the rename was deferred is worth carrying: `business_id` is a
+ * PUBLISHED WIRE FIELD two clients have already shipped against, and a PERSISTED
+ * AUDIT VALUE. Renaming it is a breaking contract change plus a rewrite of audit
+ * history — not a cleanup, and not something to do in passing while building a
+ * screen. It has its own slice.
  */
 export function Templates() {
   return (
@@ -39,7 +63,6 @@ export function Templates() {
       contractStatus="Accepted. The shape is settled; Core has not implemented the routes."
       blockedOn={[
         'Core implementation. platform-routes.ts declares two route ids — platform.organizations.list and platform.session.whoami — and none of the three template operations is registered yet.',
-        'The inner-unit rename to Workspace (ADR 0025), which the decision requires to land before Templates are built rather than after, or they are built on the old name and renamed twice.',
       ]}
     />
   );
