@@ -36,6 +36,7 @@ import { buildRoleGrantsSuite } from './suites/az2-login/role-grants.ts';
 import { buildBusinessSetSuite } from './suites/az2-login/business-set.ts';
 import { buildSessionRoutesSuite } from './suites/az2-login/session-routes.ts';
 import { buildBusinessSetMarkerSuite } from './suites/az2-login/business-set-marker.ts';
+import { buildEnrolmentRoundTripSuite } from './suites/az2-login/enrolment-round-trip.ts';
 
 async function runAll(suites: readonly Suite[]): Promise<CaseResult[]> {
   const results: CaseResult[] = [];
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
     buildBusinessSetSuite(),
     buildSessionRoutesSuite(),
     buildBusinessSetMarkerSuite(),
+    buildEnrolmentRoundTripSuite(),
   ];
 
   const registered = suites.reduce((total, suite) => total + suite.caseNames.length, 0);
