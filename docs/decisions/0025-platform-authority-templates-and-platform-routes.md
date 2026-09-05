@@ -289,9 +289,41 @@ the system provides, in the very document written to stop `P1` being quietly wea
 > property still drifted — because recording it at the code is not recording it where the property
 > is defined.** The paragraph above asked proposals to *say so*; they said so somewhere else.
 
-**The next question is not whether a fourth is justified. It is whether `P1` still means anything**
-— and `core-agent` named that threshold itself rather than being asked to. **A fourth requires
-re-deriving the property from scratch, not another exception argued from these three.**
+### The replacement is a property, not a number — and the count was never the line
+
+**`core-agent`'s framing, adopted over the Team Lead's.** *"Exactly one"* was already false, will keep
+being false, and **counting was the wrong instrument all along**: it made every new component look
+like an exception to be argued rather than a case to be tested.
+
+**What the three actually share is not "needs the tenant resolver" — that is the symptom:**
+
+> **A platform operation whose effect a customer is entitled to see in their own trail, or whose
+> object lives in their tenant.**
+
+- `onboarding/` — creates a Workspace **in** the tenant.
+- `directory/` — records that the platform **asked about** one of their members.
+- `credential/` — records that one of their members' accounts **was taken over.**
+
+**Every one WRITES into the customer's record. None READS business data.** So the guarantee that
+matters survives, stated as a property that is still checkable at six components:
+
+> **The platform may write a customer's record of what was done to them. It may not read what they
+> have.**
+
+**And it keeps its test, which is what makes it a boundary rather than a description:** `qa-agent`'s
+structural grep — *no module under `platform/core/platform/**` names a tenant primitive* — **stays
+exception-free.** All three sit outside that directory; the class itself still cannot reach a tenant.
+
+### Where to stop trusting it
+
+**Not at a count. At the first component that resolves a store in order to READ.**
+
+All three write and none reads, which is why *"the platform cannot see a customer's data"* is still
+literally true. **A read would break the property while looking like the fourth instance of an
+accepted pattern** — arriving with three precedents, a familiar shape, and a directory that already
+holds its neighbours.
+
+> **That is the line, and it is invisible to anyone counting.**
 
 ## What this does NOT decide
 
