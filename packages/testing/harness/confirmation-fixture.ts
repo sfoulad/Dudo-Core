@@ -57,7 +57,12 @@ import type {
   ConfirmationChallenge,
   ConfirmationService,
 } from '../../../platform/core/confirmation/confirmation-service.ts';
-import { createConfirmationGate } from '../../../platform/core/confirmation/confirmation-gate.ts';
+import {
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
+  createConfirmationGate,
+} from '../../../platform/core/confirmation/confirmation-gate.ts';
 import type { ConfirmationGate } from '../../../platform/core/confirmation/confirmation-gate.ts';
 import { createD1ConfirmationStore } from '../../../platform/core/confirmation/adapters/d1/d1-confirmation-store.ts';
 
@@ -125,10 +130,19 @@ type CriticalInput = { readonly customer_id: string };
  * client-visible obligation the contract does not state, and it is recorded here rather than
  * discovered by whoever builds the first real one.
  */
+/**
+ * THE PORT'S OWN CONSTANTS, IMPORTED RATHER THAN TRANSCRIBED — since 2026-09-05.
+ *
+ * These were three string literals. `REAUTH_IDENTIFIER_FIELD` changed from `identifier` to
+ * `reauth_identifier` at 16:58 and **eighteen cases went red at once**, every one of them a
+ * fixture asserting a field name the port no longer used. Transcribing a wire field name into a
+ * harness is the same class of drift as transcribing a permission catalog: correct until it is
+ * not, and silent in between.
+ */
 export const CONFIRMATION_FIELD_NAMES: readonly string[] = Object.freeze([
-  'confirmation_id',
-  'reauth_derived_value',
-  'identifier',
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
 ]);
 
 export function createSyntheticCriticalAction(

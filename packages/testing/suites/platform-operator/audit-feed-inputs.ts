@@ -71,9 +71,19 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
     { value: 'yesterday', why: 'free text' },
     { value: '', why: 'present but empty, which is not the same as absent' },
     {
-      value: '2026-02-31T00:00:00Z',
+      value: '2026-02-31T00:00:00.000Z',
       why: 'THE REALITY CHECK. Correctly SHAPED and not a real date — the pattern alone passes ' +
         'it, and only the round-trip comparison catches it',
+    },
+    {
+      value: '2026-09-01T00:00:00Z',
+      why:
+        'SECOND PRECISION, WITH A ZONE, AND REFUSED SINCE `7686940` — which reverses what this ' +
+        'suite asserted an hour earlier, so it is recorded rather than silently updated. The ' +
+        'fractional digits went from optional to REQUIRED because a bound without them does not ' +
+        'name its own temporal value: `until=…T00:00:00Z` is ambiguous about whether the records ' +
+        'in that second\'s first millisecond are inside the window. Requiring `.000` makes the ' +
+        'bound mean exactly one instant',
     },
   ]);
 
@@ -122,15 +132,11 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
     // about the zone and not about the date being unusable.
     const world = await make();
     try {
+      // THE ONLY ACCEPTED FORM, since `7686940`: a zone AND three fractional digits. An hour
+      // earlier this case asserted that the second-precision form was accepted too; that is now
+      // in the refusal table above, with the reason.
       expectOk(
-        'the identical instant WITH `Z` is accepted',
-        await world.call('platform.audit.list', {
-          sessionId: SESSION_ADMIN,
-          queryString: 'since=2026-09-01T00:00:00Z',
-        }),
-      );
-      expectOk(
-        'and the millisecond form is accepted too',
+        'the identical instant with `Z` AND millisecond precision is accepted',
         await world.call('platform.audit.list', {
           sessionId: SESSION_ADMIN,
           queryString: 'since=2026-09-01T00:00:00.000Z',
@@ -150,7 +156,7 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
         `${ISOLATION} an incoherent window is an argument error, not an empty page`,
         await world.call('platform.audit.list', {
           sessionId: SESSION_ADMIN,
-          queryString: 'since=2026-09-02T00:00:00Z&until=2026-09-01T00:00:00Z',
+          queryString: 'since=2026-09-02T00:00:00.000Z&until=2026-09-01T00:00:00.000Z',
         }),
         expectedInvalidArgument('until', 'must_be_after_since'),
       );
@@ -159,7 +165,7 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
         'and an empty window with equal bounds is refused the same way',
         await world.call('platform.audit.list', {
           sessionId: SESSION_ADMIN,
-          queryString: 'since=2026-09-01T00:00:00Z&until=2026-09-01T00:00:00Z',
+          queryString: 'since=2026-09-01T00:00:00.000Z&until=2026-09-01T00:00:00.000Z',
         }),
         expectedInvalidArgument('until', 'must_be_after_since'),
       );

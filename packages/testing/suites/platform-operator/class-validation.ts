@@ -127,6 +127,13 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         'platform-audit-read-v1, 0028 Decision 3, added 2026-09-05. One Organization\'s feed, ' +
         'which DOES disclose principals, and which writes a record into that Organization\'s own ' +
         'trail on every call — "it keeps the back door the same size as the front one"',
+      'platform.credentials.reset':
+        'credential-reset-v1, added 2026-09-05. **THE MOST DANGEROUS OPERATION IN THE PLATFORM** — ' +
+        'holding core.credential.reset is the ability to take over any account. Gated, and unlike ' +
+        'revoke it carries its target in the BODY, so it is the route that covers body ' +
+        'substitution now that the synthetic route is retired. `derived_value` is the console\'s ' +
+        'KDF output salted with the TARGET\'s identifier: 0015 §D holds, and the server never ' +
+        'sees a password even here',
       'platform.operators.revoke':
         'platform-operators-v1, added 2026-09-05. **THE FIRST CONFIRMATION-GATED ROUTE IN THE ' +
         'SHIPPED TABLE**, and the first with both a path parameter and a gate — a combination the ' +

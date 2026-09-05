@@ -134,8 +134,8 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
         a: 'action_id=platform.organizations.list',
         b: 'action_id=platform.templates.list',
       },
-      { name: 'since', a: 'since=2026-09-01T00:00:00Z', b: 'since=2026-09-02T00:00:00Z' },
-      { name: 'until', a: 'until=2026-09-30T00:00:00Z', b: 'until=2026-09-29T00:00:00Z' },
+      { name: 'since', a: 'since=2026-09-01T00:00:00.000Z', b: 'since=2026-09-02T00:00:00.000Z' },
+      { name: 'until', a: 'until=2026-09-30T00:00:00.000Z', b: 'until=2026-09-29T00:00:00.000Z' },
     ]);
 
   for (const dimension of DIMENSIONS) {
@@ -223,7 +223,7 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
           //
           // `until` is a real filter and it excludes exactly the records this case creates: the
           // seeded rows are dated 2026-09-01..04 and the fixture clock is 2026-09-05T09:00.
-          const window = 'until=2026-09-05T00:00:00Z';
+          const window = 'until=2026-09-05T00:00:00.000Z';
 
           // The whole set in one page, as the reference. `page_size=25` exceeds the six seeded.
           const whole = await feed(world, { scoped, query: `page_size=25&${window}` });
@@ -521,8 +521,8 @@ export function buildAuditPrincipalOmissionSuite(
         'page_size=25',
         `actor_principal_id=${PRN_ADMIN}`,
         'action_id=platform.organizations.members.resolve',
-        'since=2026-09-01T00:00:00Z',
-        'until=2026-09-30T00:00:00Z',
+        'since=2026-09-01T00:00:00.000Z',
+        'until=2026-09-30T00:00:00.000Z',
         `actor_principal_id=${PRN_ADMIN}&action_id=platform.organizations.members.resolve`,
       ];
       let sawTheRow = false;
@@ -583,6 +583,84 @@ export function buildAuditPrincipalOmissionSuite(
       world.close();
     }
   });
+
+  suite.test(
+    'A REVOCATION APPEARS IN THE PLATFORM FEED AND IN NO ORGANIZATION FEED — and that is correct',
+    async () => {
+      // =====================================================================================
+      // THE ASSERTION THAT WOULD OTHERWISE READ AS A LEAK OF SCOPE, WRITTEN DOWN AS INTENDED.
+      // =====================================================================================
+      //
+      // `0014` made `organizationId` non-null on the principal variant of `PlatformActionTarget`
+      // this morning, reasoning that no operation names a principal outside an Organization.
+      // **`platform.operators.revoke` is that operation and it arrived the same day**, so the
+      // field became required-but-NULLABLE at `769ad02`.
+      //
+      // The consequence is visible and is the right one: a platform operator belongs to no
+      // Organization, so a revocation is recorded with `target_kind = 'principal'` and a NULL
+      // `target_organization_id`. The scoped feed filters on that column, so **the record appears
+      // in the platform-wide feed and in nobody's Organization feed.**
+      //
+      // A REVIEWER MEETING THAT FOR THE FIRST TIME WOULD REASONABLY SUSPECT A DROPPED SCOPE. It
+      // is asserted here so the next person finds the answer rather than the question.
+      const world = await make();
+      try {
+        seedFeed(world);
+        // A revocation record, as the route writes one: a principal target with NO Organization.
+        seedActionRow(world.control, {
+          actionRecordId: 'par_revocation_00001',
+          actionId: 'platform.operators.revoke',
+          targetKind: 'principal',
+          targetId: LEAKABLE_PRINCIPAL,
+          targetOrganizationId: null,
+          occurredAt: '2026-09-04T14:00:00.000Z',
+        });
+
+        const platform = await feed(world, { query: 'page_size=25' });
+        assertTrue(
+          'the revocation IS in the platform-wide feed',
+          platform.data.some((row) => row.record_id === 'par_revocation_00001'),
+          'a revocation is invisible to the platform feed, which is the one feed that can show ' +
+            `oversight of the operator population: ${JSON.stringify(platform.data)}`,
+        );
+        // AND ITS TARGET IS STILL OMITTED THERE, because the platform feed omits principals
+        // whatever the row is about. The revocation's visibility does not buy an exemption.
+        assertTrue(
+          `${ISOLATION} but the platform feed still omits WHO was revoked`,
+          !JSON.stringify(platform).includes(LEAKABLE_PRINCIPAL),
+          'the platform feed disclosed the revoked principal — 0028 Decision 3 omits principals ' +
+            'on this feed for every row, and a revocation is not an exception',
+        );
+
+        // AND IT IS IN NO ORGANIZATION'S FEED. Asserted over BOTH seeded Organizations, because
+        // "absent from the one I checked" is a weaker claim than the design makes.
+        for (const organizationId of [ORG_ALPHA, ORG_BETA]) {
+          const scopedPage = expectOk(
+            `${organizationId}'s feed answers`,
+            await world.call('platform.organizations.audit.list', {
+              sessionId: SESSION_ADMIN,
+              pathParams: { organization_id: organizationId },
+              queryString: 'page_size=25',
+            }),
+          ) as FeedPage;
+          assertTrue(
+            `${ISOLATION} the revocation is absent from ${organizationId}'s feed`,
+            !scopedPage.data.some((row) => row.record_id === 'par_revocation_00001'),
+            'a revocation with no Organization appeared in an Organization feed, which means the ' +
+              'scoped filter is matching NULL rather than excluding it — and every tenant would ' +
+              "see every other tenant's unscoped records",
+          );
+          assertTrue(
+            `and ${organizationId}'s feed is not simply empty, so the absence is a filter`,
+            scopedPage.data.length > 0,
+            'the feed returned nothing at all, so this case would pass with the filter removed',
+          );
+        }
+      } finally {
+        world.close();
+      }
+    },
+  );
 
   suite.test('a principal-target row in ANOTHER Organization is not in this Organization\'s feed', async () => {
     const world = await make();

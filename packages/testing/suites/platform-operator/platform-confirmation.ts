@@ -85,10 +85,48 @@ import {
   confirmableOperations,
   requiresConfirmation,
 } from '../../../../platform/core/confirmation/critical-permissions.ts';
+import {
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
+} from '../../../../platform/core/confirmation/confirmation-gate.ts';
 import { ok } from '../../../../platform/core/kernel/result.ts';
 import { deriveLoginCredential as adminDerive } from '../../../../platform/admin/src/api/kdf.ts';
 
-const ROUTE = createSyntheticCriticalRoute();
+/**
+ * ===========================================================================================
+ * THE REAL `platform.credentials.reset`. **THE SYNTHETIC ROUTE IS RETIRED — 2026-09-05, 17:06.**
+ * ===========================================================================================
+ *
+ * This suite ran against `createSyntheticCriticalRoute()` for as long as the shipped table had no
+ * gated route. **It now has two**, and one of them is `platform.credentials.reset` — the id the
+ * synthetic route borrowed. Keeping it would mean a harness route shadowing a real one of the same
+ * name, which is worse than no coverage: `callRoute` keys its injected handler by route id, so
+ * every case here would have been exercising a fixture that had quietly replaced the shipped
+ * route.
+ *
+ * **AND THE ARGUMENT FOR KEEPING IT IS GONE.** This morning the synthetic route earned its place
+ * by covering the BODY-substitution axis, which `platform.operators.revoke` structurally cannot —
+ * revoke's body is only the three confirmation fields. The real reset route declares
+ * `principal_id`, `target_identifier` and `derived_value`, so **it covers that axis itself**. Both
+ * axes are now on real routes: body substitution here, path substitution on revoke.
+ *
+ * The tripwire that demanded this said the repair would be *"to point the suite at it and delete
+ * the synthetic route, not to update the string."* That is what this is.
+ */
+function criticalRoute(): PlatformRoute {
+  const found = platformRoutes().find((route) => route.id === 'platform.credentials.reset');
+  if (found === undefined) {
+    throw new Error(
+      'platform.credentials.reset is not in the shipped table. It was, at 17:06 on 2026-09-05, ' +
+        'when the synthetic route was retired in its favour. If it has been withdrawn, this ' +
+        'suite needs a decision rather than a fallback.',
+    );
+  }
+  return found;
+}
+
+const ROUTE = criticalRoute();
 
 /**
  * The handler. It records that it RAN and performs nothing.
@@ -116,17 +154,40 @@ async function challenge(
   const issued = await world.confirmations.issueChallenge({
     principalId: options.principalId ?? PRN_ADMIN,
     sessionId: options.sessionId ?? SESSION_ADMIN,
-    actionId: SYNTHETIC_CRITICAL_ROUTE_ID,
+    actionId: 'platform.credentials.reset',
     permissionId: 'core.credential.reset',
-    parameters: options.parameters ?? { principal_id: PRN_RESET_TARGET },
+    // THE BOUND PARAMETERS ARE THE ROUTE'S WHOLE INPUT under `aa48dd4`: body-minus-the-three,
+    // UNION the path parameters. This route declares no path parameter, so it is the three
+    // non-confirmation body fields — and they must match what `body()` sends below, byte for byte,
+    // or every case here fails at the binding rather than at the property it names.
+    parameters: options.parameters ?? {
+      principal_id: PRN_RESET_TARGET,
+      target_identifier: RESET_TARGET_IDENTIFIER,
+      derived_value: RESET_DERIVED_VALUE,
+    },
     locale: 'en',
   });
   const value = expectOk('a challenge is issued', issued) as { confirmationId: string };
   return value.confirmationId;
 }
 
+/**
+ * The two operation fields beside `principal_id`.
+ *
+ * SYNTHETIC AND FIXED. `derived_value` is 43 base64url characters because the route validates the
+ * width; it is not a credential and nothing derives from it here — the RESET itself is not what
+ * these cases are about, the GATE in front of it is.
+ */
+const RESET_TARGET_IDENTIFIER = 'reset.target@example.invalid';
+const RESET_DERIVED_VALUE = 'A'.repeat(43);
+
 function body(fields: Readonly<Record<string, unknown>>): string {
-  return JSON.stringify({ principal_id: PRN_RESET_TARGET, ...fields });
+  return JSON.stringify({
+    principal_id: PRN_RESET_TARGET,
+    target_identifier: RESET_TARGET_IDENTIFIER,
+    derived_value: RESET_DERIVED_VALUE,
+    ...fields,
+  });
 }
 
 /**
@@ -194,7 +255,7 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
           principal_id: 'prn_a_different_one1',
           confirmation_id: confirmationId,
           reauth_derived_value: await world.operatorDerivedValue(),
-          identifier: world.operatorIdentifier,
+          [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
         }),
       });
       assertTrue(
@@ -221,7 +282,7 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
         bodyText: body({
           confirmation_id: confirmationId,
           reauth_derived_value: await world.operatorDerivedValue(),
-          identifier: world.operatorIdentifier,
+          [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
         }),
       });
       assertTrue(
@@ -249,7 +310,7 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
         bodyText: body({
           confirmation_id: confirmationId,
           reauth_derived_value: othersValue,
-          identifier: MODERATOR_IDENTIFIER,
+          [REAUTH_IDENTIFIER_FIELD]: MODERATOR_IDENTIFIER,
         }),
       });
       assertTrue(
@@ -271,7 +332,7 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
       const bodyText = body({
         confirmation_id: confirmationId,
         reauth_derived_value: await world.operatorDerivedValue(),
-        identifier: world.operatorIdentifier,
+        [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
       });
       expectOk(
         'the first submission is served',
@@ -306,7 +367,7 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
         bodyText: body({
           confirmation_id: 'cnf_fabricated_00001',
           reauth_derived_value: await world.operatorDerivedValue(),
-          identifier: world.operatorIdentifier,
+          [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
         }),
       });
       assertTrue(
@@ -362,13 +423,18 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
           'its body carries ONLY the three confirmation fields — which is why the body-substitution ' +
             'case above cannot be written for it',
           [...revoke!.fields].sort().join(','),
-          'confirmation_id,identifier,reauth_derived_value',
+          // THE PORT'S OWN CONSTANTS. This assertion held a transcribed literal and went red when
+          // `identifier` became `reauth_identifier`, which is the drift the whole migration to
+          // constants was for — a case whose name is about substitution failing on a field NAME.
+          [CONFIRMATION_ID_FIELD, REAUTH_DERIVED_VALUE_FIELD, REAUTH_IDENTIFIER_FIELD]
+            .sort()
+            .join(','),
         );
 
         const submission = async (confirmationId: string) => ({
           confirmation_id: confirmationId,
           reauth_derived_value: await world.operatorDerivedValue(),
-          identifier: world.operatorIdentifier,
+          [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
         });
 
         // A confirmation minted to revoke PRN_MODERATOR.
@@ -436,7 +502,7 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
         bodyText: body({
           confirmation_id: 'cnf_fabricated_00001',
           reauth_derived_value: await world.operatorDerivedValue(),
-          identifier: world.operatorIdentifier,
+          [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
         }),
       });
       assertTrue('the request was refused', !answer.ok, JSON.stringify(answer));
@@ -584,7 +650,7 @@ export function buildPlatformConfirmationScopeSuite(
         .map((route) => route.id)
         .sort()
         .join(','),
-      'platform.operators.revoke',
+      'platform.credentials.reset,platform.operators.revoke',
     );
   });
 
@@ -661,6 +727,127 @@ export function buildPlatformConfirmationScopeSuite(
     },
   );
 
+  suite.test(
+    'THE INTERLEAVED REVOCATION: two operators revoking the same target — the OUTCOME is right ' +
+      'even when the code is not',
+    async () => {
+      // =====================================================================================
+      // A KNOWN RESIDUAL, COVERED RATHER THAN REPORTED. `core-agent` named it deliberately.
+      // =====================================================================================
+      //
+      // `revokeOperator` reads the operator row, then conditionally deletes it. Between those two
+      // steps another operator may revoke the same target, so the second caller can receive
+      // `failed_precondition` where `not_found` was the true state. **The wrong error, never a
+      // wrong outcome.**
+      //
+      // THE ALTERNATIVE WAS WORSE AND THAT IS WHY THIS IS ACCEPTED: making the store report WHICH
+      // condition failed would turn a genuine last-operator refusal into a missing row, and would
+      // be the existence oracle the collapse closes.
+      //
+      // *** SO THIS ASSERTS THE OUTCOME AND NOT THE CODE, WHICH IS WHAT WAS ASKED FOR. *** It
+      // accepts either error, and requires the things that must be true whichever arrives: the
+      // target is revoked exactly once, the second call revokes nobody, and no second audit
+      // record claims a success.
+      //
+      // IT LIVES IN THIS SUITE AND NOT THE GATED ONE. It printed STILL GREEN under `0027`'s
+      // control on its first run — correctly, because it is about the store's conditional delete
+      // and both revocations carry valid confirmations whether the gate refuses or not. Moved
+      // rather than explained.
+      const world = await make();
+      try {
+        // *** `world.call` AND NOT `world.callRoute`, AND THE DIFFERENCE IS THE WHOLE CASE. ***
+        // `callRoute` injects a handler, which the gated suite's cases want because they are about
+        // the GATE and need to observe whether the operation ran. This case is about what the REAL
+        // handler does when the row is already gone, so an injected stub reports success for both
+        // calls — which is exactly what it did on this case's first run.
+        const before = world.controlRows('platform_operator').length;
+        assertTrue('the fixture holds operators to revoke', before >= 2, String(before));
+
+        const submission = async () => {
+          const issued = expectOk(
+            'a challenge to revoke the moderator',
+            await world.confirmations.issueChallenge({
+              principalId: PRN_ADMIN,
+              sessionId: SESSION_ADMIN,
+              actionId: 'platform.operators.revoke',
+              permissionId: 'core.principal.revoke-platform-scope',
+              parameters: { principal_id: PRN_MODERATOR },
+              locale: 'en',
+            }),
+          ) as { confirmationId: string };
+          return JSON.stringify({
+            confirmation_id: issued.confirmationId,
+            reauth_derived_value: await world.operatorDerivedValue(),
+            [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
+          });
+        };
+
+        // TWO SUBMISSIONS, EACH WITH ITS OWN CONFIRMATION. A single confirmation would be refused
+        // the second time as a replay — a different property, already covered, and it would make
+        // this case pass without ever reaching the interleaving.
+        expectOk(
+          'the first revocation succeeds',
+          await world.call('platform.operators.revoke', {
+            sessionId: SESSION_ADMIN,
+            bodyText: await submission(),
+            pathParams: { principal_id: PRN_MODERATOR },
+          }),
+        );
+
+        const second = await world.call('platform.operators.revoke', {
+          sessionId: SESSION_ADMIN,
+          bodyText: await submission(),
+          pathParams: { principal_id: PRN_MODERATOR },
+        });
+
+        // ---- THE OUTCOME, WHICH IS WHAT MATTERS.
+        assertTrue(
+          `${ISOLATION} the second revocation does NOT succeed`,
+          !second.ok,
+          `revoking an already-revoked operator reported success: ${JSON.stringify(second)}`,
+        );
+        // EITHER CODE IS ACCEPTED, BY NAME, so this case documents the residual instead of pinning
+        // a value that is knowingly imprecise. A THIRD code fails — the residual is between these
+        // two, and anything else is a different defect to route.
+        const code = (second as { error: { code: string } }).error.code;
+        assertTrue(
+          'and it is one of the two the residual permits',
+          code === 'not_found' || code === 'failed_precondition',
+          `the second revocation answered '${code}'. The known residual is that an interleaved ` +
+            'revocation can report failed_precondition where not_found was true; any other code ' +
+            'is not that residual',
+        );
+
+        assertEqual(
+          `${ISOLATION} exactly one operator row was removed, not two and not none`,
+          world.controlRows('platform_operator').length,
+          before - 1,
+        );
+        assertEqual(
+          `${ISOLATION} and the target is the one that went`,
+          world
+            .controlRows('platform_operator')
+            .filter((row) => row.principal_id === PRN_MODERATOR).length,
+          0,
+        );
+
+        // NO AUDIT RECORD CLAIMS THE SECOND CALL SUCCEEDED. The outcome column is what an
+        // oversight reader counts revocations from, and a second `ok` would say the operator was
+        // revoked twice.
+        assertEqual(
+          `${ISOLATION} exactly one revocation record has outcome ok`,
+          world
+            .actionRows()
+            .filter((row) => row.action_id === 'platform.operators.revoke' && row.outcome === 'ok')
+            .length,
+          1,
+        );
+      } finally {
+        world.close();
+      }
+    },
+  );
+
   suite.test('a route declaring a critical permission and in NEITHER list stops the build', () => {
     // THE NEGATIVE CONTROL FOR THE CASE ABOVE. Without it, "every route is in one of the two
     // lists" is a statement about today's table and not about the guard — and the guard is the
@@ -705,7 +892,7 @@ export function buildPlatformConfirmationScopeSuite(
           bodyText: body({
             confirmation_id: await challenge(world),
             reauth_derived_value: await world.operatorDerivedValue(),
-            identifier: world.operatorIdentifier,
+            [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
           }),
         }),
       );
@@ -759,7 +946,7 @@ export function buildPlatformConfirmationScopeSuite(
           bodyText: body({
             confirmation_id: await challenge(world),
             reauth_derived_value: await world.operatorDerivedValue(),
-            identifier: world.operatorIdentifier,
+            [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
           }),
         }),
         EXPECTED_UNAVAILABLE,

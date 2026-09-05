@@ -51,6 +51,11 @@ import {
 import type { ConfirmationWorld } from '../../harness/confirmation-fixture.ts';
 import { requiresConfirmation, criticalPermissions } from '../../../../platform/core/confirmation/critical-permissions.ts';
 import { hasStatement } from '../../../../platform/core/confirmation/statements.ts';
+import {
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
+} from '../../../../platform/core/confirmation/confirmation-gate.ts';
 import { MAX_PARAMETER_VALUE_LENGTH } from '../../../../platform/core/confirmation/binding.ts';
 
 const EXPECTED_FORBIDDEN = {
@@ -76,9 +81,10 @@ async function goodBody(
   };
   return {
     customer_id: TARGET_CUSTOMER,
-    confirmation_id: challenge.confirmationId,
-    reauth_derived_value: await world.callerDerivedValue(),
-    identifier: CALLER_EMAIL,
+    // THE PORT'S OWN CONSTANTS, not transcribed literals — see `confirmation-fixture.ts`.
+    [CONFIRMATION_ID_FIELD]: challenge.confirmationId,
+    [REAUTH_DERIVED_VALUE_FIELD]: await world.callerDerivedValue(),
+    [REAUTH_IDENTIFIER_FIELD]: CALLER_EMAIL,
     ...overrides,
   };
 }
@@ -157,7 +163,7 @@ export function buildConfirmationSuite(
         customer_id: TARGET_CUSTOMER,
         confirmation_id: 'cnf_someone_elses01',
         reauth_derived_value: await world.callerDerivedValue(),
-        identifier: CALLER_EMAIL,
+        [REAUTH_IDENTIFIER_FIELD]: CALLER_EMAIL,
       };
       expectError(
         `${ISOLATION} another principal's confirmation is not spendable`,
@@ -183,7 +189,7 @@ export function buildConfirmationSuite(
         cascade: 'true',
         confirmation_id: 'cnf_altered_000001',
         reauth_derived_value: await world.callerDerivedValue(),
-        identifier: CALLER_EMAIL,
+        [REAUTH_IDENTIFIER_FIELD]: CALLER_EMAIL,
       };
       expectError(
         `${ISOLATION} a changed parameter invalidates the confirmation`,
@@ -377,7 +383,7 @@ export function buildConfirmationSuite(
         customer_id: TARGET_CUSTOMER,
         confirmation_id: 'cnf_never_issued001',
         reauth_derived_value: await world.callerDerivedValue(),
-        identifier: CALLER_EMAIL,
+        [REAUTH_IDENTIFIER_FIELD]: CALLER_EMAIL,
       });
       expectError(`${ISOLATION} it is refused`, answer, EXPECTED_FORBIDDEN);
       const issued = world.control.statements.slice(before).map((entry) => entry.sql);
@@ -671,7 +677,7 @@ export function buildConfirmationRefusalShapeSuite(
         customer_id: OTHER_CUSTOMER,
         confirmation_id: 'cnf_never_issued001',
         reauth_derived_value: await world.callerDerivedValue(),
-        identifier: CALLER_EMAIL,
+        [REAUTH_IDENTIFIER_FIELD]: CALLER_EMAIL,
       });
       expectError('uncomposed is unavailable', uncomposed, EXPECTED_UNAVAILABLE);
       expectError('a bad confirmation is forbidden', badConfirmation, EXPECTED_FORBIDDEN);
@@ -709,7 +715,7 @@ export function buildConfirmationRefusalShapeSuite(
         customer_id: TARGET_CUSTOMER,
         confirmation_id: 'cnf_never_issued_by_anyone',
         reauth_derived_value: await world.callerDerivedValue(),
-        identifier: CALLER_EMAIL,
+        [REAUTH_IDENTIFIER_FIELD]: CALLER_EMAIL,
       };
       const answer = await world.invoke(body);
       expectError(

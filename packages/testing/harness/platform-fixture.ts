@@ -87,7 +87,12 @@ import type { SessionCredentialSigner } from '../../../platform/core/identity/se
 
 import { DAILY_ALLOCATION } from '../../../platform/core/protection/write-admission.ts';
 import { createConfirmationService } from '../../../platform/core/confirmation/confirmation-service.ts';
-import { createConfirmationGate } from '../../../platform/core/confirmation/confirmation-gate.ts';
+import {
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
+  createConfirmationGate,
+} from '../../../platform/core/confirmation/confirmation-gate.ts';
 import type { ConfirmationGate } from '../../../platform/core/confirmation/confirmation-gate.ts';
 import { createConfirmationBinder } from '../../../platform/core/confirmation/binding.ts';
 import { createD1ConfirmationStore } from '../../../platform/core/confirmation/adapters/d1/d1-confirmation-store.ts';
@@ -119,6 +124,7 @@ import {
 import type { ConfirmationService } from '../../../platform/core/confirmation/confirmation-service.ts';
 import { createInProcessRequestCoordinator } from '../../../platform/core/protection/in-process-coordinator.ts';
 import { createMemberResolutionService } from '../../../platform/core/directory/member-resolution.ts';
+import { createCredentialResetService } from '../../../platform/core/credential/reset-service.ts';
 import { deriveLoginCredential as adminDerive } from '../../../platform/admin/src/api/kdf.ts';
 import { normalizeTemplateName } from '../../../platform/core/platform/templates.ts';
 
@@ -270,9 +276,44 @@ export async function successfulCallFor(
       bodyText: JSON.stringify({
         confirmation_id: issued.value.confirmationId,
         reauth_derived_value: await world.operatorDerivedValue(),
-        identifier: world.operatorIdentifier,
+        [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
       }),
       pathParams: { principal_id: PRN_MODERATOR },
+    };
+  }
+  if (routeId === 'platform.credentials.reset') {
+    if (world === undefined) {
+      throw new Error(
+        'platform.credentials.reset is confirmation-gated: successfulCallFor needs the world.',
+      );
+    }
+    // THE SECOND GATED ROUTE, since 17:06 on 2026-09-05. Its bound parameters are the three
+    // NON-confirmation body fields — this route declares no path parameter — and they must match
+    // the body below exactly or the gate refuses at the binding.
+    const parameters = {
+      principal_id: PRN_TENANT_OWNER,
+      target_identifier: TENANT_OWNER_IDENTIFIER,
+      derived_value: 'A'.repeat(43),
+    };
+    const issued = await world.confirmations.issueChallenge({
+      principalId: PRN_ADMIN,
+      sessionId: SESSION_ADMIN,
+      actionId: 'platform.credentials.reset',
+      permissionId: 'core.credential.reset',
+      parameters,
+      locale: 'en',
+    });
+    if (!issued.ok) {
+      throw new Error(`the fixture could not obtain a confirmation: ${JSON.stringify(issued.error)}`);
+    }
+    return {
+      bodyText: JSON.stringify({
+        ...parameters,
+        [CONFIRMATION_ID_FIELD]: issued.value.confirmationId,
+        [REAUTH_DERIVED_VALUE_FIELD]: await world.operatorDerivedValue(),
+        [REAUTH_IDENTIFIER_FIELD]: world.operatorIdentifier,
+      }),
+      pathParams: {},
     };
   }
   if (routeId === 'platform.operators.list') {
@@ -1179,11 +1220,31 @@ export async function createPlatformWorld(
     clock,
   });
 
+  // ---- CREDENTIAL RESET. `credential-reset-v1` · the most dangerous operation in the platform.
+  //
+  // THE REAL SERVICE, over the same control-plane store, resolver and coordinator everything else
+  // uses. It writes into the TARGET'S Organization's audit trail, so it needs the tenant side —
+  // and it requires an `OperatorWriteCharged` receipt as a parameter, which is what makes
+  // "the operator has already paid" impossible to forget rather than a thing to remember.
+  const reset = createCredentialResetService({
+    controlPlane: controlPlaneStoresForOnboarding.identity,
+    credentials: createD1CredentialStore(control.database),
+    identifiers: identifierHasher,
+    operators: store,
+    admission,
+    resolver,
+    coordinator: createInProcessRequestCoordinator(budget),
+    auditSinkFor: (tenantStore: TenantScopedStore) => createStoreAuditSink(tenantStore, ids),
+    ids,
+    clock,
+  });
+
   const composed = await createPlatformComposition({
     store,
     templates,
     onboarding,
     members,
+    reset,
     admission,
     confirmations,
     confirmationGate: options.composeGate === false ? undefined : gate,
@@ -1423,9 +1484,13 @@ export function createSyntheticCriticalRoute(): PlatformRoute {
     // gate would never be reached.
     fields: Object.freeze([
       'principal_id',
-      'confirmation_id',
-      'reauth_derived_value',
-      'identifier',
+      // THE PORT'S OWN CONSTANTS. `assertConfirmationCoverageIsCoherent` requires a gated route to
+      // declare exactly these three, and it compares against the same constants — so transcribing
+      // them here would make this synthetic route fail load-time coherence the moment one is
+      // renamed, which is what happened at 16:58 on 2026-09-05.
+      CONFIRMATION_ID_FIELD,
+      REAUTH_DERIVED_VALUE_FIELD,
+      REAUTH_IDENTIFIER_FIELD,
     ]),
     // NONE OF THE THREE, AND EACH ABSENCE IS REQUIRED RATHER THAN TIDY. The binding covers the
     // BODY, so an object field, a query parameter or a path parameter is an input the human never

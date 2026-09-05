@@ -225,6 +225,8 @@ const OPERATION_CONTRACTS: readonly string[] = Object.freeze([
   // ADDED 2026-09-05 with the operator roster. It also contracts `platform.operators.revoke`,
   // which is NOT built yet — see the statement-orphan case for why that distinction matters.
   'platform-operators-v1.contract.yaml',
+  // ADDED 2026-09-05 with `platform.credentials.reset`.
+  'credential-reset-v1.contract.yaml',
 ]);
 
 /**

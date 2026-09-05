@@ -58,6 +58,7 @@ import {
   buildAuditInstantSuite,
   buildCeilingFloorSuite,
 } from './suites/platform-operator/audit-feed-inputs.ts';
+import { buildAuditAnchorSuite } from './suites/platform-operator/audit-anchor.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
 import { buildTemplatesSuite } from './suites/platform-operator/templates.ts';
 import { buildRegistryCoherenceSuite } from './suites/platform-operator/registry-coherence.ts';
@@ -145,6 +146,7 @@ async function main(): Promise<void> {
     buildBootstrapBoundsSuite(),
     buildOnboardingSuite(),
     buildTemplatesSuite(),
+    buildAuditAnchorSuite(),
     buildAuditCursorScopeSuite(),
     buildAuditPrincipalOmissionSuite(),
     buildAuditInstantSuite(),

@@ -154,6 +154,12 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
           // Organization, so widening the type back was the alternative to recording the
           // platform's most dangerous operation against no one at all.
           'platform.operators.revoke': 'principal — the operator whose authority was removed, with no Organization because they have none',
+          // PRINCIPAL WITH A NULL ORGANIZATION, and for a DIFFERENT reason from revoke's. The
+          // target here may well be a member of Organizations — but a credential is a
+          // control-plane object and the reset is not scoped to any one of them. The
+          // per-Organization records are written separately, one per membership, into each
+          // customer's own trail; this row is the platform's copy and belongs to no tenant.
+          'platform.credentials.reset': 'principal — the account taken over, in no Organization because a credential is not scoped to one',
           'platform.audit.list': 'none — a feed read has no single target, and 0025 D5 forbids recording what it returned',
           'platform.organizations.audit.list': 'organization — the Organization whose trail was read',
           'platform.organizations.create': 'organization — the Organization it created, and nothing about what it contains',
