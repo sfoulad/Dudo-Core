@@ -333,7 +333,11 @@ operations:
       an owner membership, a tenant-directory entry and a first Workspace.
     permission: core.organization.create
     scope: platform
-    sensitivity: critical
+    # ~~sensitivity: critical~~ STRUCK 2026-09-05. IT IS `sensitive`, per docs/decisions/0026
+    # Decision 1, and permission-catalog.yaml has said so since. The field below records the
+    # authority rather than restating a class this file is not entitled to set — see
+    # theSENSITIVITYLIVESINTHECATALOG.
+    sensitivityAuthority: "permission-catalog.yaml, core.organization.create — `sensitive` (docs/decisions/0026 Decision 1)"
     request: { schemaRef: "urn:dudo:schema:organization-onboarding:1#/$defs/onboardOrganizationInput" }
     response: { schemaRef: "urn:dudo:schema:organization-onboarding:1#/$defs/onboardOrganizationOutput" }
     successStatus: 201
@@ -363,7 +367,40 @@ operations:
         RECOMMENDED: A, with the reclassification RECORDED AS A DECISION rather than made in this
         file, and with credential-reset-v1 staying `critical` — because that one IS account
         takeover, and the ladder keeps its meaning only if something stays at the top.
-      thisCONTRACTDOESNOTCHOOSE: "The permission is declared `critical` in the catalog today. Until this is ruled on, the route is unreachable, and that is the correct fail-closed state rather than a defect."
+      itWASRULEDON_ANDTHISBLOCKISHISTORY: >-
+        ~~"The permission is declared `critical` in the catalog today. Until this is ruled on, the
+        route is unreachable, and that is the correct fail-closed state."~~ STRUCK 2026-09-05.
+        BOTH HALVES ARE NOW FALSE: docs/decisions/0026 Decision 1 reclassified
+        core.organization.create to `sensitive`, permission-catalog.yaml has said so since, and
+        ON-6 in this same file is CLOSED. THE ROUTE IS REACHABLE AND TAKES NO CONFIRMATION.
+        THE BLOCK ABOVE IS KEPT AS THE ARGUMENT THAT PRODUCED THE RULING, not as a live question.
+        Its recommendation — option A, reclassify, recorded as a decision, with credential-reset
+        staying `critical` — is what 0026 took, including the reason: onboarding creates an EMPTY
+        tenant, destroys nothing, and the credential it creates is the tenant's FIRST, so there is
+        no prior state to take over.
+      theSENSITIVITYLIVESINTHECATALOG:
+        ruling: >-
+          THIS FILE NO LONGER DECLARES A SENSITIVITY CLASS AND MUST NOT REGAIN ONE. The class is a
+          property of the PERMISSION and lives in permission-catalog.yaml; an operation block
+          restating it is a second copy that can go stale, and it did — for the whole time between
+          0026 landing and this correction.
+        andTHEMECHANISMNEVERREADITANYWAY: >-
+          WHICH IS WHY THE STALE FIELD COULD NOT CAUSE A DEFECT, AND THAT IS DESIGN RATHER THAN LUCK.
+          confirmation-v1 makes the requirement DERIVE FROM THE PERMISSION'S CATALOGUED SENSITIVITY,
+          never from a declaration on an operation — precisely so an operation cannot opt IN by
+          calling itself critical, just as one cannot opt OUT by calling itself `write`. So
+          `requiresConfirmation('core.organization.create')` was false throughout, whatever line 336
+          said.
+          A STALE CONTRACT FIELD THAT CANNOT CAUSE A DEFECT, BECAUSE THE MECHANISM READS THE
+          AUTHORITY INSTEAD OF THE DECLARATION, IS WHAT A WELL-PLACED SOURCE OF TRUTH BUYS. It is
+          worth saying plainly, because the next reader will otherwise wonder how a wrong
+          sensitivity could have been harmless and conclude the check is missing.
+        andITISWIREDFROMTHEOTHERSIDETOO: >-
+          `assertConfirmationCoverageIsCoherent` means that if anyone ever DOES reclassify
+          core.organization.create to critical, THE BUILD STOPS — because this route would then have
+          to be a confirmable operation declaring the three confirmation fields, and it does not.
+          TWO DECISIONS ENFORCING EACH OTHER RATHER THAN MERELY AGREEING, which is the difference
+          between a rule and a convention.
     conflict: "Returned when the admin identifier already has a credential — one identifier, one principal, platform-wide. See theIdentifierCollision."
     notFound: "Returned when `template_id` names no Template. It is an honest not_found for template-v1's stated reason: Templates are platform configuration every operator may already enumerate."
     notes: >-
@@ -431,13 +468,37 @@ tenancy:
     handle again through any route. THE HANDLE'S LIFETIME IS THE OPERATION, and the implementation
     must not stash it, cache it, or return anything derived from it beyond the identifiers in the
     declared response.
-  theSHARPESTRISKINTHISCONTRACT: >-
-    NAMED SO A REVIEWER LOOKS FOR IT: THIS IS THE ONLY PLACE IN THE PLATFORM ROUTE CLASS WHERE A
-    TENANT STORE IS RESOLVED AT ALL, and platform-operator-v1 P1 says nothing in the class can
-    reach one. THE TWO ARE RECONCILED BY SCOPE AND NOT BY EXCEPTION: the handle is obtained by the
-    onboarding service after step 6, is passed to nothing else, and is never on any platform route
-    handler's context. AN IMPLEMENTATION THAT PUT A RESOLVER ON THE PLATFORM CONTEXT TO SERVE THIS
-    ONE OPERATION WOULD DEFEAT P1 FOR THE WHOLE CLASS, and that is the review point.
+  theSHARPESTRISKINTHISCONTRACT:
+    theRISK: >-
+      NAMED SO A REVIEWER LOOKS FOR IT: THIS IS THE ONLY PLACE IN THE PLATFORM ROUTE CLASS WHERE A
+      TENANT STORE IS RESOLVED AT ALL, and platform-operator-v1 P1 says nothing in the class can
+      reach one. The handle is obtained by the onboarding service after step 6, is passed to nothing
+      else, and is never on any platform route handler's context. AN IMPLEMENTATION THAT PUT A
+      RESOLVER ON THE PLATFORM CONTEXT TO SERVE THIS ONE OPERATION WOULD DEFEAT P1 FOR THE WHOLE
+      CLASS, and that is the review point.
+    P1ISFORMALLYWEAKENEDANDTHERECORDNOWSAYSSO:
+      correction: >-
+        ~~"The two are reconciled by scope and not by exception."~~ AMENDED 2026-09-05.
+        THAT WAS TOO COMFORTABLE. docs/decisions/0025 Decision 3 stated P1 as an absolute — "nothing
+        in the class CAN reach a tenant, rather than nothing does" — and this operation is an
+        exception to it, however narrow. Calling a narrowing "scope rather than exception" is the
+        kind of wording that lets the next exception be argued as scope too.
+      theHONESTFORM: >-
+        docs/decisions/0025's amendment carries it: "EXACTLY ONE HANDLER'S CLOSURE HOLDS A SERVICE
+        THAT CAN RESOLVE EXACTLY ONE STORE, FOR THE LIFETIME OF ONE OPERATION, FOR AN ORGANIZATION
+        THAT OPERATION JUST CREATED." Four bounds, each checkable, and none of them is "the class
+        cannot reach a tenant" any more.
+      whyTHEWEAKERSTATEMENTISBETTER: >-
+        BECAUSE IT IS TRUE, AND BECAUSE THE ABSOLUTE ONE WOULD HAVE BEEN QUIETLY FALSE — which is
+        worse than a stated narrowing in exactly the way AZ7 records: a control described as
+        stronger than it is stops being checked against what it actually does. A REVIEWER CAN VERIFY
+        FOUR BOUNDS; NOBODY CAN VERIFY AN ABSOLUTE THAT HAS AN EXCEPTION IN IT.
+      whatTOWATCHFOR: >-
+        THE SECOND OPERATION THAT WANTS ONE. The bounds hold today because there is exactly one such
+        handler; a second would make "exactly one" false and the argument would have to be made
+        afresh rather than inherited. organization-detail-v1 already refused to be that second one,
+        and its reasoning — a display read would hold a handle on every page load, forever, where
+        onboarding's exists once — is the test any candidate must pass.
 
 # ---------------------------------------------------------------------------
 # freeTierImpact

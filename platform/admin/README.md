@@ -2,9 +2,21 @@
 
 The operator console for **`https://admin.dudo.work`** (ADR 0010, ADR 0022).
 
-**Organizations is live. Templates, Operators and Audit are not.** Sign-in, the session probe
-and the Organization list call real, accepted, audited platform routes. The other three
-sections say what they are waiting for rather than showing a placeholder table.
+**Organizations and Templates are live. Operators and Audit are not.** Sign-in, the session
+probe, the Organization list and the full Template surface call real, accepted, audited
+platform routes. The other two sections say what they are waiting for rather than showing a
+placeholder table.
+
+> ### Templates are complete and inert, and the screen says so
+>
+> `template-v1` **TM-4**: *"Nothing consumes a Template. Organizations have no `template_id`, so
+> this capability is COMPLETE AND INERT. Creating a business type changes what no user sees
+> until onboarding adds the reference. It must not be reported as 'business types now work'."*
+>
+> So the Templates screen carries a permanent, non-dismissible notice above its controls saying
+> that creating a business type changes nothing a customer sees yet, and naming what will change
+> it (onboarding). **This is a third state** — not "blocked on acceptance", not "accepted but
+> unimplemented", but **built, working, and connected to nothing.**
 
 It is a sibling of `platform/web` and shares no build, no `package.json`, no session and no
 `node_modules` with it.
@@ -29,7 +41,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 51 checks against the shapes Core actually returns
+npm run verify:platform  # 92 checks against the shapes Core actually returns
 npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -63,6 +75,26 @@ absent and a menu missing only its first row both look unremarkable.
 |---|---|
 | `GET /api/v1/platform/whoami` | The session probe. Returns the operator's own principal id, platform role and reachable permissions. |
 | `GET /api/v1/platform/organizations` | The Organization list. Identifiers, status and creation date, keyset-paginated. |
+| `GET /api/v1/platform/templates` | The Template list, keyset-paginated. |
+| `GET /api/v1/platform/templates/{template_id}` | One Template. **The first route in this class with a path parameter.** |
+| `POST /api/v1/platform/templates` | Create a Template. Sends `name` and optionally `level_labels`. |
+
+**Two things about `create` that are easy to get wrong, and are asserted in `verify:platform`:**
+
+- **A blank label is omitted, never sent as `""`.** Core refuses a zero-length label with
+  `out_of_range`, so sending an empty string for "leave it default" turns a blank field into a
+  validation error. **Omission is what selects the default**, and the client never applies the
+  default itself — Core always returns all three labels, which is what stops the web and Apple
+  clients drifting into different ideas of what an unlabelled level is called.
+- **Any `2xx` is success.** `template-v1` declares `successStatus: 201`; Core returns **200**,
+  because `http/api.ts` hardcodes it for every platform route and `PlatformRoute` has no
+  `successStatus` field. This client accepts both, so it encodes neither side's bug. **Reported
+  to the Team Lead as a Core/contract divergence.**
+
+**And one about errors:** `rate_limited` and `quota_exceeded` **share HTTP 429**
+(`kernel/errors.ts`), so the status cannot tell them apart. The client reads the **code from the
+envelope body** and falls back to the status only when the body is unreadable. Mislabelling a
+quota refusal as a rate limit would tell an operator to wait a moment when waiting cannot help.
 
 **The success body is the response — there is no envelope.** `data` and `next_cursor` are
 top-level keys. This was read off the implementation (`platform-routes.ts` ends with
@@ -203,7 +235,8 @@ src/
   screens/
     SignIn.tsx                           sign-in with measured KDF progress
     Organizations.tsx                    LIVE — the Organization list
-    Templates.tsx Operators.tsx Audit.tsx   not built; each says what it waits for
+    Templates.tsx                        LIVE — list and create; carries the TM-4 notice
+    Operators.tsx Audit.tsx              not built; each says what it waits for
 scripts/verify-kdf.mjs                   normative checks + the cross-client drift check
 scripts/verify-platform.mjs              the platform client against Core's real shapes
 scripts/node-resolve-*.mjs               dev-only ESM hooks so the scripts import real modules

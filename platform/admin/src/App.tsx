@@ -179,7 +179,7 @@ function Centred({ children }: { children: ReactNode }) {
 function Section({ path, platform }: { path: string; platform: PlatformClient }) {
   switch (path) {
     case ROUTES.templates:
-      return <Templates />;
+      return <Templates platform={platform} />;
     case ROUTES.operators:
       return <Operators />;
     case ROUTES.audit:
