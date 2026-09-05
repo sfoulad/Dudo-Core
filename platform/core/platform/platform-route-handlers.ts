@@ -51,7 +51,7 @@ import {
   unavailable,
 } from '../kernel/errors.ts';
 import { rejectedCursor } from '../pagination/cursor.ts';
-import { isSubmittableIdentifier } from '../identity/credential-store.ts';
+import { checkIdentifier } from '../identity/credential-store.ts';
 import type { OnboardingInput, OnboardingService } from '../onboarding/onboarding.ts';
 import type { MemberResolutionService } from '../directory/member-resolution.ts';
 import { toRfc3339Utc } from '../kernel/clock.ts';
@@ -601,8 +601,12 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
     if (organizationId === undefined) {
       return err(internal());
     }
-    const identifier = body.identifier;
-    if (typeof identifier !== 'string' || !isSubmittableIdentifier(identifier)) {
+    // `checkIdentifier` RATHER THAN `isSubmittableIdentifier`, because the service now REQUIRES the
+    // brand and a boolean cannot produce one. The check and the value it licenses are one
+    // expression, so this handler cannot check and then pass something else.
+    const submitted = body.identifier;
+    const identifier = typeof submitted === 'string' ? checkIdentifier(submitted) : null;
+    if (identifier === null) {
       // A SHAPE ERROR, REFUSED BEFORE THE LOOKUP AND BEFORE THE AUDIT WRITE. It is not one of the
       // five collapsed cases: a malformed identifier is not a probe, it is a malformed request,
       // and it discloses nothing because the constraint is published in the schema.
@@ -866,7 +870,7 @@ function encodeAuditAnchor(record: PlatformAuditRecord): string {
 }
 
 function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
-  const parts = anchor.split('\\u0000');
+  const parts = anchor.split(String.fromCharCode(0));
   if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
     return null;
   }
@@ -910,10 +914,18 @@ function parseOnboardingInput(body: PreAuthBody): Result<OnboardingInput> {
   const derivedValue = body.derived_value;
 
   const details: ErrorDetail[] = [];
-  if (typeof adminIdentifier !== 'string' || !isSubmittableIdentifier(adminIdentifier)) {
-    // THE SAME PREDICATE THE LOGIN PATH USES, imported rather than restated. Two definitions of
-    // "an enrollable identifier" would agree until one was touched, and the divergence would
-    // present as an account that can be created and cannot log in.
+  // THE SAME CHECK THE LOGIN PATH USES, imported rather than restated. Two definitions of "an
+  // enrollable identifier" would agree until one was touched, and the divergence would present as
+  // an account that can be created and cannot log in.
+  //
+  // `checkIdentifier` RETURNS THE BRAND, so the check and the value it licenses are one expression.
+  // `OnboardingInput.adminIdentifier` is a `CheckedIdentifier`, so **this function cannot return a
+  // value it did not check** — the `as string` cast that used to sit at the bottom of this
+  // function is gone, and with it the gap between "we validated" and "we passed on the thing we
+  // validated".
+  const checkedIdentifier =
+    typeof adminIdentifier === 'string' ? checkIdentifier(adminIdentifier) : null;
+  if (checkedIdentifier === null) {
     details.push(detail('admin_identifier', 'must_be_a_submittable_identifier'));
   }
   if (typeof templateId !== 'string' || !IDENTIFIER_PATTERN.test(templateId)) {
@@ -934,11 +946,22 @@ function parseOnboardingInput(body: PreAuthBody): Result<OnboardingInput> {
     // silently, so it is checked at the boundary AND at the point of use.
     details.push(detail('derived_value', 'must_be_32_bytes_base64url'));
   }
-  if (details.length > 0) {
+  // `checkedIdentifier === null` IS REDUNDANT WITH `details.length > 0` AND IS WRITTEN ANYWAY.
+  //
+  // A null identifier always pushed a detail, so the two conditions are equivalent and the
+  // behaviour is identical. **The compiler cannot see that**, and the alternative was a cast at
+  // the return — which is precisely what a brand exists to remove. **Stating the invariant is
+  // cheaper than asserting it**, and if a future edit ever stops pushing that detail, this line
+  // keeps the function honest instead of shipping an unchecked identifier.
+  if (details.length > 0 || checkedIdentifier === null) {
     return err(invalidArgument(details));
   }
   return ok({
-    adminIdentifier: adminIdentifier as string,
+    // NO CAST. `checkedIdentifier` is non-null here because `details` is empty, and it carries the
+    // brand because `checkIdentifier` minted it. The other three keep their casts because their
+    // checks are still predicates — **and that contrast is the argument for the brand**: three
+    // fields where the type says "trust me" and one where it does not have to.
+    adminIdentifier: checkedIdentifier,
     templateId: templateId as string,
     firstWorkspaceName: firstWorkspaceName as string,
     derivedValue: derivedValue as string,
@@ -959,6 +982,91 @@ const DERIVED_VALUE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
  * body-field check. Both are `^[A-Za-z0-9_-]{8,64}$`, which is the schema's `templateId` pattern.
  */
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]{8,64}$/u;
+
+/**
+ * The operator roster. `platform-operators-v1`.
+ *
+ * *** THREE FIELDS PER ROW AND NOTHING ELSE, AND THE ABSENCES ARE LOAD-BEARING. *** No identifier,
+ * no email, no display name, no last-seen. `0001_principal.sql` refused an email column because
+ * *"a directory of every user's personal details, readable without any tenant scope, would be the
+ * highest-value target in the system"* — **an operator roster showing email addresses would be
+ * that directory at the most privileged end of the platform.**
+ *
+ * THE PORT CANNOT SUPPLY ONE EITHER. `PlatformOperatorSummary` has no field for it, so this
+ * handler could not leak one if it tried; the guarantee is in the type rather than in this
+ * function's restraint.
+ *
+ * THE CONSEQUENCE IS REAL AND IS `OP-3` RATHER THAN A DEFECT HERE: the console shows 22-character
+ * opaque identifiers and **an operator cannot tell colleagues apart on screen.** They recognise
+ * themselves by matching against `whoami`. The fix is display names, wherever those land.
+ *
+ * NO `not_found`. An empty roster is impossible in practice — a caller who reached this route is
+ * in it — and returns `200` with `data: []` if it ever occurs, because an empty list is a fact
+ * rather than an error.
+ */
+function listOperators(dependencies: {
+  readonly store: PlatformOperatorStore;
+  readonly cursors: PlatformCursorCodec;
+  readonly clock: Clock;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const pageSize = readPageSize(context.query);
+    if (!pageSize.ok) {
+      return err(pageSize.error);
+    }
+    const offered = readCursorParameter(context.query);
+    if (!offered.ok) {
+      return err(offered.error);
+    }
+    const binding = {
+      principalId: context.authority.principalId,
+      pageSize: pageSize.value,
+      // NO FILTERS ON THIS ROUTE, so the route id alone identifies the query. If a filter is ever
+      // added it must join this string — see `PlatformCursorBinding.scope`, where the failure a
+      // missing filter causes is a wrong page rather than an error.
+      scope: 'platform.operators.list',
+    };
+    const nowMs = dependencies.clock.nowMs();
+    let anchor: string | null = null;
+    if (offered.value !== null) {
+      const decoded = await dependencies.cursors.decode(offered.value, binding, nowMs);
+      if (!decoded.ok) {
+        return err(decoded.error);
+      }
+      anchor = decoded.value;
+    }
+
+    // ONE EXTRA ROW to decide `next_cursor` without a second query or a COUNT.
+    const found = await dependencies.store.listOperators(pageSize.value + 1, anchor);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    const hasMore = found.value.length > pageSize.value;
+    const page = hasMore ? found.value.slice(0, pageSize.value) : found.value;
+    const last = page[page.length - 1];
+
+    return ok({
+      body: {
+        data: page.map((operator) => ({
+          principal_id: operator.principalId,
+          platform_role: operator.platformRole,
+          created_at: operator.createdAt,
+        })),
+        next_cursor:
+          hasMore && last !== undefined
+            ? await dependencies.cursors.encode(last.principalId, binding, nowMs)
+            : null,
+      },
+      // NO TARGET. An enumeration names no single affected party, and `0025` Decision 5 permits
+      // only an Organization or a principal — this route names neither.
+      //
+      // *** IT DOES NOT NAME THE OPERATORS IT RETURNED, AND THAT IS DELIBERATE. *** A record
+      // listing them would put the roster INTO the operator log, where the audit feeds would then
+      // disclose it — `0028` Decision 3's shape, arriving through the target field.
+      target: NO_TARGET,
+    });
+  };
+}
 
 /** List Templates. Keyset paging, identical in shape to the Organization list. */
 function listTemplates(dependencies: {
@@ -1090,6 +1198,11 @@ export function createPlatformRouteHandlers(dependencies: {
     }),
     'platform.organizations.members.resolve': resolveMember({
       members: dependencies.members,
+    }),
+    'platform.operators.list': listOperators({
+      store: dependencies.store,
+      cursors: dependencies.cursors,
+      clock: dependencies.clock,
     }),
     'platform.audit.list': listAuditFeed({
       store: dependencies.store,

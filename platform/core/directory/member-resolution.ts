@@ -63,6 +63,7 @@ import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import { quotaExceeded, rateLimited, unavailable } from '../kernel/errors.ts';
 import type { IdentifierHasher } from '../identity/credential-store.ts';
+import type { CheckedIdentifier } from '../identity/credential-store.ts';
 import { normalizeIdentifier } from '../identity/credential-store.ts';
 import type {
   PlatformMemberResolution,
@@ -96,7 +97,17 @@ export type MemberResolutionService = {
    */
   resolve(input: {
     readonly organizationId: string;
-    readonly identifier: string;
+    /**
+     * *** `CheckedIdentifier`, NOT `string`. ***
+     *
+     * The handler checks this today and **nothing made that a property of the service.** A second
+     * caller would have hashed an unchecked string — which is not a security hole by itself, since
+     * an unaccepted identifier simply matches no credential, but it is the guard being a discipline
+     * rather than a mechanism. See `CheckedIdentifier`.
+     *
+     * IT IS THE RAW VALUE. `normalizeIdentifier` runs below, after the check, in that order.
+     */
+    readonly identifier: CheckedIdentifier;
     readonly actorPrincipalId: string;
     readonly requestId: string;
     readonly correlationId: string;

@@ -177,6 +177,7 @@ export type PlatformRouteId =
   | 'platform.organizations.members.resolve'
   | 'platform.audit.list'
   | 'platform.organizations.audit.list'
+  | 'platform.operators.list'
   | 'platform.session.whoami'
   | 'platform.confirmations.request'
   | 'platform.templates.create'
@@ -555,6 +556,33 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // caller ask "which of our operators touched this customer" — a reasonable question, and one
     // that belongs to the platform feed where the principal target is omitted.
     queryParameters: Object.freeze(['page_size', 'cursor', 'action_id', 'since', 'until']),
+    successStatus: 200 as const,
+  }),
+  // ===========================================================================================
+  // THE OPERATOR ROSTER. `platform-operators-v1`.
+  //
+  // *** THE REVOKE ROUTE IS DELIBERATELY ABSENT AND IS NOT AN OVERSIGHT. *** It is blocked on a
+  // mechanism question reported to the Team Lead: `platform-operators-v1`'s schema states that the
+  // confirmation binding covers `principal_id`, which is a PATH parameter — and the binding is
+  // computed from the BODY alone (`splitConfirmedRequest`). As things stand the binding for that
+  // route would be the EMPTY OBJECT, so **a confirmation obtained to revoke operator A would be
+  // spendable to revoke operator B**, which is the exact sentence the schema promises cannot
+  // happen. `assertConfirmationCoverageIsCoherent` refuses the build rather than shipping it.
+  //
+  // A ROUTE THAT DOES NOT EXIST CANNOT BE REACHED. Registering it now with the binding unfixed
+  // would be the more dangerous half of the contract shipped first.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.operators.list' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/operators`,
+    // `core.platform-audit.read`, THE SAME PERMISSION AS THE AUDIT FEEDS. Reading who holds
+    // authority is oversight, and `0028` keeps oversight and support splittable later without
+    // inventing a permission nobody could hold separately today.
+    permission: fixedPermission('core.platform-audit.read'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze(['page_size', 'cursor']),
     successStatus: 200 as const,
   }),
   // ===========================================================================================

@@ -54,6 +54,7 @@ import type {
   PlatformOperatorActionRecord,
   PlatformOperatorRecord,
   PlatformOperatorStore,
+  PlatformOperatorSummary,
   PlatformOrganizationDetailRecord,
   PlatformOrganizationRecord,
   PlatformOrganizationStatus,
@@ -533,6 +534,59 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
         return ok(null);
       }
       return ok({ principalId, role });
+    },
+
+    async listOperators(
+      limit: number,
+      afterPrincipalId: string | null,
+    ): Promise<Result<readonly PlatformOperatorSummary[]>> {
+      if (!Number.isInteger(limit) || limit < 1) {
+        return err(internal());
+      }
+      // KEYSET ON THE PRIMARY KEY. `WHERE principal_id > ?` resumes the index scan strictly after
+      // the previous page, so page N costs page 1. The limit is inlined as a VALIDATED integer,
+      // the anchor is BOUND — the same split `listOrganizations` makes.
+      //
+      // *** THREE COLUMNS. THERE IS NO JOIN TO `principal` AND NO JOIN TO `principal_credential`. ***
+      // Either would put an identifier or a status within reach of this statement, and the whole
+      // point of the roster is that it cannot become a directory. `0001_principal.sql`.
+      const sql =
+        afterPrincipalId === null
+          ? 'SELECT principal_id, platform_role, created_at FROM platform_operator ' +
+            `ORDER BY principal_id LIMIT ${String(limit)}`
+          : 'SELECT principal_id, platform_role, created_at FROM platform_operator ' +
+            `WHERE principal_id > ? ORDER BY principal_id LIMIT ${String(limit)}`;
+      const rows = await selectRows(
+        database,
+        sql,
+        afterPrincipalId === null ? [] : [afterPrincipalId],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      const operators: PlatformOperatorSummary[] = [];
+      for (const row of rows.value) {
+        const principalId = requiredText(row, 'principal_id');
+        const createdAt = requiredText(row, 'created_at');
+        const platformRole = toPlatformRole(text(row, 'platform_role'));
+        if (principalId === null || createdAt === null || platformRole === null) {
+          // AN UNRECOGNISED ROLE OMITS THE ROW RATHER THAN FAILING THE PAGE, and that is the one
+          // place this differs from the audit feed's mapper.
+          //
+          // THE REASON IS WHAT THE ROW MEANS. `findOperator` already denies everything to a
+          // principal whose stored role this build cannot read — so such a principal HOLDS NO
+          // AUTHORITY, and listing it would tell an operator that someone is an operator when the
+          // platform refuses them everything. **The roster answers "who can act", and the honest
+          // answer for an unreadable role is "not this one".**
+          //
+          // IT IS NOT SILENT: the same row is invisible at `findOperator` too, so a principal who
+          // believes they are an operator and is refused everywhere is consistent with a roster
+          // that omits them. A page that failed instead would make one bad row hide every good one.
+          continue;
+        }
+        operators.push({ principalId, platformRole, createdAt });
+      }
+      return ok(Object.freeze(operators));
     },
 
     async listPlatformAudit(

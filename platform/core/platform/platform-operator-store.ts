@@ -149,6 +149,24 @@ export type PlatformMemberResolution = {
 };
 
 /**
+ * One row of the operator roster. **THREE FIELDS, AND THE ABSENCES ARE THE DESIGN.**
+ *
+ * See `listOperators`. There is deliberately no `identifier`, no `displayName` and no `lastSeenAt`:
+ * `0001_principal.sql` refused the first outright, and a type with nowhere to put it is a type that
+ * cannot quietly acquire it.
+ *
+ * `platformRole` IS NARROWED ON READ. An unrecognised stored value never produces a summary — the
+ * same device `findOperator` uses, so a row written by a future migration this build does not
+ * understand fails onto the safe path rather than being rendered as an unknown authority.
+ */
+export type PlatformOperatorSummary = {
+  readonly principalId: string;
+  readonly platformRole: PlatformRole;
+  /** RFC 3339, UTC. When platform authority was GRANTED — not when the principal was created. */
+  readonly createdAt: string;
+};
+
+/**
  * The filters both feeds accept. **THE SAME TYPE FOR BOTH, WITH NO PRINCIPAL FIELD.**
  *
  * *** THERE IS NO `targetPrincipalId` AND ADDING ONE REOPENS `0028` Decision 3. *** Filtering by a
@@ -416,6 +434,36 @@ export type PlatformOperatorStore = {
    * counting results reconstructs the omitted field one bit at a time. `actorPrincipalId` is
    * permitted — operators are a known set to anyone who can read this feed at all.
    */
+  /**
+   * ===========================================================================================
+   * WHO HOLDS PLATFORM AUTHORITY. `platform-operators-v1`.
+   * ===========================================================================================
+   *
+   * *** IT RETURNS THREE COLUMNS AND THERE IS NO FOURTH TO ADD. ***
+   *
+   * `principal_id`, `platform_role`, `created_at`. **No identifier, no email, no display name, no
+   * last-seen** — `0001_principal.sql` holds none of them, and it refused an email column outright
+   * because *"a directory of every user's personal details, readable without any tenant scope,
+   * would be the highest-value target in the system."*
+   *
+   * **AN OPERATOR ROSTER SHOWING EMAIL ADDRESSES WOULD BE THAT DIRECTORY AT THE MOST PRIVILEGED
+   * END OF THE PLATFORM**, and this method must not become the reason someone adds the column.
+   * The record type has no field for one, so the pressure has nowhere to land.
+   *
+   * THE COST IS REAL AND IS NOT THIS CONTRACT'S TO FIX: the console renders 22-character opaque
+   * identifiers and **an operator cannot tell colleagues apart on screen.** They recognise
+   * themselves by matching against `whoami`. That is `OP-3`, and the fix is display names wherever
+   * they land — not a column here.
+   *
+   * KEYSET ON `principal_id`, the primary key of `platform_operator`, for the reason
+   * `listOrganizations` gives: page N costs what page 1 costs, and ordering by `created_at` would
+   * need an index the schema does not have.
+   */
+  listOperators(
+    limit: number,
+    afterPrincipalId: string | null,
+  ): Promise<Result<readonly PlatformOperatorSummary[]>>;
+
   listPlatformAudit(
     filters: PlatformAuditFilters,
     limit: number,

@@ -48,6 +48,7 @@
  */
 
 import type { Result } from '../kernel/result.ts';
+import type { CheckedIdentifier } from '../identity/credential-store.ts';
 
 /**
  * The two things that can fail AFTER the Organization irrevocably exists.
@@ -80,8 +81,20 @@ export type OnboardingWarning = 'first_workspace_not_created' | 'tenant_audit_re
  *   never sees it.
  */
 export type OnboardingInput = {
-  /** The first admin's login identifier. Already `isSubmittableIdentifier`-checked. */
-  readonly adminIdentifier: string;
+  /**
+   * The first admin's login identifier.
+   *
+   * *** `CheckedIdentifier`, NOT `string`. THE TYPE IS THE ENFORCEMENT. ***
+   *
+   * This field said *"already `isSubmittableIdentifier`-checked"* and **nothing made that true** —
+   * the handler happened to check, and a second caller of this service would have inherited
+   * nothing. A comment asserting a precondition is the shape `architecture.md` §3c warns about;
+   * a type that cannot be satisfied without the check is the shape §3a asks for.
+   *
+   * IT IS THE RAW IDENTIFIER. Normalisation happens inside the service, after the check, which is
+   * the order `account-identifier-v1`'s case-folding argument requires.
+   */
+  readonly adminIdentifier: CheckedIdentifier;
   readonly templateId: string;
   /**
    * The first Workspace's name.

@@ -189,6 +189,87 @@ export const MIN_IDENTIFIER_LENGTH = 3;
 export const CLIENT_KDF_ITERATIONS = 600_000;
 
 /**
+ * ===========================================================================================
+ * *** A STRING THAT HAS BEEN CHECKED AGAINST THE ACCOUNT-IDENTIFIER GRAMMAR. ***
+ * `account-identifier-v1` · `architecture.md` §3a.
+ * ===========================================================================================
+ *
+ * **WHAT IT CERTIFIES:** this value passed `isSubmittableIdentifier`. Nothing else.
+ *
+ * ===========================================================================================
+ * WHY IT EXISTS: FOUR CALL SITES, TWO OF WHICH FORGOT
+ * ===========================================================================================
+ *
+ * `credential-verifier.ts` and `seed-principal.ts` check before normalising.
+ * `onboarding-service.ts` and `member-resolution.ts` did not — **their handlers did it for them**,
+ * so there was no live hole, and that is exactly the shape worth fixing: **the protection was a
+ * property of two callers remembering, and the services — the reusable units — enforced nothing.**
+ * A third caller of either would have inherited none of it.
+ *
+ * §3a: *"a guard that must be remembered is a discipline; a guard whose output the write requires
+ * is a mechanism."* **Adding the two missing calls would have left the fifth author to remember.**
+ *
+ * ===========================================================================================
+ * *** IT MINTS ON THE CHECK AND NEVER ON `normalizeIdentifier`. THIS IS THE WHOLE DESIGN. ***
+ * ===========================================================================================
+ *
+ * `normalizeIdentifier` returns a **plain `string`** and must keep doing so, because
+ * **`platform/core/platform/templates.ts::normalizeTemplateName` DELEGATES TO IT** — deliberately,
+ * so Template-name collisions and identifier collisions cannot drift apart.
+ *
+ * **IF THE BRAND RODE ON THE NORMALISER'S RETURN TYPE, THAT LINE WOULD NEED A CAST TODAY** — and a
+ * cast is what defeats a brand. The person adding it would be fixing a Template test, in a file
+ * whose author never opted into the identifier rule, and **they would be right to think they were
+ * unblocking themselves.** The brand would be gone and the reason would look local and reasonable.
+ *
+ * So: **brand the checked RAW identifier; leave the normaliser serving both domains untyped.**
+ *
+ * ===========================================================================================
+ * IT CARRIES THE **RAW** STRING, NOT THE NORMALISED ONE
+ * ===========================================================================================
+ *
+ * The order at both correct call sites is **check, then normalise**, and it must stay that way.
+ * `account-identifier-v1` records why: `normalizeIdentifier` **case-folds ASCII only**, which is
+ * complete *because* the accepted character set is ASCII. **A brand that normalised on the way in
+ * would put the fold before the grammar check** and create exactly the pressure that argument
+ * exists to resist.
+ *
+ * ===========================================================================================
+ * TWO PROPERTIES IT DELIBERATELY DOES **NOT** HAVE
+ * ===========================================================================================
+ *
+ * **NO IN-STATEMENT BACKSTOP, BECAUSE THERE IS NO STALENESS WINDOW.** §3a's worked example is a
+ * fact that CAN go stale between the mint and the write — a principal made an operator in between —
+ * and it concludes that the in-statement guard is the load-bearing layer. **That reasoning does not
+ * transfer here and the symmetry is a trap:** this fact is a pure function of the string, the
+ * string is immutable, and nothing can change between the check and the use. Adding a re-check for
+ * consistency with that example would be ceremony.
+ *
+ * **NOT SINGLE-USE.** §3a: *"single-use copied without its rationale is the exported-mint mistake
+ * again."* A **capacity** receipt must be single-use — spending it twice spends one budget twice.
+ * This is a **fact** receipt: re-using it consumes nothing and is refused by nothing, because the
+ * string it certifies does not change.
+ */
+declare const CHECKED_IDENTIFIER_BRAND: unique symbol;
+
+export type CheckedIdentifier = string & {
+  readonly [CHECKED_IDENTIFIER_BRAND]: true;
+};
+
+/**
+ * The **only** producer of a `CheckedIdentifier`. Returns `null` for a value the platform will not
+ * accept.
+ *
+ * IT WRAPS `isSubmittableIdentifier` RATHER THAN REPLACING IT, so there is exactly one grammar and
+ * the boolean form stays available for the places that want a predicate. **Two implementations of
+ * "is this an identifier" would agree until one was touched**, and the divergence would be an
+ * account that can be created and cannot log in.
+ */
+export function checkIdentifier(value: string): CheckedIdentifier | null {
+  return isSubmittableIdentifier(value) ? (value as CheckedIdentifier) : null;
+}
+
+/**
  * Is this value one the platform will normalise at all?
  *
  * DELIBERATELY NOT AN EMAIL VALIDATOR. It does not try to decide whether an address is
