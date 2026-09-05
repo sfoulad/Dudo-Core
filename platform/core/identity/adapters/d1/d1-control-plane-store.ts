@@ -58,6 +58,7 @@ import type {
   IdentityControlPlaneStore,
   MembershipStatus,
   MembershipWithOrganization,
+  NewOrganizationMembership,
   OrganizationMembershipRecord,
   OrganizationStatus,
   PrincipalRecord,
@@ -66,6 +67,12 @@ import type {
   TenantDirectoryRecord,
   TenantDirectoryStore,
 } from '../../control-plane-store.ts';
+import type { MembershipAdmission } from '../../../platform/platform-authority.ts';
+// A VALUE import, and the direction is deliberate: the adapter reaches INTO the platform module
+// for the verifier, while `control-plane-store.ts` takes only the erased TYPE. There is no
+// runtime cycle — `platform-authority.ts`'s own value imports are the kernel and
+// `platform-permissions.ts`, neither of which reaches back here.
+import { consumeMembershipAdmission } from '../../../platform/platform-authority.ts';
 import type { ControlPlaneWriteReservation } from '../../control-plane-admission.ts';
 import { consumeControlPlaneWriteReservation } from '../../control-plane-admission.ts';
 
@@ -410,6 +417,66 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
           record.activeOrganizationId,
           record.createdAt,
           record.expiresAt,
+        ],
+      );
+    },
+
+    async createMembership(
+      record: NewOrganizationMembership,
+      reservation: ControlPlaneWriteReservation,
+      admission: MembershipAdmission,
+    ): Promise<Result<void>> {
+      // ---- Layer 1. THE RECEIPT. Throws rather than returning, exactly as
+      // `consumeControlPlaneWriteReservation` does and for the same reason: no client can cause
+      // this, because clients supply values and never receipts. It also binds the receipt to THIS
+      // row's principal, so one minted for A cannot fund a write for B.
+      consumeMembershipAdmission(admission, record.principalId);
+      consumeControlPlaneWriteReservation(reservation, 1);
+
+      // =====================================================================================
+      // ---- Layer 2. THE GUARD IS IN THE STATEMENT, NOT IN FRONT OF IT.
+      // =====================================================================================
+      //
+      // `INSERT ... SELECT ... WHERE NOT EXISTS` re-asks the platform-operator question IN THE
+      // SAME STATEMENT THAT WRITES, which closes the one thing the receipt cannot: the fact it
+      // certifies was true when it was minted, and a principal could be made an operator between
+      // the mint and this line. Here there is no window — the check and the write are one
+      // statement.
+      //
+      // IT COSTS NOTHING. A correlated subquery against `platform_operator`'s primary key, on a
+      // statement that was going to run anyway. No extra round trip and no extra statement.
+      //
+      // AND IT HOLDS ON A DATABASE WHERE `0010` WAS NEVER APPLIED. That is the case
+      // `security-agent` identified as the one the triggers structurally cannot cover — a restore
+      // from two backups taken at different moments does not re-run triggers, and `0010`
+      // deliberately does not validate rows that already exist. This layer does not depend on
+      // that migration at all.
+      //
+      // ---- WHAT IT DOES NOT DO, STATED BECAUSE IT IS THE RESIDUAL.
+      //
+      // A refused write lands ZERO ROWS AND REPORTS `ok`. Core's `D1Database` exposes no
+      // `meta.changes` — `batch` returns `unknown[]` — so this adapter cannot tell "wrote one row"
+      // from "wrote none", and surfacing it would mean widening a Cloudflare-shaped type that
+      // `.claude/rules/architecture.md` §6 requires to stay minimal and replaceable.
+      //
+      // THAT IS ACCEPTABLE ONLY BECAUSE OF LAYER 1, AND THE ORDER OF THE ARGUMENT MATTERS. The
+      // receipt already refused loudly, with a real error, before any of this ran. This branch is
+      // reachable only after someone has deliberately cast past the type — at which point "the
+      // forbidden row was not created" is the property that matters, not the message. A guarded
+      // INSERT as the ONLY layer would be a silent false success and would not be acceptable.
+      return execute(
+        database,
+        'INSERT INTO organization_membership ' +
+          '(principal_id, organization_id, status, role, created_at) ' +
+          'SELECT ?, ?, ?, ?, ? ' +
+          'WHERE NOT EXISTS (SELECT 1 FROM platform_operator WHERE principal_id = ?)',
+        [
+          record.principalId,
+          record.organizationId,
+          record.status,
+          record.role,
+          record.createdAt,
+          record.principalId,
         ],
       );
     },

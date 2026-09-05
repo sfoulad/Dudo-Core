@@ -83,6 +83,29 @@
 import type { Result } from '../kernel/result.ts';
 import type { MembershipRole } from '../authorization/roles.ts';
 import type { ControlPlaneWriteReservation } from './control-plane-admission.ts';
+/**
+ * ===========================================================================================
+ * `import type` IS LOAD-BEARING HERE. DO NOT "TIDY" IT INTO A VALUE IMPORT.
+ * ===========================================================================================
+ *
+ * `verbatimModuleSyntax` erases this line, so there is NO RUNTIME EDGE from `identity/**` to
+ * `platform/**` — only the compile-time obligation that `createMembership`'s third argument
+ * cannot be fabricated. The value side of the relationship runs the other way, as it should:
+ * `platform/platform-authority.ts` performs the read, and the D1 adapter imports its verifier.
+ *
+ * DROPPING THE `type` KEYWORD CREATES AN IMPORT CYCLE — `identity` → `platform` → ... → back —
+ * AND IT WILL NOT LOOK LIKE ONE. It compiles, review reads it as a formatting change, and the
+ * failure arrives at MODULE LOAD in a deployed Worker, where a partially-initialised module
+ * yields `undefined` for an export that every authenticated request depends on. That is a
+ * cold-start failure on the control plane, which is the worst place in the platform to discover
+ * an import-order problem.
+ *
+ * THE CHECK IS ONE GREP AND IT IS WORTH RUNNING WITH THE OTHER NEGATIVE CONTROLS: no line in
+ * `platform/core/identity/**` imports a VALUE from `platform/core/platform/**`, with exactly one
+ * exception — `adapters/d1/d1-control-plane-store.ts` imports `consumeMembershipAdmission`, which
+ * is the direction that is supposed to exist.
+ */
+import type { MembershipAdmission } from '../platform/platform-authority.ts';
 
 // =============================================================================================
 // Records. Each one is the minimum the resolution algorithm reads, and no more.
@@ -209,6 +232,28 @@ export type OrganizationMembershipRecord = {
   readonly organizationId: string;
   readonly status: MembershipStatus;
   readonly role: MembershipRole | null;
+};
+
+/**
+ * A membership row about to be WRITTEN, as distinct from one that has been read.
+ *
+ * IT IS A SEPARATE TYPE BECAUSE THE WRITE NEEDS ONE FIELD THE READ DOES NOT PROJECT.
+ * `created_at` is on the table and is `NOT NULL`, and no read path selects it — the resolution
+ * algorithm has never needed it, and adding it to `OrganizationMembershipRecord` would mean every
+ * membership SELECT in the platform started projecting a column nothing consumes.
+ *
+ * THE ALTERNATIVE — a fourth positional argument on `createMembership` — was rejected for the
+ * reason `PlatformCursorBinding` exists: `createMembership(record, createdAt, reservation,
+ * admission)` and `createMembership(record, reservation, admission, createdAt)` would both
+ * compile, and two adjacent parameters of the same shape are a call site waiting to be written
+ * backwards.
+ *
+ * `createdAt` IS THE SERVER'S CLOCK AND NEVER A REQUEST VALUE, the same rule
+ * `session-resolution.ts` applies by taking no `nowMs` parameter anywhere.
+ */
+export type NewOrganizationMembership = OrganizationMembershipRecord & {
+  /** RFC 3339, UTC. */
+  readonly createdAt: string;
 };
 
 /**
@@ -363,6 +408,50 @@ export type IdentityControlPlaneStore = {
     sessionId: string,
     organizationId: string | null,
     reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<void>>;
+
+  /**
+   * ===========================================================================================
+   * WRITES ONE `organization_membership` ROW. IT CANNOT BE CALLED WITHOUT THE PLATFORM-OPERATOR
+   * CHECK HAVING HAPPENED. `docs/decisions/0025` decision 1 · finding `M-1`.
+   * ===========================================================================================
+   *
+   * `admission` IS THE WHOLE POINT OF THIS SIGNATURE. `platform/platform-authority.ts` exports
+   * `admitMembershipWrite` as the ONLY producer of a `MembershipAdmission`, and its mint is
+   * module-private — so there is no way to obtain this argument without the `platform_operator`
+   * read actually having run and returned no row.
+   *
+   * `M-1` was that the write-side guard had no call sites and that omitting it, when membership
+   * administration eventually landed, WOULD BE SILENT: nothing fails, no test goes red, and
+   * `0010`'s triggers become the only layer — on a database where that migration may not have been
+   * applied. **A parameter that cannot be fabricated turns that silent omission into a compile
+   * error.** It is the device `ControlPlaneWriteReservation` already uses one field along, and
+   * reusing it keeps one pattern rather than two that drift.
+   *
+   * ===========================================================================================
+   * NOTHING IN THIS REPOSITORY CALLS THIS YET, AND THAT IS STATED RATHER THAN IMPLIED.
+   * ===========================================================================================
+   *
+   * Membership administration belongs to the organization-structure slice and onboarding to
+   * `organization-onboarding-v1`; neither is built. This method exists now for the same reason
+   * `issueSession` was written before any credential verifier existed and says so in capitals:
+   * **the signature IS the mechanism**, and a signature that arrives with its first caller is a
+   * signature that caller gets to choose. `PRINCIPAL_ROW_WRITES` and its siblings are declared
+   * ahead of their writers on the identical reasoning — "so the first writer draws an accounted,
+   * already-counted cost rather than a number it picked".
+   *
+   * IT IS NOT A STUB. The adapter implements it fully, its guard is tested as an attack, and it
+   * charges `ORGANIZATION_MEMBERSHIP_ROW_WRITES` from the same budget every other control-plane
+   * write draws on.
+   *
+   * WHAT THE CALLER STILL OWES, because this method cannot supply it: the ORGANIZATION's own
+   * existence and the caller's authority to add a member to it. This checks one thing — that the
+   * principal is not a platform operator — and it is not an authorization decision.
+   */
+  createMembership(
+    record: NewOrganizationMembership,
+    reservation: ControlPlaneWriteReservation,
+    admission: MembershipAdmission,
   ): Promise<Result<void>>;
 
   /**
