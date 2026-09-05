@@ -481,6 +481,110 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       );
     },
 
+    async createOrganizationWithFirstAdmin(
+      rows,
+      reservation: ControlPlaneWriteReservation,
+      admission: MembershipAdmission,
+    ): Promise<Result<void>> {
+      // ---- Layer 1. THE RECEIPTS, both bound to this operation's own values.
+      consumeMembershipAdmission(admission, rows.membership.principalId);
+      consumeControlPlaneWriteReservation(reservation, 5);
+
+      // =====================================================================================
+      // ONE BATCH, ONE TRANSACTION, FIVE STATEMENTS, DEPENDENCY ORDER.
+      // =====================================================================================
+      //
+      // D1 EXECUTES A BATCH AS A SINGLE IMPLICIT TRANSACTION — the same property
+      // `storage/adapters/d1/d1-store.ts` relies on to make a mutation and its audit record one
+      // unit. So all five rows land or none do, and there is no window in which an Organization
+      // exists without its admin, an admin without a credential, or a directory entry pointing at
+      // nothing. **`organization-onboarding-v1`'s `ON-1` orphan is unreachable through this port.**
+      //
+      // THE ORDER IS FORCED BY THE SCHEMA AND MEASURED, NOT ASSUMED. `tenant_directory`,
+      // `principal_credential` and `organization_membership` all carry `REFERENCES`, D1 enforces
+      // foreign keys, and SQLite checks them per statement rather than deferring to commit. So
+      // parents precede children: organization, tenant_directory, principal, principal_credential,
+      // organization_membership.
+      //
+      // ---- THE MEMBERSHIP STATEMENT KEEPS ITS IN-STATEMENT GUARD.
+      //
+      // `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM platform_operator ...)` — identical
+      // to `createMembership`'s, and it is not redundant here even though the principal is created
+      // three statements earlier in the same transaction. **The guard is what survives a future
+      // edit that reorders these statements or reuses this method for an existing principal**, and
+      // it costs a correlated subquery on a primary key.
+      //
+      // ---- NO `ON CONFLICT` ANYWHERE, AND THAT IS THE ANTI-TAKEOVER PROPERTY.
+      //
+      // A duplicate `identifier_hash` violates the primary key and aborts the whole batch. An
+      // upsert would silently repoint an existing person's credential at a new Organization's
+      // admin, which is account takeover wearing the shape of a convenience. The service checks
+      // for the collision first so the ordinary case answers `conflict`; this is what makes the
+      // race fail closed rather than fail open.
+      return executeBatch(database, [
+        {
+          sql: 'INSERT INTO organization (organization_id, status, created_at) VALUES (?, ?, ?)',
+          parameters: [
+            rows.organization.organizationId,
+            rows.organization.status,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO tenant_directory (organization_id, binding_name, state, created_at) ' +
+            'VALUES (?, ?, ?, ?)',
+          parameters: [
+            rows.directory.organizationId,
+            rows.directory.bindingName,
+            rows.directory.state,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO principal (principal_id, principal_type, status, created_at) ' +
+            'VALUES (?, ?, ?, ?)',
+          parameters: [
+            rows.principal.principalId,
+            rows.principal.principalType,
+            rows.principal.status,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO principal_credential ' +
+            '(identifier_hash, principal_id, algorithm, iterations, salt, verifier, created_at) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+          parameters: [
+            rows.credential.identifierHash,
+            rows.credential.principalId,
+            rows.credential.algorithm,
+            rows.credential.iterations,
+            rows.credential.salt,
+            rows.credential.verifier,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO organization_membership ' +
+            '(principal_id, organization_id, status, role, created_at) ' +
+            'SELECT ?, ?, ?, ?, ? ' +
+            'WHERE NOT EXISTS (SELECT 1 FROM platform_operator WHERE principal_id = ?)',
+          parameters: [
+            rows.membership.principalId,
+            rows.membership.organizationId,
+            rows.membership.status,
+            rows.membership.role,
+            rows.membership.createdAt,
+            rows.membership.principalId,
+          ],
+        },
+      ]);
+    },
+
     async setSessionActiveOrganization(
       sessionId: string,
       organizationId: string | null,
@@ -530,6 +634,35 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
   };
 
   return { identity, tenantDirectory };
+}
+
+/**
+ * Several statements, ONE transaction. The multi-statement form of `execute` below.
+ *
+ * IT EXISTS SO THAT THE ATOMICITY IS AT THE PORT AND NOT AT THE CALL SITE. A caller that wanted
+ * five rows written together could not assemble it from five `execute` calls — that is five
+ * transactions — and the difference is `ON-1`'s orphan row.
+ *
+ * A FAILURE ANYWHERE IN THE BATCH IS `unavailable`, exactly as `execute`'s is, and for the same
+ * reason: distinguishing a constraint violation from an outage would mean reading a D1 error
+ * message, which is a vendor-shaped string in a control flow. Callers that need to tell a
+ * collision apart must check for it with a read BEFORE the write, which is what
+ * `onboarding-service.ts` does and documents.
+ */
+async function executeBatch(
+  database: D1Database,
+  statements: readonly { readonly sql: string; readonly parameters: readonly unknown[] }[],
+): Promise<Result<void>> {
+  try {
+    await database.batch(
+      statements.map((statement) =>
+        database.prepare(statement.sql).bind(...statement.parameters),
+      ),
+    );
+    return ok(undefined);
+  } catch (cause) {
+    return err(unavailable());
+  }
 }
 
 async function execute(

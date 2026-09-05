@@ -40,7 +40,10 @@
 import type { Clock } from '../kernel/clock.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
+import type { ErrorDetail } from '../kernel/errors.ts';
 import { conflict, detail, internal, invalidArgument, notFound, quotaExceeded } from '../kernel/errors.ts';
+import { isSubmittableIdentifier } from '../identity/credential-store.ts';
+import type { OnboardingInput, OnboardingService } from '../onboarding/onboarding.ts';
 import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
@@ -399,6 +402,127 @@ function createTemplate(dependencies: {
   };
 }
 
+/**
+ * ===========================================================================================
+ * ONBOARD AN ORGANIZATION. `organization-onboarding-v1`.
+ * ===========================================================================================
+ *
+ * *** THE HANDLER IS THIN ON PURPOSE, AND THE THINNESS IS THE ISOLATION ARGUMENT. *** It
+ * validates four strings and calls one method. **Everything that touches a tenant store lives in
+ * `onboarding/`, outside this directory**, so that `qa-agent`'s control — *"no module under
+ * `platform/core/platform/**` names a tenant primitive"* — stays exact rather than gaining an
+ * exception for this one route. This function names no resolver, no store and no binding.
+ *
+ * IT PASSES THE OPERATOR'S PRINCIPAL ID AND NOTHING ELSE ABOUT THE OPERATOR. The service needs it
+ * for the write-budget reservation and for the audit record's actor. It receives no authority, no
+ * grants and no session.
+ */
+function onboardOrganization(dependencies: { readonly onboarding: OnboardingService }) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const parsed = parseOnboardingInput(body);
+    if (!parsed.ok) {
+      return err(parsed.error);
+    }
+
+    const outcome = await dependencies.onboarding.onboard({
+      request: parsed.value,
+      // SERVER-DERIVED. `context.authority` came from a verified session and a `platform_operator`
+      // row; there is no body field that could influence it.
+      actorPrincipalId: context.authority.principalId,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+    });
+    if (!outcome.ok) {
+      return err(outcome.error);
+    }
+
+    return ok({
+      body: {
+        organization_id: outcome.value.organizationId,
+        admin_principal_id: outcome.value.adminPrincipalId,
+        workspace_id: outcome.value.workspaceId,
+        warnings: outcome.value.warnings,
+        // NO CREDENTIAL FIELD, AND NO TOMBSTONE FOR THE ONE THAT WAS REMOVED. The server never
+        // held a password — the console generated it, derived from it, and holds the only copy.
+        // A placeholder property here would be a PERMITTED OPTIONAL FIELD, which is the same
+        // defect one size smaller.
+      },
+      // THE ORGANIZATION IT CREATED. One of the two target kinds `0025` Decision 5 permits, and
+      // the operator log records the identifier and nothing about what the Organization contains —
+      // not the admin's identifier, not the Workspace name, not the Template.
+      target: { kind: 'organization', organizationId: outcome.value.organizationId },
+    });
+  };
+}
+
+/**
+ * The four fields, validated individually. The CLASS has already refused anything undeclared, a
+ * non-object body, an oversized body and any query string; this is the per-field semantic layer.
+ *
+ * EVERY REFUSAL NAMES ITS FIELD, because each one is a shape error a console must be able to show
+ * against the right input. None of them discloses anything: the constraints are published in the
+ * schema, and none of these checks touches storage.
+ */
+function parseOnboardingInput(body: PreAuthBody): Result<OnboardingInput> {
+  const adminIdentifier = body.admin_identifier;
+  const templateId = body.template_id;
+  const firstWorkspaceName = body.first_workspace_name;
+  const derivedValue = body.derived_value;
+
+  const details: ErrorDetail[] = [];
+  if (typeof adminIdentifier !== 'string' || !isSubmittableIdentifier(adminIdentifier)) {
+    // THE SAME PREDICATE THE LOGIN PATH USES, imported rather than restated. Two definitions of
+    // "an enrollable identifier" would agree until one was touched, and the divergence would
+    // present as an account that can be created and cannot log in.
+    details.push(detail('admin_identifier', 'must_be_a_submittable_identifier'));
+  }
+  if (typeof templateId !== 'string' || !IDENTIFIER_PATTERN.test(templateId)) {
+    details.push(detail('template_id', 'must_be_an_identifier'));
+  }
+  if (
+    typeof firstWorkspaceName !== 'string' ||
+    firstWorkspaceName.trim() !== firstWorkspaceName ||
+    firstWorkspaceName.length < 1 ||
+    firstWorkspaceName.length > MAX_WORKSPACE_NAME_LENGTH
+  ) {
+    details.push(detail('first_workspace_name', 'must_be_a_trimmed_name'));
+  }
+  if (typeof derivedValue !== 'string' || !DERIVED_VALUE_PATTERN.test(derivedValue)) {
+    // WIDTH-CHECKED HERE AND AGAIN AT `fromBase64Url` IN THE SERVICE. `credential-verifier.ts`
+    // calls the width check "the only mitigation for a client that sends something other than a
+    // KDF output" — a short value stored as a verifier weakens the account permanently and
+    // silently, so it is checked at the boundary AND at the point of use.
+    details.push(detail('derived_value', 'must_be_32_bytes_base64url'));
+  }
+  if (details.length > 0) {
+    return err(invalidArgument(details));
+  }
+  return ok({
+    adminIdentifier: adminIdentifier as string,
+    templateId: templateId as string,
+    firstWorkspaceName: firstWorkspaceName as string,
+    derivedValue: derivedValue as string,
+  });
+}
+
+/** The schema's `maxLength`. */
+const MAX_WORKSPACE_NAME_LENGTH = 120;
+
+/** 32 bytes of base64url. The schema's `^[A-Za-z0-9_-]{43}$`. */
+const DERIVED_VALUE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+
+/**
+ * The platform identifier grammar, restated here rather than exported from `platform-routes.ts`.
+ *
+ * IT IS THE SAME EXPRESSION AND THE DUPLICATION IS DELIBERATE-BUT-SMALL: exporting the matcher's
+ * private constant would make a path-matching detail part of the class's surface, and this is a
+ * body-field check. Both are `^[A-Za-z0-9_-]{8,64}$`, which is the schema's `templateId` pattern.
+ */
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]{8,64}$/u;
+
 /** List Templates. Keyset paging, identical in shape to the Organization list. */
 function listTemplates(dependencies: {
   readonly templates: TemplateStore;
@@ -481,6 +605,19 @@ function readTemplate(dependencies: { readonly templates: TemplateStore }) {
 export function createPlatformRouteHandlers(dependencies: {
   readonly store: PlatformOperatorStore;
   readonly templates: TemplateStore;
+  /**
+   * The onboarding service. REQUIRED, unlike `confirmations`.
+   *
+   * It is not optional because there is no sensible degraded mode: a platform console that cannot
+   * onboard is a console with no purpose, and an optional dependency would make
+   * `platform.organizations.create` answer `unavailable` in a deployment that simply forgot it —
+   * indistinguishable from an outage. Requiring it makes the omission a COMPILE error instead,
+   * which is the same reason `templates` is required.
+   *
+   * IT IS A PORT WITH ONE METHOD AND NOT A RESOLVER. This module names no tenant primitive; see
+   * `onboarding/onboarding.ts` for why the resolver lives outside this directory.
+   */
+  readonly onboarding: OnboardingService;
   readonly admission: ControlPlaneWriteAdmission;
   readonly ids: IdGenerator;
   readonly cursors: PlatformCursorCodec;
@@ -494,6 +631,9 @@ export function createPlatformRouteHandlers(dependencies: {
 }): PlatformRouteHandlers {
   const handlers: Record<string, unknown> = {
     'platform.organizations.list': listOrganizations(dependencies),
+    'platform.organizations.create': onboardOrganization({
+      onboarding: dependencies.onboarding,
+    }),
     'platform.session.whoami': whoami(),
     'platform.templates.create': createTemplate({
       templates: dependencies.templates,

@@ -167,6 +167,7 @@ export const PLATFORM_BASE_PATH = '/api/v1/platform';
  */
 export type PlatformRouteId =
   | 'platform.organizations.list'
+  | 'platform.organizations.create'
   | 'platform.session.whoami'
   | 'platform.confirmations.request'
   | 'platform.templates.create'
@@ -274,6 +275,24 @@ export type PlatformRoute = {
    * EMPTY MEANS THE WHOLE QUERY STRING IS REFUSED, not that unknown keys are filtered. See P2.
    */
   readonly queryParameters: readonly string[];
+  /**
+   * The status a SUCCESSFUL response carries. `200` unless the route creates something.
+   *
+   * IT IS A PER-ROUTE FIELD AND NOT A METHOD RULE, AND THE FIELD IS COPIED FROM THE CONTRACT
+   * RATHER THAN REASONED ABOUT. Every route here declares what its contract's `successStatus`
+   * declares: `201` for the three that create — `platform-operator-v1:500,531` for the reads,
+   * `template-v1:230,279,304`, `confirmation-v1:301`, `organization-onboarding-v1:343`.
+   *
+   * *** THE CITATIONS ARE THERE BECAUSE THE FIRST VERSION OF THIS FIELD GOT TWO OF THEM WRONG. ***
+   * `templates.create` and `confirmations.request` were written as `200` with comments asserting
+   * the contracts said so; both contracts say `201`. **A plausible argument about a status is not
+   * evidence of one**, and a comment claiming a contract as its authority is exactly what stops
+   * the next reader from opening it. Line numbers make the claim checkable.
+   *
+   * THE HANDLER STILL CHOOSES NO STATUS. It is declared in the route table, beside the fields and
+   * the permission, where a reviewer reads what a route does.
+   */
+  readonly successStatus: 200 | 201;
 };
 
 /**
@@ -306,6 +325,7 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // supposed to answer, and `include=customers` is how a console acquires cross-tenant reach in
     // one query parameter.
     queryParameters: Object.freeze(['page_size', 'cursor']),
+    successStatus: 200 as const,
   }),
   Object.freeze({
     id: 'platform.session.whoami' as const,
@@ -319,6 +339,7 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // and has no field naming another principal" — and an accepted-but-ignored parameter would be
     // the first half of undoing it.
     queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
   }),
   Object.freeze({
     id: 'platform.confirmations.request' as const,
@@ -359,6 +380,59 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     fields: Object.freeze(['action_id', 'locale']),
     objectFields: Object.freeze(['parameters']),
     queryParameters: Object.freeze([]),
+    // 201. `confirmation-v1:301`, READ RATHER THAN REASONED FROM. The first version of this line
+    // said 200 and justified it — "a confirmation is created and the caller never names it as a
+    // resource" — which is a plausible argument about a field the contract had already decided.
+    // A challenge IS a created resource with an identifier the client echoes back.
+    successStatus: 201 as const,
+  }),
+  // ===========================================================================================
+  // ONBOARDING. `organization-onboarding-v1`, `docs/decisions/0026` decisions 1 and 2.
+  //
+  // THE ONLY OPERATION IN DUDO THAT BRINGS A TENANT INTO EXISTENCE, and the only route in this
+  // class whose handler reaches a tenant store. See `onboarding/onboarding.ts` for P1 as amended.
+  //
+  // *** IT IS NOT CONFIRMATION-GATED, AND THAT IS A DECISION RATHER THAN AN OMISSION. ***
+  // `0026` decision 1 reclassified `core.organization.create` from `critical` to `sensitive`
+  // precisely so this route stays reachable in one request. `isConfirmationGated` derives the
+  // requirement from the PERMISSION, so this needs no exception and gets none — and if the
+  // permission is ever reclassified back, `assertConfirmationCoverageIsCoherent` stops the build
+  // rather than letting the route become silently unreachable.
+  //
+  // THE CONTRACT'S OPERATION BLOCK STILL SAYS `sensitivity: critical` AND IS STALE. `ON-6` is
+  // CLOSED in the same file and `permission-catalog.yaml` says `sensitive`. Reported to the Team
+  // Lead; it cannot cause a defect here because nothing reads a declared sensitivity.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.organizations.create' as const,
+    method: 'POST' as const,
+    // THE SAME PATH AS THE LIST, DIFFERENT METHOD. `matchPlatformRoute` matches on both.
+    path: `${PLATFORM_BASE_PATH}/organizations`,
+    permission: fixedPermission('core.organization.create'),
+    // FOUR FIELDS, AND WHAT IS ABSENT IS THE POINT. NO `organization_id`, `principal_id` or
+    // `workspace_id` — all server-generated, and a caller-chosen tenant identifier is the one
+    // input that could collide a new Organization with an existing one's identifier space. NO
+    // `role`, NO `permissions`, NO `memberships` — `0025` decision 4 bound 2, which `0025` names
+    // as the bound most likely to erode. NO `password` — `0017`'s basis is that entropy protects
+    // these accounts.
+    //
+    // A BODY SUPPLYING ANY OF THEM IS REFUSED WITH `invalid_argument` BY THE CLASS, before
+    // authentication, because this list is the complete accepted set. That is bound 3's
+    // structural assertion: there is no field through which an existing Organization could be
+    // named, so the membership-write step cannot be reached with an identifier from anywhere but
+    // this operation's own generator.
+    fields: Object.freeze([
+      'admin_identifier',
+      'template_id',
+      'first_workspace_name',
+      'derived_value',
+    ]),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze([]),
+    // 201. `organization-onboarding-v1`'s `successStatus`, and it is 201 EVEN WITH A NON-EMPTY
+    // `warnings` ARRAY — a step-7 failure is not a failed creation, and reporting it as one would
+    // leave a customer that exists, cannot be entered, and needs a credential reset to rescue.
+    successStatus: 201 as const,
   }),
   // ===========================================================================================
   // TEMPLATES. `template-v1`, `docs/decisions/0025` decision 2.
@@ -379,6 +453,10 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     fields: Object.freeze(['name']),
     objectFields: Object.freeze(['level_labels']),
     queryParameters: Object.freeze([]),
+    // 201. `template-v1:230`. This line said 200 and claimed the contract as its authority
+    // without the contract having been opened — the divergence `admin-shell` found from the
+    // client side, which is where a status mismatch surfaces.
+    successStatus: 201 as const,
   }),
   Object.freeze({
     id: 'platform.templates.list' as const,
@@ -388,6 +466,7 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     fields: Object.freeze([]),
     objectFields: Object.freeze([]),
     queryParameters: Object.freeze(['page_size', 'cursor']),
+    successStatus: 200 as const,
   }),
   Object.freeze({
     id: 'platform.templates.read' as const,
@@ -400,6 +479,7 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     objectFields: Object.freeze([]),
     // NONE, so any query string at all is refused. The identifier is in the path.
     queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
   }),
 ]);
 

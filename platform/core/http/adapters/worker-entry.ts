@@ -100,6 +100,10 @@ import { createMembershipPrincipalAuthorizationSource } from '../../identity/pri
 import { createIdentityComposition } from '../../identity/composition.ts';
 import { createD1PlatformStore } from '../../platform/adapters/d1/d1-platform-store.ts';
 import { createD1TemplateStore } from '../../platform/adapters/d1/d1-template-store.ts';
+import { createOnboardingService } from '../../onboarding/onboarding-service.ts';
+import { createHmacIdentifierHasher } from '../../identity/credential-store.ts';
+import { createStoreAuditSink } from '../../audit/store-audit-sink.ts';
+import type { TenantScopedStore } from '../../storage/store.ts';
 import { createD1ConfirmationStore } from '../../confirmation/adapters/d1/d1-confirmation-store.ts';
 import { createConfirmationBinder } from '../../confirmation/binding.ts';
 import { createConfirmationService } from '../../confirmation/confirmation-service.ts';
@@ -377,7 +381,52 @@ export async function createCoreRuntime(
   });
 
   const platformStore = createD1PlatformStore(controlDatabase);
+  const templateStore = createD1TemplateStore(controlDatabase);
+
+  // ===========================================================================================
+  // ONBOARDING. `organization-onboarding-v1`. ASSEMBLED HERE AND NOWHERE ELSE.
+  // ===========================================================================================
+  //
+  // *** THIS IS THE ONLY PLACE A TENANT-STORE RESOLVER AND THE PLATFORM SURFACE MEET, AND IT IS
+  // DELIBERATELY THIS FILE. *** `worker-entry.ts` already names Cloudflare types and already holds
+  // the resolver; `platform/composition.ts` holds neither and must not start. What crosses into
+  // the platform class is `OnboardingService` — one method, returning identifiers.
+  //
+  // THE RESOLVER PASSED HERE IS THE SAME ONE THE ACTION PIPELINE USES, not a second one with
+  // looser rules. It answers `unavailable` for a missing entry, a non-active entry, an unreadable
+  // directory and an unknown binding name — four causes, one answer, no fallback binding and no
+  // default database.
+  //
+  // `tenantBindingName` IS `TENANT_BINDING` AND HAS NO DEFAULT ANYWHERE BELOW THIS LINE. It
+  // decides which physical database a new customer's data lands in, which is a deployment
+  // decision; `0006` §0.2 forbids the shape of a default by name.
+  const tenantResolver = createDirectoryTenantStoreResolver(
+    controlPlane.tenantDirectory,
+    (bindingName, organizationId) =>
+      bindingName === TENANT_BINDING
+        ? createD1TenantStore(env.DB_TENANT, organizationId)
+        : undefined,
+  );
+  const onboarding = createOnboardingService({
+    controlPlane: controlPlane.identity,
+    // READ-ONLY. The collision check. The credential WRITE goes through `controlPlane` above,
+    // which cannot write one without also creating an Organization in the same batch.
+    credentials: createD1CredentialStore(controlDatabase),
+    identifiers: await createHmacIdentifierHasher(lookupKey),
+    templates: templateStore,
+    operators: platformStore,
+    admission,
+    resolver: tenantResolver,
+    coordinator: createDurableObjectRequestCoordinator(coordinationNamespace),
+    auditSinkFor: (store: TenantScopedStore) =>
+      createStoreAuditSink(store, createRandomIdGenerator()),
+    ids: createRandomIdGenerator(),
+    clock,
+    tenantBindingName: TENANT_BINDING,
+  });
+
   const platformRoutes = await createPlatformComposition({
+    onboarding,
     confirmations,
     // THE SAME GATE INSTANCE THE ACTION PIPELINE RECEIVES, and passing it here is what makes
     // `confirmation-v1`'s "EVERY entry point" true rather than true of one class. Composed
@@ -387,7 +436,7 @@ export async function createCoreRuntime(
     store: platformStore,
     // A SEPARATE STORE OVER THE SAME BINDING. `template` is tenant-independent configuration and
     // shares nothing with the operator tables but the database it sits in.
-    templates: createD1TemplateStore(controlDatabase),
+    templates: templateStore,
     admission,
     authorizer: createAuthorizer(),
     ids: createRandomIdGenerator(),
@@ -422,13 +471,10 @@ export async function createCoreRuntime(
       //
       // THE STATIC PATH IS DELETED RATHER THAN LEFT UNUSED. An empty-list resolver sitting in the
       // file is one edit away from being handed a wildcard by someone making a demo work.
-      resolver: createDirectoryTenantStoreResolver(
-        controlPlane.tenantDirectory,
-        (bindingName, organizationId) =>
-          bindingName === TENANT_BINDING
-            ? createD1TenantStore(env.DB_TENANT, organizationId)
-            : undefined,
-      ),
+      // THE SAME INSTANCE ONBOARDING RECEIVES, constructed once above. Two resolvers would be two
+      // places the "no fallback binding, no default database" rule is implemented, and therefore
+      // two places it can differ.
+      resolver: tenantResolver,
       authorizer: createAuthorizer(),
       clock,
       ids: createRandomIdGenerator(),

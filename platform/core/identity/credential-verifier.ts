@@ -228,7 +228,20 @@ assertVerifierParametersAreCoherent();
  * otherwise: PBKDF2 has no memory hardness and is not equivalent to Argon2id at any iteration
  * count. The client-side 600,000 is what makes the total adequate.
  */
-async function deriveVerifier(
+/*
+ * EXPORTED 2026-09-05 FOR ONBOARDING, AND EXPORTING IT IS THE SAFER OF THE TWO OPTIONS.
+ *
+ * `organization-onboarding-v1` writes a credential row, which means computing the same verifier
+ * this function computes for the login path. The alternative was a second derivation in
+ * `onboarding/`, and `worker-entry.ts` already states why that is wrong for exactly this code:
+ * *"a second verifier here would be a second implementation of the hardest code in the platform,
+ * measured once and trusted twice."*
+ *
+ * A DIVERGENCE BETWEEN THE TWO WOULD NOT LOOK LIKE A BUG. It would look like a customer's first
+ * admin being unable to log in with the password they were just handed — and it would be blamed
+ * on the console's KDF, which is the third implementation and the one everyone would suspect.
+ */
+export async function deriveVerifier(
   submitted: CryptoBytes,
   salt: CryptoBytes,
   iterations: number,

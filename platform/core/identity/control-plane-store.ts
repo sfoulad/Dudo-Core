@@ -273,6 +273,75 @@ export type NewOrganizationMembership = OrganizationMembershipRecord & {
 };
 
 /**
+ * ===========================================================================================
+ * THE FIVE ROWS ONBOARDING CREATES, AS ONE VALUE. `organization-onboarding-v1`.
+ * ===========================================================================================
+ *
+ * THEY ARE ONE TYPE BECAUSE THEY ARE ONE WRITE. See `createOrganizationWithFirstAdmin` for why
+ * the port exposes a single call rather than five — the atomicity is only available if the
+ * boundary is given the whole operation, and a port with five methods is a port that cannot
+ * offer it.
+ *
+ * `createdAt` IS ONE VALUE SHARED BY ALL FIVE ROWS, taken once from the server's clock. Five
+ * separate timestamps would differ by milliseconds and would let a reader of the tables infer an
+ * ordering that has no meaning — the rows commit together.
+ */
+export type NewOrganization = {
+  readonly organizationId: string;
+  readonly status: 'active' | 'suspended';
+};
+
+export type NewPrincipal = {
+  readonly principalId: string;
+  readonly principalType: ControlPlanePrincipalType;
+  readonly status: 'active' | 'suspended';
+};
+
+/**
+ * A credential row about to be written.
+ *
+ * *** THIS TYPE IS THE ACCOUNT-CREATION SURFACE `credential-store.ts` DID NOT HAVE. *** That file
+ * records the property being given up here, and it was the strongest one available: *"no
+ * `createCredential` and no `updateCredential`... THE RUNNING WORKER HAS NO CODE PATH THAT WRITES
+ * A CREDENTIAL AT ALL — which means no request, authenticated or not, can create or change one."*
+ *
+ * IT IS SPENT KNOWINGLY, BY `docs/decisions/0026` AND `organization-onboarding-v1`, and what
+ * replaces it is narrower than the absence but not nothing:
+ *
+ *   - **ONE writer.** `createOrganizationWithFirstAdmin`, which cannot write a credential without
+ *     also creating a `principal` and an `organization` in the same statement batch. There is no
+ *     method that writes a credential alone, so there is no way to attach one to an existing
+ *     principal through this port.
+ *   - **NO UPDATE PATH.** `principal_credential`'s primary key is the identifier hash, the insert
+ *     is a plain `INSERT` with no `ON CONFLICT`, and a collision is a `conflict` refusal. So this
+ *     port can create a credential and STILL cannot change one. `credential-reset-v1` will need
+ *     its own writer and will not find one here to widen.
+ *   - **NO PASSWORD REACHES THE SERVER.** `verifier` is derived from a `derived_value` the client
+ *     computed; `0015` §D's central property is untouched. See `theDERIVATIONHAPPENSONTHESERVER
+ *     HERE_ANDTHATISADEPARTURE`, closed as option B.
+ *
+ * THE HONEST STATEMENT OF WHAT DUDO'S ACCOUNT-CREATION SURFACE NOW IS: *"whatever authorizes
+ * `core.organization.create`"* — a platform operator, on the platform host, holding a permission
+ * six roles' worth of grants are checked against. That is strictly weaker than "no code path
+ * exists", and `platform_operator` itself keeps the stronger guarantee: no route creates one.
+ */
+export type NewPrincipalCredential = {
+  /** base64url of `HMAC-SHA-256(IDENTITY_LOOKUP_KEY, normalized_identifier)`. */
+  readonly identifierHash: string;
+  readonly principalId: string;
+  readonly algorithm: string;
+  readonly iterations: number;
+  readonly salt: string;
+  readonly verifier: string;
+};
+
+export type NewTenantDirectoryEntry = {
+  readonly organizationId: string;
+  readonly bindingName: string;
+  readonly state: 'active' | 'suspended' | 'migrating';
+};
+
+/**
  * A session. PRINCIPAL-SCOPED, which is the whole of `0014` §C.1.
  *
  * `activeOrganizationId` IS NULLABLE AND THAT IS THE DESIGN. A principal may belong to several
@@ -466,6 +535,71 @@ export type IdentityControlPlaneStore = {
    */
   createMembership(
     record: NewOrganizationMembership,
+    reservation: ControlPlaneWriteReservation,
+    admission: MembershipAdmission,
+  ): Promise<Result<void>>;
+
+  /**
+   * ===========================================================================================
+   * ONBOARDING'S FIVE CONTROL-PLANE ROWS, IN ONE STATEMENT BATCH. `organization-onboarding-v1`.
+   * ===========================================================================================
+   *
+   * *** IT IS ONE METHOD BECAUSE ATOMICITY IS ONLY AVAILABLE AT THIS BOUNDARY, AND A PORT WITH
+   * FIVE METHODS COULD NOT OFFER IT. ***
+   *
+   * The contract plans for a partial failure and accepts the litter: *"IF THE OPERATION FAILS
+   * BETWEEN STEP 3 AND STEP 4, AN ORPHAN DIRECTORY ROW SURVIVES... it is litter in a table nothing
+   * cleans, and it is the price of breaking the circularity in this direction"* — recorded as
+   * `ON-1`. **THAT PRICE DOES NOT HAVE TO BE PAID.** All five rows are in ONE database, D1 executes
+   * a batch as a single implicit transaction, and `storage/adapters/d1/d1-store.ts` already relies
+   * on exactly that to make a mutation and its audit record one unit. So the five commit together
+   * or not at all, and **`ON-1`'s orphan is not reachable through this port.**
+   *
+   * IT IS REPORTED RATHER THAN TAKEN QUIETLY, because it makes a contract's accepted risk
+   * unreachable, and a contract that plans for a state the implementation cannot produce should be
+   * amended rather than left to imply the state is live.
+   *
+   * ===========================================================================================
+   * THE ORDER OF THE FIVE IS THE SCHEMA'S ORDER, NOT THE CONTRACT'S, AND THE SCHEMA WINS
+   * ===========================================================================================
+   *
+   * `theOrdering` step 3 says write `tenant_directory` FIRST. **`0005_tenant_directory.sql`
+   * declares `organization_id ... REFERENCES organization (organization_id)`, and D1 enforces
+   * foreign keys — measured 2026-09-05 with a positive control.** So the contract's order fails
+   * every time and onboarding would never have worked.
+   *
+   * The contract's stated REASON survives the correction: the circularity it breaks is that the
+   * tenant store handle needs a directory entry, and the handle is resolved at step 6 — after both
+   * of these. `organization` before `tenant_directory` puts the entry in place just as surely.
+   *
+   * SO THE ORDER IS DEPENDENCY ORDER THROUGHOUT: organization, tenant_directory, principal,
+   * principal_credential, organization_membership — the same order `tools/seed-principal.ts` emits
+   * and for the same stated reason.
+   *
+   * ===========================================================================================
+   * WHAT IT REFUSES
+   * ===========================================================================================
+   *
+   * A DUPLICATE IDENTIFIER IS A `conflict` AND NOT AN UPSERT. The insert carries no `ON CONFLICT`,
+   * so an identifier already enrolled anywhere on the platform refuses the whole batch and nothing
+   * lands. `theIdentifierCollision`: one identifier, one principal, platform-wide. **An upsert here
+   * would silently move an existing person's credential to a new Organization's admin**, which is
+   * account takeover wearing the shape of a convenience.
+   *
+   * IT STILL REQUIRES A `MembershipAdmission`, exactly as `createMembership` does. The new
+   * principal cannot be a platform operator — it was created in this same batch — so the check is
+   * satisfied by construction. **The receipt is required anyway**, because the type is what makes
+   * "every membership write is preceded by the mutual-exclusion check" true of the port rather
+   * than of the callers that happen to remember.
+   */
+  createOrganizationWithFirstAdmin(
+    rows: {
+      readonly organization: NewOrganization;
+      readonly directory: NewTenantDirectoryEntry;
+      readonly principal: NewPrincipal;
+      readonly credential: NewPrincipalCredential;
+      readonly membership: NewOrganizationMembership;
+    },
     reservation: ControlPlaneWriteReservation,
     admission: MembershipAdmission,
   ): Promise<Result<void>>;

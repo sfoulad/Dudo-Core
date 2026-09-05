@@ -44,6 +44,7 @@ import type { ConfirmationService } from '../confirmation/confirmation-service.t
 import type { ConfirmationGate } from '../confirmation/confirmation-gate.ts';
 import type { PlatformOperatorStore } from './platform-operator-store.ts';
 import type { TemplateStore } from './template-store.ts';
+import type { OnboardingService } from '../onboarding/onboarding.ts';
 import type { PlatformRouteDependencies } from './platform-routes.ts';
 import { createPlatformAuthorityResolver } from './platform-authority.ts';
 import { createPlatformAuditRecorder } from './platform-audit.ts';
@@ -62,6 +63,20 @@ export type PlatformCompositionInput = {
    * is the split `control-plane-store.ts` property 3 makes for the same reason.
    */
   readonly templates: TemplateStore;
+  /**
+   * The onboarding service. REQUIRED.
+   *
+   * *** IT IS PASSED IN RATHER THAN BUILT HERE, AND THAT IS THE WHOLE OF P1's SURVIVAL. ***
+   * Building it would mean this file taking a `TenantStoreResolver`, a `RequestCoordinator` and an
+   * `AuditSink` factory — at which point the platform class's composition root holds a handle to
+   * every tenant database, and `0025` decision 3's binding property is gone for the whole class
+   * rather than narrowed to one operation.
+   *
+   * SO THE COMPOSITION ROOT THAT ASSEMBLES IT IS `worker-entry.ts`, which already names Cloudflare
+   * types and already holds the resolver. What arrives here is a port with one method that returns
+   * identifiers.
+   */
+  readonly onboarding: OnboardingService;
   /**
    * The SAME admission port the identity slice uses, drawing from the SAME `DayWriteBudget`.
    *
@@ -140,6 +155,7 @@ export async function createPlatformComposition(
     handlers: createPlatformRouteHandlers({
       store: input.store,
       templates: input.templates,
+      onboarding: input.onboarding,
       admission: input.admission,
       ids: input.ids,
       cursors,

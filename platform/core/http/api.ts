@@ -366,9 +366,16 @@ export async function handleRequest(
     if (!platformOutcome.ok) {
       return renderError(platformOutcome.error, requestId, correlationId);
     }
-    // 200 for both. Neither route creates a resource, and neither writes anything the caller
-    // asked for — the only write on either path is the audit record P4 requires.
-    return renderSuccess(platformOutcome.value, 200, requestId, correlationId);
+    // THE ROUTE'S DECLARED STATUS, from the route table. It was a literal 200 while every route in
+    // the class was a read; `platform.organizations.create` answers 201, and rederiving that from
+    // the method here would also have changed the challenge route and `templates.create`, both of
+    // which are POSTs their contracts declare as 200.
+    return renderSuccess(
+      platformOutcome.value,
+      platformRoute.route.successStatus,
+      requestId,
+      correlationId,
+    );
   }
 
   // ===========================================================================================
