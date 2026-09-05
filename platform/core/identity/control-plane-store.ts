@@ -100,10 +100,26 @@ import type { ControlPlaneWriteReservation } from './control-plane-admission.ts'
  * cold-start failure on the control plane, which is the worst place in the platform to discover
  * an import-order problem.
  *
- * THE CHECK IS ONE GREP AND IT IS WORTH RUNNING WITH THE OTHER NEGATIVE CONTROLS: no line in
- * `platform/core/identity/**` imports a VALUE from `platform/core/platform/**`, with exactly one
- * exception — `adapters/d1/d1-control-plane-store.ts` imports `consumeMembershipAdmission`, which
- * is the direction that is supposed to exist.
+ * THE CHECK, AND IT IS WORTH RUNNING WITH THE OTHER NEGATIVE CONTROLS. Within
+ * `platform/core/identity/**` there are exactly TWO value imports from
+ * `platform/core/platform/**`, and both are intended:
+ *
+ *   1. `adapters/d1/d1-control-plane-store.ts` imports `consumeMembershipAdmission`. This is the
+ *      direction that is supposed to exist — the adapter reaches into the platform module for the
+ *      verifier, and `platform-authority.ts`'s own value imports are the kernel and
+ *      `platform-permissions.ts`, neither of which reaches back.
+ *   2. `tools/seed-platform-operator.ts` imports `PLATFORM_ROLES`, `toPlatformRole` and
+ *      `reachablePlatformPermissions`. That file is a COMMAND-LINE TOOL, is imported by nothing
+ *      under `platform/core/http/**`, and is not in the Worker's module graph at all — so it
+ *      cannot participate in a load-time cycle regardless of what it imports.
+ *
+ * A THIRD ONE NEEDS AN ARGUMENT. `control-plane-store.ts` — this file — must never become one.
+ *
+ * *** WRITE THAT CHECK TO HANDLE MULTI-LINE IMPORTS AND TO STRIP COMMENTS FIRST. *** A naive
+ * line-oriented grep misses `import {\n  a,\n  b,\n} from '...'` entirely, because the path is on
+ * a different line from the keyword — and it matches the word "import" inside prose like this
+ * paragraph. Both mistakes were made while writing this comment, and the first one produced a
+ * confident count that was wrong by one.
  */
 import type { MembershipAdmission } from '../platform/platform-authority.ts';
 
