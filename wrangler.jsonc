@@ -43,8 +43,15 @@
   // records to every subdomain that ever exists.
   //
   //   app.dudo.work    the web application AND its API      cookie, host-only
-  //   admin.dudo.work  the admin interface (0010)           cookie, host-only, SEPARATE session
   //   api.dudo.work    the API only, for NON-browser clients  Authorization: Bearer
+  //
+  // admin.dudo.work IS NOT SERVED BY THIS WORKER. It belongs to `dudo-admin`
+  // (wrangler.admin.jsonc), because Cloudflare allows only ONE collection of static assets per
+  // Worker and the admin console is a SECOND SPA — see the 2026-09-05 amendment to 0022.
+  //
+  // A custom domain is claimed by exactly one Worker, so the two deploys are ORDERED: removing
+  // the hostname here and deploying THIS Worker is what releases it; only then can dudo-admin
+  // claim it. admin.dudo.work is briefly unrouted in between, and that is expected.
   //
   // api.dudo.work is not an alias. It is where the Apple client and future integrations talk to
   // Dudo — that client disabled URLSession's cookie store entirely, so it has no cookie to lose
@@ -55,7 +62,6 @@
   // problem, and pointing the apex at the application would decide it by accident.
   "routes": [
     { "pattern": "app.dudo.work", "custom_domain": true },
-    { "pattern": "admin.dudo.work", "custom_domain": true },
     { "pattern": "api.dudo.work", "custom_domain": true }
   ],
   // The deployment entry module is at the ROOT, not inside platform/core.
