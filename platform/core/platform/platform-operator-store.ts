@@ -36,14 +36,14 @@
  *      `TenantStoreResolver`, `TenantScopedStore`, `createD1TenantStore` or `TENANT_COLUMN`. The
  *      one import from `storage/` anywhere in this tree is `d1-store.ts`'s `D1Database` TYPE,
  *      which is a structural interface with two methods and confers no binding.
- *   2. NO CODE UNDER `platform/core/platform/**` MENTIONS THOSE NAMES, EXCLUDING `tools/**` AND
- *      COMMENTS. The comment exclusion is because the prose deliberately names them to explain
- *      the rule. THE `tools/**` EXCLUSION IS NARROW AND IS STATED RATHER THAN ASSUMED:
- *      `seed-platform-operator.ts` is a command-line tool that prints SQL, is imported by nothing
- *      in `platform/core/http/**`, holds no binding, and its output deliberately warns the
- *      operator "the target is DB_CONTROL, NOT DB_TENANT" — a warning worth more than a tidier
- *      grep. `identity/tools/seed-principal.ts` sits outside the equivalent identity grep for the
- *      same reason.
+ *   2. NO CODE UNDER `platform/core/platform/**` MENTIONS THOSE NAMES, comments excluded — the
+ *      prose deliberately names them to explain the rule. THERE IS NO OTHER EXCLUSION, AND THAT
+ *      IS WORTH ONE SENTENCE: an earlier draft put `seed-platform-operator.ts` in this tree and
+ *      needed a `tools/**` carve-out, because that tool's output warns an operator "the target is
+ *      DB_CONTROL, NOT DB_TENANT". The tool now lives in `identity/tools/` beside
+ *      `seed-principal.ts`, which is where the Team Lead placed it and which happens to leave this
+ *      control total. A negative control with no exceptions is worth more than one with a
+ *      justified exception, because the next exception arrives arguing from the first.
  *   3. `platform/core/action/**` AND `apps/**` DO NOT IMPORT `platform/core/platform/**`.
  *
  * ===========================================================================================

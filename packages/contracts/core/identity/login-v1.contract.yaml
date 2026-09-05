@@ -266,27 +266,51 @@ entryPoints:
     method: POST
     path: "/auth/session/revoke"
     surface: public
-    clientsCallIt: false
-    title: "Session revoke — RESERVED, NO HANDLER. THERE IS NO LOGOUT."
+    clientsCallIt: true
+    title: "Session revoke — LOGOUT. IT WORKS."
+    correctedOn: "2026-09-05"
+    theCORRECTION: >-
+      ~~"RESERVED, NO HANDLER. THERE IS NO LOGOUT... A USER CANNOT LOG OUT."~~ STRUCK. THAT WAS
+      TRUE WHEN WRITTEN AND HAS NOT BEEN TRUE SINCE docs/decisions/0018 §B LANDED. Verified against
+      Core on 2026-09-05 rather than taken on report: `identity/login.ts` documents this entry point
+      as "LOGOUT. Deletes the session row and clears the cookie, and accepts either carrier",
+      `revokeHandler` returns `cleared` on all six paths, and `pre-auth-registry.ts` sets
+      `collapseTo: 'cleared'`.
+      HOW IT WAS FOUND, AND IT IS THE PART WORTH KEEPING: `admin-shell` needed sign-out, read this
+      contract, read Core, found they disagreed, BUILT AGAINST CORE AND REPORTED THE DIVERGENCE.
+      Reporting it was right. BUILDING AGAINST CODE RATHER THAN THE CONTRACT IS EXACTLY WHAT
+      CONTRACT-FIRST EXISTS TO PREVENT — and the client had no better option, because a contract
+      that says a feature does not exist gives a client nothing to build. THE FAULT IS THIS FILE'S.
     description: >-
-      Registered with no handler, disclosure 'collapsed', so it answers 200 {"status":"ok"} and
-      REVOKES NOTHING. This is reported as a gap rather than smoothed over. It is fail-closed in
-      the security sense — nothing is issued and nothing is deleted — and it is honest at the wire,
-      because revocation is collapsed precisely so that "revoked" and "did nothing" are
-      indistinguishable (a logout that said "no such session" for an unknown token and "done" for a
-      real one is a token-validity oracle).
+      Ends the session. DELETES THE SESSION ROW AND CLEARS THE COOKIE — both halves, and only the
+      first existed when this contract was first written.
+      DISCLOSURE IS STILL 'collapsed' AND THAT HAS NOT CHANGED: all six internal paths — nothing
+      presented, two carriers disagreeing, an invalid MAC, a session not found, a session found and
+      deleted, and the store or budget refusing — return the identical `cleared` outcome. An
+      attacker holding a stolen or guessed token cannot learn from a logout whether it was live.
     errors: [rate_limited]
-    whyNoOtherCodeIsReachable: >-
-      IT HAS NO HANDLER, SO CORE COLLAPSES IT BEFORE THE BODY IS PARSED — no 400 — and its
-      collapse target is 'acknowledged', so a malformed request, an unknown field and a valid one
-      all receive the same 200. The only other answer it can give is the rate limit.
-    theConsequenceSTATED: >-
-      A USER CANNOT LOG OUT. The cookie is HttpOnly, so no client can clear it from script, and the
-      session row lives its full twelve hours. NEITHER CLIENT MAY FAKE A LOGOUT that implies the
-      session ended — clearing local state while the credential stays valid is a false statement to
-      the user, and on a shared device it is a security defect rather than a cosmetic one. Recorded
-      as LG-1. It is a product gap, not a security bypass, and it is the first follow-up owed on
-      this slice.
+    outcome: >-
+      `cleared` — 200 {"status":"ok"} PLUS ONE FIXED CLEARING COOKIE. The cookie is CONSTANT and
+      ARGUMENT-FREE: the handler supplies no name, no value and no lifetime, so nothing here can
+      vary per request. THAT IS WHAT SEPARATES IT FROM `issued` and why it does not reintroduce the
+      `collapseTo: 'issued'` hazard the registry refuses.
+      IT REPLACED `acknowledged` RATHER THAN JOINING IT, so the registry's one-outcome rule for a
+      collapsed entry point still holds.
+    bothCARRIERSAREACCEPTED: >-
+      docs/decisions/0018 §A. THIS IS THE ONE ENTRY POINT THAT MAY READ `Authorization: Bearer`, and
+      it needs to be: the Apple client disabled its cookie store entirely, so a Bearer-only client
+      could otherwise call logout and be told `acknowledged` while nothing was revoked.
+      THE MISMATCH RULE STANDS: both carriers present and disagreeing revokes NOTHING, because that
+      is a confusion attack — a cookie an attacker can plant cross-site beside a header the
+      application sets. The caller is told the same thing regardless, since the outcome is fixed.
+    whatACLIENTMUSTSTILLDO: >-
+      TREAT 401 AS "LOGGED OUT" AND NOT AS "RETRY". The clearing cookie removes ONE cause of a
+      stale credential, not the class: a session also ends at absolute 12-hour expiry, on a revoked
+      membership, on a suspended principal, or on a SESSION_HMAC_KEY rotation. A client that assumed
+      only an explicit logout ends a session will mishandle all four.
+    theCOST: >-
+      3 ROW-WRITES, exactly like a login — a DELETE leaves every index. So a login + select + logout
+      cycle is 9, which is the figure organization-selection-v1 now carries.
 
 # ---------------------------------------------------------------------------
 # clientKdf — NORMATIVE. IDENTICAL IN BOTH CLIENTS. THIS IS THE PART THAT MUST NOT DIVERGE.
@@ -934,8 +958,18 @@ dependencies:
     WHAT THAT MEANS FOR A CLIENT, AND IT IS THE WHOLE FLOW: a 200 from this endpoint is NOT a usable
     session. The client must then call the picker and select an Organization before any business
     request will do anything but answer 422. See organization-selection-v1 -> clientObligations.
-  thereIsNoLogout: >-
-    See entryPoints identity.session.revoke and LG-1. It is the first follow-up owed.
+  logoutWORKS_ANDTHECLIENTSMUSTCALLIT: >-
+    ~~"There is no logout."~~ CORRECTED 2026-09-05 — see entryPoints identity.session.revoke and
+    LG-1. POST /auth/session/revoke deletes the session row and returns a clearing cookie, on either
+    carrier.
+    SO THE OLD PROHIBITION INVERTS. This contract used to say NEITHER CLIENT MAY FAKE A LOGOUT,
+    because clearing local state while the credential stayed valid was a false statement to the user
+    and a security defect on a shared device. THAT RULE IS NOW SATISFIED BY CALLING THE ROUTE, and
+    the replacement obligation is the mirror image: A CLIENT THAT OFFERS SIGN-OUT MUST CALL THIS
+    ENDPOINT AND MUST NOT MERELY DISCARD LOCAL STATE. Discarding local state alone leaves a live
+    session row for up to twelve hours, which is the same defect wearing the opposite excuse.
+    A CLIENT SHOULD TREAT THE RESPONSE AS FINAL AND NOT RETRY. Every outcome is `cleared`, so a
+    retry cannot learn anything and cannot do anything except spend the rate limit.
   thereIsNoRegistrationRESETORCHANGE: >-
     See clientKdf.enrollmentISNOTINTHISCONTRACT. Enrollment is an out-of-band operator action;
     the running Worker has no code path that writes a credential.
@@ -1007,7 +1041,10 @@ testObligations:
     - "A request carrying both a dudo_session cookie and a different Authorization: Bearer value is refused unauthenticated rather than resolved by precedence."
   clientBehaviour:
     - "Both clients render the SAME single message for a 401 from this endpoint, and neither distinguishes any cause."
-    - "Neither client calls /auth/login/start, /auth/session/refresh or /auth/session/revoke."
+    - "Neither client calls /auth/login/start or /auth/session/refresh. CORRECTED 2026-09-05: this previously included /auth/session/revoke, and asserting that no client calls logout would have been a TEST THAT FAILED THE MOMENT SIGN-OUT WAS BUILT CORRECTLY — the same class of stale assertion the organization-selection-v1 sweep found seven of. Struck prose is inert; a struck test is not."
+    - "A client offering sign-out DOES call POST /auth/session/revoke, and does not merely discard local state. Assert that the session row is gone and that a request carrying the old credential answers 401 on the next call."
+    - "Logout works on BOTH carriers: assert a cookie-bearing client and a Bearer-only client each end their session, because docs/decisions/0018 §A exists precisely because the Bearer path silently did nothing."
+    - "All six revocation paths return the identical body and the identical clearing cookie. A caller must not be able to distinguish a live session from a forged token by logging out with it."
     - "Neither client retries a 401 automatically; both honour Retry-After on a 429."
     - "Both clients render 'logged in, no Organization' as a first-class explained state, identically."
 
@@ -1052,16 +1089,37 @@ versioning:
     - "Moving any path in this contract."
   additive:
     - "A new pre-authentication entry point — which is nevertheless a change to an Accepted decision, because the registry permits exactly five and refuses to load otherwise."
-    - "A handler for identity.session.revoke, which would make logout work without changing any shape a client sends."
+    - "~~A handler for identity.session.revoke, which would make logout work without changing any shape a client sends.~~ DONE — docs/decisions/0018, landed before 2026-09-05. Kept visible because the prediction held exactly: no request shape changed, and the only wire difference is one constant clearing cookie on the response. A client written against the old contract still works; it simply never logs anyone out."
 
 # ---------------------------------------------------------------------------
 # openQuestions — worked around, not buried. The assumption made is stated in every case.
 # ---------------------------------------------------------------------------
 openQuestions:
   LG-1:
-    question: "There is no logout. identity.session.revoke is registered, has no handler, and answers 200 while revoking nothing."
-    assumptionMade: "Documented as a product gap and named as the first follow-up. Neither client may fake a logout that implies the session ended."
-    decides: "Team Lead"
+    status: CLOSED
+    question: "~~There is no logout. identity.session.revoke is registered, has no handler, and answers 200 while revoking nothing.~~"
+    resolution: >-
+      CLOSED by docs/decisions/0018 §A and §B, and THIS CONTRACT WAS NOT UPDATED WHEN IT LANDED —
+      which is the finding, not the logout. `0018` fixed two real defects: revocation now accepts
+      `Authorization: Bearer` (a Bearer-only Apple client could previously call logout and be told
+      `acknowledged` while nothing was revoked), and the `cleared` outcome emits a constant clearing
+      cookie (the clearing branch was previously UNREACHABLE, so logout deleted the row and left a
+      dead cookie for up to twelve hours).
+    theLESSONISTHESTALENESSANDNOTTHEGAP: >-
+      A CONTRACT THAT SAYS A FEATURE DOES NOT EXIST GIVES A CLIENT NOTHING TO BUILD, so the client
+      reads the code instead — and once one client has done that successfully, the contract has
+      stopped being the source of truth for everyone. `admin-shell` did exactly this for sign-out
+      and reported it, which is the right behaviour and is also the last line of defence rather than
+      a control.
+      THE GENERAL FORM, and it is the same shape as the auto-selection sweep in
+      organization-selection-v1: WHEN A DECISION LANDS, THE CONTRACTS THAT DESCRIBED THE OLD WORLD
+      DO NOT FAIL ANYTHING. Nothing goes red. The divergence is found by whoever next tries to build
+      against the stale half, and only if they check.
+    owed: >-
+      A CONTRACT-VERSUS-CODE CHECK IS OWED FOR THE WHOLE core/identity SET, not just this entry.
+      This file is a transcription of an implementation that preceded it, so it is the set most
+      exposed to exactly this drift, and one confirmed instance is weak evidence that it is the only
+      one. Suggested for qa-agent as a standing obligation rather than a one-off.
   LG-2:
     question: "error-envelope.schema.json declares an optional retry_after_seconds BODY field; platform/core/http/response.ts emits only the Retry-After header and never writes the body field. The contract and the code disagree."
     assumptionMade: "This contract describes Core's actual behaviour — header only. The envelope is platform-wide surface and is not settled as a side effect here."

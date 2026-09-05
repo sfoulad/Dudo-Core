@@ -158,8 +158,8 @@ export const TENANT_DIRECTORY_ROW_WRITES = 2;
  * super-admin surface where it SURVIVES. `docs/decisions/0025` publishes no route that creates a
  * platform operator; `core.platform-operator.create` is deliberately absent from the permission
  * catalog, and adding one is a decision rather than an extension. The rows are inserted by an
- * operator running SQL that `platform/core/platform/tools/seed-platform-operator.ts` printed, so
- * they never pass through `reserve` and cannot be caused by a request.
+ * operator running SQL that `tools/seed-platform-operator.ts` printed, so they never pass through
+ * `reserve` and cannot be caused by a request.
  *
  * Declared anyway, for the reason `PRINCIPAL_ROW_WRITES` is: the first writer must draw an
  * accounted, already-counted cost rather than a number it picked.

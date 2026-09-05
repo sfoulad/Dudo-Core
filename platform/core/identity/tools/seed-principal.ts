@@ -451,9 +451,9 @@ function memberlessNotice(): readonly string[] {
 }
 
 /**
- * EXPORTED SO THE PLATFORM-OPERATOR SEED TOOL USES THIS ONE RATHER THAN ITS OWN.
- * `platform/core/platform/tools/seed-platform-operator.ts` renders different statements against
- * different tables, and a second copy of the quoting rule is a second place it can be got wrong.
+ * EXPORTED SO `seed-platform-operator.ts` USES THIS ONE RATHER THAN ITS OWN. That tool renders
+ * different statements against a different table, and a second copy of the quoting rule is a
+ * second place it can be got wrong.
  */
 export function sqlQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
@@ -515,12 +515,10 @@ const BACKSPACE = String.fromCharCode(8);
  * believes a password is hidden and is wrong has been given a false assurance, which is worse
  * than no assurance.
  *
- * EXPORTED SO `platform/core/platform/tools/seed-platform-operator.ts` USES THIS ONE. That tool
- * needs exactly the same prompt, and a second implementation of raw-mode handling is a second
- * place a terminal gets left in raw mode after a Ctrl-C. Importing this module does not open a
- * prompt: `main` runs only when `argv[1]` names this file.
+ * NOT EXPORTED. `seed-platform-operator.ts` reads two arguments and no secrets, so it has no
+ * prompt to share — which is the one respect in which it is safer than this tool.
  */
-export async function prompt(label: string, hidden: boolean): Promise<string> {
+async function prompt(label: string, hidden: boolean): Promise<string> {
   const runtime = nodeProcess();
   if (runtime === undefined) {
     throw new Error('This tool runs under Node. There is no process object.');

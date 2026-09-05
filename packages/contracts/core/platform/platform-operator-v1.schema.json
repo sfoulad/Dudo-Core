@@ -37,7 +37,7 @@
     },
 
     "cursor": {
-      "description": "An opaque, tenant-bound pagination cursor. Never constructed, parsed or modified by a client. Null means there is no further page.",
+      "description": "An opaque pagination cursor. Never constructed, parsed or modified by a client. Null means there is no further page. CORRECTED 2026-09-05: this previously read 'opaque, TENANT-BOUND pagination cursor', copied from the Action-class contracts where it is correct. A PLATFORM ROUTE HAS NO TENANT (platform-operator-v1 P1), so there is nothing to bind to and TenantBoundCursorCodec is not reachable from this class. `core-agent` built a separate tenant-free codec and reported the mismatch rather than binding a cursor to a tenant that does not exist — which is the right call and the reason this is a two-line correction instead of a defect. THE CURSOR IS BOUND TO THE PRINCIPAL AND THE QUERY SHAPE INSTEAD: it must not be transferable between operators, or one operator could resume another's enumeration of the platform's Organizations.",
       "type": ["string", "null"],
       "maxLength": 512
     },

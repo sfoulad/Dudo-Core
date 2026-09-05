@@ -65,7 +65,7 @@
 
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
-import { conflict, forbidden } from '../kernel/errors.ts';
+import { forbidden, notFound } from '../kernel/errors.ts';
 import type { PrincipalGrants } from '../authorization/authorizer.ts';
 import type { PlatformRole } from './platform-permissions.ts';
 import { grantsForPlatformRole } from './platform-permissions.ts';
@@ -170,16 +170,16 @@ export function createPlatformAuthorityResolver(
  * `0025` publishes no route that creates a platform operator, so there is no code path to put
  * this in front of. It is written, exported and tested so that:
  *
- *   - `platform/core/platform/tools/seed-platform-operator.ts` can state which check the operator
- *     is skipping by running SQL by hand, and point at the trigger that covers it; and
+ *   - `platform/core/identity/tools/seed-platform-operator.ts` can name the check its guarded
+ *     `INSERT ... WHERE NOT EXISTS` performs in SQL, and point at the trigger behind it; and
  *   - the day a create route is proposed, the guard exists and its absence at the call site is a
  *     visible omission rather than a check nobody wrote.
  *
- * `conflict()` RATHER THAN `forbidden()`, because this is not an authorization decision: the
- * caller may well be entitled to create operators and this particular principal is simply not
- * eligible. THE CALLING OPERATION MUST NOT translate it into a message that names which table the
- * principal was found in — the anti-oracle in `resolve` above would be undone by a helpful error
- * one layer up.
+ * IT RETURNS `notFound()`, AND THE CHOICE IS EXPLAINED WITH ITS SIBLING BELOW — read that one
+ * first, because that is where the oracle lives. This direction has no such exposure (its only
+ * possible caller already holds platform authority), and `conflict()` would arguably read better
+ * here. It is `notFound()` anyway, so that the two directions of one invariant do not answer with
+ * two different codes: a caller that could tell them apart could tell which table refused it.
  */
 export async function assertNotAnOrganizationMember(
   store: PlatformOperatorStore,
@@ -189,7 +189,7 @@ export async function assertNotAnOrganizationMember(
   if (!holdsMembership.ok) {
     return err(holdsMembership.error);
   }
-  return holdsMembership.value ? err(conflict()) : ok(undefined);
+  return holdsMembership.value ? err(notFound()) : ok(undefined);
 }
 
 /**
@@ -208,6 +208,54 @@ export async function assertNotAnOrganizationMember(
  * That is precisely `0024`'s trap arrived at by a sensible path, which is why the check must be
  * mechanical rather than remembered. WHOEVER BUILDS THAT SLICE MUST CALL THIS BEFORE THE INSERT,
  * and `0010_platform_operator_mutual_exclusion.sql` is the backstop if they do not.
+ *
+ * ===========================================================================================
+ * IT RETURNS `notFound()`, AND IT USED TO RETURN `conflict()`. THAT WAS AN ORACLE.
+ * ===========================================================================================
+ *
+ * THINK ABOUT WHO CALLS THIS. Membership administration is performed by an ORGANIZATION'S OWN
+ * OWNER — a tenant principal with no platform authority whatsoever. If adding a member answered
+ * `conflict` for a principal that holds a `platform_operator` row and `not_found` for one that
+ * does not exist, then **any tenant administrator could enumerate the platform's operators** by
+ * trying to add candidate principals and reading which answer came back. That is a tenant
+ * principal learning a fact about the platform's own privileged accounts, which is the most
+ * valuable list in the system and the natural first step before targeting one of them.
+ *
+ * `notFound()` COLLAPSES IT, and it is the collapse the platform already uses everywhere else for
+ * "you may not act on this identifier": `session-resolution.ts` ruling 1 gives a non-member, a
+ * suspended member and a caller naming a non-existent Organization the same argument-free
+ * `notFound()`, from the same work. A principal that cannot be added and a principal that does
+ * not exist are, to a tenant administrator, the same fact — and `kernel/errors.ts` gives the
+ * constructor no parameters, so there is nothing here to vary.
+ *
+ * IT COSTS SOMETHING AND THE COST IS ACCEPTED: an administrator who mistypes an identifier and an
+ * administrator who names a real platform operator get the same message, and neither can tell
+ * why. That is the same cost `session-resolution.ts` records for the suspended-membership branch,
+ * paid for the same reason.
+ *
+ * ===========================================================================================
+ * THE COLLAPSE IS A PROPERTY OF THE **PAIR**, AND HALF OF IT IS THE CALLER'S TO SUPPLY.
+ * ===========================================================================================
+ *
+ * THIS FUNCTION ANSWERS ONE QUESTION — "is this principal a platform operator" — so for a
+ * principal that DOES NOT EXIST AT ALL it returns `ok`. That is correct and it is not the gap it
+ * looks like: refusing a non-existent principal is the surrounding operation's own step.
+ *
+ * WHICH MEANS THE ANTI-ORACLE HOLDS ONLY IF THE CALLER'S "NO SUCH PRINCIPAL" ANSWER IS ALSO
+ * `notFound()`. If a future membership-administration Action answers `not_found` for a ghost and
+ * this `not_found` for an operator, the two are indistinguishable and the property holds. If it
+ * answers anything else for a ghost — `invalid_argument`, a validation detail naming the field, a
+ * 422 — then THIS refusal becomes the odd one out and the oracle reappears, one layer up, in code
+ * that never read this file.
+ *
+ * **THAT IS AN OBLIGATION ON WHOEVER BUILDS MEMBERSHIP ADMINISTRATION, AND IT IS WRITTEN HERE
+ * BECAUSE IT CANNOT BE ENFORCED FROM HERE.** It is the same shape as `control-plane-store.ts`'s
+ * "the caller must have validated membership first": a property that spans two components, stated
+ * at the one that can explain why.
+ *
+ * A FUTURE SLICE MAY NEED A DIFFERENT CODE. It must change it deliberately, with a reviewer, and
+ * it must first answer the question above: **can the caller of this operation be a tenant
+ * principal?** If yes, the collapse is not negotiable.
  */
 export async function assertNotAPlatformOperator(
   store: PlatformOperatorStore,
@@ -221,5 +269,5 @@ export async function assertNotAPlatformOperator(
   // `platform_operator` row, and the invariant is about the row's existence rather than about
   // what it currently grants — a role this build does not understand may be one a later build
   // does.
-  return operator.value === null ? ok(undefined) : err(conflict());
+  return operator.value === null ? ok(undefined) : err(notFound());
 }

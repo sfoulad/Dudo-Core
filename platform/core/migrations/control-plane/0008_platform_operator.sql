@@ -76,9 +76,14 @@
 -- would be the single most valuable target in the platform, reachable by exactly one class of
 -- caller, for a handful of uses in Dudo's whole life. THE FREQUENCY DOES NOT JUSTIFY THE SURFACE.
 --
--- `platform/core/platform/tools/seed-platform-operator.ts` prints the statements. It deliberately
--- does NOT print an `organization_membership` insert, and it is a different tool from
--- `seed-principal.ts` for that single reason — see its header.
+-- `platform/core/identity/tools/seed-platform-operator.ts` prints the statements. It grants
+-- authority to an EXISTING principal, creates no principal and no credential, and its INSERT is
+-- GUARDED — `INSERT ... SELECT ... WHERE NOT EXISTS (a membership row)` — so it writes zero rows
+-- for an ineligible principal even on a database where migration 0010 was never applied.
+--
+-- THE PRINCIPAL MUST HAVE BEEN CREATED WITH `seed-principal.ts --no-organization`. The ordinary
+-- five-row form of that tool writes an `organization_membership` row, which disqualifies the
+-- principal permanently.
 --
 -- =============================================================================================
 -- WHAT THIS TABLE DELIBERATELY HAS NO COLUMN FOR
