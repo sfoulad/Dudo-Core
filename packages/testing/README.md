@@ -35,6 +35,43 @@ Per-App suites colocate with their App under `apps/<name>/tests/` as Apps are bu
 - **Root-level shared test configuration belongs to the Team Lead**, not to QA. QA
   proposes changes to it — see `docs/decisions/0001-governance-and-decision-sequencing.md`.
 
+## Running the platform-operator (super-admin) suite
+
+```
+node packages/testing/run-platform-operator.ts
+```
+
+Covers the fourth request class: `docs/decisions/0024`'s two invariants, `0025`'s five
+decisions, and `platform-operator-v1`'s binding properties P1, P2 and P4. It builds a
+control-plane database from all ten real migrations and composes the shipped
+`platform/composition.ts` over the shipped D1 adapter, so nothing about the class is
+simulated except the SQL engine.
+
+A **primary run**, then **three negative-control runs**:
+
+| # | Control | What it breaks |
+|---|---|---|
+| 1 | the mutual-exclusion probe | `principalHasAnyMembership` always answers `false` |
+| 2 | the audit record | every write silently succeeds and stores nothing |
+| 3 | the host binding | the application host is added to `adminHosts` |
+
+**Control 3 is read differently from the other two.** `0025` requires that the host binding
+be defence in depth and never the first layer, so the AUTHORIZATION suite is re-run under it
+and **must stay green** — an authorization suite that is indifferent to the hostname is the
+evidence that routing is not doing the authorizing.
+
+**`docs/decisions/0027`'s central negative control — "remove the confirmation check and every
+critical-operation test must go red" — has NOT been performed**, because no confirmation
+mechanism exists to remove. `suites/platform-operator/confirmation.ts` observes that state on
+every run and carries the owed cases as explicit skips. A wrapper that removed nothing would
+print a green control line, and a green control line reads as evidence.
+
+### What is NOT covered by this run
+
+`packages/testing` is **excluded from the root `tsconfig.json`**, deliberately and with the
+reason recorded there: it is Node code and the root config targets a Worker. So these suites
+are **not typechecked by `npm run typecheck`**. The `platform/core` half they exercise is.
+
 ## Running the Customer Directory suite
 
 ```
