@@ -14,17 +14,28 @@ testing can begin the moment they are given, rather than being written afterward
 
 | # | Blocker | Who |
 |---|---|---|
-| 1 | **`wrangler deploy` is refused by a permission classifier.** Nothing new is live. Both Worker configs pass `--dry-run`, including the cross-Worker Durable Object binding, so this is permission and not configuration | **User** |
-| 2 | **Migrations `0008`–`0012` are not applied to the staging control plane.** Applied and verified locally only | **User** |
-| 3 | Open **HIGH** security finding — see "Known gaps" | `core-agent` |
+| 1 | **Everything built after the first deploy is unshipped.** Both Workers *were* deployed successfully on 2026-09-05 — `dudo-core` on `app.`/`api.` and `dudo-admin` on `admin.dudo.work`, with its three secrets set. **What is live is that morning build and nothing since:** no Organization detail, no member resolve, no audit feeds, no operators list, no confirmation-gated route, and none of the write-budget fixes | **User** |
+| 2 | **Migrations `0011`–`0014` are not applied to the remote control plane.** `0008`–`0010` are applied and verified. **Four pending**, not two: `0011_confirmation`, `0012_template`, `0013_organization_template`, `0014_platform_operator_action_organization`. Applied and verified locally only | **User** |
+| 3 | **Console screens for the audit feeds and the operators list are in flight** — the detail screen has landed | `web-agent` |
+
+**Corrected 2026-09-05.** This table previously said `wrangler deploy` was refused by a permission
+classifier and that nothing was live. **Both were true when written and both stopped being true the
+same day**, once the deploys succeeded. It also listed two pending migrations when four are pending.
+A blocker table that overstates what is blocked is as misleading as one that understates it — it
+sends the user to fix something already fixed and leaves the real gap unnamed.
 
 **The deploys are ordered and the order matters.** A custom domain is claimed by exactly one Worker.
 `admin.dudo.work` has been removed from `wrangler.jsonc`, so:
 
 1. **Apply the pending migrations FIRST.** See below — this is not merely "before you test."
-   **`0008`–`0010` are already applied** (2026-09-05). **Pending: `0011_confirmation.sql` and
-   `0012_template.sql`**, verified against the remote control plane. The tenant database needs
-   nothing.
+   **`0008`–`0010` are already applied** (2026-09-05). **Pending: `0011_confirmation.sql`,
+   `0012_template.sql`, `0013_organization_template.sql` and
+   `0014_platform_operator_action_organization.sql`** — four, against the remote control plane. The
+   tenant database needs nothing.
+
+   **`0014` is nullable and its rollback is to stop writing it**, because the SQLite version D1
+   targets cannot drop a column. **Forward-only.** `0013` adds a foreign key to `template`, so
+   `0012` must land before it — apply them in order and do not skip.
 2. Deploy `dudo-core` — this **releases** `admin.dudo.work`
 3. Deploy `dudo-admin` — this **claims** it
 
