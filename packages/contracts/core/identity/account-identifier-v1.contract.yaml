@@ -1,0 +1,358 @@
+---
+# Account identifier — the canonical definition, version 1
+#
+# The machine-readable half is account-identifier-v1.schema.json. Both are normative together.
+#
+# Governed by: docs/decisions/0015-credential-format-and-session-credential.md (Accepted) §D
+#              .claude/rules/architecture.md §3a (a check that must be remembered is a discipline)
+#              .claude/rules/architecture.md §3c (a comment that cites is a claim)
+#              docs/architecture/standards/API_STANDARD.md §6
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# =========================================================================================
+# THE QUESTION ASKED, AND WHY THE ANSWER IS NOT THE ONE THE QUESTION EXPECTED
+# =========================================================================================
+#
+# ASKED (Team Lead, 2026-09-05): does Dudo accept non-ASCII identifiers, yes or no — and either
+# Core narrows to match the clients, or the clients widen to match Core.
+#
+# ANSWERED: NO, AND NEITHER SIDE MOVES, BECAUSE THE CONTRACT SET ALREADY DECIDED THIS AND BOTH
+# CLIENTS ALREADY IMPLEMENT IT. There is no open question here. There is an ENFORCEMENT GAP in
+# Core, a DRIFT between five restatements of one rule, and a HEDGE in a client message that
+# implies a settled decision is provisional. Those are three defects, not one decision.
+#
+# THE FRAMING WAS INVERTED AND THE INVERSION MATTERS. "The clients narrow what Core accepts"
+# reads as the clients having invented a restriction. They did not: they are the only components
+# ENFORCING a restriction the contract set has stated since login-v1 was authored, and which two
+# Core paths do not apply.
+#
+# =========================================================================================
+# WHAT WAS MEASURED, 2026-09-05, FILE BY FILE
+# =========================================================================================
+#
+# ONE RULE, SIX RESTATEMENTS, NO TWO IDENTICAL:
+#
+#   WHERE                                   NON-ASCII   '@' COUNT   ACTUALLY ENFORCED?
+#   ---------------------------------------------------------------------------------------
+#   credential-store.ts::isSubmittable      rejected    >= 1        only where it is CALLED
+#   credential-store.ts::normalizeIdentifier passes through          n/a — it validates nothing
+#   login-v1.schema.json                    rejected    >= 1        not executed (ADR 0009)
+#   organization-onboarding-v1.schema.json  rejected    EXACTLY 1   not executed
+#   organization-detail-v1.schema.json      rejected    EXACTLY 1   not executed
+#   admin + web kdf.ts::identifierRefusal   rejected    >= 1        YES — the only live check
+#
+# AND THE PROSE DISAGREED WITH ITSELF. organization-onboarding-v1 and organization-detail-v1
+# carry the IDENTICAL pattern ^[!-?A-~]*@[!-?A-~]*$ — character classes U+0021..U+003F and
+# U+0041..U+007E, which is printable ASCII with '@' REMOVED, so it encodes EXACTLY ONE '@'.
+# Onboarding's description says "at least one '@'". Detail's says "exactly one '@'". One of those
+# two sentences is false about the pattern printed directly above it. This is workflow.md §12's
+# machine-readable half: the prose describes, the pattern instructs, and nothing executes the
+# pattern, so a reader follows whichever they read first.
+#
+# =========================================================================================
+# THE ENFORCEMENT GAP IN CORE — FOUR CALL SITES, TWO GUARDED
+# =========================================================================================
+#
+#   platform/core/identity/credential-verifier.ts:439   GUARDED. isSubmittableIdentifier, then
+#                                                       normalizeIdentifier at :449. LOGIN IS SAFE.
+#   platform/core/identity/tools/seed-principal.ts:250  GUARDED, and it throws with a full
+#                                                       explanation. THE SEED TOOL IS SAFE.
+#   platform/core/onboarding/onboarding-service.ts:218  *** NOT GUARDED. ***
+#   platform/core/directory/member-resolution.ts:157    *** NOT GUARDED. ***
+#
+# SO THE TEAM LEAD'S MEASUREMENT IS CORRECT ABOUT THE BOUNDARY AND THE TWO PATHS ARE NAMED HERE,
+# because "Core accepts more than the clients send" is true of exactly these two and false of
+# login. Precision matters: a reader who concludes login is exposed will look in the wrong file.
+#
+# AND ONE OF THEM CARRIES A COMMENT ASSERTING THE CHECK THAT IS MISSING. onboarding.ts:83:
+#
+#     /** The first admin's login identifier. Already `isSubmittableIdentifier`-checked. */
+#
+# NOTHING CHECKS IT. Not platform-routes.ts, which validates field NAMES and types and never calls
+# isSubmittableIdentifier; not onboarding-service.ts, which imports only normalizeIdentifier. The
+# claim is false, and it is architecture.md §3c's exact failure mode one level over — there, a
+# comment citing a contract; here, a comment citing a guard. IT IS WORSE THAN SILENCE, because a
+# Core author adding a second consumer of OnboardingInput reads that line and does not add the
+# check. THE ONLY THING STANDING BETWEEN A NON-ASCII IDENTIFIER AND THE CREDENTIAL TABLE IS A
+# CHECK IN THE ADMIN CONSOLE'S BROWSER CODE.
+
+contractVersion: 1
+apiVersion: null           # Defines a value used by several contracts; binds to no route itself.
+namespace: core
+domain: identity
+status: proposed
+updated: "2026-09-05"
+documentsExistingImplementation: partial
+
+# ---------------------------------------------------------------------------
+# theRuling
+# ---------------------------------------------------------------------------
+theRuling:
+  answer: >-
+    DUDO DOES NOT ACCEPT NON-ASCII ACCOUNT IDENTIFIERS. An identifier is 3 to 254 characters, every
+    one of them printable ASCII in U+0021..U+007E, containing at least one '@'. This is the rule
+    docs/decisions/0015 §D set, login-v1 recorded, and both clients implement.
+  whereItIsWRITTENDOWN: >-
+    HERE, FROM NOW ON, AS THE SINGLE CANONICAL DEFINITION —
+    account-identifier-v1.schema.json#/$defs/accountIdentifier. Every contract that accepts an
+    identifier states this shape and names this file as the authority it states it from. The five
+    independent restatements are the defect; consolidating them is the fix.
+  itIsNOTANEWDECISION: >-
+    NOTHING IS NARROWED AND NOTHING IS WIDENED BY THIS RULING, with the single exception of the
+    '@' count, which is corrected TOWARD Core and toward RFC 5321. No client changes behaviour. No
+    user who can log in today stops being able to. THE TEAM LEAD'S DECISION RECORD SHOULD SAY THAT
+    IT CONFIRMS 0015 §D AND CLOSES A DRIFT, rather than that it decided the question — a record
+    that presents a confirmation as a decision makes the original decision look weaker than it was.
+  soTHECLIENTSDONOTWIDEN: >-
+    AND THE WORK 0015 §D WOULD HAVE REQUIRED IS NOT INCURRED. The Team Lead asked to be told
+    explicitly if the answer turned this into real work in Dudo-Apple. IT DOES NOT. No new test
+    vectors are needed, no non-ASCII NFKC agreement has to be established between
+    normalize('NFKC') and precomposedStringWithCompatibilityMapping, and no Apple work follows
+    from this ruling.
+
+  # -------------------------------------------------------------------------
+  # theArgumentAGAINSTWIDENING — including the one nobody has recorded
+  # -------------------------------------------------------------------------
+  theArgumentAgainstWidening:
+    one_theCASEFOLDINGHAZARD:
+      finding: >-
+        THIS IS THE STRONGEST ARGUMENT FOR 'NO' AND IT IS IN NO RECORD ANYWHERE. It is not about
+        implementation difficulty; it is an account-integrity defect that widening would create.
+      theDefect: >-
+        normalizeIdentifier CASE-FOLDS ASCII ONLY. Under the current restriction that is complete,
+        because every accepted character is ASCII. WIDEN THE CHARACTER SET AND THE FOLD DOES NOT
+        WIDEN WITH IT — it still maps only U+0041..U+005A. So:
+          SAM@example.com and sam@example.com are ONE account. Correct, and expected.
+          SÁM@example.com and sám@example.com are TWO SEPARATE ACCOUNTS, with two credentials,
+          two principals and two memberships — because 'Á' is not in U+0041..U+005A and is left
+          exactly as it arrived.
+        A user who enrolled with one and types the other is not told 'wrong password'; they are a
+        different person as far as Dudo is concerned. AND A SECOND PARTY CAN ENROL THE CASE
+        VARIANT OF AN EXISTING ACCOUNT, which the identifier-uniqueness constraint will not
+        prevent, because the two normalise differently and therefore hash differently.
+      whyTheFIXISNOTEASY: >-
+        The obvious repair — fold the whole of Unicode — is precisely what 0015 §D refused, because
+        JavaScript and Swift disagree on real characters and a login that works on the web and
+        fails on iPhone for one user is a defect nobody would find. SO WIDENING FORCES A CHOICE
+        BETWEEN AN ACCOUNT-CONFUSION HAZARD AND A CROSS-CLIENT DIVERGENCE HAZARD. Refusing
+        non-ASCII avoids having to choose, which is why the restriction is worth more than it
+        looks.
+      andHOMOGRAPHS: >-
+        A related consequence, stated because it follows from the same property: with non-ASCII
+        permitted, an identifier using Cyrillic 'а' (U+0430) in place of Latin 'a' is a different
+        account that renders identically in every list an operator reads. NFKC does not collapse
+        those — they are different characters, not compatibility variants. THE OPERATOR CONSOLE'S
+        RESOLVE ROUTE IS EXACTLY WHERE THAT WOULD BITE, because its whole purpose is an operator
+        matching an identifier a customer read out to them.
+    two_theRECORDEDCOST: >-
+      ALREADY ACCEPTED AND UNCHANGED: an RFC 6531 internationalised address cannot be used with
+      Dudo. A non-ASCII local part or a non-punycode domain is refused. PUNYCODE DOMAINS WORK,
+      because punycode is ASCII. This excludes a real class of user and the trade is deliberate.
+    three_theTESTVECTORCOST: >-
+      Widening makes 0015 §D's three-way byte-identical requirement materially harder: NFKC over
+      non-ASCII must be shown to agree between normalize('NFKC') and
+      precomposedStringWithCompatibilityMapping over inputs nobody has tested, and the shared
+      vectors would have to cover them or the widening is unverified rather than verified. STATED
+      BECAUSE THE TEAM LEAD ASKED FOR IT EXPLICITLY IF THE RULING WENT THE OTHER WAY. It did not,
+      so this cost is not incurred.
+  whatWOULDCHANGETHISRULING: >-
+    A recorded decision, and shared non-ASCII test vectors for every implementation, IN THAT ORDER
+    — and an answer to the case-folding hazard above, which is the part that is not merely
+    laborious. Relaxing the character rule without settling how two case variants of one non-ASCII
+    address relate would swap a known limitation for an account-integrity defect.
+
+# ---------------------------------------------------------------------------
+# whereTheRefusalBELONGS — and the trap in the obvious answer
+# ---------------------------------------------------------------------------
+whereTheRefusalBelongs:
+  theRequirement: >-
+    THE REFUSAL BELONGS IN CORE, AT EVERY BOUNDARY THAT ACCEPTS AN IDENTIFIER, SO THAT A NON-ASCII
+    IDENTIFIER CANNOT ENTER THROUGH ANY PATH. The clients' checks then become what they should
+    always have been: a courtesy that gives the user a good message, never the enforcement.
+    architecture.md §3a is the authority and its sentence is exact — a check that must be
+    REMEMBERED by every client is a discipline; three clients agreeing today is not evidence the
+    fourth will. Dudo has already had three clients and is about to have a fourth.
+  theTRAPINTHEOBVIOUSFIX:
+    doNotPutTheRejectionINSIDEnormalizeIdentifier: >-
+      *** THIS IS THE MOST IMPORTANT SENTENCE IN THIS CONTRACT AND IT CONTRADICTS THE OBVIOUS
+      READING OF THE REQUEST. *** The request said the refusal belongs "at the same boundary as
+      normalizeIdentifier". IF THAT IS IMPLEMENTED AS A REJECTION INSIDE normalizeIdentifier, IT
+      BREAKS TEMPLATE NAMING.
+    why: >-
+      platform/core/platform/templates.ts:135 — normalizeTemplateName(name) IS
+      normalizeIdentifier(name). Template names are not identifiers. They are human-readable
+      Organization-template names, they legitimately contain non-ASCII, and templates.ts states
+      that acceptance in terms: "two names differing only by a non-ASCII case distinction are two
+      Templates — accepted there, and accepted here for the same reason." A rejection inside
+      normalizeIdentifier would make every non-ASCII Template name fail, in a module whose author
+      never opted into the identifier rule, as a silent side effect of an identity fix.
+      THE FUNCTION SERVES TWO DOMAINS WITH TWO DIFFERENT ACCEPTANCE RULES AND ONE SHARED
+      NORMALISATION. That is legitimate — the normalisation genuinely is the same, and importing it
+      rather than restating it is what keeps the two from drifting — but it means the ACCEPTANCE
+      rule cannot live inside the shared function.
+    theCorrectShape: >-
+      THE GUARD GOES AT THE IDENTIFIER ENTRY POINTS, NOT INSIDE THE NORMALISER. Concretely, the two
+      unguarded call sites named above must not be able to reach the credential path with an
+      unchecked value. architecture.md §3a's receipt pattern is available and is the strongest
+      form: make the checked value a distinct branded type that only the check can produce and that
+      the credential-hashing path requires, so OMISSION DOES NOT COMPILE. That is Core's design to
+      make and this contract does not mandate the mechanism — but it does state the property:
+      A NEW CORE PATH THAT ACCEPTS AN IDENTIFIER MUST NOT BE ABLE TO SKIP THE CHECK BY FORGETTING
+      IT.
+    andRENAMEISNOTREQUIREDBUTISWORTHCONSIDERING: >-
+      normalizeIdentifier is named for one of its two domains, which is how a Template name came to
+      be normalised by a function called 'identifier'. Renaming is core-agent's call and is NOT
+      requested here — it touches many call sites for a readability gain — but if it is ever done,
+      the name should describe the OPERATION (NFKC plus ASCII case folding) rather than the DOMAIN.
+
+# ---------------------------------------------------------------------------
+# theInteractionWithTheFiveWayCollapse — the reason this is not cosmetic
+# ---------------------------------------------------------------------------
+theInteractionWithTheCollapse:
+  theConcern: >-
+    organization-detail-v1's resolve deliberately collapses five refusal cases into one
+    byte-identical answer, so a hit does the same work as a miss. Layered on the enforcement gap,
+    the Team Lead observed a second and unintended collapse: A PRINCIPAL THE CONSOLE CANNOT TYPE
+    IS INDISTINGUISHABLE FROM A PRINCIPAL WHO DOES NOT EXIST, and today the only thing separating
+    them is that the console's local refusal messages happen to be distinct strings.
+  theRuling: >-
+    THE CONCERN IS CORRECT AND THE REMEDY IS NOT A UI CONVENTION. Enforcing the identifier rule in
+    Core dissolves it: once a non-ASCII identifier cannot be enrolled through ANY path, "a
+    principal the console cannot type" is an empty set, and there is nothing for the collapse to
+    hide. THE FIX IS THE ENFORCEMENT, NOT THE MESSAGE.
+  keepTheLocalMessageDISTINCTANYWAY: >-
+    AND THE TEAM LEAD'S INSTRUCTION TO admin-shell STANDS, AS DEFENCE IN DEPTH RATHER THAN AS THE
+    CONTROL. A client refusing input it can see is malformed, with a message saying so, is right
+    on its own terms — it is a better experience than a round trip to a fixed refusal, and it is
+    the same courtesy every other field gets. What must not happen is that distinction being
+    RELIED ON, because a refusal message is presentation and presentation is never security. State
+    it as: the message is a courtesy that must remain distinct; the enforcement is Core's.
+  theTIMINGNOTE: >-
+    A CLIENT-SIDE REFUSAL IS INSTANT AND A SERVER REFUSAL IS NOT, which is a distinction visible to
+    anyone with a stopwatch. It discloses nothing about any ACCOUNT — it is decided entirely by the
+    shape of the string the caller typed, which the caller already knows — and it is the same
+    argument credential-verifier.ts makes for its own two shape checks returning early. Recorded so
+    that nobody reports it as a regression against the collapse.
+
+# ---------------------------------------------------------------------------
+# theAtMomentHedge
+# ---------------------------------------------------------------------------
+theAtMomentHedge:
+  theWording: >-
+    The admin console's refusal says Dudo can only sign in with a plain ASCII email address "AT THE
+    MOMENT".
+  ruling: >-
+    THE HEDGE GOES. It states a settled decision as a temporary narrowing, and it is the reason
+    this arrived as an open question rather than as a defect report. A DECISION READ AS PROVISIONAL
+    GETS RE-LITIGATED; ONE READ AS SETTLED GETS IMPLEMENTED.
+  whatItSHOULDSAYINSTEAD: >-
+    A statement of fact with no forward-looking clause: the address must use plain ASCII
+    characters. IT SHOULD NOT PROMISE FUTURE SUPPORT, because no record commits to it and
+    theArgumentAgainstWidening gives a real reason it may never come. It also should not explain
+    the reasoning to a user, who cannot act on it.
+    THE EXACT COPY IS admin-shell's AND web-agent's TO WRITE — this contract does not author client
+    strings. What binds is: no hedge, no promise, no reasoning, and the two clients say the same
+    thing as each other.
+
+# ---------------------------------------------------------------------------
+# consumers — every contract that states this shape
+# ---------------------------------------------------------------------------
+consumers:
+  theRule: >-
+    A CONTRACT ACCEPTING AN ACCOUNT IDENTIFIER STATES accountIdentifier's SHAPE AND NAMES THIS FILE
+    AS THE AUTHORITY. Because no URN resolver exists (AS1), the shape is RESTATED rather than
+    $ref'd, exactly as businessId is restated across three contracts — and like businessId it is a
+    NAMED DRIFT SURFACE rather than an accident. qa-agent checks that every restatement is
+    character-identical to this one.
+  known:
+    - contract: login-v1
+      field: email
+      wasCorrect: true
+      note: "Its pattern already permitted >= 1 '@' and matched Core. Unchanged in substance; now points here."
+    - contract: organization-onboarding-v1
+      field: admin_identifier
+      wasCorrect: false
+      note: >-
+        Pattern permitted EXACTLY ONE '@' while its own description said 'at least one'. Corrected
+        to >= 1, which is ADDITIVE — it accepts strictly more than before, so no request that
+        previously succeeded can now fail.
+    - contract: organization-detail-v1
+      field: identifier
+      wasCorrect: false
+      note: >-
+        Same pattern, and its description said 'exactly one', so the prose was self-consistent and
+        both were stricter than Core. Corrected to >= 1. ADDITIVE.
+    - contract: credential-reset-v1
+      field: identifier
+      note: "NOT AUDITED IN THIS PASS. Named so it is checked rather than assumed — see openQuestions AI-3."
+    - contract: confirmation-v1
+      field: identifier
+      note: "NOT AUDITED IN THIS PASS. Same. AI-3."
+  notAConsumer:
+    - contract: template-v1
+      field: name
+      why: >-
+        A TEMPLATE NAME IS NOT AN IDENTIFIER AND MUST NOT ACQUIRE THIS RULE. It shares the
+        NORMALISER and not the ACCEPTANCE RULE. Stated explicitly and in the negative, because the
+        two now sit next to each other in this contract set and the natural next edit is to
+        'harmonise' them. Harmonising them would refuse every non-ASCII Template name, which
+        template-v1 deliberately accepts.
+
+# ---------------------------------------------------------------------------
+# testObligations
+# ---------------------------------------------------------------------------
+testObligations:
+  enforcement:
+    - >-
+      THE NEGATIVE CONTROL, AND IT IS THE ONE THAT MATTERS: a non-ASCII identifier is REFUSED at
+      EVERY Core entry point that accepts one — login, onboarding, member resolution, and the seed
+      tool. Today onboarding and member resolution ACCEPT IT, so this test must go red before the
+      fix and green after. A test written after the fix that only ever passes has verified nothing
+      (workflow.md §11a).
+    - >-
+      With every client-side check DISABLED, Core still refuses. This is the test that distinguishes
+      'Core enforces it' from 'no client happens to send it', and it is the whole point of moving
+      the enforcement.
+    - "A Template name containing non-ASCII is still ACCEPTED after the identifier fix. This is the regression the obvious implementation causes, and it must be a standing test rather than a review note."
+  drift:
+    - "Every restatement of accountIdentifier across the contract set is character-identical: same minLength, same maxLength, same pattern. One grep, and it is a qa-agent check rather than a reviewer's good intentions."
+    - "The prose beside each restatement says the same thing as the pattern beside it — specifically, that it permits at least one '@'. This is the check that would have caught the original divergence, and it failed to exist."
+  behaviour:
+    - "'a@@b.example' and a quoted-local-part address containing '@' are ACCEPTED by onboarding and by resolve after the correction, matching login and matching Core."
+    - "An identifier with a leading or trailing space is REFUSED and never trimmed, at every entry point, in every client."
+
+# ---------------------------------------------------------------------------
+# versioning
+# ---------------------------------------------------------------------------
+versioning:
+  contractVersion: 1
+  changeClass: additive
+  note: >-
+    The '@'-count correction WIDENS two contracts' accepted value set, which is additive under
+    API_STANDARD.md §6 — no previously accepted request becomes invalid. Everything else is a
+    consolidation of statements that already existed.
+  breaking:
+    - "Widening beyond printable ASCII — which is breaking not because of the pattern but because of theArgumentAgainstWidening.one, the case-folding hazard."
+    - "Narrowing the '@' count back to exactly one, which would refuse addresses Core accepts today."
+    - "Any change to normalizeIdentifier's definition, which changes every stored lookup hash and every user's salt at once."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  AI-1:
+    question: "Core does not enforce the identifier rule at onboarding-service.ts:218 or member-resolution.ts:157, and onboarding.ts:83 carries a comment asserting a check that does not exist."
+    assumptionMade: "Specified as a requirement with the trap named (not inside normalizeIdentifier). The mechanism is core-agent's; the property — omission must not be possible by forgetting — is stated."
+    decides: "Team Lead records; core-agent implements"
+  AI-2:
+    question: "normalizeIdentifier serves two domains with different acceptance rules, and is named for one of them."
+    assumptionMade: "Left as is. The shared normalisation is correct and importing it is what stops drift; only the acceptance rule is domain-specific. A rename is noted as optional and not requested."
+    decides: "core-agent, if ever"
+  AI-3:
+    question: "credential-reset-v1 and confirmation-v1 both carry an identifier field and were NOT audited in this pass."
+    assumptionMade: "None. They are named as unaudited rather than assumed correct, because the pattern of this finding is that restatements diverge silently. ONE CONFIRMED INSTANCE IS WEAK EVIDENCE THAT IT IS THE ONLY ONE (workflow.md §12) — and this pass found two divergent out of three checked."
+    decides: "architecture-agent should audit them next; Team Lead schedules"
+  AI-4:
+    question: "The clients hold their own copies of isSubmittableIdentifier and normalizeIdentifier in platform/{admin,web}/src/api/kdf.ts, duplicated from Core."
+    assumptionMade: "Unavoidable and correct — the KDF runs client-side, so the client must be able to normalise without a round trip. It is a drift surface and is named as one; the shared test vectors are what bind the copies."
+    decides: "no decision needed; recorded so the duplication is deliberate rather than discovered"

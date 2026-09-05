@@ -248,6 +248,23 @@ operations:
         reason: JavaScript and Swift disagree on real characters and a rule three implementations
         must share cannot depend on which one runs it.
         THE STORED NAME IS THE OPERATOR'S ORIGINAL. Normalisation decides COLLISION, never display.
+      aTEMPLATENAMEISNOTANACCOUNTIDENTIFIERANDMUSTNEVERACQUIREITSRULE: >-
+        ADDED 2026-09-05, IN THE NEGATIVE, BECAUSE THE NEXT EDIT IN THIS AREA IS LIKELY TO BE THE
+        WRONG ONE. account-identifier-v1 now fixes an account identifier at PRINTABLE ASCII ONLY and
+        requires Core to enforce that at every identifier entry point. A TEMPLATE NAME IS NOT AN
+        IDENTIFIER: it is a human-readable label, it legitimately contains non-ASCII, and this
+        contract accepts that deliberately — two names differing only by a non-ASCII case
+        distinction are two Templates, which is stated above and is unchanged.
+        THE TWO SHARE THE NORMALISER AND NOT THE ACCEPTANCE RULE. platform/core/platform/templates.ts
+        implements normalizeTemplateName as normalizeIdentifier, and importing it rather than
+        restating it is CORRECT — it is what stops the two definitions drifting. But it means a
+        rejection added INSIDE normalizeIdentifier, to close the identifier enforcement gap, would
+        silently refuse every non-ASCII Template name. THAT WOULD BE A DEFECT IN THIS CONTRACT
+        CAUSED BY A FIX TO ANOTHER ONE, and it would arrive with a green identity test suite.
+        account-identifier-v1 -> whereTheRefusalBelongs.theTRAPINTHEOBVIOUSFIX states the same
+        thing from the identity side; it is stated here as well because the person who breaks this
+        will be reading the identity contract, and the person who has to notice will be reading
+        this one.
       itIsNOTANORACLE: >-
         Templates are platform configuration visible to every operator through
         platform.templates.list. A conflict discloses the existence of something the caller may
