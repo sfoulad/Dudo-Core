@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      NO INDEXING, EVER. An administration console has no reason to appear in a
+      search result, and `admin.dudo.work` is a public hostname on a public DNS
+      zone. This is not a security control — the routes are authorized in Core on
+      every call — it is the removal of an unnecessary invitation.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="color-scheme" content="light" />
+    <title>Dudo platform administration</title>
+    <meta
+      name="description"
+      content="Dudo platform-administration console. Operator access only."
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      The Dudo administration console needs JavaScript. Sign-in derives your key in
+      your own browser and cannot run without it.
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

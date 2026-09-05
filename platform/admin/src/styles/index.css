@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Dudo platform administration — design tokens
+   ---------------------------------------------------------------------------
+   ADR 0010: "Dudo's own tokens replace the template brand entirely... Retaining
+   the template's brand would ship someone else's identity, and the template's
+   tokens are not accessibility-checked against Dudo's palette." So none of
+   shadcn-admin's colour variables survive; the palette below is Dudo's, taken
+   from the app icon — deep navy #071342 with a scarlet macaw.
+
+   THE VALUES ARE THE SAME AS `platform/web`, AND THAT IS DELIBERATE, NOT
+   DUPLICATION-BY-ACCIDENT. Dudo is one brand with two clients. What differs is
+   how they are USED: the console wears navy as its chrome — a dark sidebar and
+   header — so that an operator can tell at a glance which of the two
+   applications they are looking at. Colour is the cheapest possible reminder
+   that a destructive action here reaches somebody else's business.
+
+   RTL IS A REQUIREMENT, NOT A FOLLOW-UP. ADR 0010: "Full RTL and LTR layouts,
+   not an RTL afterthought. Logical Tailwind properties — start/end, never
+   left/right." Every rule in this file and every className in this project uses
+   logical properties: ps/pe, ms/me, border-s/border-e, text-start/text-end,
+   start-0/end-0, inset-inline. Arabic is then a `dir` attribute, not a rewrite.
+   A component written with left/right has to be rebuilt, not translated.
+   --------------------------------------------------------------------------- */
+
+@theme {
+  /* Brand */
+  --color-navy-900: #040b2b;
+  --color-navy-800: #071342;
+  --color-navy-700: #142057;
+  --color-navy-600: #23327a;
+  --color-navy-100: #e7e9f3;
+  --color-navy-50: #f2f3f9;
+
+  --color-scarlet-700: #a5161f;
+  --color-scarlet-600: #c81e28;
+  --color-scarlet-500: #e0301e;
+  --color-scarlet-50: #fdedec;
+
+  --color-gold-700: #8a6100;
+  --color-gold-500: #f5b301;
+  --color-gold-50: #fdf4dc;
+
+  --color-azure-700: #14588f;
+  --color-azure-500: #1f6fb2;
+  --color-azure-50: #e9f2fa;
+
+  --color-green-700: #14624b;
+  --color-green-500: #1d7a5f;
+  --color-green-50: #e7f3ee;
+
+  /* Neutrals — warm. A warm paper under navy reads as a considered document;
+     a cool grey under navy reads as a dashboard template. */
+  --color-paper: #faf8f5;
+  --color-surface: #ffffff;
+  --color-sunk: #f4f1ec;
+  --color-line: #e6e1d9;
+  --color-line-strong: #d3ccc0;
+  --color-ink: #191b22;
+  --color-ink-soft: #40444f;
+  --color-ink-muted: #5e6472;
+  --color-ink-faint: #8a8f9c;
+
+  /* Type */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+                "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  --radius-sm: 4px;
+  --radius-DEFAULT: 7px;
+  --radius-lg: 12px;
+
+  --shadow-card: 0 1px 2px rgb(7 19 66 / 0.06);
+  --shadow-raised: 0 1px 3px rgb(7 19 66 / 0.08), 0 6px 18px -8px rgb(7 19 66 / 0.16);
+  --shadow-float: 0 2px 6px rgb(7 19 66 / 0.10), 0 24px 48px -20px rgb(7 19 66 / 0.28);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* The `hidden` attribute must win. Any component that sets `display` would
+     otherwise override the UA's `display: none` and leave an empty error slot
+     under every form field. */
+  [hidden] {
+    display: none !important;
+  }
+
+  /* One visible focus ring, never removed, redrawn in gold inside dark surfaces
+     so it cannot disappear against navy. The console's sidebar and header are
+     navy, so this is load-bearing rather than defensive: without it, keyboard
+     focus would be invisible across the whole of the navigation. */
+  :focus-visible {
+    outline: 3px solid var(--color-navy-600);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  .on-navy :focus-visible {
+    outline-color: var(--color-gold-500);
+  }
+
+  ::placeholder {
+    color: var(--color-ink-faint);
+  }
+}
+
+@layer components {
+  /* The skip link. Present in the DOM at all times and revealed on focus, so a
+     keyboard user is not forced through the whole sidebar to reach the section
+     they navigated to. `inset-inline-start` rather than `left` — RTL. */
+  .skip-link {
+    position: absolute;
+    inset-block-start: 0.5rem;
+    inset-inline-start: 0.5rem;
+    z-index: 50;
+    padding: 0.5rem 0.875rem;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    border-radius: var(--radius-DEFAULT);
+    box-shadow: var(--shadow-float);
+    transform: translateY(-200%);
+  }
+
+  .skip-link:focus-visible {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
