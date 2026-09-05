@@ -866,7 +866,7 @@ function encodeAuditAnchor(record: PlatformAuditRecord): string {
 }
 
 function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
-  const parts = anchor.split(' ');
+  const parts = anchor.split('\\u0000');
   if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
     return null;
   }
