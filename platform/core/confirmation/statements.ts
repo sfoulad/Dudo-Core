@@ -108,12 +108,65 @@ export const MAX_STATEMENT_LENGTH = 500;
  * statement showed the human, from the same declaration, already grammar-checked by the
  * interpolation control. **What was recorded and what was read are the same value by
  * construction.**
+ *
+ * ===========================================================================================
+ * *** THE CORRESPONDENCE PROPERTY, STATED BECAUSE A REFACTOR WOULD SEPARATE IT WITHOUT NOTICING.
+ * ===========================================================================================
+ *
+ * **THE IDENTIFIER IN THE AUDIT RECORD IS THE IDENTIFIER IN THE TEXT THE HUMAN READ.** Not an
+ * equivalent one, not one derived the same way — the same value, from one declaration, substituted
+ * into the statement and copied into the record.
+ *
+ * WHY IT MATTERS: an operator log exists so that someone can later ask *"what did this person
+ * agree to?"* If the record's target and the statement's target were computed independently — two
+ * lookups, two conventions, two sets of parameter names — they would agree until the day one of
+ * them changed, and **the log would then say a human confirmed something about P while the human
+ * had been shown Q.** That is worse than no record, because it is a record that will be believed.
+ *
+ * THE OBVIOUS REFACTOR THAT BREAKS IT is moving audit-target selection out to the caller, where it
+ * looks like routing concern rather than statement concern. It is neither: it is the correspondence
+ * itself, and it only holds while both halves read this one declaration.
+ *
+ * IT IS MECHANICALLY ASSERTABLE, AND `statementCatalogEntries` EXISTS SO THAT IT IS. For every
+ * entry: render the statement, take the declared audit target, and assert the target's identifier
+ * appears verbatim in the rendered text. `assertStatementCatalogIsCoherent` already refuses a
+ * target key the statement does not interpolate; the end-to-end form is `qa-agent`'s and the
+ * enumerator is what makes it cover the whole catalog rather than the entries somebody remembered.
  */
 type StatementAuditTarget = {
   readonly kind: 'organization' | 'principal';
   /** Must be one of `interpolates`; the coherence guard enforces it. */
   readonly key: string;
 };
+
+/**
+ * ===========================================================================================
+ * WHAT A CHALLENGE'S AUDIT RECORD DOES **NOT** SAY, AND THE TRIGGER FOR CHANGING THAT.
+ * ===========================================================================================
+ *
+ * The record carries WHO acted, WHICH object they named, and WHEN. Its `action_id` is the
+ * CHALLENGE ROUTE'S OWN frozen identifier — `platform.confirmations.request` — and **not the
+ * operation being confirmed.**
+ *
+ * SO THE LOG DOES NOT SAY *WHICH* CRITICAL OPERATION A CHALLENGE WAS SOUGHT FOR. That is a real
+ * gap and it is deliberate. Team Lead ruling, 2026-09-05:
+ *
+ *   `PlatformOperatorActionRecord.actionId` is documented as *"a Core-owned literal from a frozen
+ *   table; there is no path by which a caller supplies this string"*, and **that guarantee is what
+ *   makes the column trustworthy and enumerable** — a reviewer can group by it, alert on it, and
+ *   know the set is closed. Admitting a bounded caller-supplied value changes the property from
+ *   *"a closed set"* to *"a closed set, unless someone passed something"*, and **the second is not
+ *   a weaker version of the first, it is a different claim** that every future consumer has to
+ *   check for.
+ *
+ * IT IS NOT AMBIGUOUS TODAY: `core.credential.reset` is the only critical platform operation, so
+ * "a challenge concerning principal P" can only have meant one thing.
+ *
+ * *** THE TRIGGER: WHEN A SECOND CRITICAL PLATFORM OPERATION EXISTS AND DISTINGUISHING THEM IN
+ * THE LOG MATTERS, ADD A DISTINCTLY-NAMED COLUMN THEN — never by overloading `action_id`, whose
+ * value is its guarantee. *** Written here so the next person meets a decision rather than finds
+ * a gap, and so that the cheap-to-do-later, expensive-to-undo direction is the recorded one.
+ */
 
 type StatementTemplate = {
   /**
@@ -208,6 +261,41 @@ export function resolveStatementLocale(requested: string | undefined): Statement
 /** Does Core have a statement for this operation at all? See `renderStatement` for why it matters. */
 export function hasStatement(actionId: string): boolean {
   return Object.prototype.hasOwnProperty.call(CATALOG, actionId);
+}
+
+/**
+ * Every catalog entry, with the keys it interpolates and the audit target it declares.
+ *
+ * ===========================================================================================
+ * IT EXISTS SO THE CORRESPONDENCE CAN BE ASSERTED OVER THE **WHOLE CATALOG**, NOT OVER THE
+ * ENTRIES SOMEBODY REMEMBERED.
+ * ===========================================================================================
+ *
+ * `renderStatement` and `statementAuditTarget` were already exported, so the check was writable —
+ * but only against action identifiers a test author typed out by hand. **A statement added later
+ * would be covered by nothing, and a statement is exactly the thing that gets added later.** This
+ * is the same argument `TESTING_STANDARD.md` §5.5 makes for asserting over every statement a run
+ * emitted rather than over the paths someone exercised.
+ *
+ * IT RETURNS THE SHAPE AND NOT THE TEXT. The templates stay module-private: a caller that could
+ * read them could compare against its own copy, and a caller that could reach them at all is one
+ * refactor from a caller that renders its own — which is the whole thing `whyTHESTATEMENTIS
+ * SERVERAUTHORED` forbids.
+ */
+export function statementCatalogEntries(): readonly {
+  readonly actionId: string;
+  readonly interpolates: readonly string[];
+  readonly auditTarget: { readonly kind: 'organization' | 'principal'; readonly key: string } | null;
+}[] {
+  return Object.freeze(
+    Object.entries(CATALOG).map(([actionId, template]) =>
+      Object.freeze({
+        actionId,
+        interpolates: template.interpolates,
+        auditTarget: template.auditTarget,
+      }),
+    ),
+  );
 }
 
 /**
