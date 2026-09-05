@@ -14,14 +14,12 @@
  *
  * WHAT IS DELIBERATELY **NOT** HERE, AND WHY.
  *
- *   THE CONFIRMATION CHECK. `docs/decisions/0027` asks by name for the control "remove the
- *   confirmation check from the pipeline and every critical-operation test must go red". THERE IS
- *   NO CONFIRMATION CHECK IN THIS REPOSITORY TO REMOVE: no `confirmation` table, no module, no
- *   critical operation wired to one. A wrapper that removed nothing would produce a green
- *   negative-control line, which is worse than an absent one because it reads as evidence.
- *   See `suites/platform-operator/confirmation.ts`.
+ *   (Nothing, since 2026-09-05. This header previously recorded that the confirmation control
+ *   could not be built because no confirmation check existed to remove. `platform/core/
+ *   confirmation/**` now exists and `withConfirmationCheckRemoved` below is that control.)
  */
 
+import type { ConfirmationGate } from '../../../platform/core/confirmation/confirmation-gate.ts';
 import type { IdentityControlPlaneStore } from '../../../platform/core/identity/control-plane-store.ts';
 import type { PlatformAuditRecorder } from '../../../platform/core/platform/platform-audit.ts';
 import type { PlatformOperatorStore } from '../../../platform/core/platform/platform-operator-store.ts';
@@ -105,6 +103,36 @@ export function withActionSideMutualExclusionRemoved(
 export function withAuditRecorderRemoved(_recorder: PlatformAuditRecorder): PlatformAuditRecorder {
   return {
     async record() {
+      return ok(undefined);
+    },
+  };
+}
+
+/**
+ * ===========================================================================================
+ * `0027`'s CENTRAL NEGATIVE CONTROL — THE ONE THAT RECORD MOST WANTED PERFORMED.
+ * ===========================================================================================
+ *
+ *   *"REMOVE THE CONFIRMATION CHECK FROM THE PIPELINE AND EVERY CRITICAL-OPERATION TEST MUST GO
+ *   RED. If removing the check turns only some tests red, coverage is incomplete and the suite is
+ *   what is wrong, not the finding."*
+ *
+ * `enforce` returns `ok` for everything. The gate is still composed, still called, still consulted
+ * on every critical operation — and always agrees. **That is the shape the defect would actually
+ * take**: not a deleted call site, which a reviewer would notice, but a check that runs and never
+ * refuses. `requiresConfirmation` still returns true, the pipeline still branches, and the
+ * operation proceeds.
+ *
+ * IT IS A WRAPPER, SO NO FILE UNDER `platform/core/**` IS EDITED. A control that required a
+ * production edit could not be run on demand, which is how a control stops being run.
+ *
+ * EVERY case in `suites/platform-operator/confirmation.ts` that claims a critical operation is
+ * gated must go red under this. A case that stays green is not testing the gate, whatever its
+ * name says — and per the record, that makes the SUITE the thing that is wrong.
+ */
+export function withConfirmationCheckRemoved(_gate: ConfirmationGate): ConfirmationGate {
+  return {
+    async enforce() {
       return ok(undefined);
     },
   };

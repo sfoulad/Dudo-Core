@@ -86,6 +86,26 @@ import {
 import type { SessionCredentialSigner } from '../../../platform/core/identity/session-credential.ts';
 
 import { DAILY_ALLOCATION } from '../../../platform/core/protection/write-admission.ts';
+import { createConfirmationService } from '../../../platform/core/confirmation/confirmation-service.ts';
+import { createConfirmationBinder } from '../../../platform/core/confirmation/binding.ts';
+import { createD1ConfirmationStore } from '../../../platform/core/confirmation/adapters/d1/d1-confirmation-store.ts';
+
+/**
+ * A body that gets each route as far as AUTHORIZATION, and past it.
+ *
+ * `platform.confirmations.request` resolves its permission FROM THE BODY and the class validates
+ * before it authorizes, so a bodyless request is refused at step 1 and never reaches the check a
+ * class-wide case is about. Exported because three suites loop over the route table and all three
+ * need it — a copy in each is three places for it to drift.
+ */
+export function bodyForPlatformRoute(routeId: string): string {
+  return routeId === 'platform.confirmations.request'
+    ? JSON.stringify({
+        action_id: 'platform.credentials.reset',
+        parameters: { principal_id: 'prn_target_00000001' },
+      })
+    : '';
+}
 import { createInProcessDayWriteBudget } from '../../../platform/core/protection/in-process-coordinator.ts';
 
 // ---------------------------------------------------------------------------
@@ -113,6 +133,7 @@ export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
   '0008_platform_operator.sql',
   '0009_platform_operator_action.sql',
   '0011_confirmation.sql',
+  '0012_template.sql',
 ]);
 
 export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';
@@ -512,9 +533,24 @@ export async function createPlatformWorld(
   const realStore = createD1PlatformStore(control.database);
   const store = options.wrapStore === undefined ? realStore : options.wrapStore(realStore);
 
+  // The confirmation service, composed so `platform.confirmations.request` is reachable.
+  //
+  // ADDED 2026-09-05 when that route joined the class. Without it the route answers `unavailable`
+  // — the fail-closed shape for an uncomposed dependency — and every class-wide case that loops
+  // over the route table would have been asserting against a route that could not succeed. That is
+  // a fixture that models a deployment nobody ships.
+  const confirmations = createConfirmationService({
+    store: createD1ConfirmationStore(control.database),
+    binder: await createConfirmationBinder(new Uint8Array(32).fill(0x4d)),
+    admission,
+    ids,
+    clock,
+  });
+
   const composed = await createPlatformComposition({
     store,
     admission,
+    confirmations,
     authorizer: createAuthorizer(),
     ids,
     clock,

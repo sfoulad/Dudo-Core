@@ -252,10 +252,42 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
 
       assertTrue('a context was captured', captured !== null, 'the handler was never called');
       const context = captured as unknown as PlatformRouteContext;
+      // =====================================================================================
+      // EACH FIELD IS NAMED WITH THE REASON IT IS NOT A TENANT. A COUNT WOULD ERODE.
+      // =====================================================================================
+      //
+      // This assertion used to pin a sorted key string. When the challenge route added `objects`
+      // and `sessionId` it went red, and the tempting repair was to update the string — which
+      // would have been a control that gets bumped rather than one that has to be argued. The
+      // Team Lead ruled the two additions legitimate AND ruled that the assertion should survive
+      // in a form where the NEXT addition has to be justified rather than appended.
+      //
+      // So the expected set is a MAP FROM FIELD TO REASON. Adding a field means writing down why
+      // it is not a tenant, in this file, where a reviewer reads it. An unexplained field fails.
+      const permitted: Readonly<Record<string, string>> = {
+        routeId: 'a Core-owned literal from the frozen route table',
+        authority: 'a principal id, a platform role and a frozen grant set — no organizationId',
+        query: 'validated query parameters, checked against the route\'s declared set',
+        objects: 'validated nested body fields; the challenge route\'s `parameters` and nothing else',
+        sessionId:
+          'the session the confirmation binds to. A session is not a tenant: an operator\'s ' +
+          'session carries a null active_organization_id for its whole life (0024), so this ' +
+          'yields no Organization even indirectly',
+        requestId: 'an observability value',
+        correlationId: 'an observability value, shape-validated at the transport boundary',
+      };
+      const actual = Object.keys(context).sort();
+      const unexplained = actual.filter((field) => !(field in permitted));
       assertEqual(
-        `${ISOLATION} the context is exactly five fields and none of them is a tenant`,
-        Object.keys(context).sort().join(','),
-        'authority,correlationId,query,requestId,routeId',
+        `${ISOLATION} every field a handler receives is named here with why it is not a tenant`,
+        unexplained.join(','),
+        '',
+      );
+      const missing = Object.keys(permitted).filter((field) => !actual.includes(field));
+      assertEqual(
+        'and every field named here is still present — a removed field is also a change to argue',
+        missing.join(','),
+        '',
       );
       assertEqual(
         `${ISOLATION} the authority carries no organizationId`,

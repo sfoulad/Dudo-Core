@@ -55,6 +55,7 @@ import {
   SESSION_MODERATOR,
   SESSION_STRANGER,
   createPlatformWorld,
+  bodyForPlatformRoute,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import { withFailingActionLog } from '../../harness/broken-platform-controls.ts';
@@ -83,7 +84,7 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
     suite.test(`${route.id} writes exactly one action record, and it is a READ`, async () => {
       const world = await make();
       try {
-        expectOk(`${route.id} succeeds for a platform-admin`, await world.call(route.id, { sessionId: SESSION_ADMIN }));
+        expectOk(`${route.id} succeeds for a platform-admin`, await world.call(route.id, { sessionId: SESSION_ADMIN, bodyText: bodyForPlatformRoute(route.id) }));
         const rows = world.actionRows();
         assertEqual(`${route.id} produced exactly one record`, rows.length, 1);
         assertEqual('the action id is the route id, a Core-owned literal', rows[0].action_id, route.id);
@@ -91,8 +92,23 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
         assertEqual('the role is recorded', rows[0].actor_platform_role, 'platform-admin');
         assertEqual('the outcome is ok', rows[0].outcome, 'ok');
         assertEqual('the correlation id is carried', rows[0].correlation_id, CORRELATION_ID);
-        assertEqual('neither route in this slice names a target', rows[0].target_kind, 'none');
-        assertEqual('so the target identifier is null', rows[0].target_id, null);
+        // UPDATED 2026-09-05. This asserted `'none'` for both routes when the slice had two, and
+        // `platform.confirmations.request` legitimately names the principal its challenge is for.
+        // THE CONSTRAINT THAT MATTERS IS `0025` DECISION 5 AND IT IS UNCHANGED: the record may name
+        // an identifier and may never carry the CONTENTS of what was touched. So the assertion is
+        // now per route, and a target is required to be an identifier or nothing — never a name, a
+        // value or a summary.
+        const expectedTarget = route.id === 'platform.confirmations.request' ? 'principal' : 'none';
+        assertEqual(`${route.id} names the target kind it should`, rows[0].target_kind, expectedTarget);
+        if (expectedTarget === 'none') {
+          assertEqual('so the target identifier is null', rows[0].target_id, null);
+        } else {
+          assertTrue(
+            `${ISOLATION} the target is an opaque identifier, not a name or a value`,
+            typeof rows[0].target_id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(rows[0].target_id),
+            `the action log recorded a target that is not an identifier: ${String(rows[0].target_id)}`,
+          );
+        }
       } finally {
         world.close();
       }
@@ -103,7 +119,7 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
     const world = await make();
     try {
       for (const route of ROUTES) {
-        await world.call(route.id, { sessionId: SESSION_MODERATOR });
+        await world.call(route.id, { sessionId: SESSION_MODERATOR, bodyText: bodyForPlatformRoute(route.id) });
       }
       const rows = world.actionRows();
       assertEqual('one record per refused route', rows.length, ROUTES.length);
@@ -158,7 +174,7 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
       for (const route of ROUTES) {
         expectError(
           `${route.id} refuses rather than proceeding without evidence`,
-          await world.call(route.id, { sessionId: SESSION_ADMIN }),
+          await world.call(route.id, { sessionId: SESSION_ADMIN, bodyText: bodyForPlatformRoute(route.id) }),
           EXPECTED_UNAVAILABLE,
         );
       }

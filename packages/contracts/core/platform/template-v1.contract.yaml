@@ -160,12 +160,30 @@ theObject:
       Template. A LABEL THAT COULD ALTER A SCOPE WOULD BE CONFIGURATION DECIDING AUTHORIZATION,
       which is the shape 0007 D1 forbids.
     theWORKSPACENAMING: >-
-      `workspace` IS THE KEY BECAUSE THE INNER UNIT IS BEING RENAMED FROM `Business` TO `Workspace`
-      (core-object-registry.yaml namingRuling2026-09-05, adopted by docs/decisions/0025). THIS
-      CONTRACT IS WRITTEN IN THE POST-RENAME VOCABULARY DELIBERATELY — writing it in the old one
-      would mean shipping a contract that has to be broken immediately, and the rename lands before
-      this is built. If the rename is deferred, THIS FILE IS WRONG AND MUST BE CHANGED, rather than
-      the two vocabularies being allowed to coexist.
+      `workspace` IS THE KEY, AND TWO VOCABULARIES FOR THIS LEVEL COEXIST DELIBERATELY. THE NEW
+      PLATFORM SURFACE SAYS `Workspace`; THE CUSTOMER WIRE AND THE DATABASE SAY `business_id`.
+      Neither is to be "corrected" toward the other.
+      ~~"If the rename is deferred, THIS FILE IS WRONG AND MUST BE CHANGED, rather than the two
+      vocabularies being allowed to coexist."~~ STRUCK 2026-09-05, AND STRUCK RATHER THAN
+      ANNOTATED because it is an ASSERTION rather than a description — "this file is wrong and must
+      be changed" is an instruction to a future implementer, and .claude/rules/workflow.md §12 names
+      that as the dangerous kind of staleness. It was correct when written and the world moved
+      underneath it; nothing failed when it did.
+      THE RENAME IS DEFERRED, AND NOT FOR INDECISION. docs/decisions/0025's Amendment of 2026-09-05
+      established that `business_id` is a PUBLISHED WIRE FIELD TWO CLIENTS HAVE SHIPPED AGAINST
+      (`apps/customers/domain/validation.ts`) and a PERSISTED AUDIT VALUE
+      (`move-customer-to-business.ts` `changedFieldNames`). Renaming it is therefore a breaking
+      change to a shipped contract PLUS AN AUDIT-HISTORY REWRITE — which `.claude/rules/architecture.md`
+      §1 requires to go through its own record, and which must not be smuggled in as tidying during
+      another feature's build.
+      SO THE COEXISTENCE IS THE DECISION, NOT THE FAILURE STATE. It is a real cost, accepted
+      knowingly: a reader has to know both words. IT IS SMALLER THAN the alternative, and it has a
+      CLOSING TRIGGER — the rename is owed before a second App ships a contract using the word,
+      because that is the point at which two vocabularies become a fork rather than an inconvenience.
+      WHAT THE USER ACTUALLY ASKED FOR IS SERVED BY `level_labels` RATHER THAN BY THE RENAME. Their
+      complaint was about words on a screen — a form reading "which of your Businesses is this
+      customer filed under" — and a school rendering "Campus" fixes exactly that, today, with no
+      breaking change. The rename is for developers and the public API; the labels are for users.
   lifecycle:
     ruling: >-
       A TEMPLATE IS CREATED `active` AND MAY BE RETIRED. THERE IS NO DELETE AND NO UPDATE IN

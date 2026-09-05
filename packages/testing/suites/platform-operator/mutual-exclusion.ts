@@ -67,6 +67,7 @@ import {
   seedOrganization,
   seedPlatformOperator,
   seedPrincipal,
+  bodyForPlatformRoute,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import type { PlatformRouteId } from '../../../../platform/core/platform/platform-routes.ts';
@@ -118,7 +119,7 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       assertTrue('the class has routes to test', ROUTE_IDS.length > 0, 'the route table is empty');
       const answers: string[] = [];
       for (const routeId of ROUTE_IDS) {
-        const answer = await world.call(routeId, { sessionId: SESSION_BOTH_TABLES });
+        const answer = await world.call(routeId, { sessionId: SESSION_BOTH_TABLES, bodyText: bodyForPlatformRoute(routeId) });
         assertTrue(
           `${ISOLATION} ${routeId} refuses a principal in both tables`,
           !answer.ok,
@@ -146,8 +147,8 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       try {
         // --- At the route layer: a real principal in neither table, and a tenant owner.
         for (const routeId of ROUTE_IDS) {
-          const stranger = await world.call(routeId, { sessionId: SESSION_STRANGER });
-          const tenantOwner = await world.call(routeId, { sessionId: SESSION_TENANT_OWNER });
+          const stranger = await world.call(routeId, { sessionId: SESSION_STRANGER, bodyText: bodyForPlatformRoute(routeId) });
+          const tenantOwner = await world.call(routeId, { sessionId: SESSION_TENANT_OWNER, bodyText: bodyForPlatformRoute(routeId) });
           assertTrue(
             `${ISOLATION} ${routeId} refused both`,
             !stranger.ok && !tenantOwner.ok,
@@ -213,7 +214,7 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
         for (const routeId of ROUTE_IDS) {
           expectError(
             `${routeId}: the contract's fourth forbidden cause`,
-            await world.call(routeId, { sessionId: SESSION_BOTH_TABLES }),
+            await world.call(routeId, { sessionId: SESSION_BOTH_TABLES, bodyText: bodyForPlatformRoute(routeId) }),
             EXPECTED_FORBIDDEN,
           );
         }
@@ -227,8 +228,8 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
     const world = await make();
     try {
       for (const routeId of ROUTE_IDS) {
-        await world.call(routeId, { sessionId: SESSION_BOTH_TABLES });
-        await world.call(routeId, { sessionId: SESSION_STRANGER });
+        await world.call(routeId, { sessionId: SESSION_BOTH_TABLES, bodyText: bodyForPlatformRoute(routeId) });
+        await world.call(routeId, { sessionId: SESSION_STRANGER, bodyText: bodyForPlatformRoute(routeId) });
       }
       assertEqual(
         'no record is written for a caller whose authority did not resolve',

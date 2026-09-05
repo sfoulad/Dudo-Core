@@ -46,7 +46,11 @@ import { buildPlatformAuditSuite } from './suites/platform-operator/audit.ts';
 import { buildOrganizationsListSuite } from './suites/platform-operator/organizations-list.ts';
 import { buildHostBindingSuite } from './suites/platform-operator/host-binding.ts';
 import { buildBootstrapBoundsSuite } from './suites/platform-operator/bootstrap-bounds.ts';
-import { buildConfirmationSuite } from './suites/platform-operator/confirmation.ts';
+import {
+  buildConfirmationChallengeSuite,
+  buildConfirmationRefusalShapeSuite,
+  buildConfirmationSuite,
+} from './suites/platform-operator/confirmation.ts';
 import {
   buildPlatformMigrationCoverageSuite,
   buildSqliteDoubleSuite,
@@ -55,8 +59,11 @@ import {
 import {
   withActionSideMutualExclusionRemoved,
   withAuditRecorderRemoved,
+  withConfirmationCheckRemoved,
   withMutualExclusionProbeRemoved,
 } from './harness/broken-platform-controls.ts';
+import { createConfirmationWorld } from './harness/confirmation-fixture.ts';
+import type { ConfirmationWorldOptions } from './harness/confirmation-fixture.ts';
 import { createPlatformWorld } from './harness/platform-fixture.ts';
 import type { PlatformWorldOptions } from './harness/platform-fixture.ts';
 
@@ -121,6 +128,8 @@ async function main(): Promise<void> {
     buildHostBindingSuite(),
     buildBootstrapBoundsSuite(),
     buildConfirmationSuite(),
+    buildConfirmationRefusalShapeSuite(),
+    buildConfirmationChallengeSuite(),
   ];
   const registered = primarySuites.reduce((total, suite) => total + suite.caseNames.length, 0);
   const primary = await runAll(primarySuites);
@@ -231,6 +240,30 @@ async function main(): Promise<void> {
     await runAll([
       buildHostBindingSuite(hostBindingRemoved),
       buildPlatformAuthorizationSuite(hostBindingRemoved),
+    ]),
+  );
+
+  // -----------------------------------------------------------------------------------------
+  // `docs/decisions/0027`'s CENTRAL NEGATIVE CONTROL. Performed for the first time.
+  //
+  //   "REMOVE THE CONFIRMATION CHECK FROM THE PIPELINE AND EVERY CRITICAL-OPERATION TEST MUST GO
+  //   RED. If removing the check turns only some tests red, coverage is incomplete and the suite
+  //   is what is wrong, not the finding."
+  //
+  // The gate is still composed and still called on every critical operation — it simply always
+  // agrees. That is the shape the defect would take: not a deleted call site, which a reviewer
+  // would notice, but a check that runs and never refuses.
+  //
+  // READ THE STILL-GREEN LIST AS THE RECORD INSTRUCTS. A case that stays green here is not testing
+  // the gate, and that makes the SUITE the thing to fix — not the control to narrow.
+  // -----------------------------------------------------------------------------------------
+  const confirmationRemoved = (options?: ConfirmationWorldOptions) =>
+    createConfirmationWorld({ ...options, wrapGate: withConfirmationCheckRemoved });
+  classify(
+    "0027's CENTRAL CONTROL — the confirmation check removed from the pipeline",
+    await runAll([
+      buildConfirmationSuite(confirmationRemoved),
+      buildConfirmationRefusalShapeSuite(confirmationRemoved),
     ]),
   );
 

@@ -70,16 +70,24 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         Array.isArray(route.queryParameters),
         'queryParameters is not an array',
       );
+      // UPDATED 2026-09-05, AND THE PROPERTY IS UNCHANGED. `PlatformRoute.permission` was a
+      // string; it is now a union of `{kind:'fixed'}` and `{kind:'from-body'}`, because the
+      // confirmation challenge route borrows the permission of the operation it confirms rather
+      // than inventing a `core.confirmation.request` that everyone holds. THE CLASS PROPERTY IS
+      // STILL "EVERY ROUTE EVALUATES A PERMISSION" — only its representation moved, so the
+      // assertion follows the representation and keeps asserting the same thing.
       assertTrue(
         `${route.id} declares a permission`,
-        typeof route.permission === 'string' && route.permission.length > 0,
+        route.permission.kind === 'fixed'
+          ? route.permission.permissionId.length > 0
+          : typeof route.permission.resolve === 'function',
         'a route in this class has no permission, which is what distinguishes it from a session route',
       );
     }
     assertEqual(
-      'and the table is the closed set of two this slice ships',
+      'and the table is the closed set this slice ships',
       ROUTES.map((route) => route.id).sort().join(','),
-      'platform.organizations.list,platform.session.whoami',
+      'platform.confirmations.request,platform.organizations.list,platform.session.whoami',
     );
   });
 

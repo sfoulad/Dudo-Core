@@ -68,6 +68,28 @@ function show(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * A body that gets each route as far as AUTHORIZATION.
+ *
+ * ADDED 2026-09-05 and it is not a convenience. `platform.confirmations.request` resolves its
+ * permission FROM THE BODY, and the class validates before it authorizes — so a bodyless request
+ * to that route is refused with `invalid_argument` at step 1 and never reaches the check these
+ * cases are about. A loop that sent nothing would have been asserting that validation works, under
+ * a case name claiming authorization does.
+ *
+ * `platform.credentials.reset` IS THE ONLY CONFIRMABLE PLATFORM OPERATION, so it is the only
+ * action id that resolves to a permission at all. If a second is added, this map is where a
+ * reviewer sees that these cases now cover one of two.
+ */
+function bodyForRoute(routeId: PlatformRouteId): string {
+  return routeId === 'platform.confirmations.request'
+    ? JSON.stringify({
+        action_id: 'platform.credentials.reset',
+        parameters: { principal_id: 'prn_target_00000001' },
+      })
+    : '';
+}
+
 /** A store whose operator row carries a role this build does not recognise. Cause 2. */
 function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
   return {
@@ -111,17 +133,17 @@ export function buildPlatformAuthorizationSuite(
       for (const routeId of ROUTE_IDS) {
         expectError(
           `${ISOLATION} ${routeId} refuses a tenant owner`,
-          await world.call(routeId, { sessionId: SESSION_TENANT_OWNER }),
+          await world.call(routeId, { sessionId: SESSION_TENANT_OWNER, bodyText: bodyForRoute(routeId) }),
           EXPECTED_FORBIDDEN,
         );
         expectError(
           `${ISOLATION} ${routeId} refuses a tenant member`,
-          await world.call(routeId, { sessionId: SESSION_TENANT_MEMBER }),
+          await world.call(routeId, { sessionId: SESSION_TENANT_MEMBER, bodyText: bodyForRoute(routeId) }),
           EXPECTED_FORBIDDEN,
         );
         expectError(
           `${ISOLATION} ${routeId} refuses a principal in neither table`,
-          await world.call(routeId, { sessionId: SESSION_STRANGER }),
+          await world.call(routeId, { sessionId: SESSION_STRANGER, bodyText: bodyForRoute(routeId) }),
           EXPECTED_FORBIDDEN,
         );
       }
@@ -136,14 +158,17 @@ export function buildPlatformAuthorizationSuite(
       for (const routeId of ROUTE_IDS) {
         expectError(
           `${routeId} refuses marketplace-moderator`,
-          await world.call(routeId, { sessionId: SESSION_MODERATOR }),
+          await world.call(routeId, { sessionId: SESSION_MODERATOR, bodyText: bodyForRoute(routeId) }),
           EXPECTED_FORBIDDEN,
         );
       }
       // The control: the SAME routes serve platform-admin, so the refusals above are about the
       // role rather than about the routes being broken.
       for (const routeId of ROUTE_IDS) {
-        expectOk(`${routeId} serves platform-admin`, await world.call(routeId, { sessionId: SESSION_ADMIN }));
+        expectOk(
+          `${routeId} serves platform-admin`,
+          await world.call(routeId, { sessionId: SESSION_ADMIN, bodyText: bodyForRoute(routeId) }),
+        );
       }
     } finally {
       world.close();

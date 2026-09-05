@@ -41,7 +41,7 @@
         "workspace": {
           "allOf": [{ "$ref": "#/$defs/levelLabel" }],
           "default": "Workspace",
-          "description": "A school renders 'Campus', a shop 'Branch', a clinic 'Site'. THE KEY IS `workspace` BECAUSE THE INNER UNIT IS BEING RENAMED FROM `Business` (core-object-registry.yaml namingRuling2026-09-05, adopted by docs/decisions/0025). If that rename is deferred, THIS SCHEMA IS WRONG AND MUST CHANGE — the two vocabularies must not be allowed to coexist."
+          "description": "A school renders 'Campus', a shop 'Branch', a clinic 'Site'. THE KEY IS `workspace`, AND TWO VOCABULARIES FOR THIS LEVEL COEXIST DELIBERATELY: the new platform surface says `Workspace`, the customer wire and the database say `business_id`, and neither is to be corrected toward the other. CORRECTED 2026-09-05 — this previously said the schema would be WRONG if the rename were deferred. The rename IS deferred, and not for indecision: docs/decisions/0025's Amendment established that `business_id` is a published wire field two clients have shipped against and a persisted audit value, so renaming it is a breaking change plus an audit-history rewrite, owed to its own slice with a closing trigger (before a second App ships a contract using the word). THE COEXISTENCE IS THE DECISION, NOT A FAILURE STATE. And note that these labels are what the user actually asked for: the complaint was about words on a screen, and a school rendering 'Campus' fixes it today with no breaking change."
         },
         "branch": {
           "allOf": [{ "$ref": "#/$defs/levelLabel" }],

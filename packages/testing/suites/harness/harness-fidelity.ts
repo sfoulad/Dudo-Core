@@ -67,6 +67,10 @@ function migrationsOnDisk(): string[] {
  * be typed here, beside its reason, is one a reviewer sees.
  */
 const CONTROL_PLANE_DELIBERATE_OMISSIONS: Readonly<Record<string, string>> = Object.freeze({
+  '0012_template.sql':
+    'The Template table. `template-v1` is accepted and unimplemented, nothing on the authenticated ' +
+    'path reads it, and no AZ2 suite touches Templates. Same tripwire shape as 0011: if login ever ' +
+    'begins consulting it, the AZ2 suites go red and this entry is where the reader is told why.',
   '0011_confirmation.sql':
     'The confirmation table. Nothing on the authenticated path reads it TODAY — the pipeline gate ' +
     'is being built and does not exist yet. THIS ENTRY IS A TRIPWIRE, and the narrow fixture is ' +
