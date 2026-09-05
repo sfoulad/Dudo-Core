@@ -64,7 +64,8 @@ read off their own home screen.
 which is not a security posture.** It closes `CR-3`.
 
 **The residual, accepted not closed:** an operator with a known identifier can probe it against
-every Organization. **N requests, audited in both homes, visible to each victim, rate limited** —
+every Organization. **N requests, audited in both homes, ~~visible to each victim~~, ~~rate
+limited~~** — *two of these four terms are false; see the amendments of 2026-09-05* —
 against a member list's one request per Organization returning everything. The attack goes from
 free and silent to **linear, audited and visible.** And the honest limit: **auditing is detection,
 not prevention.**
@@ -78,7 +79,9 @@ rationed.**
 
 **And it would have been worse than the front door**, because a bulk read names no Organization to
 write a tenant-side record into: **one request, and one the tenant cannot see.** The residual in
-Decision 2 rested on *N, audited, visible, rate limited* — a bulk read inverts every term.
+Decision 2 rested on *N, audited, ~~visible~~, ~~rate limited~~* — a bulk read inverts every term.
+*Two of those terms have since been measured false; the argument against a bulk read does not depend
+on them, but see the amendments of 2026-09-05 before citing this line.*
 
 > **The control becomes the leak** — arriving not from anyone doing anything unusual, but from the
 > audit mechanism faithfully recording what it was built to record.
@@ -165,7 +168,8 @@ platform one.**
 
 Decisions 2 and 3 both lean on tenant-side audit records: the resolve writes one on every call
 including 404s, and the Organization feed writes one on every read — *"the tenant must see that read
-happen."* The residual was accepted as **N requests, audited, tenant-visible, rate limited.**
+happen."* The residual was accepted as **N requests, audited, ~~tenant-visible~~, ~~rate limited~~.**
+*This amendment strikes the third term. The amendment below it strikes the fourth.*
 
 **`core.audit.read` is catalogued at organization scope and has no route.** So today the tenant-side
 records are **written and unreadable**. Nothing in the product lets a customer see what the platform
@@ -185,6 +189,74 @@ console, which is the wrong place for it by construction.
 **Stated here rather than in a backlog because of what it would otherwise become:** a future reader
 citing `0028` for the proposition that operator actions are visible to tenants would be quoting a
 control that has never worked. **An unread audit record is detection that nobody performs.**
+
+## Amendment, 2026-09-05 — "rate limited" is false, and the cost of a probe lands on the victim
+
+**SECURITY FINDING, measured by `core-agent` against shipped code and against code it had written an
+hour earlier.** This strikes the fourth term of Decision 2's residual. With the amendment above it,
+**half the residual's terms are now false.**
+
+### The measurement
+
+Per call, index rows included, counted from `0001_audit_event.sql` rather than taken from a constant:
+
+| operation | tenant row-writes | control-plane row-writes |
+|---|---|---|
+| `members.resolve` — **hit** | **5** | 2 |
+| `members.resolve` — **refusal** | **5** | 2 |
+| `organizations.audit.list` — **with results** | **5** | 2 |
+| `organizations.audit.list` — **empty** | **5** | 2 |
+| `audit.list` (platform feed) | **0** | 2 |
+
+**The tenant record lands on the Organization's `business` allocation — 10,000/day — not on the
+operator's control-plane budget.** The intended bound was the operator's 600: 300 calls × 5 = 1,500
+row-writes, **15% of a customer's day.**
+
+**That is not what happens. Driving the real dispatcher 2,000 times against ledgers keyed as
+production keys them: 10,000 of 10,000 — one operator exhausts one named customer's entire daily
+write allocation, on either route.**
+
+### The mechanism, which is an ordering bug rather than a budgeting one
+
+**The tenant write happens first; the operator's audit record is charged second.** Once the
+operator's 600 is spent, **every further call still performs the 5 tenant row-writes and only then
+fails at the audit step.** 85% of the damage lands *after* the operator's own ceiling is gone.
+
+> **The attacker is told the call failed. The customer pays for it anyway.**
+
+**And the customer cannot see why** — their own mutations begin failing, and `PA-3` means they
+cannot read the trail that would explain it.
+
+### The term that survives both fixes
+
+**It does not scale per principal. It scales per operator × target.** Each operator has its own 600;
+they all spend the **same** Organization's 10,000. Two operators halve the calls needed. **A taken
+session is an operator.**
+
+So the ordering fix and `PO-4` both bound the **attacker**, while the exposure is a property of the
+**target**. A per-Organization sub-ceiling on platform-originated tenant writes is the only one of
+the three that bounds what is actually at risk. **It is deliberately deferred** — today the operator
+set is small and the realistic threat is one taken session — and it is recorded here so that nobody
+has to rediscover, the day that set grows, that the other two fixes never scaled.
+
+### Re-deriving Decision 2 rather than leaving it propped up
+
+**`workflow.md` §12 requires this**: the argument rested on four terms and two are gone, so the
+conclusion has to be re-earned rather than assumed to survive.
+
+**It survives.** The comparison was never *resolve versus nothing* — it was **resolve versus a member
+list**, and a member list is one request per Organization returning everything, silently. Linear and
+audited still beats constant and silent, and the aggregation Decision 1 rationed still costs N
+audited requests. **Decision 1 and Decision 2 stand.**
+
+**What has changed is that the residual is materially weaker than when it was accepted, and it now
+contains a hazard nobody contemplated at the time.** The original residual reasoned entirely about
+*disclosure* — what an operator could learn. **This is availability**: the same probe, aimed at a
+customer rather than at a question, breaks their product. **A cost that was assessed as a deterrent
+to the attacker turned out to be a weapon against the victim.**
+
+> **The honest sentence is the one Decision 2 already contains — auditing is detection, not
+> prevention — and it is now the only term of the residual doing any work.**
 
 ## Amendment, 2026-09-05 — a confirmation challenge records that permission was sought, and not for whom
 
