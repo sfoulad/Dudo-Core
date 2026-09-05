@@ -870,11 +870,11 @@ function listAuditFeed(dependencies: {
  * component** — `occurred_at` is RFC 3339 and `action_record_id` matches the identifier grammar —
  * so the split is unambiguous rather than merely unlikely.
  */
-function encodeAuditAnchor(record: PlatformAuditRecord): string {
+export function encodeAuditAnchor(record: PlatformAuditRecord): string {
   return `${record.occurredAt} ${record.actionRecordId}`;
 }
 
-function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
+export function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
   const parts = anchor.split(String.fromCharCode(0));
   if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
     return null;
