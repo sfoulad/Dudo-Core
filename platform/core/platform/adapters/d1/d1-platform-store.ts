@@ -58,6 +58,7 @@ import type {
   PlatformOrganizationDetailRecord,
   PlatformOrganizationRecord,
   PlatformOrganizationStatus,
+  PlatformRevocation,
 } from '../../platform-operator-store.ts';
 
 type SqlRow = Record<string, unknown>;
@@ -587,6 +588,69 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
         operators.push({ principalId, platformRole, createdAt });
       }
       return ok(Object.freeze(operators));
+    },
+
+    async revokeOperator(
+      principalId: string,
+      isSelfRevocation: boolean,
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<PlatformRevocation | null>> {
+      consumeControlPlaneWriteReservation(reservation, 1);
+
+      // =====================================================================================
+      // *** THE DELETE AND ITS PRECONDITION ARE ONE STATEMENT. `RETURNING` GIVES THE COUNT. ***
+      // =====================================================================================
+      //
+      // `DELETE ... WHERE principal_id = ? AND (<self> OR (SELECT COUNT(*) FROM platform_operator)
+      // > 1) RETURNING principal_id`.
+      //
+      // CHECK-THEN-ACT WOULD BE A RACE WITH NO RECOVERY. Two concurrent revocations both read two
+      // operators, both proceed, and the platform is left with **zero operators and no route that
+      // can create one** — `0025` publishes none, deliberately, so the only way back is
+      // out-of-band SQL against production. `architecture.md` §3a: the in-statement guard *"is the
+      // only layer with no window at all, because it re-asks the question in the same statement
+      // that writes."*
+      //
+      // THE SELF CASE BYPASSES THE COUNT DELIBERATELY. The last operator may resign; the contract
+      // permits it because refusing would mean an operator cannot leave, and no route could ever
+      // make them not-the-last.
+      const deleted = await selectRows(
+        database,
+        'DELETE FROM platform_operator WHERE principal_id = ? AND (? = 1 OR ' +
+          '(SELECT COUNT(*) FROM platform_operator) > 1) RETURNING principal_id',
+        [principalId, isSelfRevocation ? 1 : 0],
+      );
+      if (!deleted.ok) {
+        return err(deleted.error);
+      }
+      if (deleted.value.length === 0) {
+        // NOT AN OPERATOR, **OR** THE LAST ONE AND NOT THE CALLER. The route separates these two
+        // by asking `findOperator` first — it cannot be done here, because a statement that
+        // reported which condition failed would tell a caller whether an arbitrary principal holds
+        // platform authority, which is the oracle the 404 collapse exists to close.
+        return ok(null);
+      }
+
+      // THE COUNT AFTER THE DELETE. A second round trip, and it has to be: SQLite cannot return an
+      // aggregate over the post-delete table from within the DELETE itself. **A race here changes
+      // only the number reported to an operator, never whether the delete was safe** — the
+      // precondition was enforced in the statement above and cannot be undone by a later read.
+      const remaining = await selectRows(
+        database,
+        'SELECT COUNT(*) AS remaining FROM platform_operator',
+        [],
+      );
+      if (!remaining.ok) {
+        return err(remaining.error);
+      }
+      const value = remaining.value[0]?.remaining;
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+        // THE REVOCATION ALREADY HAPPENED. Reporting `internal` here is honest — the operation
+        // succeeded and its report did not — and it is the direction the dispatcher already takes
+        // when an audit record cannot be written after a committed change.
+        return err(internal());
+      }
+      return ok({ remainingOperatorCount: value });
     },
 
     async listPlatformAudit(

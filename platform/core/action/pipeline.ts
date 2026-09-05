@@ -657,6 +657,21 @@ export async function invokeAction(
         // gate splits them. `parsed.value` is the Action's own typed shape and has already dropped
         // whatever it does not declare.
         body: (rawInput ?? {}) as Readonly<Record<string, unknown>>,
+        // ===================================================================================
+        // EMPTY, AND STATED RATHER THAN DEFAULTED. *** DO NOT DELETE THIS AS NOISE. ***
+        // ===================================================================================
+        //
+        // An Action has no path template — the App router matches on a base path and the Action's
+        // inputs arrive in the body and the query — so there is genuinely nothing to bind here
+        // today.
+        //
+        // **IT IS WRITTEN OUT BECAUSE `enforce` MAKES IT REQUIRED, AND THAT IS DELIBERATE.**
+        // `confirmation-v1` as of `aa48dd4`: *"a recomputation whose key set omits any declared
+        // path parameter is a defect and must fail closed, not proceed with a narrower binding."*
+        // An OPTIONAL parameter defaulting to `{}` would satisfy the compiler while violating that
+        // sentence — so the day an Action gains a path template, **this line is a compile-time
+        // decision someone has to make rather than an empty binding they inherit in silence.**
+        pathParams: {},
       });
       if (!confirmed.ok) {
         return fail(confirmed.error);

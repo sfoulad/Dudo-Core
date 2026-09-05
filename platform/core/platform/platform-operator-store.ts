@@ -167,6 +167,22 @@ export type PlatformOperatorSummary = {
 };
 
 /**
+ * What a successful revocation reports.
+ *
+ * `remainingOperatorCount` IS TAKEN AFTER THE DELETE, in the same statement, so it is the count a
+ * caller can act on rather than one that was true a moment ago.
+ *
+ * *** IT MAY BE ZERO, AND ONLY ON A SELF-REVOCATION. *** The last operator revoking themselves is
+ * permitted — the contract has no route that could stop them being the last, and refusing would
+ * mean an operator cannot resign. **A zero here is the platform having no operators and no route
+ * that can create one**, which is exactly why the non-self case is refused with
+ * `failed_precondition`.
+ */
+export type PlatformRevocation = {
+  readonly remainingOperatorCount: number;
+};
+
+/**
  * The filters both feeds accept. **THE SAME TYPE FOR BOTH, WITH NO PRINCIPAL FIELD.**
  *
  * *** THERE IS NO `targetPrincipalId` AND ADDING ONE REOPENS `0028` Decision 3. *** Filtering by a
@@ -463,6 +479,35 @@ export type PlatformOperatorStore = {
     limit: number,
     afterPrincipalId: string | null,
   ): Promise<Result<readonly PlatformOperatorSummary[]>>;
+
+  /**
+   * ===========================================================================================
+   * REMOVE A PRINCIPAL'S PLATFORM AUTHORITY. `platform-operators-v1`.
+   * ===========================================================================================
+   *
+   * *** IT RETURNS THE REMAINING OPERATOR COUNT, AND THE COUNT IS TAKEN IN THE SAME STATEMENT AS
+   * THE DELETE. ***
+   *
+   * The contract refuses a revocation that would leave **zero** platform operators unless the
+   * target is the caller. Reading the count first and deleting second is a check-then-act race:
+   * two concurrent revocations both see two operators, both proceed, and **the platform is left
+   * with none and no route that can create one** — `0025` publishes no route that grants platform
+   * authority, so recovery is out-of-band SQL.
+   *
+   * SO THE ADAPTER DELETES CONDITIONALLY AND COUNTS IN ONE ROUND TRIP. `architecture.md` §3a's
+   * ranking applies exactly: *"a guard inside the statement… is the only layer with no window at
+   * all, because it re-asks the question in the same statement that writes."*
+   *
+   * `null` MEANS THE TARGET WAS NOT AN OPERATOR — unknown principal, tenant member, or already
+   * revoked. **The route collapses all three into the argument-free 404**, and revoking an
+   * already-revoked operator is therefore a 404 rather than a 200: the row is gone, so the target
+   * is not an operator, and the collapse applies.
+   */
+  revokeOperator(
+    principalId: string,
+    isSelfRevocation: boolean,
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<PlatformRevocation | null>>;
 
   listPlatformAudit(
     filters: PlatformAuditFilters,

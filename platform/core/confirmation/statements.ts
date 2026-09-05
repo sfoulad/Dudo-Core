@@ -251,6 +251,63 @@ const CATALOG: Readonly<Record<string, StatementTemplate>> = Object.freeze({
         'إنهاء جميع جلساته النشطة. تُعرض كلمة المرور الجديدة مرة واحدة ولا يمكن استرجاعها لاحقًا.',
     }),
   }),
+  // ===========================================================================================
+  // REVOKE PLATFORM AUTHORITY. `platform-operators-v1`.
+  //
+  // *** `principal_id` IS A PATH PARAMETER, NOT A BODY FIELD, AND THAT IS WHY THIS ENTRY EXISTS
+  // IN ITS CURRENT FORM. *** `revokeOperatorInput` carries only the three confirmation fields, so
+  // under the STRUCK binding definition — body minus the three, nothing added — the parameters
+  // were the EMPTY OBJECT and this statement would have had nothing to interpolate. The human
+  // would have been asked to confirm "revoke platform authority from {0}" with no {0}.
+  //
+  // `aa48dd4` AMENDED THE BINDING TO COVER DECLARED PATH PARAMETERS, so `principal_id` is present
+  // in `parameters` and the statement names the actual target. **The statement and the binding
+  // read the same object**, which is what makes "the human agreed to THIS" true rather than
+  // asserted.
+  //
+  // ===========================================================================================
+  // *** THE GENERAL POINT, WHICH IS WORTH MORE THAN THIS ENTRY: A HUMAN-VISIBLE SURFACE IS A
+  // CHEAP DETECTOR FOR DEFECTS IN THE MACHINERY BEHIND IT. ***
+  // ===========================================================================================
+  //
+  // The empty-binding defect was found three independent ways on one day, and **this was the most
+  // legible of the three:**
+  //
+  //   - A LOAD-TIME GUARD refused to build the route. Correct, and it is a build failure someone
+  //     has to interpret before they know what it means.
+  //   - A CONTRACT SENTENCE promised a property the code would not have had. Correct, and it
+  //     needed a careful reader comparing a schema against an implementation.
+  //   - THIS TEXT would have rendered *"Revoke platform authority from principal "* **and then
+  //     nothing.** Wrong in a way anyone would see instantly, without knowing what a binding is.
+  //
+  // **THE STATEMENT AND THE BINDING READ THE SAME OBJECT, SO A HOLE IN ONE IS VISIBLE IN THE
+  // OTHER** — and the one with a human in front of it is the one where the hole is obvious. When
+  // a mechanism has a rendered surface, **write the surface early and look at it**: it costs
+  // nothing and it catches things that a guard reports obliquely and a contract states abstractly.
+  //
+  // This entry was written before the route existed, and the empty slot is what made the defect
+  // concrete rather than argued.
+  // ===========================================================================================
+  'platform.operators.revoke': Object.freeze({
+    interpolates: Object.freeze(['principal_id']),
+    // A PRINCIPAL, exactly as the reset above. `0025` Decision 5 permits an Organization or a
+    // principal and this operation names a principal.
+    auditTarget: Object.freeze({ kind: 'principal' as const, key: 'principal_id' }),
+    text: Object.freeze({
+      // IT NAMES THE IRREVERSIBILITY AND THE SELF-REVOCATION CASE, because `0007` D15 requires the
+      // statement to say "exactly what will happen" and the most surprising outcome of this
+      // operation is the operator revoking THEMSELVES — which the route permits deliberately, with
+      // no separate path.
+      en:
+        'Revoke platform authority from principal {0}. They lose access to every platform ' +
+        'operator route from their next request onwards. If this is your own principal you will ' +
+        'lose that access yourself, immediately, and no platform route can restore it.',
+      ar:
+        'إلغاء صلاحية المنصة عن الحساب {0}. سيفقد الوصول إلى جميع مسارات مشغّل المنصة اعتبارًا من ' +
+        'طلبه التالي. وإذا كان هذا حسابك أنت، فستفقد هذا الوصول بنفسك فورًا، ولا يمكن لأي مسار في ' +
+        'المنصة استعادته.',
+    }),
+  }),
 });
 
 export type RenderedStatement = {

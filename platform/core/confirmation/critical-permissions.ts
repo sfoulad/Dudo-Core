@@ -150,6 +150,21 @@ export function criticalPermissions(): readonly string[] {
  */
 const CONFIRMABLE_PLATFORM_OPERATIONS: Readonly<Record<string, string>> = Object.freeze({
   'platform.credentials.reset': 'core.credential.reset',
+  // ===========================================================================================
+  // REVOKE. `platform-operators-v1`, and it is the SECOND entry, which needed its own argument.
+  // ===========================================================================================
+  //
+  // `core.principal.revoke-platform-scope` is the sixteenth critical permission — **the one that
+  // was missing from the frozen set earlier today and therefore FAILED OPEN.** The catalog's own
+  // description states the property that was untrue: *"CRITICAL, so confirmation applies — which
+  // means SESSION THEFT ALONE CANNOT REVOKE ANYONE."*
+  //
+  // IT IS TRUE NOW ONLY IF THIS LINE AND THE ROUTE'S GATING BOTH EXIST. Being in the critical set
+  // makes `requiresConfirmation` answer `true`; being HERE is what makes a challenge obtainable,
+  // and `assertConfirmationCoverageIsCoherent` refuses the build if a gated route is not in this
+  // map. **Both halves, or the route is unreachable rather than unguarded** — which is the correct
+  // direction and is still not the intended one.
+  'platform.operators.revoke': 'core.principal.revoke-platform-scope',
 });
 
 export function confirmableOperations(): readonly string[] {

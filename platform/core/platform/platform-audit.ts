@@ -131,11 +131,36 @@ export type PlatformActionTarget =
        * records it exists for, and every handler that forgot would look like every handler that
        * did not.
        *
-       * A PRINCIPAL-TARGETED ACTION THAT GENUINELY HAPPENS IN NO ORGANIZATION HAS NO WAY TO SAY
-       * SO, DELIBERATELY. There is no such operation today and one would be a design question —
-       * a platform action naming a person outside any tenant — rather than a field to widen.
+       * ===========================================================================================
+       * *** IT IS NULLABLE, AND IT WAS NOT. CORRECTED 2026-09-05, BY THE FIRST OPERATION THAT
+       * NEEDED THE OTHER ANSWER. ***
+       * ===========================================================================================
+       *
+       * This field said: *"a principal-targeted action that genuinely happens in no Organization
+       * has no way to say so, deliberately. There is no such operation today and one would be a
+       * design question rather than a field to widen."*
+       *
+       * **`platform.operators.revoke` IS THAT OPERATION AND IT ARRIVED THE SAME DAY.** Revoking
+       * platform authority names a principal and happens in **no Organization** — the authority
+       * being removed was never scoped to one.
+       *
+       * **THE PREDICTION WAS RIGHT AND THE CONCLUSION WAS WRONG.** I foresaw the case and chose to
+       * make it unrepresentable, which forced the alternative to be `NO_TARGET` — **and that loses
+       * the principal from the operator log entirely, on the most security-relevant operation the
+       * platform has.** `0025` Decision 5 says the log records *"which operator did what, to which
+       * Organization or principal"*; a revocation recording neither is the log failing at its one
+       * job.
+       *
+       * *** REQUIRED-BUT-NULLABLE, NOT OPTIONAL. *** The author must still decide. `null` means
+       * *"this action happened in no Organization"* — a positive statement — and the field being
+       * absent would mean *"nobody thought about it"*, which are different and must not look the
+       * same. Same shape as `NewOrganization.templateId`.
+       *
+       * THE CONSEQUENCE FOR THE FEEDS IS CORRECT RATHER THAN TOLERATED: a `null` here means the
+       * record appears in the PLATFORM feed and in **no** Organization feed. That is right — a
+       * revocation affects no Organization, so no Organization's trail should carry it.
        */
-      readonly organizationId: string;
+      readonly organizationId: string | null;
     };
 
 /** The one target value for an operation that names nothing. Frozen so it cannot be mutated. */

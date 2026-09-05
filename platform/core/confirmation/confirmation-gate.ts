@@ -129,6 +129,20 @@ const CONFIRMATION_FIELDS: readonly string[] = Object.freeze([
  */
 export function splitConfirmedRequest(
   body: Readonly<Record<string, unknown>>,
+  /**
+   * *** THE ROUTE'S DECLARED PATH PARAMETERS, ALREADY DECODED. REQUIRED, NEVER OPTIONAL. ***
+   *
+   * `confirmation-v1` as amended `aa48dd4`. An OPTIONAL parameter defaulting to `{}` would
+   * **satisfy the type system while violating the sentence the type exists to enforce**: *"a
+   * recomputation whose key set omits any declared path parameter is a defect and must fail
+   * closed, not proceed with a narrower binding."* Defaulting IS proceeding with a narrower
+   * binding.
+   *
+   * THE VALUES ARE THE DECODED SEGMENTS. `matchPlatformRoute` decodes once and validates against
+   * the identifier grammar before this is ever reached, so `%40` and `@` cannot become two
+   * bindings for one request — mechanical rule A.
+   */
+  pathParams: Readonly<Record<string, string>>,
 ): Result<{
   readonly confirmationId: string;
   readonly derivedValue: string;
@@ -177,6 +191,43 @@ export function splitConfirmedRequest(
     // Numbers belong in a critical operation's parameters as strings.
     return err(invalidArgument([detail(key, 'must_be_a_string_boolean_or_null')]));
   }
+
+  // =========================================================================================
+  // ---- UNION THE DECLARED PATH PARAMETERS. `aa48dd4`'s `atSPEND` form.
+  // =========================================================================================
+  //
+  //   keys(parameters) = ( keys(body) \ {the three} ) ∪ names(pathTemplate(R))
+  //
+  // *** THIS IS THE HALF THAT MAKES THE TARGET BINDABLE. *** Before it, `revokeOperatorInput`
+  // carried only the three confirmation fields, so the parameters were the EMPTY OBJECT and **a
+  // confirmation minted to revoke operator A was spendable on operator B** — the exact sentence
+  // `platform-operators-v1` promises cannot happen.
+  //
+  // ---- MECHANICAL RULE B: ALWAYS A JSON STRING, NEVER COERCED.
+  //
+  // A path segment arrives as text and stays text. **A numeric-looking segment binds as `"42"`,
+  // not `42`** — there is no route today with a non-string path parameter, and this line is what
+  // stops the first one becoming a cross-client divergence. It is also why nothing here parses:
+  // `canonicalizeParameters` refuses numbers outright, so a coerced `42` would make the operation
+  // unconfirmable rather than merely differently-bound.
+  //
+  // ---- MECHANICAL RULE C: ORDER IS IRRELEVANT, AND THAT IS NOT LUCK.
+  //
+  // `canonicalizeParameters` sorts keys, so this union is a SET of pairs and the merge is
+  // deterministic however either side assembles it. **A client may build the object in any order
+  // and still produce byte-identical output**, which is the property that lets the client rule be
+  // one sentence rather than a serialisation appendix.
+  //
+  // ---- NO COLLISION IS POSSIBLE HERE, AND IT IS CHECKED SOMEWHERE ELSE ON PURPOSE.
+  //
+  // `assertConfirmationCoverageIsCoherent` refuses AT CONSTRUCTION any gated route whose path
+  // parameter names intersect its body fields or the three confirmation fields. **So this
+  // assignment cannot overwrite a body value** — and the check is at construction rather than
+  // here because *"a collision that reaches a request is a precedence rule that already exists"*.
+  for (const [name, value] of Object.entries(pathParams)) {
+    parameters[name] = value;
+  }
+
   return ok({
     confirmationId: body[CONFIRMATION_ID_FIELD] as string,
     derivedValue: body[REAUTH_DERIVED_VALUE_FIELD] as string,
@@ -196,6 +247,13 @@ export type ConfirmationGate = {
     readonly actionId: string;
     readonly permissionId: string;
     readonly body: Readonly<Record<string, unknown>>;
+    /**
+     * *** THE ROUTE'S DECLARED PATH PARAMETERS. REQUIRED. `confirmation-v1` as of `aa48dd4`. ***
+     *
+     * An Action passes `{}` — explicitly, not by default, because an Action gaining a path
+     * template later must not inherit an empty binding silently.
+     */
+    readonly pathParams: Readonly<Record<string, string>>;
   }): Promise<Result<void>>;
 };
 
@@ -230,7 +288,7 @@ export function createConfirmationGate(
         return err(forbidden());
       }
 
-      const split = splitConfirmedRequest(input.body);
+      const split = splitConfirmedRequest(input.body, input.pathParams);
       if (!split.ok) {
         return err(split.error);
       }

@@ -44,6 +44,7 @@ import type { ErrorDetail } from '../kernel/errors.ts';
 import {
   conflict,
   detail,
+  failedPrecondition,
   internal,
   invalidArgument,
   notFound,
@@ -57,7 +58,10 @@ import type { MemberResolutionService } from '../directory/member-resolution.ts'
 import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
-import { TEMPLATE_ROW_WRITES } from '../identity/control-plane-admission.ts';
+import {
+  PLATFORM_OPERATOR_ROW_WRITES,
+  TEMPLATE_ROW_WRITES,
+} from '../identity/control-plane-admission.ts';
 import type { TemplateStore } from './template-store.ts';
 import { normalizeTemplateName, parseTemplateCreate, toTemplateOutput } from './templates.ts';
 import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
@@ -1068,6 +1072,122 @@ function listOperators(dependencies: {
   };
 }
 
+/**
+ * ===========================================================================================
+ * REVOKE PLATFORM AUTHORITY. `platform-operators-v1`. **THE FIRST GATED ROUTE IN DUDO.**
+ * ===========================================================================================
+ *
+ * *** THIS HANDLER RUNS ONLY AFTER THE CONFIRMATION GATE HAS PASSED, AND IT DOES NOT CHECK THAT.
+ * *** `dispatchPlatformRoute` step 5b enforces it for every route whose permission is critical, and
+ * this one cannot opt out — the requirement derives from the permission, not from anything written
+ * here. **A handler that checked would be a second place the requirement lives.**
+ *
+ * WHAT THE GATE PROVED BEFORE THIS FUNCTION WAS CALLED: the caller re-authenticated as themselves,
+ * and the confirmation was minted for **this principal, this session, this action, and these
+ * parameters — which now include the `principal_id` path segment.** So a confirmation obtained to
+ * revoke operator A cannot be spent here on operator B.
+ *
+ * ===========================================================================================
+ * THE `not_found` COLLAPSE, AND WHAT IS DELIBERATELY *NOT* COLLAPSED WITH IT
+ * ===========================================================================================
+ *
+ * **THREE CASES, ONE 404**: an unknown principal, a principal who is a TENANT MEMBER, and a
+ * principal who is not (or is no longer) an operator. Distinguishing them would make this route an
+ * oracle for **which principals hold platform authority and which hold memberships**.
+ *
+ * **`failed_precondition` IS NOT PART OF THAT COLLAPSE AND THAT IS DELIBERATE.** It is returned
+ * when the revocation would leave zero operators and the target is not the caller — *"the caller
+ * IS authorized and the platform's state is what refuses"*, and it discloses only that at least one
+ * operator exists, **which the caller already knows, being one.** There is no population to protect
+ * here: a caller who reaches this route may already list every operator.
+ *
+ * REVOKING AN ALREADY-REVOKED OPERATOR IS A 404, NOT A 200. The row is gone, so the target is not
+ * an operator. **A client must not treat that as an error worth retrying** — the desired state has
+ * been reached, and a console should say so rather than reporting a failure.
+ */
+function revokeOperator(dependencies: {
+  readonly store: PlatformOperatorStore;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly clock: Clock;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const principalId = context.pathParams.principal_id;
+    if (principalId === undefined) {
+      return err(internal());
+    }
+
+    // ---- SELF-REVOCATION IS THIS ROUTE, WITH THE CALLER'S OWN IDENTIFIER. There is no separate
+    // path, because *"a second route would be a second place the bounds are implemented."*
+    const isSelfRevocation = principalId === context.authority.principalId;
+
+    // ---- THE TARGET MUST BE AN OPERATOR, ASKED BEFORE THE WRITE. This is what lets the route
+    // separate `not_found` from `failed_precondition` — the store's conditional delete cannot,
+    // because a statement that reported WHICH condition failed would be the oracle the collapse
+    // closes.
+    const target = await dependencies.store.findOperator(principalId);
+    if (!target.ok) {
+      return err(target.error);
+    }
+    if (target.value === null) {
+      return err(notFound());
+    }
+
+    const nowMs = dependencies.clock.nowMs();
+    const admitted = await dependencies.admission.reserve({
+      principalId: context.authority.principalId,
+      estimatedRowWrites: PLATFORM_OPERATOR_ROW_WRITES,
+      nowMs,
+    });
+    if (!admitted.ok) {
+      return err(admitted.error);
+    }
+    if (admitted.value.kind === 'deferred') {
+      return err(quotaExceeded());
+    }
+
+    const revoked = await dependencies.store.revokeOperator(
+      principalId,
+      isSelfRevocation,
+      admitted.value.reservation,
+    );
+    if (!revoked.ok) {
+      return err(revoked.error);
+    }
+    if (revoked.value === null) {
+      // THE TARGET WAS AN OPERATOR A MOMENT AGO AND THE DELETE DID NOT HAPPEN. Two causes, and
+      // they are told apart by what we already know: the precondition is the only thing that could
+      // have refused, because `findOperator` just said the row existed.
+      //
+      // *** THE RACE IS REAL AND FALLS THE SAFE WAY. *** Another operator may have revoked this
+      // target between the read and the write, in which case this is a `not_found` reported as
+      // `failed_precondition`. **The wrong error, never a wrong outcome** — and the alternative,
+      // reporting `not_found`, would hide a genuine last-operator refusal as a missing row.
+      return err(failedPrecondition());
+    }
+
+    return ok({
+      body: {
+        principal_id: principalId,
+        was_self: isSelfRevocation,
+        remaining_operator_count: revoked.value.remainingOperatorCount,
+      },
+      // THE PRINCIPAL WHOSE AUTHORITY WAS REMOVED, IN NO ORGANIZATION.
+      //
+      // `organizationId: null` IS A POSITIVE STATEMENT, not an omission: platform authority was
+      // never scoped to an Organization, so a revocation happens in none. **The record therefore
+      // appears in the platform feed and in no Organization feed**, which is correct — no
+      // customer's trail should carry it.
+      //
+      // *** IT IS NOT `NO_TARGET`, AND THAT MATTERED ENOUGH TO WIDEN A TYPE I TIGHTENED THIS
+      // MORNING. *** `PlatformActionTarget`'s principal variant required a non-null Organization,
+      // which left only `NO_TARGET` here — **and that would have recorded the platform's most
+      // security-relevant operation with no target at all.** `0025` Decision 5: the log records
+      // "which operator did what, to which Organization or principal".
+      target: { kind: 'principal', principalId, organizationId: null },
+    });
+  };
+}
+
 /** List Templates. Keyset paging, identical in shape to the Organization list. */
 function listTemplates(dependencies: {
   readonly templates: TemplateStore;
@@ -1198,6 +1318,11 @@ export function createPlatformRouteHandlers(dependencies: {
     }),
     'platform.organizations.members.resolve': resolveMember({
       members: dependencies.members,
+    }),
+    'platform.operators.revoke': revokeOperator({
+      store: dependencies.store,
+      admission: dependencies.admission,
+      clock: dependencies.clock,
     }),
     'platform.operators.list': listOperators({
       store: dependencies.store,

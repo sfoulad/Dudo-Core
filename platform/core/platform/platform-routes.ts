@@ -178,6 +178,7 @@ export type PlatformRouteId =
   | 'platform.audit.list'
   | 'platform.organizations.audit.list'
   | 'platform.operators.list'
+  | 'platform.operators.revoke'
   | 'platform.session.whoami'
   | 'platform.confirmations.request'
   | 'platform.templates.create'
@@ -559,18 +560,21 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     successStatus: 200 as const,
   }),
   // ===========================================================================================
-  // THE OPERATOR ROSTER. `platform-operators-v1`.
+  // THE OPERATOR ROSTER AND THE REVOKE. `platform-operators-v1`.
   //
-  // *** THE REVOKE ROUTE IS DELIBERATELY ABSENT AND IS NOT AN OVERSIGHT. *** It is blocked on a
-  // mechanism question reported to the Team Lead: `platform-operators-v1`'s schema states that the
-  // confirmation binding covers `principal_id`, which is a PATH parameter — and the binding is
-  // computed from the BODY alone (`splitConfirmedRequest`). As things stand the binding for that
-  // route would be the EMPTY OBJECT, so **a confirmation obtained to revoke operator A would be
-  // spendable to revoke operator B**, which is the exact sentence the schema promises cannot
-  // happen. `assertConfirmationCoverageIsCoherent` refuses the build rather than shipping it.
+  // *** THE REVOKE ROUTE WAS HELD BACK UNTIL THE BINDING COVERED ITS TARGET, AND THAT IS WHY IT
+  // IS SAFE TO REGISTER NOW. ***
   //
-  // A ROUTE THAT DOES NOT EXIST CANNOT BE REACHED. Registering it now with the binding unfixed
-  // would be the more dangerous half of the contract shipped first.
+  // Its schema states that the binding covers `principal_id` — a PATH parameter — while the
+  // binding was computed from the BODY alone. `revokeOperatorInput` carries only the three
+  // confirmation fields, so the binding would have been the EMPTY OBJECT and **a confirmation
+  // minted to revoke operator A would have been spendable on operator B**, which is the exact
+  // sentence the schema promises cannot happen, on the route that revokes platform scope.
+  //
+  // `assertConfirmationCoverageIsCoherent` REFUSED THE BUILD rather than shipping it, the question
+  // went upward, and `confirmation-v1` was amended (`aa48dd4`) so the binding is body-minus-three
+  // UNION the declared path parameters. **The guard that refused it is the same guard that now
+  // requires the union to be complete.**
   // ===========================================================================================
   Object.freeze({
     id: 'platform.operators.list' as const,
@@ -583,6 +587,38 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     fields: Object.freeze([]),
     objectFields: Object.freeze([]),
     queryParameters: Object.freeze(['page_size', 'cursor']),
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.operators.revoke' as const,
+    method: 'POST' as const,
+    // *** THE FIRST GATED ROUTE IN DUDO, AND THE FIRST WITH A BOUND PATH PARAMETER. ***
+    // `{principal_id}` is the target, and it is in the PATH rather than the body deliberately:
+    // one place it can come from, so a body and a path can never disagree about who is revoked.
+    path: `${PLATFORM_BASE_PATH}/operators/{principal_id}/revoke`,
+    // `core.principal.revoke-platform-scope` — THE SIXTEENTH CRITICAL PERMISSION, and the one that
+    // FAILED OPEN earlier today because it was missing from Core's frozen critical set. The
+    // catalog's own description states the property that was untrue: *"CRITICAL, so confirmation
+    // applies — which means SESSION THEFT ALONE CANNOT REVOKE ANYONE."*
+    //
+    // IT IS TRUE NOW ONLY BECAUSE THREE THINGS HOLD TOGETHER: the permission is in the critical
+    // set, the operation is in `CONFIRMABLE_PLATFORM_OPERATIONS` with a statement, and the binding
+    // covers the path. **`assertConfirmationCoverageIsCoherent` refuses the build if any one of
+    // them is missing** — checked explicitly rather than assumed.
+    permission: fixedPermission('core.principal.revoke-platform-scope'),
+    // THE THREE CONFIRMATION FIELDS AND NOTHING ELSE. `revokeOperatorInput` is exactly these; the
+    // target is the path parameter. **A `principal_id` body field would be a name collision the
+    // coverage guard refuses at construction** — the union would become a precedence rule.
+    fields: Object.freeze([
+      CONFIRMATION_ID_FIELD,
+      REAUTH_DERIVED_VALUE_FIELD,
+      REAUTH_IDENTIFIER_FIELD,
+    ]),
+    objectFields: Object.freeze([]),
+    // NONE. Query parameters remain refused on a gated route — a path parameter is structurally
+    // required and always present; a query parameter may be absent, and binding a sometimes-absent
+    // value forces every implementation to agree on how absence is represented.
+    queryParameters: Object.freeze([]),
     successStatus: 200 as const,
   }),
   // ===========================================================================================
@@ -632,6 +668,17 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     queryParameters: Object.freeze([]),
     successStatus: 200 as const,
   }),
+]);
+
+/**
+ * The three fields a gated route must declare and which are removed from the body before the
+ * binding's union. Named once so the coverage guard's two checks — "declares all three" and
+ * "no path parameter collides with one" — cannot disagree about which three they are.
+ */
+const CONFIRMATION_BODY_FIELDS: readonly string[] = Object.freeze([
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
 ]);
 
 export class PlatformConfirmationCoverageError extends Error {
@@ -779,11 +826,7 @@ export function assertConfirmationCoverageIsCoherent(
     if (!isConfirmationGated(route)) {
       continue;
     }
-    for (const field of [
-      CONFIRMATION_ID_FIELD,
-      REAUTH_DERIVED_VALUE_FIELD,
-      REAUTH_IDENTIFIER_FIELD,
-    ]) {
+    for (const field of CONFIRMATION_BODY_FIELDS) {
       if (!route.fields.includes(field)) {
         throw new PlatformConfirmationCoverageError(
           `'${route.id}' requires a confirmation and does not declare the body field '${field}'. ` +
@@ -808,14 +851,94 @@ export function assertConfirmationCoverageIsCoherent(
           'parameter is an input the human never confirmed.',
       );
     }
-    if (route.path.includes('{')) {
-      throw new PlatformConfirmationCoverageError(
-        `'${route.id}' requires a confirmation and takes a path parameter ('${route.path}'). The ` +
-          'binding covers the body only, so the confirmed target and the acted-on target would ' +
-          'be different values.',
-      );
+    // =========================================================================================
+    // *** THE NAME-COLLISION RULE. `confirmation-v1` as of `aa48dd4`, `theINVARIANTTOASSERT`:
+    //
+    //     names(pathTemplate(R)) ∩ ( declaredBodyFields(R) ∪ {the three} ) = ∅
+    //
+    // =========================================================================================
+    //
+    // *** THIS INVERTS THE RULE THAT USED TO BE HERE. *** It refused any gated route that declared
+    // a path parameter; it now REQUIRES those parameters to be bound and refuses only a COLLISION.
+    //
+    // THE OLD RULE WAS RIGHT FOR A REASON THAT EXPIRED, which is a different thing from being
+    // wrong. Its stated reason was to stop *"the human confirms `identifier=alice`, the request
+    // carries `?identifier=root`"* — but **the real requirement was never "no path parameters", it
+    // was "nothing outside the binding".** Refusing them achieved that by making the case
+    // unreachable, which was honest while no gated route existed and wrong the moment one did.
+    //
+    // WHY A COLLISION IS REFUSED AT CONSTRUCTION RATHER THAN RESOLVED AT REQUEST TIME: **a union
+    // with a collision is a precedence rule, and a precedence rule is a place for a caller to
+    // shadow a value a reviewer assumed was authoritative.** That is the same sentence
+    // `http/api.ts` uses to refuse a repeated query parameter, and it is why moving the target
+    // into the body was rejected — adopting the union without this check would reintroduce that
+    // ambiguity INSIDE the binding.
+    //
+    // *** QUERY PARAMETERS AND OBJECT FIELDS STAY REFUSED ABOVE, AND THE ARGUMENT IS NOT
+    // CONSERVATISM. *** A path parameter is STRUCTURALLY REQUIRED — the route cannot be addressed
+    // without it, so it always exists, always has exactly one value, and both sides always hold
+    // it. **A query parameter MAY BE ABSENT**, so "the declared set" and "the present set" differ,
+    // and binding a sometimes-absent value forces every implementation to agree on how absence is
+    // represented — omitted key, `null`, or empty string — which is three ways for two clients to
+    // produce different bytes for the same intent. **Anyone proposing to bind query parameters
+    // must answer that, not merely observe that path parameters are now bound.**
+    for (const name of pathParameterNames(route.path)) {
+      if (route.fields.includes(name)) {
+        throw new PlatformConfirmationCoverageError(
+          `'${route.id}' declares a path parameter '${name}' whose name collides with one of its ` +
+            'body fields. The binding is the union of the two, so a collision is a precedence ' +
+            'rule — and a precedence rule is a place for a caller to shadow a value a reviewer ' +
+            'assumed was authoritative. Rename one of them.',
+        );
+      }
+      // *** THIS BRANCH IS UNREACHABLE FOR ANY ROUTE THAT GOT THIS FAR, AND IS KEPT ANYWAY. ***
+      //
+      // A gated route must declare all three confirmation fields as body fields — checked above in
+      // this same function — so a path parameter colliding with a confirmation field ALWAYS
+      // collides with a declared body field, and the branch above fires first.
+      //
+      // IT IS KEPT AS DEFENCE IN DEPTH AND ITS UNREACHABILITY IS RECORDED RATHER THAN ASSUMED
+      // AWAY. `workflow.md` §11a: a check that is sound by accident is indistinguishable from one
+      // that is sound by design, and this one is sound because of an ordering decision made
+      // eighty lines earlier. **If the three-field requirement is ever relaxed, this branch stops
+      // being dead and starts being the only thing standing between a confirmation field and a
+      // path parameter of the same name.**
+      //
+      // Found by a probe whose expected error message was wrong, not by reading the code.
+      if (CONFIRMATION_BODY_FIELDS.includes(name)) {
+        throw new PlatformConfirmationCoverageError(
+          `'${route.id}' declares a path parameter '${name}' whose name collides with a ` +
+            'confirmation field. Those three are removed from the body before the union, so a ' +
+            'path parameter of the same name would be bound while the body field it shadows was ' +
+            'not — the least visible form of the collision, and the reason this is checked at ' +
+            'construction rather than at the request.',
+        );
+      }
     }
   }
+}
+
+/**
+ * `names(pathTemplate(R))` — the brace-delimited segments of a route's path.
+ *
+ * *** THE PATH TEMPLATE IS THE DECLARATION, AND IT IS THE SINGLE SOURCE. *** This function reads
+ * `route.path`, and `matchPlatformRoute` substitutes from **the same string on the same object**.
+ * There is no second list of parameter names anywhere — which is the property `confirmation-v1`'s
+ * `howACLIENTKNOWSWHICHPATHPARAMETERSAROUTEDECLARES` protects: *"one source, two readers, no
+ * list"*. **The guard and the dispatcher cannot drift as a route's path changes**, because
+ * changing the path changes both.
+ *
+ * IT SHARES ITS PARSING RULE WITH THE MATCHER: a whole segment written `{name}`, nothing else. A
+ * segment that merely contains a brace is not a parameter to either of them.
+ */
+function pathParameterNames(path: string): readonly string[] {
+  const names: string[] = [];
+  for (const segment of path.split('/')) {
+    if (segment.startsWith('{') && segment.endsWith('}') && segment.length > 2) {
+      names.push(segment.slice(1, -1));
+    }
+  }
+  return names;
 }
 
 assertConfirmationCoverageIsCoherent();
@@ -1632,10 +1755,19 @@ export async function dispatchPlatformRoute(
       // set — so the challenge and the submission cannot name different operations.
       actionId: route.id,
       permissionId,
-      // THE VALIDATED FLAT BODY. A gated route may declare no object fields, no query parameters
-      // and no path parameters (same assertion), so this IS the whole of the route's input — and
-      // the confirmation therefore covers everything the operation will act on.
+      // THE VALIDATED FLAT BODY, AND THE DECLARED PATH PARAMETERS. Together these are the whole of
+      // a gated route's input, because object fields and query parameters remain REFUSED on one.
+      //
+      // *** THIS COMMENT USED TO CLAIM THE BODY ALONE WAS THE WHOLE INPUT, AND IT WAS TRUE ONLY
+      // BECAUSE NO GATED ROUTE EXISTED. *** A claim true by emptiness reads exactly like a claim
+      // true by design — `workflow.md` §12 — and this one would have become false the moment the
+      // first gated route was registered, which is the route being built now.
       body: parsedBody.value,
+      // FROM `request.pathParams`, WHICH `matchPlatformRoute` PRODUCED FROM THE ROUTE'S OWN
+      // TEMPLATE. **One source, two readers**: the same `route.path` string that the coverage
+      // guard parses for `names(pathTemplate(R))` is the one the matcher substitutes from, so the
+      // guard and the dispatcher cannot drift as a route's path changes.
+      pathParams: request.pathParams,
     });
     if (!confirmed.ok) {
       return recordThen(dependencies, authority.value, charge.value, route, request, 'denied', NO_TARGET, () =>
