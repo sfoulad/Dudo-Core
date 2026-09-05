@@ -33,7 +33,7 @@
         },
         "parameters": {
           "type": "object",
-          "description": "THE EXACT PARAMETERS THE CONFIRMED OPERATION WILL CARRY. They are part of the binding, so a confirmation obtained for one parameter set cannot be spent on another — that is the substitution attack this mechanism primarily exists to stop. The object is passed through to the target operation's own schema for validation: an invalid parameter set is refused HERE rather than at submission, so a human is never shown a statement about an operation that could not have run. Canonical serialisation for hashing is normative and owed to core-agent: sorted keys, no insignificant whitespace, UTF-8. TWO CLIENTS PRODUCING DIFFERENT BYTES FOR THE SAME PARAMETERS WOULD MAKE CONFIRMATIONS FAIL ON ONE PLATFORM AND NOT THE OTHER, which is the same class of cross-client hazard as the KDF normalisation split."
+          "description": "THE EXACT PARAMETERS THE CONFIRMED OPERATION WILL CARRY. ON SUBMISSION THESE ARE DEFINED AS THE REQUEST BODY MINUS THE THREE CONFIRMATION FIELDS — `confirmation_id`, `reauth_derived_value` and `identifier` — and nothing else is removed or added. That definition is normative because it is the only one that makes the binding recomputable without each side holding a list of which fields count, and two such lists drift. They are part of the binding, so a confirmation obtained for one parameter set cannot be spent on another — that is the substitution attack this mechanism primarily exists to stop. The object is passed through to the target operation's own schema for validation: an invalid parameter set is refused HERE rather than at submission, so a human is never shown a statement about an operation that could not have run. Canonical serialisation for hashing is normative and owed to core-agent: sorted keys, no insignificant whitespace, UTF-8. TWO CLIENTS PRODUCING DIFFERENT BYTES FOR THE SAME PARAMETERS WOULD MAKE CONFIRMATIONS FAIL ON ONE PLATFORM AND NOT THE OTHER, which is the same class of cross-client hazard as the KDF normalisation split."
         }
       }
     },
@@ -67,9 +67,16 @@
     "confirmedRequestFields": {
       "type": "object",
       "description": "NOT A STANDALONE SHAPE. These two properties are MERGED INTO the request schema of every operation whose permission is `critical`, as REQUIRED fields. They are not a header and not a wrapper envelope: the parameters are part of the binding, so the confirmation and the parameters it authorises must arrive in one object validated by one schema. AN OPTIONAL CONFIRMATION FIELD WOULD BE A CONFIRMATION THAT CAN BE OMITTED, leaving the pipeline to refuse a request the schema called valid — two places deciding one thing.",
-      "required": ["confirmation_id", "reauth_derived_value"],
+      "required": ["confirmation_id", "reauth_derived_value", "identifier"],
       "properties": {
         "confirmation_id": { "$ref": "#/$defs/confirmationId" },
+        "identifier": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[!-?A-~]*@[!-?A-~]*$",
+          "description": "THE CALLER'S OWN LOGIN IDENTIFIER. ADDED 2026-09-05 AND FORCED BY ARITHMETIC, not chosen: the KDF salt is the normalised identifier, and CORE CANNOT RECOVER IT. `CredentialStore` has one method, `findByIdentifierHash`, with no path from a principal to a credential; `principal_credential` has no index on `principal_id`; and a principal may hold SEVERAL credentials under different identifiers, so 'the principal's credential' is not a single row and trying each in turn would make the work vary with how many a principal holds — destroying the equal-work property on the one path this contract requires it. THE CONTRACT PREVIOUSLY ASSERTED THIS PROBLEM DID NOT ARISE HERE; that was true of the client and false of the server. NORMATIVE AND NOT OPTIONAL: Core MUST assert that the verified credential's principalId equals the CALLING principal, and MUST refuse identically to a wrong password when it does not — otherwise presenting ANOTHER user's identifier and password satisfies re-authentication for your own session, which defeats the presence half by substitution and would pass any test that only checks 'a wrong password is refused'. A distinguishable refusal there is an oracle for which identifiers belong to which principals."
+        },
         "reauth_derived_value": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{43}$",

@@ -8,17 +8,16 @@
   "scripts": {
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
-
     "//migrations": "LOCAL variants act on the local simulated D1 and are safe to run freely. REMOTE variants act on the deployed database and are a production-class action requiring explicit user approval each time (.claude/rules/security.md §7). They are separate scripts, and named, so neither can be run by accident.",
     "d1:migrate:tenant:local": "wrangler d1 migrations apply dudo-tenant --local",
     "d1:migrate:control:local": "wrangler d1 migrations apply dudo-control-plane --local",
     "d1:migrate:tenant:remote": "wrangler d1 migrations apply dudo-tenant --remote",
     "d1:migrate:control:remote": "wrangler d1 migrations apply dudo-control-plane --remote",
-
     "//deploy": "There is no `deploy` script, deliberately. Deployment is gated on C5 and on explicit user approval; a one-word npm script is exactly the wrong affordance for an action that needs a decision.",
     "deploy:staging": "wrangler deploy --env staging"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
     "typescript": "^5.6.0",
     "wrangler": "^4.129.0"
   }

@@ -1,0 +1,374 @@
+---
+# Platform audit read — contract of record, version 1
+#
+# Core is already writing the platform-operator action log and NOTHING CAN READ IT. Data is
+# accumulating that no route can reach, which is the state this contract exists to end.
+#
+# The machine-readable half is platform-audit-read-v1.schema.json. BOTH ARE NORMATIVE TOGETHER,
+# and `required` lists are ASSERTIONS rather than description (.claude/rules/workflow.md §12).
+#
+# THIS IS AN OPERATION IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class; this
+# contract restates none of it.
+#
+# Governed by: docs/decisions/0025 Decision 5 — what the log holds, and what it must never hold
+#              organization-detail-v1 theMembershipRuling — WHICH THIS CONTRACT NEARLY UNDID
+#              core-object-registry.yaml CO1
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: THE WRITER EXISTS AND IS TRANSCRIBED WHERE IT CONSTRAINS THE SHAPE; the routes, the
+# wire shapes and every rule below are NEW WORK.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05, jointly with organization-detail-v1 — theFindingTHISCONTRACTALMOSTSHIPPED and that contract's theMembershipRuling are one finding in two places."
+updated: "2026-09-05"
+documentsExistingImplementation: partial
+
+# ---------------------------------------------------------------------------
+# theFindingTHISCONTRACTALMOSTSHIPPED — read before the operations
+# ---------------------------------------------------------------------------
+theFindingTHISCONTRACTALMOSTSHIPPED:
+  what: >-
+    A PLAIN "READ THE OPERATOR LOG" ROUTE REINTRODUCES THE CO1 AGGREGATION organization-detail-v1
+    JUST REFUSED, AND IT DOES SO FROM DATA CORE IS ALREADY WRITING.
+  theMechanism: >-
+    The log records the ACTION AND ITS TARGET IDENTIFIERS. Every
+    `platform.organizations.members.resolve` therefore leaves a record of the form
+    "operator X resolved principal P in Organization O" — WHICH IS A MEMBERSHIP FACT. Read the log
+    in bulk and those tuples aggregate into exactly the mapping the membership ruling rations: which
+    principals belong to which Organizations, for every resolve ever performed, in one request.
+  whyItMATTERSMORETHANITLOOKS: >-
+    THE ATTACK THE MEMBERSHIP RULING ACCEPTED AS RESIDUAL WAS "N REQUESTS, AUDITED, TENANT-VISIBLE,
+    RATE LIMITED". An unrestricted log read collapses that to ONE REQUEST, and — this is the part
+    that matters — TO A REQUEST THE TENANT CANNOT SEE. A resolve writes a tenant-side record so the
+    customer knows the platform asked about their staff. READING THE LOG WRITES NO TENANT RECORD,
+    because it names no single Organization to write one into. So the cheap path is also the
+    invisible one, which inverts every control the residual rested on.
+  itIsTHESAMESHAPEASTHERULINGITSELF: >-
+    Two permitted reads composing into a forbidden one. `core.platform-audit.read` discloses nothing
+    CO1 forbids on its own — a log of operator actions is exactly what oversight requires — and
+    neither does the resolve. THE COMBINATION IS THE DISCLOSURE, and it arrives not by an operator
+    doing anything unusual but by the audit control faithfully recording what it was built to record.
+    THE CONTROL BECOMES THE LEAK, which is `0013`'s shape in a new place.
+  soTHECONTRACTISSHAPEDAROUNDIT: "See theTwoFeeds. It is the whole design and not a caveat on it."
+
+# ---------------------------------------------------------------------------
+# theTwoFeeds — the design, and why it is two routes rather than one with a filter
+# ---------------------------------------------------------------------------
+theTwoFeeds:
+  ruling: >-
+    TWO READ ROUTES, DIFFERING IN WHAT THEY MAY DISCLOSE RATHER THAN IN CONVENIENCE.
+      THE PLATFORM FEED     every operator action, ACROSS all Organizations,
+                            WITHOUT `target_principal_id`.
+      THE ORGANIZATION FEED every operator action affecting ONE NAMED Organization,
+                            WITH the principal-level target.
+  theRULETHATGENERATESBOTH: >-
+    PRINCIPAL-LEVEL TARGETS ARE DISCLOSED ONLY WHEN THE CALLER NAMES THE ORGANIZATION.
+    That is the identical gate the membership ruling applies to the resolve: an operator must
+    already have a reason to ask about a specific customer. THE ORGANIZATION-LEVEL TARGET NEEDS NO
+    GATE, because an operator can enumerate Organizations from their own home screen and learning
+    that one was acted on discloses nothing they could not obtain there.
+  whyNOTONEROUTEWITHANOPTIONALFILTER:
+    ruling: "TWO ROUTES. A single route with an optional `organization_id` query parameter is REFUSED."
+    why: >-
+      BECAUSE THE FIELD SET WOULD THEN DEPEND ON A QUERY PARAMETER, and a response whose columns
+      change with an argument is a response nobody can reason about — a client would have to branch,
+      a reviewer would have to trace which branch produced which fields, and the security property
+      would live in an `if` rather than in a route table. TWO ROUTES MAKE THE DISCLOSURE VISIBLE IN
+      THE PATH, which is where a reviewer looks.
+      IT ALSO MAKES THE PERMISSION SPLITTABLE LATER. If oversight is ever separated from support,
+      the platform feed and the Organization feed can carry different permissions without a shape
+      change.
+  theAGGREGATIONCOSTISNOWLINEARAGAIN: >-
+    An operator who wants the membership mapping must call the Organization feed once per
+    Organization. THAT IS N REQUESTS, EACH AUDITED, EACH WRITING A TENANT-SIDE RECORD INTO THE
+    ORGANIZATION IT NAMES — the same cost and the same visibility as N resolves. THE BACK DOOR IS
+    CLOSED BY MAKING IT THE SAME SIZE AS THE FRONT ONE, rather than by adding a rule that says not
+    to use it.
+  whatTHEPLATFORMFEEDSTILLANSWERS: >-
+    AND IT IS MOST OF WHAT OVERSIGHT ACTUALLY NEEDS, which is why dropping one field is a
+    proportionate fix rather than a mutilation: who is acting, how often, against how many
+    Organizations, at what times, with what outcomes, and whether an operator's activity changed
+    shape. A REVIEWER INVESTIGATING AN OPERATOR LEARNS EVERYTHING EXCEPT WHICH INDIVIDUAL PEOPLE
+    WERE NAMED, and can obtain that per Organization, audibly, when they have cause.
+
+# ---------------------------------------------------------------------------
+# whatTheLogHolds — transcribed from docs/decisions/0025 Decision 5, and NOT widened
+# ---------------------------------------------------------------------------
+whatTheLogHolds:
+  fields: >-
+    Actor principal, actor platform role, action id, target Organization, target principal,
+    outcome, timestamp, correlation id.
+  theBINDINGCONSTRAINT: >-
+    `0025` Decision 5: IT RECORDS THE OPERATION AND ITS TARGET IDENTIFIERS, NEVER THE CONTENTS OF
+    WHAT WAS TOUCHED — because "an operator log that accumulates customer data is a second copy of
+    the tenant database with weaker access rules."
+    THIS CONTRACT MAY NOT WIDEN THAT AND DOES NOT. There is no field here for a Template's name, an
+    Organization's name, a customer, a request body, a response body, a diff, or a reason string. A
+    READ CONTRACT CANNOT DISCLOSE WHAT THE WRITER DOES NOT STORE, and this one must not create
+    pressure to store more.
+  theTHINGITWILLBEASKEDFORFIRST: >-
+    "WHAT CHANGED?" — a before-and-after on a Template edit, or which fields an onboarding set.
+    REFUSE IT HERE. Field-level change data is the contents of what was touched, and the moment the
+    operator log carries it, `0025` Decision 5 is dead and the log is the second database it warned
+    about. If a change history is genuinely needed it belongs to the object's own tenant-scoped
+    trail, read by the party that owns the object.
+  NOCREDENTIALEVER: >-
+    STATED SEPARATELY BECAUSE IT IS THE ONE THAT WOULD BE CATASTROPHIC. No password, no derived
+    value, no verifier, no salt, no session identifier, no confirmation token. credential-reset-v1
+    already requires that the audit record "says a reset happened, never what the value was", and
+    the read side must be incapable of returning one — which it is, because the writer stores none.
+
+# ---------------------------------------------------------------------------
+# separationOfDuties — the weakness this contract cannot fix
+# ---------------------------------------------------------------------------
+separationOfDuties:
+  theProblem: >-
+    THE PARTY BEING AUDITED CAN READ THE AUDIT LOG. `platform-admin` holds both
+    `core.credential.reset` and `core.platform-audit.read`, so the same principal acts and reviews.
+    At one or two operators there is no other arrangement available — a second role that only reads
+    would need a second person to hold it.
+  whatSAVESITANDWHATDOESNOT:
+    - >-
+      THE LOG IS APPEND-ONLY AND THIS CONTRACT PUBLISHES NO DELETE, NO UPDATE AND NO EXPORT. An
+      operator can read their own trail and cannot alter it. THAT IS THE PROPERTY THAT MATTERS —
+      being able to see what was recorded about you is not the same as being able to change it.
+    - >-
+      READING THE LOG IS ITSELF AUDITED (P4), so an operator reviewing another operator's activity
+      leaves a record of having done so. The reviewer is reviewable.
+    - >-
+      WHAT DOES NOT SAVE IT: nothing prevents an operator from acting and then reading their own
+      record to confirm what was captured. That is a real limitation of a single-operator platform
+      and it is recorded rather than dressed up.
+  whenTOREVISIT: >-
+    THE MOMENT A THIRD OPERATOR EXISTS. `core.platform-audit.read` is already a separate permission
+    precisely so that oversight can be split from action without a contract change — a
+    read-only reviewer role is a catalog edit, not a redesign. Recorded as PA-1.
+
+# ---------------------------------------------------------------------------
+# pagination
+# ---------------------------------------------------------------------------
+pagination:
+  cursor: >-
+    THE TENANT-FREE CURSOR `core-agent` BUILT, BOUND TO THE PRINCIPAL AND TO THE QUERY SHAPE.
+    platform-operator-v1's corrected `$defs/cursor` states the property: a cursor must not be
+    transferable between operators, or one operator could resume another's enumeration. THAT
+    MATTERS MORE HERE THAN ANYWHERE ELSE IN THE CLASS, because a resumable position in an audit feed
+    is a position in a record of everyone's activity.
+  bindingTOTHEQUERYSHAPE: >-
+    A cursor issued by the ORGANIZATION feed must not be spendable on the PLATFORM feed, or the
+    field-set difference between them could be crossed by replaying a cursor. THE TWO FEEDS ARE
+    DIFFERENT QUERIES AND THEIR CURSORS ARE NOT INTERCHANGEABLE — the same substitution property
+    confirmation-v1's binding relies on, applied to pagination.
+  ordering: >-
+    NEWEST FIRST, BY (timestamp, record id) DESCENDING. The composite is required rather than
+    cosmetic: timestamps collide at second precision under a burst, and a cursor over a non-unique
+    sort key either skips records or repeats them. AN AUDIT FEED THAT SILENTLY SKIPS A RECORD IS
+    WORSE THAN ONE THAT REFUSES TO PAGE.
+  bounds: "page_size 1-100, default 25. There is no unbounded form and none may be added."
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+
+  # =======================================================================================
+  - id: platform.audit.list
+    title: "The platform feed"
+    method: GET
+    path: "/audit"
+    surface: platform
+    provenance: "NEW WORK. The writer exists; nothing reads it."
+    description: >-
+      Every platform-operator action, across all Organizations, WITHOUT the principal-level target.
+      This is the oversight view: who acted, how often, against how many Organizations, when, and
+      with what outcome.
+    permission: core.platform-audit.read
+    scope: platform
+    request: >-
+      Query parameters `page_size`, `cursor`, `actor_principal_id`, `action_id`, `since` and `until`
+      only. Every other parameter is refused with invalid_argument by the class (P2).
+    response: { schemaRef: "urn:dudo:schema:platform-audit-read:1#/$defs/platformFeedOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 2
+    audit: required
+    theOMITTEDFIELD: >-
+      `target_principal_id` IS NOT IN THIS RESPONSE AND MUST NOT BE ADDED. It is the field that
+      aggregates into the CO1 mapping — see theFindingTHISCONTRACTALMOSTSHIPPED. The record still
+      names the Organization, so a reviewer can see that operator X acted on Organization O and go
+      to the Organization feed for the detail, audibly.
+    theFILTERSARENOTAWAYAROUNDIT: >-
+      CHECKED RATHER THAN ASSUMED, BECAUSE A FILTER IS THE OBVIOUS BYPASS. There is deliberately NO
+      `target_principal_id` FILTER: filtering by a principal and counting results would disclose
+      that principal's Organizations one bit at a time, which is the omitted field reconstructed
+      through a query parameter. `actor_principal_id` filters by the OPERATOR, which is not a
+      disclosure — operators are a known set to anyone who can read this feed at all.
+    notes: >-
+      NO not_found. An empty feed returns 200 with data: [] — and it is the ordinary state today,
+      because no route has written a record that anyone has read.
+      maxRowWrites IS 2 ON A READ, per P4. Every call to the audit log writes to the audit log,
+      which is correct and slightly vertiginous: THE FIRST RECORD IN AN EMPTY LOG WILL USUALLY BE
+      SOMEONE READING IT.
+
+  # =======================================================================================
+  - id: platform.organizations.audit.list
+    title: "The Organization feed"
+    method: GET
+    path: "/organizations/{organization_id}/audit"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Every platform-operator action affecting one named Organization, WITH the principal-level
+      target. This is the accountability view — what has the platform done to this customer — and
+      it is the view an operator handling a support case actually needs.
+    permission: core.platform-audit.read
+    scope: platform
+    request: "Path parameter `organization_id`; query parameters `page_size`, `cursor`, `action_id`, `since`, `until`."
+    response: { schemaRef: "urn:dudo:schema:platform-audit-read:1#/$defs/organizationFeedOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    theTENANTSIDERECORD:
+      ruling: >-
+        THIS ROUTE WRITES A TENANT-SIDE AUDIT RECORD INTO THE NAMED ORGANIZATION, ON EVERY CALL.
+        It is the second read operation in Dudo that does; the first is
+        platform.organizations.members.resolve, and for the same reason.
+      why: >-
+        IT IS WHAT KEEPS THE BACK DOOR THE SAME SIZE AS THE FRONT ONE. The membership ruling accepted
+        an N-probe residual because each probe is visible to the customer probed. A per-Organization
+        audit read discloses the same class of fact, so it must carry the same visibility — otherwise
+        an operator would simply read the log instead of resolving, and the control would have been
+        routed around rather than enforced.
+      theRECURSIONISBOUNDEDANDWORTHNAMING: >-
+        READING AN ORGANIZATION'S AUDIT TRAIL WRITES TO THAT ORGANIZATION'S AUDIT TRAIL. That is
+        intended, and it terminates — a read produces one record, it does not produce a record per
+        record read — but it means a trail contains reads of itself and a reader will see their own
+        previous visits. STATED SO IT IS NOT REPORTED AS A DEFECT.
+    notFound: >-
+      An unknown organization_id returns the argument-free 404, on the same reasoning
+      organization-detail-v1 records: every caller who can reach this route can already enumerate
+      Organizations, so the distinction discloses nothing. SPECIFIC TO THIS CLASS; do not copy it to
+      a route a tenant principal can reach.
+    notes: >-
+      maxRowWrites 4 counts the CONTROL-PLANE cost — the platform-operator record (2) plus the
+      reservation for the tenant write. The tenant `audit_event` write is 5 row-writes from the
+      `business` allocation. TWO LEDGERS, BOTH RESERVED, exactly as
+      platform.organizations.members.resolve.
+
+# ---------------------------------------------------------------------------
+# whatThisContractDOESNOTPUBLISH
+# ---------------------------------------------------------------------------
+whatThisContractDOESNOTPUBLISH:
+  - >-
+    NO EXPORT. `core.audit.export` exists in the catalog for a TENANT exporting its own log and is
+    declared [organization]. A platform-wide export would be a downloadable copy of every operator
+    action against every customer, and §3.2 keeps export separate from read precisely because
+    "reading one record and downloading the whole book are different risks". If it is ever wanted it
+    needs its own permission and its own argument.
+  - >-
+    NO DELETE AND NO UPDATE. The log is append-only. This is what makes it evidence rather than
+    notes, and it is the property that makes separationOfDuties survivable.
+  - >-
+    NO READ OF THE TENANT-SIDE audit_event. That log belongs to the Organization and is read by the
+    Organization through `core.audit.read` at organization scope. A PLATFORM ROUTE READING A
+    TENANT'S AUDIT LOG WOULD BE A TENANT READ WITH AN OFFICIAL-SOUNDING NAME, and it is exactly the
+    kind of thing that arrives as "operators need to see the full picture". It is AZ3.
+  - >-
+    NO SUBSCRIPTION, STREAM OR WEBHOOK. A push feed of operator actions is a copy of the log living
+    somewhere with different access rules, which is `0025` Decision 5's own objection.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none-for-the-reads-one-for-the-organization-feeds-audit
+  ruling: >-
+    BOTH ROUTES READ ONLY THE CONTROL-PLANE OPERATOR LOG. Neither reads a row behind
+    `whereWithTenant`, and neither can be made to: the log is a control-plane table with no
+    tenant_id.
+  theORGANIZATIONFEEDSTENANTWRITE: >-
+    Resolves a tenant handle SOLELY to append one audit record, reads no business data through it,
+    and the handle's lifetime is the operation — the same review point three other platform
+    contracts now carry. Putting a resolver on the platform route context to serve it would defeat
+    P1 for the whole class.
+  theISOLATIONTESTFORTHISCONTRACT: >-
+    Not "tenant A must not read tenant B" — there is no tenant on the reading side. WHAT REPLACES
+    IT: assert that no response from either route contains a customer, a Workspace, a name, a field
+    value, a diff or a credential, AND that the platform feed contains no `target_principal_id`
+    under any combination of filters. Assert by attempting it.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read, d1-rows-written, d1-storage]
+  writes: "2 control-plane row-writes per platform-feed page; 2 control-plane plus 5 tenant per Organization-feed page."
+  theGROWTHTERMWORTHWATCHING: >-
+    THE LOG IS THE ONLY TABLE IN THIS SURFACE THAT GROWS WITHOUT BOUND. Every platform route writes
+    to it, including every read, so it grows with operator activity and NEVER SHRINKS — there is no
+    delete. At ~300 operator actions per day per operator the volume is trivial against 500 MB, but
+    THE RETENTION QUESTION IS REAL AND IS NOT ANSWERED HERE: an append-only log with no retention
+    policy is a storage commitment nobody has costed. Recorded as PA-2.
+  paging: "Bounded at 100 rows per page, enforced by the store's LIMIT as docs/decisions/0020's correction requires — the bound is a contract with the store, and a store that ignored `limit` would grow the page unbounded with nothing noticing."
+  cost: "USD 0 / BD 0 per month. No new table beyond the log the writer already creates, no new service."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  theCentralOne:
+    - >-
+      THE PLATFORM FEED NEVER RETURNS target_principal_id, UNDER ANY COMBINATION OF FILTERS,
+      page_size, cursor OR TIME RANGE. This is the assertion the whole contract turns on. Assert the
+      field is absent from the shape AND that no code path populates it.
+    - "There is no target_principal_id FILTER on the platform feed. Supplying one is refused with invalid_argument, not ignored — an ignored parameter is a parameter someone will later honour."
+  theFeeds:
+    - "The Organization feed returns target_principal_id; the platform feed does not. Assert both against the same underlying record, so the difference is proven to be the route and not the data."
+    - "A cursor issued by one feed is refused by the other."
+    - "A cursor issued to operator A is refused for operator B."
+    - "Paging over records with identical timestamps neither skips nor repeats a record. Seed a burst at one-second precision; this is the defect the composite sort key exists to prevent."
+  audit:
+    - "Both routes write a platform-operator record. A caller with no platform_operator row writes NONE."
+    - "The Organization feed writes a tenant-side record into the named Organization on EVERY call, including one that returns an empty page."
+  theContents:
+    - "No response contains a credential, a password, a derived value, a salt, a session identifier or a confirmation token. Assert by grepping the serialised response, not by inspecting the schema."
+    - "No response contains a field value, a diff, a before/after, an Organization name or a Template name — 0025 Decision 5's 'never the contents of what was touched'."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: PA-1
+    question: "The party being audited can read the audit log. platform-admin both acts and reviews."
+    recommendation: >-
+      Unavoidable at one or two operators. The log is append-only and reads are themselves audited,
+      which is what makes it survivable. SPLIT IT THE MOMENT A THIRD OPERATOR EXISTS —
+      core.platform-audit.read is already a separate permission so a read-only reviewer role is a
+      catalog edit rather than a redesign.
+    blocks: "Nothing at current scale. It is a stated weakness of a single-operator platform."
+  - id: PA-2
+    question: >-
+      The operator log is append-only, grows with every platform route call including reads, and has
+      NO RETENTION POLICY. Nothing deletes it and nothing has costed it.
+    recommendation: >-
+      Trivial at closed-beta volume and a real commitment at any other. Retention for an audit log
+      is a compliance decision as much as a storage one — deleting evidence has consequences deleting
+      cache does not — so it belongs in a record rather than in a cron job someone adds.
+    blocks: "Nothing today."
+  - id: PA-3
+    question: >-
+      A customer cannot read the platform's actions against them EXCEPT through the tenant-side
+      records this surface writes, and no tenant route reads `audit_event` yet either.
+    recommendation: >-
+      `core.audit.read` is catalogued at organization scope and has no route. THE TENANT-SIDE READ
+      IS THE MORE IMPORTANT OF THE TWO — a trail only the platform can read is a trail kept by the
+      party being audited, which platform-operator-v1's auditModel already names as insufficient.
+      It belongs to the organization-structure slice, alongside OD-2.
+    blocks: "A customer's ability to see what the platform did to their account. Not this contract."

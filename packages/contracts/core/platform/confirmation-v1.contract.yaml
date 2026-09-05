@@ -357,12 +357,88 @@ theConfirmedRequest:
     EXACTLY — no second KDF, no second parameter set, no second place for web and Apple to diverge.
     THE SERVER REUSES `credential-verifier.ts` AND ITS EQUAL-WORK PROPERTY, so a wrong password on
     a confirmation costs the same work as a right one and this route is not a password oracle.
-  theSALTPROBLEMDOESNOTARISEHERE: >-
-    WORTH STATING, BECAUSE IT DOES ARISE IN credential-reset-v1. The KDF salt is the normalised
-    identifier of the principal being authenticated — and here that is THE CALLER'S OWN, which the
-    caller obviously knows because it typed it at login. Contrast CR-5, where the console must
-    derive for a DIFFERENT principal whose normalised identifier it does not know and cannot be
-    told. Confirmation is unaffected by that problem.
+  theSALTPROBLEM:
+    theASSERTIONTHATWASWRONG: >-
+      ~~"THE SALT PROBLEM DOES NOT ARISE HERE... the KDF salt is the normalised identifier of the
+      principal being authenticated — and here that is THE CALLER'S OWN, which the caller obviously
+      knows because it typed it at login. Confirmation is unaffected by that problem."~~
+      STRUCK 2026-09-05. TRUE OF THE CLIENT AND FALSE OF THE SERVER, which is why it read as
+      settled: the caller does know its own identifier, and the sentence is simply silent on
+      whether Core does.
+    whyCORECANNOTRECOVERIT_THREEFACTS: >-
+      1. `CredentialStore` HAS EXACTLY ONE METHOD — `findByIdentifierHash(hash)`. There is no path
+         from a principal to a credential, deliberately: the port was built so that "nothing else in
+         the platform" can turn an identifier into a principal, and it has no reverse direction.
+      2. `principal_credential` HAS NO INDEX ON `principal_id`, deliberately, and `0006` names the
+         threshold at which one would be added.
+      3. A PRINCIPAL MAY HOLD SEVERAL CREDENTIALS UNDER DIFFERENT IDENTIFIERS. `0006`: "a UNIQUE
+         constraint on `principal_id` is deliberately absent... that is what makes an address change
+         possible without a lockout window."
+    theTHIRDFACTISTHEONENOINDEXSOLVES: >-
+      "THE PRINCIPAL'S CREDENTIAL" IS NOT A SINGLE ROW. Adding an index would let Core find the set;
+      it would not tell Core which member of it the caller derived against. TRYING EACH IN TURN
+      MAKES THE WORK VARY WITH HOW MANY CREDENTIALS A PRINCIPAL HOLDS, which destroys
+      `credential-verifier.ts`'s equal-work property ON THE ONE PATH THIS CONTRACT EXPLICITLY
+      REQUIRES IT — and turns the route into the password oracle it claims not to be.
+    theFIX: >-
+      `confirmedRequestFields` GAINS THE CALLER'S OWN `identifier`, alongside `confirmation_id` and
+      `reauth_derived_value`. `verify(submittedIdentifier, submittedValue)` already takes it and
+      already has the equal-work property. NO INDEX, NO MIGRATION, NO NEW STORE METHOD, NO COST
+      CHANGE.
+    itMIRRORSCR_5_EXACTLY: >-
+      THE SAME DEFECT IN THE OPPOSITE DIRECTION. The salt is the normalised identifier; in
+      credential-reset the CONSOLE cannot know the TARGET's, and here the SERVER cannot know the
+      CALLER's. `0015` §D moved derivation to the client, and EVERY ROUTE TOUCHING A CREDENTIAL NOW
+      INHERITS A SALT PROBLEM THAT MUST BE SOLVED SEPARATELY. That sentence is the general form and
+      it should be checked against any future credential-touching route before it is written.
+
+  theSUBSTITUTIONRULE_WHICHISNOTOPTIONAL:
+    theAttack: >-
+      `verify` AUTHENTICATES WHOEVER THE IDENTIFIER NAMES. So without a further check, A CALLER MAY
+      PRESENT ANOTHER USER'S IDENTIFIER AND THAT USER'S PASSWORD AND SATISFY RE-AUTHENTICATION FOR
+      ITS OWN SESSION. The credential is valid, the verification succeeds, and the confirmation is
+      spent on the attacker's operation.
+    whyItDEFEATSTHEWHOLEMECHANISM: >-
+      IT DEFEATS THE PRESENCE HALF BY SUBSTITUTION. whatConfirmationPROVES rests on (b) "the party
+      acting is still the credential holder" — and this proves only that the caller holds SOMEBODY's
+      credential. A departing employee's old password, a shared demo account, a credential from a
+      breach: any of them would satisfy a gate that was supposed to prove the person at the keyboard
+      is the session's owner.
+      AND IT WOULD PASS ANY TEST THAT ONLY CHECKS "A WRONG PASSWORD IS REFUSED", which is the test
+      everybody writes.
+    theRULE: >-
+      CORE MUST ASSERT THAT `CredentialVerification.principalId` EQUALS THE CALLING PRINCIPAL, AND
+      MUST REFUSE IDENTICALLY TO A WRONG PASSWORD WHEN IT DOES NOT.
+    theSECONDHALFISASLOADBEARINGASTHEFIRST: >-
+      "IDENTICALLY" IS NOT TIDINESS. A distinguishable error — "that credential belongs to someone
+      else" versus "wrong password" — IS AN ORACLE FOR WHICH IDENTIFIERS BELONG TO WHICH PRINCIPALS,
+      available to anyone holding a session. It is the same disclosure organization-detail-v1's
+      theMembershipRuling refuses at the Organization level, arriving one layer down through an
+      error message. SAME WORK, SAME TIMING, SAME BODY, SAME CODE.
+    theTESTFORIT: >-
+      Mechanical and owed: principal A, holding a valid session, submits principal B's identifier
+      and B's CORRECT password. THE OPERATION IS REFUSED, and the refusal is byte-identical and
+      equal-work to A submitting its own identifier with a wrong password. A suite that only covers
+      the wrong-password case has not tested this at all.
+
+  theSUBMITTEDPARAMETERSAREDEFINED:
+    ruling: >-
+      THE `parameters` THE BINDING IS RECOMPUTED OVER ARE THE SUBMITTED REQUEST BODY MINUS THE THREE
+      CONFIRMATION FIELDS — `confirmation_id`, `reauth_derived_value` and `identifier`. Nothing
+      else is removed and nothing is added.
+    why: >-
+      IT IS CHECKABLE, AND IT IS THE ONLY READING THAT MAKES THE BINDING RECOMPUTABLE. The
+      challenge was issued over the operation's parameters; the submission carries those parameters
+      plus the confirmation fields; so the parameters are what remains when the confirmation fields
+      are removed. Any other definition requires each side to hold a list of which fields count,
+      and two lists drift.
+    whyITMUSTBEINTHECONTRACT: >-
+      `core-agent` HAD TO DEFINE THIS TO PROCEED, and a definition invented at implementation time
+      is a definition the OTHER client invents differently. THE CANONICAL SERIALISATION IS ALREADY
+      NAMED AS A CROSS-CLIENT HAZARD in this contract's own schema — sorted keys, no insignificant
+      whitespace, UTF-8 — and leaving the FIELD SET undefined beside it would have been the same
+      hazard one level up: two clients producing different bytes for the same operation, so
+      confirmations fail on one platform and not the other.
 
 # ---------------------------------------------------------------------------
 # storage
@@ -426,6 +502,8 @@ testRequirements:
     - "An expired confirmation is refused. Assert at the boundary, not only well past it."
   theReauthentication:
     - "A correct confirmation_id with a WRONG derived value is refused, and costs the same work as a right one — credential-verifier.ts's equal-work property must hold on this path too."
+    - "THE SUBSTITUTION TEST, AND IT IS THE ONE A SUITE WILL OTHERWISE OMIT: principal A, holding a valid session, submits principal B's identifier with B's CORRECT password. REFUSED — and the refusal is byte-identical and equal-work to A submitting its own identifier with a wrong password. A suite covering only the wrong-password case has not tested the presence half at all."
+    - "A principal holding TWO credentials under different identifiers can confirm with EITHER, and the work does not vary with how many it holds. This is why the identifier is submitted rather than looked up."
     - "An AI-agent principal cannot complete a critical operation, because it cannot produce a derived value. Assert as a positive test of D15's clause, not as an assumption."
   theOracleProperties:
     - "A caller lacking the target operation's permission receives the IDENTICAL refusal from the challenge route that it would receive from the operation itself."

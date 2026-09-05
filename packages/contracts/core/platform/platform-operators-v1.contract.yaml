@@ -1,0 +1,364 @@
+---
+# Platform operators — contract of record, version 1
+#
+# Who else holds platform authority, and how it is taken away.
+#
+# The machine-readable half is platform-operators-v1.schema.json. BOTH ARE NORMATIVE TOGETHER, and
+# `required` lists are ASSERTIONS rather than description (.claude/rules/workflow.md §12).
+#
+# THIS IS AN OPERATION IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class and
+# this contract restates none of it. Note the two files are differently named on purpose:
+# `platform-operator-v1` is THE CLASS AND THE AUTHORITY MODEL; this one is THE ROSTER.
+#
+# Governed by: docs/decisions/0025 Decision 1 (platform_operator, and the mutual-exclusion
+#                invariant) · platform-operator-v1 theBootstrapProblem (why there is no create)
+#              confirmation-v1 (revocation is `critical` and therefore confirmed)
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: ALL NEW WORK. `seed-platform-operator.ts` exists and grants out of band; nothing
+# reads the roster and nothing revokes through a request.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-05. The revoke route was accepted after the objection in
+  theCompromisedOperatorObjection was ANSWERED rather than overruled — argument four being decisive:
+  the route adds no SQL dependency, it moves SQL from the common emergency to the rare one.
+updated: "2026-09-05"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# theAsymmetry — read and revoke exist; create deliberately does not
+# ---------------------------------------------------------------------------
+theAsymmetry:
+  ruling: >-
+    THIS CONTRACT PUBLISHES A LIST AND A REVOKE. IT PUBLISHES NO CREATE, AND THE ABSENCE IS A
+    DECISION RATHER THAN AN OVERSIGHT.
+  whyNOCREATE: >-
+    platform-operator-v1 theBootstrapProblem, unchanged: "A route that grants platform authority is
+    the single most valuable target in the platform, it would be reachable by exactly one class of
+    caller, and its only legitimate use is a handful of times in Dudo's life. THE FREQUENCY DOES NOT
+    JUSTIFY THE SURFACE."
+    It also keeps one property this whole surface otherwise gives up. credential-reset-v1 destroys
+    "no request can create or change a credential" for `principal_credential`; `platform_operator`
+    RETAINS the equivalent — no request, authenticated or not, can create a row in it. THE MOST
+    PRIVILEGED TABLE IN THE PLATFORM STAYS UNREACHABLE FROM THE NETWORK.
+  whyREVOKENEVERTHELESS:
+    theArgument: >-
+      THE ASYMMETRY IS THE ARGUMENT AND NOT AN INCONSISTENCY. CREATION IS PLANNED AND RARE;
+      REVOCATION IS AN EMERGENCY AND MAY BE NEEDED AT 3AM BY WHOEVER IS STILL REACHABLE.
+      REQUIRING SQL TO REVOKE COMPROMISED ACCESS IS A REAL OPERATIONAL RISK IN A WAY THAT REQUIRING
+      SQL TO GRANT IT IS NOT — the cost of a slow grant is an inconvenienced colleague; the cost of a
+      slow revoke is an attacker retaining the ability to reset every customer credential on the
+      platform for as long as it takes to find someone with database access.
+    theMECHANISMALREADYEXISTS: >-
+      `seed-platform-operator.ts` records that deleting the row TAKES EFFECT ON THE OPERATOR'S VERY
+      NEXT REQUEST, because authority is re-read per request and never cached — the property
+      `0007` D8 and D12 require and that `0020` refused to trade away for a session-length cache.
+      SO THE ROUTE IS THE ONLY MISSING PART. This contract adds no mechanism, no column and no
+      cache-invalidation problem; it exposes a deletion whose semantics are already settled.
+
+# ---------------------------------------------------------------------------
+# theCompromisedOperatorObjection — the strongest counter, answered rather than waved past
+# ---------------------------------------------------------------------------
+theCompromisedOperatorObjection:
+  theObjection: >-
+    A REVOKE ROUTE LETS A COMPROMISED OPERATOR REVOKE EVERY OTHER OPERATOR, leaving the attacker as
+    the platform's only administrator and everyone who might stop them locked out of the console.
+  itIsREALANDITISWEAKERTHANITLOOKS_ANDHERE_ISWHY:
+    one_itGRANTSNONEWPOWEROVERCUSTOMERS: >-
+      THE DECISIVE POINT. A compromised operator ALREADY holds `core.credential.reset`,
+      `core.organization.create` and `core.platform-audit.read`. They can already take over any
+      TENANT account on the platform, onboard, and read the operator log. REVOKING OTHER OPERATORS
+      ADDS NOTHING TO THEIR REACH OVER CUSTOMER DATA — it is a DENIAL-OF-OVERSIGHT attack, not a
+      privilege-escalation one. The damage it adds is delay in being stopped, not breadth of harm.
+    two_ITCANNOTREACHTHEOTHEROPERATORSACCOUNTSANYWAY: >-
+      credential-reset-v1 REFUSES TO RESET A PLATFORM OPERATOR, with the same argument-free 404 an
+      unknown principal receives, precisely so that "one operator can take over another" is
+      impossible. Revocation does not weaken that: a revoked operator's credential is untouched and
+      their account is not taken over. THE ATTACKER STILL CANNOT BECOME THEM.
+    three_ITISLOUDANDCANNOTBEQUIETENED: >-
+      Every revocation writes a platform-operator audit record, and platform-audit-read-v1 publishes
+      NO DELETE, NO UPDATE AND NO EXPORT — the log is append-only. AN ATTACKER WHO REVOKES FOUR
+      COLLEAGUES LEAVES FOUR RECORDS NAMING THEMSELVES AND CANNOT REMOVE THEM. Compare the
+      alternative this objection defends: an attacker who is never revoked because nobody could
+      reach a database at 3am leaves no such trail of their own removal, because there is none.
+    four_RECOVERYISTHESAMEEITHERWAY: >-
+      AND THIS IS THE ONE THAT SETTLES IT. Without a revoke route, recovering from a compromised
+      operator requires SQL. With one, recovering from a MALICIOUS revocation ALSO requires SQL. THE
+      ROUTE DOES NOT ADD AN SQL DEPENDENCY — it removes SQL from the COMMON case (a compromise
+      noticed by a colleague) and leaves it in the RARE case (a compromise that also chooses to
+      lock everyone out). Trading a frequent emergency for a rare one, in the same fallback, is the
+      right trade.
+  soTHERULINGISYES_WITHTHREEBOUNDS: >-
+    THE ROUTE IS PUBLISHED. The objection is not dismissed; it is bounded, and each bound below
+    removes part of it rather than restating that it is unlikely.
+
+# ---------------------------------------------------------------------------
+# theThreeBounds
+# ---------------------------------------------------------------------------
+theThreeBounds:
+
+  one_REVOCATIONIS_critical_ANDTHEREFORECONFIRMED:
+    ruling: >-
+      `core.principal.revoke-platform-scope` IS DECLARED `critical`, so confirmation-v1 applies:
+      a server-authored statement, a single-use binding, AND A RE-AUTHENTICATION.
+    whyITISTHELARGESTREDUCTIONINTHEATTACKANDCOSTSNOTHING: >-
+      SESSION THEFT ALONE CANNOT REVOKE ANYONE. An attacker holding a stolen cookie — the cheapest
+      and most common compromise — cannot produce the derived value, so the whole objection above
+      narrows to an attacker who ALSO holds the operator's password. That is a materially rarer
+      event, and the mechanism is already built: this bound is free.
+      IT ALSO MEANS AN AI PRINCIPAL CAN NEVER REVOKE AN OPERATOR, because confirmation-v1's
+      re-authentication is something a model structurally cannot produce.
+    andITSTAYS_critical: >-
+      Do not reclassify it to make it convenient. docs/decisions/0026's line holds: "the ladder
+      keeps its meaning only if something stays at the top", and removing the authority that
+      administers the platform is squarely there.
+
+  two_THELASTOPERATORCANNOTBEREVOKEDBYANOTHER:
+    ruling: >-
+      A REVOCATION THAT WOULD LEAVE ZERO PLATFORM OPERATORS IS REFUSED with `failed_precondition`,
+      WHEN THE TARGET IS SOMEONE ELSE.
+    why: >-
+      NOT PRIMARILY AGAINST MALICE — AGAINST THE COMMONER ACCIDENT. Two operators; one revokes the
+      other for a good reason; then loses their own password. The platform is now unadministrable
+      and needs SQL, from a state nobody intended and everybody would have prevented if asked.
+      A guard costs one COUNT and removes an entire class of self-inflicted outage.
+    itDOESNOTSTOPTHEATTACK_ANDISNOTMEANTTO: >-
+      STATED PLAINLY: an attacker revoking everyone else stops one short and remains the sole
+      operator, which is exactly the objection's scenario. THIS BOUND IS ABOUT ACCIDENTS AND THE
+      OTHER TWO ARE ABOUT THE ATTACK. Claiming it as a defence against a determined operator would
+      be the kind of overclaim `AZ7` records as a defect class.
+
+  three_SELFREVOCATIONISALWAYSPERMITTED:
+    ruling: >-
+      AN OPERATOR MAY ALWAYS REVOKE ITSELF, INCLUDING WHEN IT IS THE LAST ONE. Bound two applies
+      only to revoking another principal.
+    why: >-
+      "I THINK I AM COMPROMISED" MUST NEVER BE BLOCKED BY A RULE. The last operator self-revoking
+      leaves the platform needing SQL to restore an operator — which is a real cost and is the
+      operator's own deliberate choice, taken in the one situation where cutting off an attacker
+      matters more than console convenience. A guard that refused it would mean the person best
+      placed to stop an intrusion is the one person the system will not let act.
+    theCONSEQUENCESTATEDATTHEPOINTOFACTION: >-
+      The console MUST say, at the moment of confirmation, that a self-revocation is irreversible
+      from the console and requires an out-of-band grant to undo. confirmation-v1's statement is
+      server-authored, so THIS IS A STATEMENT CORE MUST COMPOSE rather than a UI nicety.
+
+# ---------------------------------------------------------------------------
+# whatRevocationDOESANDDOESNOTDO
+# ---------------------------------------------------------------------------
+whatRevocationDOESANDDOESNOTDO:
+  does:
+    - "DELETES THE platform_operator ROW. Effective on the target's very next request, because authority is re-read per request and never cached."
+    - "WRITES A PLATFORM-OPERATOR AUDIT RECORD naming the actor and the target. Append-only; the actor cannot remove it."
+  doesNot:
+    - >-
+      IT DOES NOT TOUCH THE PRINCIPAL, THE CREDENTIAL, OR ANY SESSION. The principal survives, its
+      credential is unchanged, and its session remains a valid session. WHAT CHANGES IS THAT THE
+      SESSION NOW GRANTS NOTHING: platform routes refuse it for want of a row, and Actions refuse it
+      for want of a membership, which `0024`'s mutual exclusion guarantees it does not have.
+      A REVOKED OPERATOR HOLDS A LIVE SESSION THAT CAN DO NOTHING AT ALL, which is why no session
+      revocation is specified here and why specifying one would be adding a mechanism to solve a
+      problem the invariant already solves.
+    - >-
+      IT DOES NOT DELETE AUDIT HISTORY. The operator's past actions remain in the log under their
+      principal id, and `platform-audit-read-v1` still returns them. REMOVING SOMEONE'S AUTHORITY
+      MUST NOT REMOVE THE RECORD OF WHAT THEY DID WITH IT — that is the difference between
+      revocation and erasure, and a future "clean up removed operators" convenience would destroy
+      the evidence this whole surface exists to produce.
+    - >-
+      IT DOES NOT MAKE THE PRINCIPAL A TENANT MEMBER. `0024`'s mutual exclusion is about
+      simultaneous presence; a former operator is simply a principal with no rows in either table,
+      and granting it a membership afterwards is an ordinary tenant administration action that the
+      triggers permit.
+
+# ---------------------------------------------------------------------------
+# thePermissionForTHELIST — reused rather than invented, and the reasoning is the test
+# ---------------------------------------------------------------------------
+thePermissionForTHELIST:
+  ruling: "THE LIST DECLARES `core.platform-audit.read`. No `core.platform-operator.list` is created."
+  why: >-
+    THE ROSTER AND THE ACTIVITY FEED ARE ONE DISCLOSURE CLASS. `platform-audit-read-v1` already
+    returns `actor_principal_id` on every record, so anyone who can read the feed already learns the
+    operator set — a separate permission for the roster would gate a fact the other permission hands
+    over on the first page. AND THE RULING THAT MADE THAT SAFE IS THE SAME ONE HERE: who is acting
+    is not a disclosure, because operators are a known set to anyone who can read the log at all and
+    identifying the actor is the point of an operator log.
+  itPASSESTHEDENIABILITYTEST: >-
+    Which is the test organization-selection-v1 and platform-operator-v1 both applied when refusing
+    to invent a permission: is it deniable to someone with a legitimate reason to be refused?
+    `core.platform-audit.read` IS — a future `marketplace-moderator` should hold neither the log nor
+    the roster, and a read-only reviewer role should hold both. A THIRD PERMISSION WOULD SPLIT
+    NOTHING THAT ANYONE WANTS SPLIT.
+  andITKEEPSTHEOVERSIGHTSPLITINONEPLACE: >-
+    `core.platform-audit.read` is already the permission that separates OVERSIGHT from ACTION
+    (PA-1). Putting the roster behind it means a future read-only reviewer role gets the roster and
+    the log together, as one grant, which is what a reviewer needs and all of what they need.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+
+  # =======================================================================================
+  - id: platform.operators.list
+    title: "List platform operators"
+    method: GET
+    path: "/operators"
+    surface: platform
+    provenance: "NEW WORK."
+    description: "Who holds platform authority, and which platform role each one holds."
+    permission: core.platform-audit.read
+    scope: platform
+    request: "Query parameters `page_size` (1-100, default 25) and `cursor` only."
+    response: { schemaRef: "urn:dudo:schema:platform-operators:1#/$defs/listOperatorsOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 2
+    audit: required
+    notes: >-
+      IT RETURNS principal_id, platform_role AND created_at, AND NOTHING ELSE. No identifier, no
+      email, no display name, no last-seen — `control-plane/0001_principal.sql` holds none of them
+      and this route must not create pressure to add them. AN OPERATOR ROSTER SHOWING EMAIL
+      ADDRESSES WOULD BE THE DIRECTORY THAT FILE REFUSED, at the most privileged end of the platform.
+      IT IS THE SAME LIMITATION AS EVERY OTHER SCREEN: the console renders 22-character opaque
+      identifiers, and an operator recognises themselves by matching against `whoami`. That is
+      genuinely poor and it is PO-3's gap rather than this contract's — the fix is display names,
+      wherever they land.
+      NO not_found. An empty roster is impossible in practice (a caller reaching this route is in
+      it) but returns 200 with data: [] rather than an error if it ever occurs.
+
+  # =======================================================================================
+  - id: platform.operators.revoke
+    title: "Revoke platform authority"
+    method: POST
+    path: "/operators/{principal_id}/revoke"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Remove a principal's platform authority. Effective on that principal's very next request.
+    permission: core.principal.revoke-platform-scope
+    scope: platform
+    sensitivity: critical
+    request: >-
+      Path parameter `principal_id`, plus confirmation-v1's three confirmed-request fields
+      (`confirmation_id`, `reauth_derived_value`, `identifier`) in the body. NO OTHER FIELD.
+    response: { schemaRef: "urn:dudo:schema:platform-operators:1#/$defs/revokeOperatorOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    theCONFIRMATIONISREQUIRED: >-
+      `critical`, so confirmation-v1's pipeline requirement applies automatically — it is DERIVED
+      FROM THE SENSITIVITY and is not declared here, which is the property that makes it
+      unforgettable. The challenge's `parameters` are the body minus the three confirmation fields,
+      so the binding covers `principal_id`: A CONFIRMATION OBTAINED TO REVOKE OPERATOR A CANNOT BE
+      SPENT REVOKING OPERATOR B.
+    failedPrecondition: >-
+      RETURNED WHEN THE REVOCATION WOULD LEAVE ZERO PLATFORM OPERATORS AND THE TARGET IS NOT THE
+      CALLER. It is `failed_precondition` rather than `forbidden` because the caller IS authorized
+      and the platform's state is what refuses — and it discloses only that at least one operator
+      exists, which the caller already knows, being one.
+      NOTE THIS IS A DISTINGUISHABLE ERROR AND THAT IS DELIBERATE: unlike the not_found collapse
+      below, there is no population to protect here. The caller may already list every operator.
+    notFound: >-
+      A principal_id that is not a platform operator returns the argument-free 404 — INCLUDING an
+      unknown principal and a principal that is a TENANT MEMBER. The three collapse for the reason
+      credential-reset-v1 collapses its five: distinguishing them would make this route an oracle
+      for which principals hold platform authority and which hold memberships, available to anyone
+      who reaches it.
+    idempotence: >-
+      REVOKING AN ALREADY-REVOKED OPERATOR RETURNS 404, NOT 200. The row is gone, so the target is
+      not an operator, and the collapse above applies. A CLIENT MUST NOT TREAT THAT 404 AS AN ERROR
+      WORTH RETRYING — the desired state has been reached, and the console should say so rather than
+      reporting a failure.
+    notes: >-
+      SELF-REVOCATION USES THIS ROUTE with the caller's own principal_id. There is no separate
+      path, because a second route would be a second place the bounds are implemented.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none
+  ruling: >-
+    NEITHER OPERATION TOUCHES TENANT DATA, NAMES AN ORGANIZATION, OR RESOLVES A TENANT STORE.
+    `platform_operator` is a control-plane table and revocation is a control-plane delete.
+  thereISNOTENANTSIDEAUDITRECORD:
+    ruling: "AND THIS IS THE ONE PLACE IN THE PLATFORM SURFACE WHERE THAT IS CORRECT."
+    why: >-
+      platform-operator-v1's audit model requires two homes because operator actions land ON
+      CUSTOMERS. THESE TWO DO NOT: listing operators and revoking one affect no Organization, so
+      there is no affected tenant whose log should receive a record, AND NO ORGANIZATION IS NAMED
+      THAT ONE COULD BE WRITTEN INTO. Writing to every Organization would be worse than writing to
+      none — it would tell every customer about the platform's internal staffing.
+      THE PLATFORM-OPERATOR RECORD IS THEREFORE THE COMPLETE TRAIL for these operations, which is
+      exactly the case Decision 5's platform log was created for.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read, d1-rows-written]
+  writes: >-
+    2 per list (the audit record). 4 per revoke: the row delete (2 — a DELETE leaves the
+    primary-key index) plus the audit record (2). Plus the confirmation's own 4, which
+    confirmation-v1 accounts for on its own routes.
+  volume: "Revocation is a handful of events in the platform's life. The roster is read on one console screen. Neither is a growth term."
+  cost: "USD 0 / BD 0 per month. No new table, no new service."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  theBounds:
+    - "REVOKING THE LAST REMAINING OPERATOR, WHEN THE TARGET IS SOMEONE ELSE, RETURNS failed_precondition AND DELETES NOTHING. Assert the row count is unchanged, not merely the status code."
+    - "SELF-REVOCATION SUCCEEDS EVEN WHEN THE CALLER IS THE LAST OPERATOR, leaving zero. This is the case a naive guard breaks, and breaking it means an operator who believes they are compromised cannot act."
+    - "A confirmation obtained to revoke operator A cannot be spent revoking operator B — the binding covers principal_id."
+    - "WITHOUT A VALID CONFIRMATION THE ROUTE REFUSES. A stolen session with no password cannot revoke anyone; this is the bound that carries most of the compromised-operator objection."
+  theCollapse:
+    - "An unknown principal, a tenant member, and an already-revoked operator all return the IDENTICAL argument-free 404 — same body, same timing, same size."
+  theEffect:
+    - "A revoked operator's very NEXT request to any platform route is refused. Assert with a live session issued before the revocation, because that is the case per-request re-reading exists to handle and a cache would silently break."
+    - "The revoked principal's credential still authenticates and its session is still a session — it simply grants nothing. Assert both, because a test that only checks 'refused' would pass against an implementation that wrongly deleted the credential."
+    - "THE AUDIT HISTORY SURVIVES. The revoked operator's past actions are still returned by platform-audit-read-v1 under their principal id."
+  theRoster:
+    - "The list returns no identifier, email or display name under any parameter."
+    - "A principal holding core.credential.reset but NOT core.platform-audit.read receives forbidden on the list — the roster is behind the oversight permission, not the action one."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: OP-1
+    question: >-
+      A compromised operator holding both session AND password can still revoke every other
+      operator, stopping one short of zero, and remain the platform's sole administrator.
+    recommendation: >-
+      ACCEPTED, BOUNDED, AND NOT CLAIMED TO BE CLOSED. It grants no new power over customer data,
+      cannot reach another operator's account, is recorded in an append-only log the attacker cannot
+      edit, and is recoverable by the same SQL fallback that would be needed if no revoke route
+      existed. Revisit when the operator population is large enough that a quorum rule would mean
+      something — at two or three it would mean unanimity, which is worse.
+    blocks: "Nothing."
+  - id: OP-2
+    question: >-
+      A read-only reviewer role — holding `core.platform-audit.read` and
+      `core.principal.revoke-platform-scope` but NOT `core.credential.reset` or
+      `core.organization.create` — is now expressible and does not exist.
+    recommendation: >-
+      IT IS THE 3AM RESPONDER THE REVOKE ROUTE WAS ARGUED FOR, and the permissions were split
+      precisely so it is a catalog edit rather than a redesign. Creating it is a decision about who
+      Dudo trusts with what, not an architecture change. Worth doing before a third operator, so
+      that the split exists before it is needed.
+    blocks: "Nothing. It is the payoff for separating grant from revoke."
+  - id: OP-3
+    question: "The roster shows opaque identifiers, so an operator cannot tell colleagues apart on screen."
+    recommendation: "PO-3's gap. Display names, wherever they land. Do not close it by adding an email column to the roster — that is the directory 0001_principal.sql refused."
+    blocks: "A usable screen, not the contract."

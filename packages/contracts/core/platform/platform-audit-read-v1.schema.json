@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:platform-audit-read:1",
+  "title": "Platform audit read — wire shapes, version 1",
+  "description": "The machine-readable half of platform-audit-read-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema, so every constraint here is READ BY A PERSON AND HAND-IMPLEMENTED: a `required` list is an instruction someone will follow literally (.claude/rules/workflow.md §12). THE TWO RECORD SHAPES BELOW DIFFER BY EXACTLY ONE FIELD AND THAT DIFFERENCE IS THE SECURITY PROPERTY OF THIS CONTRACT.",
+
+  "$defs": {
+
+    "principalId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "organizationId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+
+    "platformRole": {
+      "type": "string",
+      "enum": ["platform-admin", "marketplace-moderator"],
+      "description": "The actor's platform role AT THE TIME OF THE ACTION, recorded on the row rather than resolved at read time — a role that changed later must not rewrite history."
+    },
+
+    "actionId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+      "maxLength": 128,
+      "description": "Which platform operation was invoked, e.g. 'platform.credentials.reset'. A stable token, never a human sentence — a log a machine cannot group is a log nobody can review."
+    },
+
+    "outcome": {
+      "type": "string",
+      "enum": ["succeeded", "failed"],
+      "description": "TWO VALUES, NOT A CODE. A reason string would drift toward describing WHAT went wrong, and 0025 Decision 5 forbids the contents of what was touched. Note that 'failed' here means the operation failed AFTER the authority check — a caller who is not an established operator writes no record at all (platform-operator-v1 whichSIDEOFTHEAUTHORITYCHECKTHEWRITESITSON), so this log contains no evidence of probing by non-operators. That blind spot is recorded there, not solved here."
+    },
+
+    "recordCommon": {
+      "type": "object",
+      "description": "NOT A STANDALONE SHAPE — the fields both feeds share. Nothing here names a customer, a Workspace, a field value, a diff, an Organization name, a Template name, or any credential material, and none may be added: 0025 Decision 5 permits the operation and its target identifiers and NOTHING ELSE, because 'an operator log that accumulates customer data is a second copy of the tenant database with weaker access rules.'",
+      "required": ["record_id", "occurred_at", "actor_principal_id", "actor_platform_role", "action_id", "outcome", "correlation_id"],
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "Opaque. It is the tiebreaker in the (occurred_at, record_id) sort key, which is why it is on the wire at all — paging over a second-precision timestamp alone either skips records or repeats them, and an audit feed that silently skips a record is worse than one that refuses to page."
+        },
+        "occurred_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC." },
+        "actor_principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "WHICH OPERATOR ACTED. Disclosing this is not a leak: operators are a known set to anyone who can read this feed at all, and identifying the actor is the entire point of an operator log."
+        },
+        "actor_platform_role": { "$ref": "#/$defs/platformRole" },
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "correlation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "Ties this record to the request that produced it and to the tenant-side record written alongside it. It is the only identifier that crosses the two audit homes, and it is what makes a two-database trail reconstructable after a partial failure."
+        }
+      }
+    },
+
+    "platformFeedRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [{ "$ref": "#/$defs/recordCommon" }],
+      "required": ["record_id", "occurred_at", "actor_principal_id", "actor_platform_role", "action_id", "outcome", "correlation_id", "target_organization_id"],
+      "description": "THE PLATFORM FEED RECORD. IT HAS NO `target_principal_id` AND MUST NEVER GAIN ONE — that is the single field whose presence would let this feed aggregate into the CO1 mapping organization-detail-v1's theMembershipRuling refuses: every resolve record is 'principal P was resolved in Organization O', which is a membership fact, and a bulk read would collect every one of them in a single request the affected tenants cannot see. THE ORGANIZATION-LEVEL TARGET IS FINE, because an operator can enumerate Organizations from their own home screen and learning that one was acted on discloses nothing they could not obtain there.",
+      "properties": {
+        "record_id": { "$ref": "#/$defs/recordCommon/properties/record_id" },
+        "occurred_at": { "$ref": "#/$defs/recordCommon/properties/occurred_at" },
+        "actor_principal_id": { "$ref": "#/$defs/recordCommon/properties/actor_principal_id" },
+        "actor_platform_role": { "$ref": "#/$defs/platformRole" },
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "correlation_id": { "$ref": "#/$defs/recordCommon/properties/correlation_id" },
+        "target_organization_id": {
+          "oneOf": [{ "$ref": "#/$defs/organizationId" }, { "type": "null" }],
+          "description": "Null for an action that names no Organization — a Template create, or a whoami. REQUIRED AND NULLABLE rather than optional, so a client never has to distinguish 'absent' from 'none'."
+        }
+      }
+    },
+
+    "organizationFeedRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "occurred_at", "actor_principal_id", "actor_platform_role", "action_id", "outcome", "correlation_id", "target_principal_id"],
+      "description": "THE ORGANIZATION FEED RECORD. It carries `target_principal_id`, and it may BECAUSE THE CALLER NAMED THE ORGANIZATION — the identical gate the membership ruling applies to the resolve: an operator must already have a reason to ask about a specific customer. There is no `target_organization_id` here because the path parameter already fixed it, and repeating it would invite a client to trust the body over the path.",
+      "properties": {
+        "record_id": { "$ref": "#/$defs/recordCommon/properties/record_id" },
+        "occurred_at": { "$ref": "#/$defs/recordCommon/properties/occurred_at" },
+        "actor_principal_id": { "$ref": "#/$defs/recordCommon/properties/actor_principal_id" },
+        "actor_platform_role": { "$ref": "#/$defs/platformRole" },
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "correlation_id": { "$ref": "#/$defs/recordCommon/properties/correlation_id" },
+        "target_principal_id": {
+          "oneOf": [{ "$ref": "#/$defs/principalId" }, { "type": "null" }],
+          "description": "The principal the action named — the person a credential was reset for, or the one a resolve returned. Null for an action naming no principal. THIS IS THE FIELD THE PLATFORM FEED OMITS."
+        }
+      }
+    },
+
+    "cursor": {
+      "type": ["string", "null"],
+      "maxLength": 512,
+      "description": "Opaque, BOUND TO THE PRINCIPAL AND TO THE QUERY SHAPE. Never constructed or parsed by a client. Principal-bound so one operator cannot resume another's enumeration of a record of everyone's activity; query-shape-bound so a cursor issued by the Organization feed CANNOT BE SPENT ON THE PLATFORM FEED — otherwise the one-field difference between the two record shapes could be crossed by replaying a cursor, which is the substitution property confirmation-v1's binding relies on, applied to pagination. Null means no further page."
+    },
+
+    "platformFeedOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/platformFeedRecord" } },
+        "next_cursor": { "$ref": "#/$defs/cursor" }
+      }
+    },
+
+    "organizationFeedOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/organizationFeedRecord" } },
+        "next_cursor": { "$ref": "#/$defs/cursor" }
+      }
+    }
+  }
+}

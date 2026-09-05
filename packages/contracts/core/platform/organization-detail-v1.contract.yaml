@@ -1,0 +1,446 @@
+---
+# Organization detail — contract of record, version 1
+#
+# WHAT AN OPERATOR MAY SEE ABOUT AN ORGANIZATION WITHOUT READING TENANT DATA.
+#
+# That sentence is the whole contract. Everything below is the line docs/decisions/0024 draws,
+# applied field by field, and the two places it lands somewhere non-obvious.
+#
+# The machine-readable half is organization-detail-v1.schema.json. BOTH ARE NORMATIVE TOGETHER,
+# and `required` lists are ASSERTIONS rather than description — .claude/rules/workflow.md §12,
+# "prose describes; assertions instruct". Nothing in this repository executes JSON Schema, so
+# every constraint here is an instruction to a person who will follow it literally.
+#
+# THIS IS AN OPERATION IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class, its
+# four binding properties and its audit model, and this contract restates none of them.
+#
+# Governed by: docs/decisions/0024 (the isolation invariants) · 0025 (the class, Templates,
+#                Decision 5's "never the contents of what was touched") · platform-operator-v1
+#              core-object-registry.yaml CO1 — "a user's list of Organizations must never be
+#                visible to any of them"
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: ALL NEW WORK.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05. theMembershipRuling is being recorded as a decision record jointly with platform-audit-read-v1's theFinding — they are the same finding twice and separating them would let a future reader adopt one without the other."
+updated: "2026-09-05"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# theLine — WHAT IS IN AND WHAT IS OUT, AND WHY EACH ONE LANDS WHERE IT DOES
+# ---------------------------------------------------------------------------
+theLine:
+  theTest: >-
+    A FIELD IS AVAILABLE TO AN OPERATOR IF AND ONLY IF READING IT REQUIRES NO TENANT STORE. That is
+    not a policy, it is platform-operator-v1 P1: nothing in this class CAN reach a tenant, so a
+    field behind `whereWithTenant` is not withheld — it is unreachable. The test is mechanical and
+    it is the reason this contract can be written before AZ3 rather than after it.
+  in:
+    - "organization_id, status, created_at — control-plane columns, already read by platform.organizations.list."
+    - "display_name — the column does not exist yet; the field is contracted as nullable so names are additive later."
+    - "The Template it adopted, INLINE — id, name and level labels. Tenant-independent platform configuration."
+    - "member_count — a count, not a list. See theMembershipRuling."
+  out:
+    - "Customers, invoices, and every other business record. Tenant data, unreachable, and the console already says so on screen."
+    - "Counts or summaries of business records. A count is a read; 'how many customers' is how a console acquires cross-tenant reach one convenient number at a time (platform.organizations.list already refuses this)."
+    - "Activity, usage, last-seen. Same reason."
+    - "THE WORKSPACE LIST — and this one is a correction, not an omission. See theWorkspaceFinding."
+    - "THE MEMBER LIST — and this is the ruling that was asked for. See theMembershipRuling."
+
+# ---------------------------------------------------------------------------
+# theWorkspaceFinding — Workspaces are NOT control-plane, and the brief assumed they were
+# ---------------------------------------------------------------------------
+theWorkspaceFinding:
+  finding: >-
+    WORKSPACES CANNOT APPEAR IN THIS VIEW AND THE REASON IS STRUCTURAL RATHER THAN CHOSEN. They
+    were listed among the things that "arguably live in the control plane". THEY DO NOT.
+    `platform/core/migrations/0002_business.sql` puts them in the PRODUCTION SHARED TENANT-DATA
+    database with `tenant_id` as the leading column of the primary key, and every read of that
+    table goes through the storage boundary, which emits `tenant_id = ?` from a resolved handle.
+    A PLATFORM ROUTE HAS NO HANDLE (P1), SO THERE IS NOTHING TO READ THEM WITH.
+  whyItLOOKSLIKEACONTROLPLANETHING: >-
+    Because a Workspace feels like structure rather than content — it is a container, not a
+    customer record. THAT INTUITION IS WHAT THE TENANCY MODEL DELIBERATELY IGNORES: `business` is
+    tenant-scoped because `customer.business_id` points at it, and a Business is "an authorization
+    scope, not an isolation boundary" INSIDE the tenant. Its NAME is something the customer wrote.
+  andONBOARDINGISNOTAPRECEDENT: >-
+    STATED BECAUSE IT IS THE OBVIOUS COUNTER-ARGUMENT. organization-onboarding-v1 DOES resolve a
+    tenant handle, transiently, to write the first Workspace — and it argues that "the handle's
+    lifetime is the operation" and that putting a resolver on the platform route context to serve
+    it "would defeat P1 for the whole class."
+    A DISPLAY READ IS EXACTLY THE CASE THAT ARGUMENT EXCLUDES. Onboarding's handle exists to write
+    a row into a tenant the same operation is creating; a detail view's handle would exist to read
+    a customer's data for an operator's convenience, on every page load, forever. THE FIRST IS
+    BOUNDED BY AN OPERATION THAT HAPPENS ONCE; THE SECOND IS THE SLOPE P1 EXISTS TO PREVENT.
+  whatTheOPERATORSEESINSTEAD: >-
+    NOTHING, AND THE CONSOLE SHOULD SAY SO in the same terms it already uses for customers rather
+    than rendering an empty list — an empty Workspace list is indistinguishable from an Organization
+    with no Workspaces, and one of those is a fact while the other is a boundary.
+  theCOSTSTATEDPLAINLY: >-
+    AN OPERATOR CANNOT CONFIRM THAT ONBOARDING CREATED A WORKSPACE. organization-onboarding-v1
+    returns `workspace_id` in its 201 and reports `first_workspace_not_created` in `warnings`, so
+    the information exists AT THE MOMENT OF CREATION and nowhere afterwards. If an operator needs
+    to verify it later, that is a genuine gap and it is OD-1 — but it is a gap that must be closed
+    by giving the TENANT a way to see its own Workspaces, not by giving the platform one.
+
+# ---------------------------------------------------------------------------
+# theMembershipRuling — THE RULING THAT WAS ASKED FOR
+# ---------------------------------------------------------------------------
+theMembershipRuling:
+  ruling: >-
+    NO MEMBER LIST. An operator may NOT enumerate the principals belonging to an Organization.
+    THERE IS NO GET /organizations/{id}/members IN THIS CONTRACT AND ONE MUST NOT BE ADDED.
+    A MEMBER COUNT IS PERMITTED, and a TARGETED RESOLVE is published in its place — see below.
+  itIsACONTROLPLANEREADANDTHATISNOTTHEQUESTION: >-
+    `organization_membership` is a control-plane table with no `tenant_id`, so the read is
+    STRUCTURALLY AVAILABLE. P1 does not forbid it and no boundary stops it. THIS RULING IS
+    THEREFORE A CHOICE RATHER THAN A CONSEQUENCE, which is exactly why it needs to be written down
+    — everything else in this contract is decided by the tenancy model, and this one is not.
+  theREASON_ITISCO1_BYAGGREGATION:
+    theRule: >-
+      core-object-registry.yaml CO1: "A USER'S LIST OF ORGANIZATIONS MUST NEVER BE VISIBLE TO ANY OF
+      THEM."
+    theOBJECTION_ANDWHYITFAILS: >-
+      A member list appears not to violate CO1: it maps ORGANIZATION -> PRINCIPALS, while CO1
+      forbids PRINCIPAL -> ORGANIZATIONS. Listing Organization A's members tells the reader who is
+      in A and says nothing about where else those people are.
+      THAT HOLDS FOR ONE ORGANIZATION AND FAILS FOR AN OPERATOR, because an operator is the one
+      caller in the platform who can enumerate EVERY Organization — `core.organization.list` is in
+      the same role, on the same console, one screen away. LIST ALL ORGANIZATIONS, LIST EACH ONE'S
+      MEMBERS, INVERT THE MAPPING, AND YOU HAVE EVERY PRINCIPAL'S ORGANIZATION LIST. The transpose
+      of the permitted read IS the forbidden one.
+    soTHEDISCLOSUREISNOTINEITHERPERMISSIONALONE: >-
+      AND THAT IS WHY IT WOULD HAVE BEEN MISSED. Neither `core.organization.list` nor a
+      hypothetical `core.organization.list-members` discloses CO1 by itself; the pair does, held by
+      one principal, with no rule broken at either step. IT IS THE SAME SHAPE AS THE MEMBERSHIP-ROW
+      ESCALATION docs/decisions/0024 CLOSED — cross-tenant reach assembled entirely out of
+      legitimate parts — and it is the reason `0025` chose two tables over a column: an invariant
+      that depends on nobody combining two permitted things is not an invariant.
+    theSECONDARGUMENT_0025_DECISION5: >-
+      "AN OPERATOR LOG THAT ACCUMULATES CUSTOMER DATA IS A SECOND COPY OF THE TENANT DATABASE WITH
+      WEAKER ACCESS RULES." That was written about a WRITE and applies unchanged to a READ SURFACE:
+      a console screen listing every customer's staff is a directory of the platform's users,
+      assembled from tenant relationships, readable without any tenant's knowledge or consent. The
+      only difference is that a log persists it and a screen renders it, and a screen can be
+      screenshotted.
+    andTHEBASELINETHISISMEASUREDAGAINST: >-
+      `control-plane/0001_principal.sql` refused an EMAIL COLUMN outright — "a directory of every
+      user's personal details, readable without any tenant scope, would be the highest-value target
+      in the system and it would exist for the convenience of a login form." A member list is that
+      directory, minus the addresses, assembled at read time instead of stored. THE SCHEMA PAID A
+      REAL COST (a keyed HMAC, and an operator who cannot answer "which account is this email") TO
+      AVOID IT, and handing it back through an admin API would spend that purchase.
+  whatTHEOPERATORGETSINSTEAD:
+    theProblemThisMustSolve: >-
+      credential-reset-v1 TAKES A principal_id, AND CR-3 RECORDS THAT NO ROUTE IN ANY DUDO CONTRACT
+      PRODUCES ONE. An operator with no way to find a principal cannot use a route that already
+      exists. Refusing the member list without answering this would leave the platform with a
+      credential-reset capability nobody can invoke, which is not a security posture, it is a
+      broken product.
+    theRESOLVEOPERATION: >-
+      A TARGETED LOOKUP, PUBLISHED BELOW AS platform.organizations.members.resolve: the operator
+      supplies an Organization AND an identifier, and receives that principal's id and role, or the
+      collapsed not_found. IT RETURNS AT MOST ONE PRINCIPAL AND NEVER A SET.
+    theDISTINCTIONTHATJUSTIFIESIT_ANDITISTHEWHOLERULING: >-
+      AN OPERATOR RESOLVING AN IDENTIFIER THEY WERE GIVEN IS SUPPORT. AN OPERATOR RECEIVING A LIST
+      THEY DID NOT ASK FOR BY NAME IS SURVEILLANCE.
+      The structural difference is that a resolve REQUIRES THE OPERATOR TO ALREADY KNOW SOMETHING
+      ONLY THE CUSTOMER COULD HAVE TOLD THEM. A customer writes in saying "please reset
+      sam@example.com"; the operator resolves exactly that identifier and nothing else. Enumeration
+      has no such gate — it requires the operator to know only that the Organization exists, which
+      they can discover from their own home screen.
+      IT IS THE SAME DEVICE credential-reset-v1 USES FOR ITS `identifier` FIELD: the value is not
+      how the target is FOUND in any enumerable sense, it is what the caller must already possess.
+  theRESIDUALSTATEDRATHERTHANCLOSED:
+    theNPROBEATTACK: >-
+      AN OPERATOR HOLDING A KNOWN IDENTIFIER CAN PROBE IT AGAINST EVERY ORGANIZATION AND LEARN
+      WHICH ONES THAT PERSON BELONGS TO. That is CO1, for one principal, at a cost of N requests.
+      IT IS NOT CLOSED BY THIS DESIGN AND IS NOT CLAIMED TO BE.
+    whyITISACCEPTABLEANDWHATBOUNDSIT: >-
+      THREE THINGS, AND THEY ARE CONTROLS RATHER THAN HOPES. Every probe writes a platform-operator
+      audit record (P4), so the attack is loud in exactly the log built to catch it — N requests
+      leave N records naming the actor. Every probe ALSO writes a tenant-side record into the
+      Organization named, so THE CUSTOMER CAN SEE THE PLATFORM ASKING ABOUT THEIR STAFF, which is
+      the property that makes this materially different from a silent enumeration. And the route is
+      rate limited per principal, on top of the per-principal daily write ceiling that already
+      bounds it to roughly 300 operator actions a day.
+      COMPARE WHAT WAS REFUSED: a member list is ONE request per Organization and returns
+      everything. The resolve is one request per (Organization, identifier) pair and returns one
+      bit. The attack goes from free and silent to linear, audited, and visible to the victim.
+    theHONESTLIMITOFTHAT: >-
+      AUDITING IS DETECTION, NOT PREVENTION, and nobody currently reads the operator log because
+      the read route does not exist. So today the controls are the rate limit and the write ceiling;
+      the audit half becomes real when the audit-read contract lands, and stating it now stops
+      "it is audited" being cited as though someone were watching.
+  theCASETHISDOESNOTSERVE:
+    - >-
+      "OUR ADMIN LEFT AND WE DO NOT KNOW WHICH EMAIL THEY USED." The operator cannot help: they
+      cannot enumerate, and they cannot resolve without an identifier. THAT IS A REAL SUPPORT
+      FAILURE AND IT IS THE RIGHT ONE TO ACCEPT HERE — it is the AZ3 break-glass case by another
+      name (an operator needing tenant-adjacent data to provide support), AZ3 is undecided, and
+      solving it as a side effect of a detail view would decide it in a screen.
+    - >-
+      THE PROPER FIX IS TO GIVE THE TENANT A WAY TO SEE ITS OWN MEMBERS — a tenant-scoped Action,
+      read by the Organization's own owner, which is where this data belongs and which needs no
+      platform surface at all. Recorded as OD-2. THE PLATFORM SHOULD NOT BE THE ONLY PARTY THAT CAN
+      SEE WHO IS IN A CUSTOMER'S BUSINESS.
+  memberCountISPERMITTED:
+    ruling: "`member_count` IS RETURNED. A count, never a list."
+    why: >-
+      A COUNT DOES NOT INVERT. Knowing Organization A has five members reconstructs nothing about
+      any principal, and the aggregation attack above needs identities rather than cardinalities.
+      It answers the questions an operator legitimately has — did onboarding work, is this
+      Organization in use, is it abandoned — without naming anyone.
+    itsSMALLLEAK: >-
+      REPEATED COUNTS REVEAL THAT MEMBERSHIP CHANGED, though never who or in which direction. That
+      is a fact about the Organization rather than about a person, it is already implied by any
+      support conversation, and it is recorded rather than dismissed.
+
+# ---------------------------------------------------------------------------
+# theOnePageOneRequestRule — the row-write budget shapes the response, not just the route count
+# ---------------------------------------------------------------------------
+theOnePageOneRequestRule:
+  ruling: >-
+    THE DETAIL ROUTE RETURNS EVERYTHING THE DETAIL PAGE NEEDS, IN ONE REQUEST. The Template is
+    RESOLVED AND EMBEDDED — id, name and level labels — rather than returned as an id the console
+    must fetch. A console rendering this page makes ONE call.
+  why: >-
+    BECAUSE A READ COSTS WRITES IN THIS CLASS. P4 makes every platform route write an audit record,
+    so a page that fires three requests spends three times the budget of one that fires a single
+    request, against a per-principal ceiling of roughly 300 operator actions per UTC day. THE
+    ORDINARY REST INSTINCT — return an id, let the client resolve it — IS THE EXPENSIVE ONE HERE,
+    and it is expensive in a resource that stops the whole platform when exhausted rather than
+    merely being slow.
+  itIsNOTDENORMALISATIONFORCONVENIENCE: >-
+    The embedded Template is a READ OF PLATFORM CONFIGURATION, tenant-independent and identical for
+    every caller, so embedding it copies nothing sensitive and creates no staleness a client could
+    act on wrongly. CONTRAST anything tenant-scoped, which is not embedded because it is not
+    readable at all.
+  theCONSEQUENCEFORTHECONSOLE: >-
+    DO NOT POLL THIS ROUTE, and do not re-fetch on window focus. At 2 row-writes per call a console
+    polling every thirty seconds would exhaust one operator's daily ceiling in about two and a half
+    hours and then answer 503 — a self-inflicted outage produced by a refresh loop nobody would
+    think of as traffic.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+
+  # =======================================================================================
+  - id: platform.organizations.read
+    title: "Organization detail"
+    method: GET
+    path: "/organizations/{organization_id}"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Everything the platform knows about one Organization that is not tenant data: identity,
+      status, the Template it adopted, and how many principals belong to it.
+    permission: core.organization.list
+    scope: platform
+    request: "Path parameter `organization_id` only. No body, no query parameters."
+    response: { schemaRef: "urn:dudo:schema:organization-detail:1#/$defs/organizationDetailOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 2
+    audit: required
+    reads: "Three point reads: `organization`, a COUNT on `organization_membership`, and `template`. No tenant read of any kind."
+    theSHAREDPERMISSION:
+      ruling: "IT DECLARES core.organization.list RATHER THAN A NEW core.organization.read-platform."
+      why: >-
+        THE CATALOG'S core.organization.read IS DECLARED [organization] AND MUST STAY THERE — it is
+        a TENANT principal reading its OWN Organization record, and widening it to platform is the
+        escalation AZ8 removed from marketplace-moderator. A THIRD permission for "an operator reads
+        one Organization" would be a permission nobody could hold without also holding
+        core.organization.list, since an operator who cannot enumerate cannot reach a detail page:
+        it would be deniable to nobody and therefore ceremony, which organization-selection-v1 and
+        platform-operator-v1 have each refused to invent.
+      whenTOREVISIT: >-
+        The moment a role should be able to READ one Organization without ENUMERATING all of them.
+        No such role exists; when one does, this is a real split rather than a naming exercise.
+    notFound: >-
+      An unknown organization_id returns the argument-free 404. THERE IS NO ORACLE CONCERN HERE and
+      it is worth saying why rather than leaving it to be re-derived: every caller who can reach
+      this route can already enumerate every Organization from platform.organizations.list, so a
+      distinction discloses nothing to a population that could not obtain it one screen away. THIS
+      REASONING IS SPECIFIC TO THIS CLASS and must not be copied to a route reachable by a tenant
+      principal.
+
+  # =======================================================================================
+  - id: platform.organizations.members.resolve
+    title: "Resolve one member by identifier"
+    method: POST
+    path: "/organizations/{organization_id}/members/resolve"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Given an Organization and a login identifier the operator already holds, return that
+      principal's id and membership role. AT MOST ONE PRINCIPAL, NEVER A SET. This is the route
+      that makes credential-reset-v1 usable, and it exists in place of a member list rather than
+      alongside one.
+    permission: core.credential.reset
+    scope: platform
+    request: { schemaRef: "urn:dudo:schema:organization-detail:1#/$defs/resolveMemberInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-detail:1#/$defs/resolveMemberOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    theWRITECOST: >-
+      4: the platform-operator audit record (2) AND the tenant-side record (2 of the 5 an
+      `audit_event` write costs, reserved conservatively — see auditNote). Higher than every other
+      read in this class, deliberately, because this one is watched.
+    thePERMISSIONIScore_credential_reset_ANDTHATISTHEPOINT:
+      ruling: >-
+        IT DECLARES THE PERMISSION OF THE OPERATION IT SERVES, not core.organization.list. A
+        principal who may not reset a credential may not resolve a principal.
+      why: >-
+        THE ONLY LEGITIMATE USE OF THIS ROUTE IS TO OBTAIN A principal_id FOR A CREDENTIAL RESET.
+        Binding it to that permission means the resolve surface cannot be reached by a role that
+        merely administers Templates or reads the Organization list, and it means REVOKING
+        core.credential.reset REVOKES THE ABILITY TO RESOLVE PEOPLE — one grant, one capability,
+        withdrawn together. The alternative would let a narrower role accumulate the CO1 aggregation
+        this contract refuses.
+      andITISTHESAMEDEVICEconfirmation_v1USES: >-
+        Its challenge routes declare the permission of the operation being confirmed, for the same
+        reason: a caller cannot obtain a step toward something it may not do.
+    theAUDITISTENANTVISIBLE:
+      ruling: >-
+        THIS ROUTE WRITES A TENANT-SIDE AUDIT RECORD INTO THE NAMED ORGANIZATION, ON EVERY CALL,
+        INCLUDING EVERY not_found. It is one of only two read operations in Dudo that does.
+      why: >-
+        IT IS THE CONTROL THAT MAKES theRESIDUAL ACCEPTABLE. The N-probe attack is not prevented; it
+        is made VISIBLE TO THE VICTIM. A customer can see that the platform asked whether a
+        particular person belongs to their Organization, which is the disclosure they would most
+        want to know about and the one a silent enumeration would never have shown them.
+      whyEVENONnot_found: >-
+        BECAUSE THE PROBE IS THE THING BEING RECORDED, NOT THE ANSWER. A record written only on
+        success would leave every unsuccessful probe invisible, which is exactly the half an
+        attacker generates most of. This is D2's rule for denied reads, applied to a resolve.
+      theBUDGETNOTE: >-
+        A tenant `audit_event` write is 5 row-writes (1 row + primary key + 3 explicit indexes) from
+        the `business` allocation, not the `system` one. maxRowWrites above counts the CONTROL-PLANE
+        cost, which is what the platform route's own reservation covers; the tenant-side write draws
+        from the Organization's allocation exactly as organization-onboarding-v1's does. THE TWO
+        LEDGERS ARE SEPARATE AND BOTH MUST BE RESERVED.
+    notFoundCOLLAPSE: >-
+      AN UNKNOWN ORGANIZATION, AN IDENTIFIER BELONGING TO NOBODY, AN IDENTIFIER BELONGING TO SOMEONE
+      WHO IS NOT A MEMBER OF THIS ORGANIZATION, A SUSPENDED MEMBERSHIP, AND A PLATFORM OPERATOR ALL
+      RETURN THE IDENTICAL ARGUMENT-FREE 404. Five cases, one answer, no distinguishing field,
+      message, detail token or response size.
+      THE FIFTH IS THE ONE THAT MATTERS AND IT IS EASY TO MISS: without it, this route becomes an
+      oracle for WHICH PRINCIPALS ARE PLATFORM OPERATORS, which credential-reset-v1 already collapses
+      for the same reason and which is the single most useful fact an attacker could extract from
+      this surface.
+      THE SAME WORK MUST HAPPEN ON ALL FIVE PATHS, not merely the same code — the property
+      organization-selection-v1's theHintRuling establishes, applied here.
+    notes: >-
+      THE IDENTIFIER IS NEVER RETURNED, ECHOED OR CONFIRMED IN THE RESPONSE. The caller sent it and
+      already knows it; echoing it would put an email address in a response body for no purpose, and
+      in a log line for anyone who logs responses.
+      IT RETURNS THE MEMBERSHIP ROLE, because an operator about to reset a credential should know
+      whether they are about to take over an `owner` or a `member`. That is a fact about the
+      relationship, not about the person.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none-for-the-reads-one-for-the-audit
+  ruling: >-
+    NEITHER OPERATION READS A ROW BEHIND `whereWithTenant`. Both read only control-plane tables —
+    `organization`, `organization_membership`, `template` — and `platform.organizations.read` writes
+    nothing tenant-side at all.
+  theRESOLVEROUTESTENANTWRITE: >-
+    `platform.organizations.members.resolve` RESOLVES A TENANT HANDLE SOLELY TO APPEND AN AUDIT
+    RECORD, reads no business data through it, and the handle's lifetime is the operation — the same
+    review point organization-onboarding-v1 and credential-reset-v1 both carry. PUTTING A RESOLVER
+    ON THE PLATFORM ROUTE CONTEXT TO SERVE IT WOULD DEFEAT P1 FOR THE WHOLE CLASS.
+  theISOLATIONTESTFORTHISCONTRACT: >-
+    THE ORDINARY "tenant A must not read tenant B" TEST IS NOT THE RIGHT ONE, because there is no
+    tenant on the reading side. WHAT REPLACES IT: assert that neither route can be made to return a
+    customer, a Workspace, a count of either, or any field sourced from the tenant database — and
+    assert it by attempting it, not by inspecting the schema.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read, d1-rows-written]
+  writes: >-
+    2 control-plane row-writes for the detail read; 2 control-plane plus 5 tenant for the resolve.
+    At the 600/day per-principal ceiling that is ~300 detail views or ~150 resolves per operator per
+    UTC day, and the two share one budget.
+  reads: "Three point reads for detail, two for resolve. Against 5,000,000 rows/day this is not a measurable term."
+  atTheLimit: >-
+    quota_exceeded with Retry-After to the next 00:00 UTC. NO TENANT'S SERVICE DEGRADES — no
+    Organization depends on the admin console — but THE OPERATOR IS LOCKED OUT OF THEIR OWN TOOLING
+    UNTIL RESET, which is the failure mode to design the console around and the reason
+    theOnePageOneRequestRule exists.
+  cost: "USD 0 / BD 0 per month. No new table, no new service, no new binding."
+
+# ---------------------------------------------------------------------------
+# testRequirements — assertions, and they instruct
+# ---------------------------------------------------------------------------
+testRequirements:
+  theBoundary:
+    - "NEITHER ROUTE RETURNS A WORKSPACE, A CUSTOMER, OR A COUNT OF EITHER. Assert the response shape rejects such a field and that no code path populates one."
+    - "NEGATIVE CONTROL: no module serving either route imports TenantStoreResolver, TenantScopedStore, createD1TenantStore or TENANT_COLUMN — except the resolve route's audit writer, which must import ONLY what it needs to append."
+    - "THERE IS NO MEMBER-LIST ROUTE. Assert by enumerating the platform route table, not by trying a URL: the absence is the control, and a route added later would pass a URL-based test that never ran."
+  theResolve:
+    - "An identifier belonging to a principal in ANOTHER Organization returns 404, indistinguishable from one belonging to nobody."
+    - "An identifier belonging to a PLATFORM OPERATOR returns 404 — the same 404, with no timing or size difference."
+    - "A suspended membership returns 404."
+    - "EVERY call writes a tenant-side audit record into the named Organization, INCLUDING every 404. Assert the record count on the failing paths, because that is the half an attacker generates most of."
+    - "The response never contains the submitted identifier."
+    - "A principal holding core.organization.list but NOT core.credential.reset receives forbidden — the two permissions are genuinely separate and the resolve is bound to the narrower one."
+  theBudget:
+    - "One detail page render costs exactly ONE request and 2 row-writes. Assert the request count, because the defect this prevents is a console making three calls and nobody noticing until an operator is locked out."
+  audit:
+    - "Both routes write a platform-operator audit record. A caller with no platform_operator row writes NONE — platform-operator-v1's whichSIDEOFTHEAUTHORITYCHECKTHEWRITESITSON."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: OD-1
+    question: >-
+      An operator cannot verify after the fact that onboarding created a Workspace. The information
+      exists only in the 201 response, at the moment of creation.
+    recommendation: >-
+      Close it by giving the TENANT a view of its own Workspaces, not the platform. If an operator
+      genuinely needs it, that is AZ3 and should be argued there rather than added here.
+    blocks: "Nothing. It is a support limitation, stated."
+  - id: OD-2
+    question: >-
+      NO PARTY CAN CURRENTLY SEE AN ORGANIZATION'S MEMBER LIST — not the platform, by this ruling,
+      and not the Organization's own owner, because no tenant-scoped Action exists.
+    recommendation: >-
+      THE TENANT-SIDE ROUTE IS THE ONE THAT SHOULD BE BUILT, and it is more urgent than anything
+      this contract adds: an Organization that cannot see who its own members are cannot administer
+      itself. It belongs to the organization-structure slice. THE PLATFORM SHOULD NOT BE THE ONLY
+      PARTY THAT CAN SEE WHO IS IN A CUSTOMER'S BUSINESS, and today it would have been.
+    blocks: "Tenant self-administration. Not this contract."
+  - id: OD-3
+    question: >-
+      The N-probe attack on the resolve route is bounded and audited, not prevented. An operator
+      with a known identifier can learn which Organizations that person belongs to, at N requests.
+    recommendation: >-
+      Accepted with three controls — audited in both homes, tenant-visible, rate limited. Revisit if
+      the operator population grows beyond a handful, because every control here is proportionate to
+      "one or two operators" and none of them is proportionate to twenty.
+    blocks: "Nothing at current scale."
+  - id: OD-4
+    question: >-
+      Organizations still have no name, so a detail page is headed by a 22-character opaque
+      identifier. PO-3 records the same gap for the list.
+    recommendation: "The organization-structure slice. One fix closes the list, the detail page and the Organization picker. `display_name` is already contracted as nullable in all three, so it is additive."
+    blocks: "A usable console, not the contract."

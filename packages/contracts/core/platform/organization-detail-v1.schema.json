@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-detail:1",
+  "title": "Organization detail — wire shapes, version 1",
+  "description": "The machine-readable half of organization-detail-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema — no implementation, no package.json, no node_modules — so every constraint here is READ BY A PERSON AND HAND-IMPLEMENTED. A `required` list is an instruction someone will follow literally, with no validator to disagree with the prose (.claude/rules/workflow.md §12).",
+
+  "$defs": {
+
+    "organizationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "Opaque, non-sequential, unguessable. Never parsed, decoded or interpreted by a client."
+    },
+
+    "principalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+
+    "membershipRole": {
+      "type": "string",
+      "enum": ["owner", "member"],
+      "description": "The closed union stored on organization_membership.role (docs/decisions/0019). AN UNRECOGNISED STORED VALUE IS NEVER RENDERED: it collapses to null internally and denies everything, so a row written by a future migration this build does not understand cannot reach a client as an unknown string."
+    },
+
+    "organizationDetailOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id", "status", "created_at", "display_name", "template", "member_count"],
+      "description": "EVERYTHING THE DETAIL PAGE NEEDS, IN ONE RESPONSE — the Template is embedded rather than returned as an id to fetch, because a read costs writes in this class and a three-request page spends three times the budget. NOTE WHAT IS STRUCTURALLY ABSENT AND CANNOT BE ADDED: no workspaces, no customers, no counts of either, no activity, no usage, no last-seen. Those live behind `whereWithTenant` and a platform route holds no tenant handle, so they are unreachable rather than withheld. AND NOTE WHAT IS ABSENT BY RULING: no member list. See theMembershipRuling — an operator can enumerate every Organization, so member lists over all of them invert to every principal's Organization list, which core-object-registry.yaml CO1 forbids by name.",
+      "properties": {
+        "organization_id": { "$ref": "#/$defs/organizationId" },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended"]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC."
+        },
+        "display_name": {
+          "type": ["string", "null"],
+          "maxLength": 200,
+          "description": "ALWAYS null today — control-plane/0002_organization.sql declined a name column and the organization-structure slice owns it. REQUIRED AND NULLABLE rather than optional, so that names arriving later change no shape and no client has to learn a new field. A client renders organization_id verbatim when this is null and MUST NOT substitute a placeholder of its own, or two consoles will invent two different ones."
+        },
+        "template": {
+          "description": "The Template this Organization adopted, RESOLVED AND EMBEDDED. Null when none was recorded — every Organization created before Templates existed, which today is all of them. Embedding is safe because a Template is tenant-INDEPENDENT platform configuration, identical for every caller, so it copies nothing sensitive and creates no staleness a client could act on wrongly.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["template_id", "name", "level_labels"],
+              "properties": {
+                "template_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+                "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+                "level_labels": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["organization", "workspace", "branch"],
+                  "description": "Fully populated, with platform defaults filled in for any level the Template omitted — the client never implements the default table, which is what stops the web and Apple consoles drifting into two ideas of what an unlabelled level is called.",
+                  "properties": {
+                    "organization": { "type": "string", "minLength": 1, "maxLength": 40 },
+                    "workspace": { "type": "string", "minLength": 1, "maxLength": 40 },
+                    "branch": { "type": "string", "minLength": 1, "maxLength": 40 }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "member_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "HOW MANY PRINCIPALS BELONG TO THIS ORGANIZATION. A COUNT, NEVER A LIST, AND THE DISTINCTION IS THE RULING: a count does not invert, so it reconstructs nothing about any principal, while a list over every Organization reconstructs every principal's Organization list. It answers what an operator legitimately asks — did onboarding work, is this Organization in use, is it abandoned — without naming anyone. ITS SMALL LEAK IS RECORDED RATHER THAN DISMISSED: repeated reads reveal that membership changed, never who or in which direction, which is a fact about the Organization rather than about a person."
+        }
+      }
+    },
+
+    "resolveMemberInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identifier"],
+      "description": "THE OPERATOR MUST ALREADY KNOW THE IDENTIFIER — the customer gave it to them. That requirement IS the control this route rests on: an operator resolving an identifier they were given is support; an operator receiving a list they did not ask for by name is surveillance. The Organization is a path parameter, not a body field.",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[!-?A-~]*@[!-?A-~]*$",
+          "description": "A login identifier. Constraints are credential-store.ts::isSubmittableIdentifier's, restated rather than invented: printable ASCII only, no whitespace, nothing above U+007E, exactly one '@'. Normalised NFKC then ASCII-only case folding before hashing — NOT toLowerCase(), which differs between JavaScript and Swift for real characters. IT IS NOT AN ENUMERATION KEY: it selects at most one principal within one named Organization, and a caller who does not already hold it learns nothing from this route."
+        }
+      }
+    },
+
+    "resolveMemberOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "role"],
+      "description": "AT MOST ONE PRINCIPAL, NEVER A SET, AND THE SHAPE ENFORCES IT — this is an object rather than an array precisely so that a future change returning several would be a visible breaking change rather than a quiet widening of a list that was always a list. THE SUBMITTED IDENTIFIER IS NOT ECHOED: the caller sent it and knows it, and echoing it would put an email address in a response body for no purpose and in a log line for anyone who logs responses.",
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "The value credential-reset-v1 requires and that CR-3 recorded no route produced. This route exists to close that gap without opening enumeration."
+        },
+        "role": {
+          "$ref": "#/$defs/membershipRole",
+          "description": "The membership role, returned because an operator about to reset a credential should know whether they are taking over an `owner` or a `member`. That is a fact about the RELATIONSHIP, not about the person, and it changes how carefully the operator should proceed."
+        }
+      }
+    }
+  }
+}

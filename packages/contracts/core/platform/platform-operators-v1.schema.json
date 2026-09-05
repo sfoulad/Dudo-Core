@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:platform-operators:1",
+  "title": "Platform operators — wire shapes, version 1",
+  "description": "The machine-readable half of platform-operators-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema, so every constraint here is read by a person and hand-implemented: a `required` list is an instruction someone will follow literally (.claude/rules/workflow.md §12).",
+
+  "$defs": {
+
+    "principalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+
+    "platformRole": {
+      "type": "string",
+      "enum": ["platform-admin", "marketplace-moderator"],
+      "description": "The closed union stored in platform_operator.platform_role. An unrecognised stored value denies everything and is never rendered — it collapses to null on read, the device authorization/roles.ts and credential-verifier.ts both use so that a row written by a future migration this build does not understand fails onto the safe path."
+    },
+
+    "operatorSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "platform_role", "created_at"],
+      "description": "NOTE WHAT IS ABSENT AND WHY IT MUST STAY ABSENT: no identifier, no email, no display name, no last-seen. control-plane/0001_principal.sql holds none of them, and it refused an email column outright because 'a directory of every user's personal details, readable without any tenant scope, would be the highest-value target in the system.' AN OPERATOR ROSTER SHOWING EMAIL ADDRESSES WOULD BE THAT DIRECTORY AT THE MOST PRIVILEGED END OF THE PLATFORM. The consequence — an operator cannot tell colleagues apart on screen — is real, is OP-3, and is closed by display names rather than by adding a column here.",
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" },
+        "platform_role": { "$ref": "#/$defs/platformRole" },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. When platform authority was granted — not when the principal was created."
+        }
+      }
+    },
+
+    "listOperatorsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/operatorSummary" }
+        },
+        "next_cursor": {
+          "type": ["string", "null"],
+          "maxLength": 512,
+          "description": "Opaque, bound to the principal and the query shape, exactly as platform-audit-read-v1's. Never constructed or parsed by a client. Null means no further page."
+        }
+      }
+    },
+
+    "revokeOperatorInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmation_id", "reauth_derived_value", "identifier"],
+      "description": "THE TARGET IS THE PATH PARAMETER, NOT A BODY FIELD — so there is exactly one place it can come from and no possibility of a body and a path disagreeing. THE THREE FIELDS HERE ARE confirmation-v1's confirmedRequestFields, REQUIRED because the permission is `critical` and the requirement derives from sensitivity rather than being declared per route. `identifier` is the CALLER'S OWN, and Core must assert the verified credential's principalId equals the calling principal, refusing identically to a wrong password when it does not — without that check, presenting another operator's identifier and password would satisfy re-authentication for your own session. THE CHALLENGE'S `parameters` ARE THIS BODY MINUS THESE THREE FIELDS, which for this route is the empty object plus the path parameter, so the binding covers principal_id: a confirmation obtained to revoke operator A cannot be spent revoking operator B.",
+      "properties": {
+        "confirmation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22,64}$"
+        },
+        "reauth_derived_value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "description": "32 bytes, base64url. PBKDF2-SHA256(NFC(password), salt = normalize(identifier), 600000, 32 bytes) — byte-identical to login, so the client reuses its login code path. AN AI PRINCIPAL CANNOT PRODUCE THIS, which means no model can ever revoke a platform operator."
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[!-?A-~]*@[!-?A-~]*$",
+          "description": "The CALLER'S OWN login identifier, required because Core cannot recover the KDF salt from a principal — see confirmation-v1 theSALTPROBLEM."
+        }
+      }
+    },
+
+    "revokeOperatorOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "was_self", "remaining_operator_count"],
+      "description": "Cache-Control: no-store.",
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "Echoed from the path. It carries nothing the caller did not send."
+        },
+        "was_self": {
+          "type": "boolean",
+          "description": "TRUE WHEN THE OPERATOR REVOKED ITSELF. The console needs it to render the right consequence — a self-revocation means the current session now grants nothing and the operator cannot undo it from the console, which is a materially different screen from having removed a colleague. It is not a security field; it is the difference between 'done' and 'you are locked out, deliberately'."
+        },
+        "remaining_operator_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "HOW MANY PLATFORM OPERATORS REMAIN. Zero is reachable only by self-revocation of the last operator — revoking ANOTHER principal down to zero is refused with failed_precondition. IT IS RETURNED BECAUSE THE CONSOLE MUST BE ABLE TO SAY 'THERE ARE NOW NO OPERATORS AND RESTORING ONE REQUIRES OUT-OF-BAND ACCESS' at the moment it happens rather than leaving someone to discover it. It discloses nothing: the caller holds core.platform-audit.read and may list the roster directly."
+        }
+      }
+    }
+  }
+}

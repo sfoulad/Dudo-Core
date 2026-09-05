@@ -432,6 +432,42 @@ permissions:
     scopes: [platform]
     status: proposed
     phase: 1
+  - id: core.principal.revoke-platform-scope
+    group: platform
+    description: >-
+      Remove a principal's platform authority. THE COUNTERPART TO
+      core.principal.grant-platform-scope, AND DELIBERATELY A SEPARATE PERMISSION RATHER THAN THE
+      SAME ONE — §3.2's logic that `list` is separate from `read` and `export` from `read` applies:
+      granting and revoking the broadest authority in the system are different risks in opposite
+      directions.
+      THE SEPARATION BUYS SOMETHING CONCRETE: a break-glass responder role can hold REVOKE without
+      GRANT, so the person reachable at 3am can cut off a compromised operator without themselves
+      being able to create one. That role does not exist yet and this permission is what makes it a
+      catalog edit rather than a redesign.
+      CRITICAL, so confirmation applies (confirmation-v1) — which means SESSION THEFT ALONE CANNOT
+      REVOKE ANYONE. There is no corresponding route for GRANT, deliberately: platform-operator-v1
+      records that "a route that grants platform authority is the single most valuable target in the
+      platform" and that "the frequency does not justify the surface."
+    sensitivity: critical
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.platform-audit.read
+    group: platform
+    description: >-
+      Read the platform-operator action log — which operator did what, to which Organization, when.
+      NEVER the contents of what was touched (docs/decisions/0025 Decision 5).
+      IT IS SEPARATE FROM core.audit.read, which is declared [organization, business] and is a
+      TENANT principal reading its OWN log. Two permissions rather than one widened one, for the
+      reason AZ8 records: widening a tenant-scoped permission above the tenant boundary is an
+      escalation, not a convenience.
+      SENSITIVE RATHER THAN READ, because an operator-action log is a record of what the platform
+      did to its customers, and reading it in bulk is the oversight function rather than an
+      ordinary lookup.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
   - id: core.credential.reset
     group: platform
     description: >-
@@ -884,6 +920,8 @@ defaultRoles:
       - core.template.list
       - core.template.create
       - core.credential.reset
+      - core.platform-audit.read
+      - core.principal.revoke-platform-scope
   # core.app.read was removed from this role: it is declared scopes: [organization,
   # business], and a platform-scope role holding it reads every tenant's installed Apps
   # across the tenant boundary. Moderation reviews PUBLISHED App versions, which is a
