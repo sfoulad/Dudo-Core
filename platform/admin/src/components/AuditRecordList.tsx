@@ -169,11 +169,29 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
 }
 
 /**
- * The timestamp, localised for reading with the RFC 3339 original preserved.
+ * The timestamp, rendered IN UTC AND LABELLED, with the RFC 3339 original kept.
  *
- * An operator correlating this against Core's logs needs the original; a
- * localised string alone loses it. Both are here — `dateTime` and `title` carry
- * the exact value Core sent.
+ * ===========================================================================
+ * UTC, NOT LOCAL TIME, AND THE REASON IS THE FILTER
+ * ===========================================================================
+ *
+ * The date filters on both feeds submit a UTC calendar day. A screen that
+ * FILTERS in UTC and RENDERS in local time makes the boundary rows appear to
+ * contradict the filter: an operator west of UTC asks for the 5th and sees rows
+ * stamped the 4th, and reasonably concludes the filter is broken. Either
+ * consistently is defensible; the mixture is worse than both.
+ *
+ * UTC also settles the thing that matters in an investigation. An audit trail
+ * is read by more than one person, often at once, and two operators discussing
+ * "the 5th" must mean the same window or they are comparing different evidence.
+ * A local day makes one filter mean different things to different people.
+ *
+ * THE LABEL IS NOT DECORATION. A timestamp shown without a zone is read as local
+ * by almost everyone, so rendering UTC unlabelled would produce a confident
+ * misreading rather than a visible one.
+ *
+ * `dateTime` and `title` still carry the exact value Core sent, for anyone
+ * correlating against Core's own logs.
  */
 function OccurredAt({ value }: { value: string }) {
   const parsed = new Date(value);
@@ -183,6 +201,7 @@ function OccurredAt({ value }: { value: string }) {
   return (
     <time dateTime={value} title={value}>
       {parsed.toLocaleString(undefined, {
+        timeZone: 'UTC',
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -190,6 +209,7 @@ function OccurredAt({ value }: { value: string }) {
         minute: '2-digit',
         second: '2-digit',
       })}
+      <span className="ms-1 text-ink-faint">UTC</span>
     </time>
   );
 }

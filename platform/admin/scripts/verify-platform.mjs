@@ -1330,14 +1330,15 @@ console.log('\n=== The feeds: requests, filters and paging ===\n');
       actor_principal_id: 'pr_a',
       action_id: 'platform.audit.list',
       since: '2026-09-01T00:00:00Z',
-      until: '2026-09-05T23:59:59Z',
+      // The value `toUtcDayEnd` produces, so this asserts what the screens send.
+      until: '2026-09-05T23:59:59.999Z',
     },
   });
   const url = calls[0].url;
   checkTrue('actor_principal_id IS sent on the platform feed', url.includes('actor_principal_id=pr_a'));
   checkTrue('action_id is sent', url.includes('action_id=platform.audit.list'));
   checkTrue('since is Z-suffixed and URL-encoded', url.includes('since=2026-09-01T00%3A00%3A00Z'));
-  checkTrue('until is Z-suffixed', url.includes('until=2026-09-05T23%3A59%3A59Z'));
+  checkTrue('until is Z-suffixed', url.includes('until=2026-09-05T23%3A59%3A59.999Z'));
   check('no target_principal_id parameter is ever sent', url.includes('target_principal_id'), false);
 }
 
@@ -1374,7 +1375,36 @@ console.log('\n=== The feeds: requests, filters and paging ===\n');
 console.log('\n=== The UTC day helpers ===\n');
 
 check('a calendar date becomes a Z-suffixed UTC day start', toUtcDayStart('2026-09-05'), '2026-09-05T00:00:00Z');
-check('and an inclusive UTC day end', toUtcDayEnd('2026-09-05'), '2026-09-05T23:59:59Z');
+
+/*
+ * THE DAY END IS `.999Z`, AND THE CHECKS BELOW ARE THE REASON RATHER THAN THE
+ * VALUE. The contract states neither the format of `until` nor its inclusivity,
+ * and the log is second-precision (said three times). `.999Z` is the only
+ * candidate correct under BOTH readings: inclusive it captures `…:59Z` and
+ * excludes the next day; exclusive `…:59Z` is still strictly less than it.
+ */
+check('the UTC day end is .999Z', toUtcDayEnd('2026-09-05'), '2026-09-05T23:59:59.999Z');
+checkTrue(
+  'it is strictly greater than the last second-precision instant of the day (inclusive reading)',
+  new Date('2026-09-05T23:59:59.999Z').getTime() > new Date('2026-09-05T23:59:59Z').getTime(),
+);
+checkTrue(
+  'so an exclusive `until` still includes that final second',
+  new Date('2026-09-05T23:59:59Z').getTime() < new Date(toUtcDayEnd('2026-09-05')).getTime(),
+);
+checkTrue(
+  'and it never reaches the next day, so an inclusive `until` cannot leak into it',
+  new Date(toUtcDayEnd('2026-09-05')).getTime() < new Date('2026-09-06T00:00:00Z').getTime(),
+);
+/*
+ * The regression this replaced: a plain `T23:59:59Z` under an EXCLUSIVE `until`
+ * drops every record in the final second — the newest, and the ones an
+ * investigation looks at first.
+ */
+checkTrue(
+  'the superseded T23:59:59Z would have excluded the final second under an exclusive reading',
+  new Date('2026-09-05T23:59:59Z').getTime() >= new Date('2026-09-05T23:59:59Z').getTime(),
+);
 check('an empty date yields null, so nothing is sent', toUtcDayStart(''), null);
 check('a zoneless datetime is NOT accepted as a calendar date', toUtcDayStart('2026-09-05T10:00'), null);
 check('a malformed date yields null', toUtcDayEnd('05/09/2026'), null);

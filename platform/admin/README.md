@@ -135,12 +135,26 @@ takes a `scope` that selects **whose ledger the message describes**, never what 
 ### Time filters are built, not passed through
 
 A date input yields `YYYY-MM-DD`: no time, no zone, and a zoneless timestamp is refused
-deliberately because engines disagree on whether to read it as local or UTC. **The contract names
-`since` and `until` and specifies no format for them anywhere** — the assumption taken is the form
-the schema gives `occurred_at`: RFC 3339 UTC. The typed date is treated as a **UTC calendar day**
-(`T00:00:00Z` / `T23:59:59Z`) and the fields are labelled UTC, so a record at 23:30Z falls on the
-same day for every operator. Following the operator's *local* day is defensible and would need to
-be a decision rather than an inference.
+deliberately because engines disagree on whether to read it as local or UTC.
+
+**The contract underspecifies these twice**, and both are reported rather than resolved quietly:
+it names `since` and `until` and states **neither their format nor their inclusivity**.
+
+- **Format:** taken as the form the schema gives `occurred_at` — RFC 3339 UTC.
+- **Day:** the typed date is a **UTC calendar day**, and the fields are labelled UTC. An audit
+  trail is read by more than one person at once, and two operators discussing "the 5th" must mean
+  the same window or they are comparing different evidence.
+- **The end of the day is `T23:59:59.999Z`, not `T23:59:59Z`.** The log is **second-precision** —
+  the contract says so three times — so a day's records run to `…T23:59:59Z`. With inclusivity
+  unstated, `.999Z` is the only candidate correct **both** ways: inclusive it captures that final
+  second and excludes the next day; exclusive that second is still strictly less than it. A plain
+  `T23:59:59Z` would **silently drop the final second under an exclusive reading** — the newest
+  records, where an investigation looks first.
+
+**Record timestamps are rendered in UTC and labelled**, for the same reason. A screen that filters
+in UTC and renders in local time makes the boundary rows appear to contradict the filter: an
+operator west of UTC asks for the 5th, sees rows stamped the 4th, and concludes the filter is
+broken. Either consistently is defensible; the mixture is worse than both.
 
 ### No revoke UI
 

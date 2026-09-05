@@ -1046,14 +1046,45 @@ export function toUtcDayStart(calendarDate: string): string | null {
 }
 
 /**
- * Inclusive end of the UTC day.
+ * The end of the UTC day.
  *
- * `23:59:59Z` rather than the next day's midnight: a half-open range would need
- * the operator to understand that "until the 5th" means "up to the 6th", and
- * second precision is what the log records anyway.
+ * ===========================================================================
+ * `.999Z` — CHOSEN BECAUSE IT IS CORRECT WHETHER `until` IS INCLUSIVE OR
+ * EXCLUSIVE, AND THE CONTRACT DOES NOT SAY WHICH.
+ * ===========================================================================
+ *
+ * THIS WAS `T23:59:59Z` AND THAT WAS WRONG IN ONE READING. `platform-audit-read-v1`
+ * names `since` and `until` and states NEITHER their format NOR their
+ * inclusivity — a second underspecification beyond the format one, reported
+ * rather than resolved quietly.
+ *
+ * The log's timestamps are SECOND PRECISION, which the contract says three
+ * separate times: the schema's `record_id` ("paging over a second-precision
+ * timestamp alone either skips records or repeats them"), `pagination.ordering`
+ * ("timestamps collide at second precision under a burst"), and
+ * `testRequirements` ("Seed a burst at one-second precision"). So a day's
+ * records run up to `T23:59:59Z` and no further.
+ *
+ * Against that, with `until` unspecified:
+ *
+ *   `T23:59:59Z`        correct if INCLUSIVE. If EXCLUSIVE it SILENTLY DROPS
+ *                       every record in the final second — the newest ones,
+ *                       which is where an investigation looks first.
+ *   next day `T00:00:00Z`  correct if EXCLUSIVE. If INCLUSIVE it pulls in a
+ *                       second of the FOLLOWING day.
+ *   `T23:59:59.999Z`    CORRECT EITHER WAY. Inclusive: captures `…:59Z`,
+ *                       excludes the next day. Exclusive: `…:59Z` is strictly
+ *                       less than `.999`, so it is still captured, and the next
+ *                       day still is not.
+ *
+ * THE RISK THIS TAKES, NAMED: the format is unspecified, so Core might refuse a
+ * fractional second with `invalid_argument`. That is a LOUD failure on first use
+ * and a one-character fix. The alternative risks a SILENT one-second gap that
+ * nobody would find while hunting for an event. Loud-and-wrong beats
+ * silent-and-wrong, which is the same trade every parser in this file makes.
  */
 export function toUtcDayEnd(calendarDate: string): string | null {
-  return isCalendarDate(calendarDate) ? `${calendarDate}T23:59:59Z` : null;
+  return isCalendarDate(calendarDate) ? `${calendarDate}T23:59:59.999Z` : null;
 }
 
 /** Builds `?page_size=&cursor=`, omitting a null or empty cursor. */
