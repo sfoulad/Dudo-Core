@@ -35,6 +35,46 @@ Per-App suites colocate with their App under `apps/<name>/tests/` as Apps are bu
 - **Root-level shared test configuration belongs to the Team Lead**, not to QA. QA
   proposes changes to it — see `docs/decisions/0001-governance-and-decision-sequencing.md`.
 
+## Running the type-negative harness
+
+```
+node packages/testing/run-type-negative.ts
+```
+
+**The only check in this repository that can see a type-level guarantee being removed.** Two
+controls are enforced by the type system and by nothing else — `MembershipAdmission` (`M-1`) and
+`ControlPlaneWriteReservation` (`0014` §A.11). Relax a signature to `admission?:` or export a
+private mint and `npm run typecheck` stays green, **every suite here stays green** — Node strips
+types without checking them — and the guarantee is gone with nothing saying so.
+
+The fixtures under `type-negative/cases/**` exist **to be compiled and to fail**. A second `tsc`
+invocation compiles them and the runner asserts three properties:
+
+| # | Property | What it catches |
+|---|---|---|
+| 1 | the project must **fail** to compile | every negative case started compiling |
+| 2 | every `// @expect-error TSxxxx` line produced **that code** | it failed for a different reason — *"it didn't compile" passes on a missing semicolon* |
+| 3 | **no unmarked line produced any diagnostic** | a fixture that broke, or a **control line that stopped compiling** |
+
+**Property 3 is the one that makes it a test.** A probe that dies on a bad import exits non-zero
+and satisfies property 1 while having checked nothing — that is exactly how the first hand-run
+probe of this guarantee read as a success. It also means the **control lines need no separate
+assertion**: "produced no diagnostic" is already required of every unmarked line.
+
+**The two receipts are deliberately NOT symmetric, and the asymmetry is asserted rather than left
+as a gap.** `mintMembershipAdmission` is module-private, so "the mint cannot be named from
+outside" is a negative case. `mintControlPlaneWriteReservation` is **exported on purpose**, so the
+same fixture would fail for a *correct* reason — it is a **control line that must compile**
+instead. Making the two match, in either direction, turns this run red.
+
+**What it does not prove:** that the guarantee holds at runtime. A deliberate `as never` cast
+defeats every case here. That is why `M-1` also has a guard in the SQL and an emitted-statement
+assertion in `suites/platform-operator/membership-write-guard.ts`.
+
+`type-negative/tsconfig.json` **extends the root** and overrides only `include`/`exclude`, so the
+probe always checks the same language the product is compiled with. No root file is changed and no
+dependency is added — the fixtures import from `platform/core` only and touch no Node API.
+
 ## Running the platform-operator (super-admin) suite
 
 ```

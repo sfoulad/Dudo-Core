@@ -1,0 +1,42 @@
+{
+  // Dudo-Core — the TYPE-NEGATIVE probe's compiler configuration.
+  //
+  // OWNER: qa-agent. `packages/testing/**` is qa-agent's territory
+  // (docs/architecture/boundaries.md). THIS FILE CHANGES NO ROOT CONFIGURATION and adds no
+  // dependency.
+  //
+  // ===========================================================================================
+  // IT `extends` THE ROOT RATHER THAN COPYING IT, AND THAT IS THE WHOLE DESIGN
+  // ===========================================================================================
+  //
+  // A type-negative probe asserts that certain code DOES NOT COMPILE. That claim is only
+  // meaningful with respect to a particular language configuration: `{ principalId: 'x' }` is
+  // rejected as a `MembershipAdmission` under `strict`, and a probe running with different
+  // options would be asserting a fact about a language Dudo does not ship.
+  //
+  // So every compiler option comes from the root by inheritance. If the Team Lead turns on
+  // `noUncheckedIndexedAccess`, or changes `strict`, or relaxes `verbatimModuleSyntax`, this
+  // probe follows automatically. A copied block would drift, and it would drift SILENTLY —
+  // the probe would keep passing while checking a stricter or looser language than the product.
+  //
+  // ===========================================================================================
+  // ONLY `include` AND `exclude` ARE OVERRIDDEN, AND BOTH HAVE TO BE
+  // ===========================================================================================
+  //
+  // The root `exclude`s `packages/testing` — deliberately, with its reason recorded there: that
+  // tree is Node code and the root config targets a Worker. `exclude` is INHERITED by `extends`,
+  // so without the override below this project would resolve to zero files and `tsc` would exit
+  // 0 having checked nothing. That is the exact shape of a probe that passes because it never
+  // ran, so it is called out here rather than left as a silent trap.
+  //
+  // `include` IS `cases` ONLY. The runner (`../run-type-negative.ts`) and the rest of
+  // `packages/testing` import `node:fs`, `node:sqlite` and `node:child_process`, and the root
+  // sets `"types": []` with no `@types/node` installed. Pulling them in would produce dozens of
+  // "Cannot find module 'node:fs'" diagnostics that have nothing to do with any assertion — and
+  // the runner treats an unexpected diagnostic as a failure, correctly. The fixtures under
+  // `cases/` import from `platform/core` only and touch no Node API, so they need nothing the
+  // root does not already provide.
+  "extends": "../../../tsconfig.json",
+  "include": ["cases"],
+  "exclude": []
+}
