@@ -81,10 +81,10 @@
     "resolveMemberInput": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["identifier"],
-      "description": "THE OPERATOR MUST ALREADY KNOW THE IDENTIFIER — the customer gave it to them. That requirement IS the control this route rests on: an operator resolving an identifier they were given is support; an operator receiving a list they did not ask for by name is surveillance. The Organization is a path parameter, not a body field.",
+      "required": ["target_identifier"],
+      "description": "RENAMED FROM `identifier` ON 2026-09-05 UNDER THE PLATFORM-WIDE RESERVATION. It means THE TARGET'S — the principal being resolved — and a field naming a principal must say which principal. This route is not gated today, so there was no live defect; it was one gating decision away from being the same semantic collision that made credential-reset-v1 unbuildable, because confirmation-v1 would then have stripped it as the caller's own. The rule is deliberately not scoped to 'contracts that compose with a cross-cutting mechanism': that scope depends on `sensitivity: critical`, which a route ACQUIRES LATER, so such a rule would be correct the day it was written and silently wrong the first time a route became critical.\n\nTHE OPERATOR MUST ALREADY KNOW THE IDENTIFIER — the customer gave it to them. That requirement IS the control this route rests on: an operator resolving an identifier they were given is support; an operator receiving a list they did not ask for by name is surveillance. The Organization is a path parameter, not a body field.",
       "properties": {
-        "identifier": {
+        "target_identifier": {
           "type": "string",
           "minLength": 3,
           "maxLength": 254,

@@ -6,7 +6,7 @@
 
   "$defs": {
 
-    "identifier": {
+    "adminIdentifier": {
       "type": "string",
       "minLength": 3,
       "maxLength": 254,
@@ -40,7 +40,7 @@
       "required": ["admin_identifier", "template_id", "first_workspace_name", "derived_value"],
       "description": "NOTE WHAT CANNOT BE SENT, because each absence is a decision: NO organization_id, principal_id or workspace_id — all server-generated, and a caller-chosen tenant identifier is the one input that could collide a new Organization with an existing one's identifier space. NO password — 0017's basis is that entropy protects these accounts, so an operator-chosen password expires that decision. NO role — the bootstrap exception creates exactly one membership at exactly `owner`, and a role field would widen an exception to 0007 D11 into a general grant mechanism. NO permission list, NO membership array, NO apps list.",
       "properties": {
-        "admin_identifier": { "$ref": "#/$defs/identifier" },
+        "admin_identifier": { "$ref": "#/$defs/adminIdentifier" },
         "template_id": { "$ref": "#/$defs/templateId" },
         "first_workspace_name": { "$ref": "#/$defs/workspaceName" },
         "derived_value": { "$ref": "#/$defs/derivedValue" }
