@@ -180,9 +180,12 @@ and **Actions do not** — so the Action check is not a second layer there, **it
 **Not built, and must not be reported as done** (`core-agent`'s own list, before anyone calls this
 slice finished):
 
-- **Rate limiting is not built.** `0017`'s in-process limiter does not bound a deployed Worker,
-  because each isolate has its own. Two consumers now depend on it — pre-auth and `0027`'s
-  challenge routes.
+- **Rate limiting is not built, and one of its consumers is now live.** `0017`'s in-process limiter
+  does not bound a deployed Worker, because each isolate has its own. **The confirmation challenge
+  route exists as of 2026-09-05**, so this is no longer anticipated — it is a **write reachable by
+  any authenticated principal holding a critical permission**, at 2 row-writes per call against a
+  shared control-plane ceiling. `core-agent`'s standing note: *required, does not exist, and must
+  not be reported as done.*
 - **The operator action log has no retention and no read surface.** Core is writing records that
   **nothing can read**, and nothing deletes.
 - **Creating a platform operator is the one privileged change in Dudo with no audit trail at all.**
