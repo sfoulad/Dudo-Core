@@ -64,14 +64,14 @@
         "reauth_derived_value": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{43}$",
-          "description": "32 bytes, base64url. PBKDF2-SHA256(NFC(password), salt = normalize(identifier), 600000, 32 bytes) — byte-identical to login, so the client reuses its login code path. AN AI PRINCIPAL CANNOT PRODUCE THIS, which means no model can ever revoke a platform operator."
+          "description": "32 bytes, base64url. PBKDF2-SHA256(NFC(password), salt = normalize(reauth_identifier), 600000, 32 bytes) — byte-identical to login, so the client reuses its login code path. NOTE THE SALT IS THE CALLER'S OWN IDENTIFIER, which is what `reauth_` names on both fields. AN AI PRINCIPAL CANNOT PRODUCE THIS, which means no model can ever revoke a platform operator."
         },
-        "identifier": {
+        "reauth_identifier": {
           "type": "string",
           "minLength": 3,
           "maxLength": 254,
           "pattern": "^[\\x21-\\x7E]*@[\\x21-\\x7E]*$",
-          "description": "The CALLER'S OWN login identifier, required because Core cannot recover the KDF salt from a principal — see confirmation-v1 theSALTPROBLEM.\n\nCANONICAL DEFINITION: urn:dudo:schema:account-identifier:1#/$defs/accountIdentifier. Restatement, character-identical by obligation.\n\nPATTERN CORRECTED 2026-09-05 from ^[!-?A-~]*@[!-?A-~]*$ (exactly one '@') to at-least-one, matching credential-store.ts. THIS FILE WAS NOT IN THE TWO THE SWEEP WAS ASKED FOR — it was found by grepping for the pattern rather than for the field, and it is the reason that search was the right one: the fourth restatement of a rule is not reliably found by looking where the third was."
+          "description": "The CALLER'S OWN login identifier, required because Core cannot recover the KDF salt from a principal — see confirmation-v1 theSALTPROBLEM.\n\nPROPERTY RENAMED 2026-09-05, AND IT LAGGED ITS OWN `required` LIST BY ONE COMMIT. The list was renamed to `reauth_identifier` while this property was left as `identifier`, under `additionalProperties: false` — which made revokeOperatorInput UNSATISFIABLE: every request must carry `reauth_identifier` and no request may carry a field the properties do not declare. Not a stale name; a shape no valid request could match. Found by the Team Lead grepping for bare `identifier` declarations.\n\nCANONICAL DEFINITION: urn:dudo:schema:account-identifier:1#/$defs/accountIdentifier. Restatement, character-identical by obligation.\n\nPATTERN CORRECTED 2026-09-05 from ^[!-?A-~]*@[!-?A-~]*$ (exactly one '@') to at-least-one, matching credential-store.ts. THIS FILE WAS NOT IN THE TWO THE SWEEP WAS ASKED FOR — it was found by grepping for the pattern rather than for the field, and it is the reason that search was the right one: the fourth restatement of a rule is not reliably found by looking where the third was."
         }
       }
     },
