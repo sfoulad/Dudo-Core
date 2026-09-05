@@ -70,6 +70,7 @@ import {
   denialGroupKeyText,
   windowStart,
 } from './coordination.ts';
+import type { WriteAdmissionRefusal } from './write-admission.ts';
 import {
   PER_ORGANIZATION_DAILY_ROW_WRITES,
   PLATFORM_ORIGINATED_DAILY_ROW_WRITES,
@@ -919,18 +920,65 @@ export function creditWritePermits(
  * here; the caller was already permitted to do this and the day's capacity has run out. See
  * `write-admission.ts` for why that distinction is carried all the way to the caller.
  */
+/**
+ * ===========================================================================================
+ * WHY A WRITE WAS REFUSED. **THREE INTERNAL OUTCOMES, TWO OF WHICH MAY BE TOLD APART.**
+ * ===========================================================================================
+ *
+ * `admitWrite` used to return a boolean, and that was right while one ceiling could refuse. **Two
+ * can now, and they mean opposite things:**
+ *
+ *   `'platform-share'` — the OPERATOR has spent this Organization's platform share. A statement
+ *                        about operator activity, and the operator should stop.
+ *   `'organization'`   — the CUSTOMER is at or near their own daily allocation. A statement about
+ *                        the customer, and the operator should understand the customer is having
+ *                        a bad day rather than that they themselves are being throttled.
+ *
+ * *** THE DISTINCTION IS A SECURITY PROPERTY, NOT A CONVENIENCE. *** An operator who cannot tell
+ * these apart will RETRY — and retrying is how a support session becomes the script the sub-ceiling
+ * exists to stop. **A control that induces the behaviour it exists to prevent is worse than the
+ * small disclosure telling them apart costs.**
+ *
+ * ---------------------------------------------------------------------------------------------
+ * *** IT IS A DISCLOSURE, ACCEPTED DELIBERATELY, AND ITS SIZE IS STATED. ***
+ * ---------------------------------------------------------------------------------------------
+ *
+ * `'organization'` tells a platform operator that a customer is near their daily write ceiling,
+ * which is **a coarse signal about that customer's business activity** — roughly *"this tenant
+ * performed on the order of a thousand mutations today"*. **No other platform route discloses
+ * that**, and `organization-detail-v1` `theLine` refuses counts and summaries of business records
+ * for exactly this reason.
+ *
+ * IT IS ACCEPTED BECAUSE IT IS **ONE BIT, AT THE EXTREME** — at the ceiling or not — rather than a
+ * usage gauge, and because the caller can already enumerate every Organization. **DO NOT RETURN A
+ * REMAINING COUNT.** A number here would turn one bit at one moment into the continuous usage
+ * summary `theLine` refuses, and it would be a two-line change that looked like an improvement.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * A PERMIT SHORTFALL COLLAPSES INTO `'organization'`, AND THAT IS AN EXISTING RULE
+ * ---------------------------------------------------------------------------------------------
+ *
+ * *"The platform-wide allocation is out"* must not be distinguishable. `coordination.ts`:
+ * *"a response that distinguished 'you are out' from 'the platform is out' would be a channel
+ * through which one Organization learns about aggregate activity it has no business seeing."*
+ * **Three outcomes here, two exposed.**
+ */
+export type WriteAdmissionDecision =
+  | { readonly admitted: true }
+  | { readonly admitted: false; readonly refusedBy: WriteAdmissionRefusal };
+
 export function admitWrite(
   state: CoordinationState,
   units: number,
   nowMs: number,
   origin: WriteOrigin,
-): boolean {
+): WriteAdmissionDecision {
   assertWriteUnits(units);
   const dayStartMs = windowStart(nowMs, DAY_MS);
   rollWriteDay(state, dayStartMs);
 
   if (state.writeDay.used + units > PER_ORGANIZATION_DAILY_ROW_WRITES) {
-    return false;
+    return { admitted: false, refusedBy: 'organization' };
   }
   // =========================================================================================
   // *** THE PLATFORM SUB-CEILING. CHECKED IN ADDITION TO THE ABOVE, NEVER INSTEAD OF IT. ***
@@ -950,15 +998,18 @@ export function admitWrite(
     origin === 'platform' &&
     state.platformWriteDay.used + units > PLATFORM_ORIGINATED_DAILY_ROW_WRITES
   ) {
-    return false;
+    return { admitted: false, refusedBy: 'platform-share' };
   }
   if (state.writePermits < units) {
-    return false;
+    // `'organization'`, NOT A THIRD VALUE. See the type: the platform-wide allocation running out
+    // must not be distinguishable from this Organization's own day, and merging it here is where
+    // that rule is kept rather than at the caller.
+    return { admitted: false, refusedBy: 'organization' };
   }
   state.writeDay.used += units;
   if (origin === 'platform') {
     state.platformWriteDay.used += units;
   }
   state.writePermits -= units;
-  return true;
+  return { admitted: true };
 }

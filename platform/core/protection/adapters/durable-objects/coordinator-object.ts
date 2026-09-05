@@ -672,13 +672,16 @@ export class DudoCoordinatorObject {
     // `'tenant'` is treated as `'platform'`**, which is the fail-closed direction: a corrupted or
     // future origin is charged against the bounded ceiling rather than the unbounded one.
     const origin: WriteOrigin = body.origin === 'tenant' ? 'tenant' : 'platform';
-    const admitted = admitWrite(state, units, nowMs, origin);
+    const decision = admitWrite(state, units, nowMs, origin);
+    const admitted = decision.admitted;
     // PERSISTED WHETHER OR NOT THE WRITE WAS ADMITTED. On success the used counter moved and must
     // survive an eviction; on failure the permit reserve may still have moved, because a block
     // may have been bought that this request could not spend. Persisting only the success path
     // would silently drop purchased capacity.
     this.persistWriteBudget(state);
-    return jsonResponse({ admitted });
+    return jsonResponse(
+      decision.admitted ? { admitted } : { admitted, refusedBy: decision.refusedBy },
+    );
   }
 
   /**
@@ -930,6 +933,13 @@ export function createDurableObjectRequestCoordinator(
           if (answered.value.admitted !== true) {
             return ok({
               kind: 'deferred',
+              // THE REASON CROSSES BACK AND IS VALIDATED, NOT TRUSTED — and an unrecognised value
+              // reads as `'organization'`, which is the LESS informative of the two. A corrupted
+              // reason must not invent an operator-activity signal, and it must not invent the
+              // customer-activity one either; `'organization'` is the answer that says least while
+              // still telling the operator to stop.
+              refusedBy:
+                answered.value.refusedBy === 'platform-share' ? 'platform-share' : 'organization',
               resumeAfterMs: nextUtcResetMs(request.nowMs),
               retryAfterSeconds: retryAfterSecondsUntilReset(request.nowMs),
             });

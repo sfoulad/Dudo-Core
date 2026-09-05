@@ -278,6 +278,31 @@ export const PER_ORGANIZATION_DAILY_ROW_WRITES = 10_000;
  * direction, because the alternative is a customer's own product breaking so that an operator
  * could look at it.
  *
+ * ---------------------------------------------------------------------------------------------
+ * *** THE RESIDUAL, AND THE CORRELATION IS THE POINT OF RECORDING IT ***
+ * ---------------------------------------------------------------------------------------------
+ *
+ * **THE CUSTOMER MOST LIKELY TO NEED SUPPORT IS THE ONE WHOSE USAGE IS SPIKING, AND THIS DESIGN
+ * MAKES THEM THE HARDEST TO SUPPORT.** A customer at 9,600 gets about **80 operations** of platform
+ * assistance **on precisely the day something is going wrong for them.**
+ *
+ * **That is not a hypothetical edge. It is the correlated case** — a support ceiling that tightens
+ * exactly when support is most needed — and it is recorded here so whoever revisits it with real
+ * usage finds the tradeoff stated rather than rediscovering it during an incident.
+ *
+ * **ACCEPTED, 2026-09-05, FOR THREE REASONS THAT ARE REASONS RATHER THAN BACKGROUND:**
+ *
+ *   1. **The alternative reinstates the defect.** Letting platform writes exceed the customer's
+ *      allocation is exactly what was just fixed.
+ *   2. **Reserving a slice for support instead** — capping the customer's own writes at 9,000 —
+ *      **penalises every customer every day for a rare event.**
+ *   3. **There are zero customers and zero operators today**, so the cost of choosing wrong now is
+ *      nil and the cost of choosing complexity is not.
+ *
+ * **WHAT WOULD CHANGE THE ANSWER:** real usage showing customers routinely near their ceiling, or
+ * a support incident where 80 operations was not enough. Neither is observable yet, and **nothing
+ * measures the first** — the same gap the ledger finding below names.
+ *
  * ===========================================================================================
  * THE REFUSAL LANDS ON THE OPERATOR AND NEVER ON THE CUSTOMER
  * ===========================================================================================
@@ -552,6 +577,21 @@ export function consumeWriteReservation(
 // The port
 // =============================================================================================
 
+/**
+ * WHICH CEILING REFUSED A WRITE. Two values, and they mean opposite things.
+ *
+ *   `'platform-share'` — the OPERATOR spent this Organization's platform share. About the caller.
+ *   `'organization'`   — the CUSTOMER is at their own daily allocation. About the customer.
+ *
+ * **DECLARED HERE RATHER THAN IN `coordination-engine.ts` TO KEEP THE IMPORT DIRECTION ONE-WAY.**
+ * The engine already imports this module; the reverse would be a cycle, and a type-only cycle is
+ * the kind that compiles and then surprises whoever adds the first value import.
+ *
+ * The full argument — why the distinction is a security property, what it discloses, and why it
+ * must never become a remaining COUNT — is at `admitWrite` in the engine.
+ */
+export type WriteAdmissionRefusal = 'platform-share' | 'organization';
+
 export type WriteAdmissionOutcome =
   /** Charged. The reservation is the receipt; see `WriteReservation`. */
   | { readonly kind: 'granted'; readonly reservation: WriteReservation }
@@ -567,6 +607,19 @@ export type WriteAdmissionOutcome =
    */
   | {
       readonly kind: 'deferred';
+      /**
+       * WHICH CEILING REFUSED. `'organization'` unless the platform sub-ceiling bound first.
+       *
+       * A TENANT CALLER MUST IGNORE THIS. `pipeline.ts` renders the same answer either way, and
+       * a tenant can only ever see `'organization'` because a `'tenant'` write cannot reach the
+       * platform sub-ceiling. **It exists for the operator-facing routes**, where the two mean
+       * opposite things — "you have done too much" against "this customer is having a bad day" —
+       * and an operator who cannot tell them apart retries.
+       *
+       * SEE `WriteAdmissionRefusal` for the disclosure this carries and why it is one bit rather
+       * than a count.
+       */
+      readonly refusedBy: WriteAdmissionRefusal;
       /** Epoch milliseconds of the next 00:00 UTC. For a scheduler. */
       readonly resumeAfterMs: number;
       /** The same instant in seconds from now, for `Retry-After`. Discloses nothing; see header. */

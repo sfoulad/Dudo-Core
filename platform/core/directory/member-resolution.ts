@@ -61,7 +61,7 @@ import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
-import { unavailable } from '../kernel/errors.ts';
+import { quotaExceeded, rateLimited, unavailable } from '../kernel/errors.ts';
 import type { IdentifierHasher } from '../identity/credential-store.ts';
 import { normalizeIdentifier } from '../identity/credential-store.ts';
 import type {
@@ -333,11 +333,38 @@ async function recordProbe(
   } catch {
     return err(unavailable());
   }
-  if (!admitted.ok || admitted.value.kind === 'deferred') {
-    // THE ORGANIZATION'S OWN BUDGET IS EXHAUSTED, so the probe cannot be recorded, so it does not
-    // happen. A tenant whose write allowance is spent is a tenant the platform cannot ask about —
-    // which is the fail-closed direction and, incidentally, a small brake on the N-probe attack.
+  if (!admitted.ok) {
     return err(unavailable());
+  }
+  if (admitted.value.kind === 'deferred') {
+    // =====================================================================================
+    // *** TWO CEILINGS CAN REFUSE HERE AND THEY MEAN OPPOSITE THINGS. THE OPERATOR IS TOLD
+    // WHICH. ***
+    // =====================================================================================
+    //
+    // `'platform-share'` → `rate_limited`. **A statement about the operator**: the platform has
+    // spent its share of this Organization's day. The correct response is to stop, and the
+    // correct response to being told is not to retry.
+    //
+    // `'organization'` → `quota_exceeded`. **A statement about the customer**: this Organization
+    // is at its own daily allocation. The operator is not being throttled; the customer is having
+    // a bad day, which is the thing the operator most needs to know and the thing they would
+    // otherwise misread as their own throttling.
+    //
+    // *** WITHOUT THE DISTINCTION AN OPERATOR RETRIES, AND RETRYING IS HOW A SUPPORT SESSION
+    // BECOMES THE SCRIPT THE SUB-CEILING EXISTS TO STOP. *** A control that induces the behaviour
+    // it exists to prevent is worse than the disclosure telling them apart costs.
+    //
+    // BOTH CODES ARE DECLARED BY THIS OPERATION — `organization-detail-v1:252` — so neither
+    // collapses into `internal`. Checked against the contract rather than assumed.
+    //
+    // AND THE DISCLOSURE IS ACCEPTED RATHER THAN DENIED: `quota_exceeded` tells an operator that a
+    // customer is near their write ceiling, which is a coarse signal about that customer's
+    // business activity and is one no other platform route gives. It is ONE BIT, at the extreme,
+    // to a caller who can already enumerate every Organization. **Never report how much is left.**
+    return err(
+      admitted.value.refusedBy === 'platform-share' ? rateLimited() : quotaExceeded(),
+    );
   }
 
   const audit = dependencies.auditSinkFor(store.value);

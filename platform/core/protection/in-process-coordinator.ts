@@ -307,9 +307,11 @@ export function createInProcessRequestCoordinator(
             );
           }
 
-          if (!admitWrite(state, estimatedRowWrites, request.nowMs, origin)) {
+          const decision = admitWrite(state, estimatedRowWrites, request.nowMs, origin);
+          if (!decision.admitted) {
             return ok({
               kind: 'deferred',
+              refusedBy: decision.refusedBy,
               resumeAfterMs: nextUtcResetMs(request.nowMs),
               retryAfterSeconds: retryAfterSecondsUntilReset(request.nowMs),
             });
