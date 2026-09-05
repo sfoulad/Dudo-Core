@@ -33,8 +33,11 @@ import {
   parseListOrganizations,
   parseListTemplates,
   parseOnboardOrganization,
+  parseOrganizationDetail,
+  parseResolveMember,
   parseTemplate,
   parseWhoami,
+  isKnownMembershipRole,
   isKnownOnboardingWarning,
   isKnownStatus,
   ONBOARDING_WARNINGS,
@@ -59,6 +62,14 @@ import {
   generateAdminPassword,
   GENERATED_PASSWORD_LENGTH,
 } from '../src/api/generate-password.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+/*
+ * The shared identifier check, imported so the non-ASCII sentinel below is
+ * derived from the real function rather than from a copied sentence. `kdf.ts`
+ * imports nothing, so a bare loader resolves it.
+ */
+import { identifierRefusal } from '../src/api/kdf.ts';
 
 let failures = 0;
 
@@ -898,6 +909,310 @@ for (const [code, note] of [
     'internal',
   );
 }
+
+/* =========================================================================
+   8. ORGANIZATION DETAIL — organization-detail-v1
+   ========================================================================= */
+
+console.log('\n=== Organization detail: the real shape ===\n');
+
+const DETAIL_BODY = {
+  organization_id: 'og_synthetic_0000000001',
+  status: 'active',
+  created_at: '2026-09-05T09:00:00Z',
+  display_name: null,
+  template: {
+    template_id: 'tp_synthetic_0000000001',
+    name: 'School',
+    level_labels: { organization: 'Group', workspace: 'Campus', branch: 'Classroom' },
+  },
+  member_count: 3,
+};
+
+const detail = parseOrganizationDetail(DETAIL_BODY);
+check('organization_id', detail.organization_id, 'og_synthetic_0000000001');
+check('display_name stays null', detail.display_name, null);
+check('member_count is a number', detail.member_count, 3);
+check('the embedded template name', detail.template?.name, 'School');
+check('the embedded workspace label', detail.template?.level_labels.workspace, 'Campus');
+
+check(
+  'a null template parses (no Template recorded)',
+  parseOrganizationDetail({ ...DETAIL_BODY, template: null }).template,
+  null,
+);
+check('member_count of 0 parses', parseOrganizationDetail({ ...DETAIL_BODY, member_count: 0 }).member_count, 0);
+
+/*
+ * `template` IS REQUIRED AND NULLABLE, NOT OPTIONAL. An absent key is a contract
+ * violation; reading it as null would hide the difference between "no Template
+ * was recorded" and "this response is not the shape it claims".
+ */
+for (const [label, body] of [
+  ['template ABSENT', (() => { const b = { ...DETAIL_BODY }; delete b.template; return b; })()],
+  ['member_count absent', (() => { const b = { ...DETAIL_BODY }; delete b.member_count; return b; })()],
+  ['member_count not an integer', { ...DETAIL_BODY, member_count: 2.5 }],
+  ['member_count negative', { ...DETAIL_BODY, member_count: -1 }],
+  ['member_count a string', { ...DETAIL_BODY, member_count: '3' }],
+  ['an enveloped detail body', { data: DETAIL_BODY }],
+  ['a template missing a level label', { ...DETAIL_BODY, template: { template_id: 'tp_x', name: 'S', level_labels: { organization: 'G', workspace: 'C' } } }],
+]) {
+  try {
+    parseOrganizationDetail(body);
+    failures += 1;
+    console.log(`FAIL  ${label} is refused\n        expected a throw, got none`);
+  } catch {
+    console.log(`PASS  ${label} is refused`);
+  }
+}
+
+console.log('\n=== Organization detail: one request, no extra calls ===\n');
+
+{
+  const { impl, calls } = stubFetch(jsonResponse(DETAIL_BODY));
+  await createPlatformClient({ fetchImpl: impl }).readOrganization('og_abc');
+  check('read puts the id in the PATH', calls[0].url, '/api/v1/platform/organizations/og_abc');
+  check('read is a GET', calls[0].init.method, 'GET');
+  check('read sends no body', calls[0].init.body, undefined);
+  /*
+   * THE ONE-PAGE-ONE-REQUEST RULE. The Template is embedded, so rendering the
+   * page must not fetch it. A read costs writes in this class and a three-request
+   * page spends three times the budget.
+   */
+  check('rendering the page costs exactly ONE call', calls.length, 1);
+}
+
+{
+  const { impl, calls } = stubFetch(jsonResponse(DETAIL_BODY));
+  await createPlatformClient({ fetchImpl: impl }).readOrganization('a/b?c=d');
+  check(
+    'a hostile organization id is percent-encoded, not injected',
+    calls[0].url,
+    '/api/v1/platform/organizations/a%2Fb%3Fc%3Dd',
+  );
+}
+
+console.log('\n=== The resolve: exactly one field, no confirmation ===\n');
+
+const RESOLVE_BODY = { principal_id: 'pr_synthetic_0000000001', role: 'owner' };
+
+const resolved = parseResolveMember(RESOLVE_BODY);
+check('principal_id', resolved.principal_id, 'pr_synthetic_0000000001');
+check('role', resolved.role, 'owner');
+checkTrue('owner is a known role', isKnownMembershipRole('owner'));
+checkTrue('member is a known role', isKnownMembershipRole('member'));
+check('an invented role is NOT claimed as known', isKnownMembershipRole('admin'), false);
+
+{
+  const { impl, calls } = stubFetch(jsonResponse(RESOLVE_BODY));
+  await createPlatformClient({ fetchImpl: impl }).resolveMember('og_abc', 'someone@example.com');
+  check(
+    'the Organization is a PATH parameter, not a body field',
+    calls[0].url,
+    '/api/v1/platform/organizations/og_abc/members/resolve',
+  );
+  check('resolve is a POST', calls[0].init.method, 'POST');
+  const sent = JSON.parse(calls[0].init.body);
+  /*
+   * `resolveMemberInput` IS `required: ['identifier']` WITH
+   * `additionalProperties: false`. A confirmation token here would be a
+   * validation failure, not a courtesy — AND gating the resolve would deadlock
+   * the credential reset, because the principal_id this route returns is
+   * precisely what the reset's confirmation must name.
+   */
+  check('exactly one field is sent', Object.keys(sent).join(','), 'identifier');
+  for (const forbidden of ['confirmation', 'confirmation_token', 'organization_id', 'principal_id', 'role']) {
+    check(`"${forbidden}" is NOT sent`, forbidden in sent, false);
+  }
+  check('resolve costs exactly ONE call', calls.length, 1);
+}
+
+console.log('\n=== The resolve: the collapsed refusal ===\n');
+
+/*
+ * THE ANTI-ENUMERATION PROPERTY, ASSERTED FROM THE CLIENT SIDE.
+ *
+ * Core collapses five conditions into one argument-free 404. This client cannot
+ * verify Core's half — but it CAN verify that it does not rebuild the oracle:
+ * that every 404 produces one indistinguishable outcome no matter what the
+ * envelope carries. A future edit that read `details` or `message` on this path
+ * would fail here.
+ */
+const REFUSAL_ENVELOPES = [
+  ['a bare 404', { error: { code: 'not_found', message: '', request_id: 'rq_1' } }],
+  ['a 404 with a message', { error: { code: 'not_found', message: 'no such principal', request_id: 'rq_2' } }],
+  [
+    'a 404 carrying DETAILS that name the cause',
+    {
+      error: {
+        code: 'not_found',
+        message: 'x',
+        request_id: 'rq_3',
+        details: [{ field: 'identifier', issue: 'principal_is_platform_operator' }],
+      },
+    },
+  ],
+];
+
+const refusalShapes = [];
+for (const [label, envelope] of REFUSAL_ENVELOPES) {
+  const { impl } = stubFetch(jsonResponse(envelope, 404));
+  try {
+    await createPlatformClient({ fetchImpl: impl }).resolveMember('og_abc', 'a@example.com');
+    failures += 1;
+    console.log(`FAIL  ${label} should reject`);
+  } catch (thrown) {
+    check(`${label} maps to not_found`, thrown.code, 'not_found');
+    refusalShapes.push(thrown.code);
+  }
+}
+check(
+  'every refusal envelope produces the SAME code, whatever it carried',
+  new Set(refusalShapes).size,
+  1,
+);
+
+/*
+ * AND THE SCREEN'S OWN GUARANTEE, ASSERTED AGAINST THE SOURCE.
+ *
+ * `OrganizationDetail.tsx` maps every `not_found` to `{ kind: 'refused' }`,
+ * which carries NO payload — so nothing downstream can branch on the cause,
+ * because nothing downstream has it. These are structural checks on the file
+ * rather than on a value, because the property is "there is no code that could
+ * do otherwise" and that is a claim about the source.
+ */
+console.log('\n=== The screen cannot rebuild the oracle ===\n');
+
+const screen = readFileSync(
+  join(import.meta.dirname, '..', 'src', 'screens', 'OrganizationDetail.tsx'),
+  'utf8',
+);
+const screenCode = screen.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+checkTrue(
+  "the refused state carries no payload (`kind: 'refused'` with no fields)",
+  /\{\s*readonly kind:\s*'refused'\s*\}/.test(screen),
+);
+check(
+  'there is exactly ONE refusal string constant',
+  (screenCode.match(/\bconst REFUSAL\b/g) ?? []).length,
+  1,
+);
+check(
+  'the refusal string is referenced exactly once when rendering',
+  (screenCode.match(/\{REFUSAL\}/g) ?? []).length,
+  1,
+);
+check('the screen logs nothing at all', /console\s*\./.test(screenCode), false);
+check(
+  'the screen never reads `details` (which could name the cause)',
+  /\.details\b/.test(screenCode),
+  false,
+);
+/*
+ * A REQUEST ID ON THE REFUSAL WOULD NOT LEAK THE CAUSE, BUT IT WOULD MAKE THE
+ * FIVE CASES SEPARABLE BY ANYONE WHO CAN READ CORE'S LOGS — and it would give a
+ * future author a value to branch on. `refused` carries no error, so this is
+ * enforced by the type; the check states it so removing the type guarantee
+ * cannot pass silently.
+ */
+check(
+  "the refused branch has no error object to read a request id from",
+  /kind:\s*'refused',\s*(error|request_id)/.test(screenCode),
+  false,
+);
+checkTrue(
+  'forbidden is a SEPARATE state from refused',
+  /kind:\s*'forbidden'/.test(screenCode) && /kind:\s*'refused'/.test(screenCode),
+);
+/*
+ * NO SPECULATIVE CALLS. Every resolve writes a tenant-side audit record into the
+ * customer's own log, including refusals, so the call fires on submit and
+ * nowhere else.
+ */
+check(
+  'the resolve is not wired to typing (no onChange-triggered lookup)',
+  /onChange[\s\S]{0,400}resolveMember/.test(screenCode),
+  false,
+);
+check(
+  'the detail read is not polled (no interval or focus listener)',
+  /setInterval|addEventListener\(\s*['"](focus|visibilitychange|online)/.test(screenCode),
+  false,
+);
+
+/* -------------------------------------------------------------------------
+   THE LOCAL REFUSAL MUST NOT LOOK LIKE THE SERVER REFUSAL
+   -------------------------------------------------------------------------
+   Core's accepted identifier set is strictly LARGER than the set this console
+   can submit: `normalizeIdentifier` is NFKC plus an ASCII-only case fold and
+   NORMALISES non-ASCII rather than rejecting it, while this console refuses
+   every code point outside 0x21-0x7E.
+
+   So a lookup can fail because THE CONSOLE CANNOT TYPE THE ADDRESS, and to an
+   operator that is indistinguishable from THE PERSON NOT EXISTING — unless the
+   two are visibly different. Same-looking is correct for the five server cases
+   and WRONG here, because this one is a statement about the console.
+
+   The asymmetry itself is routed to architecture and is not fixed here. What is
+   asserted here is that the console does not let the two collapse together.
+   ------------------------------------------------------------------------- */
+
+const nonAsciiSentinel = identifierRefusal(`${String.fromCharCode(0x00e9)}@example.com`);
+checkTrue(
+  'the shared check still refuses a non-ASCII identifier',
+  typeof nonAsciiSentinel === 'string' && nonAsciiSentinel.length > 0,
+);
+checkTrue(
+  'and its shared wording is about SIGNING IN, which is why this screen re-words it',
+  /sign you in/.test(nonAsciiSentinel ?? ''),
+);
+checkTrue(
+  'the screen derives that sentinel from the real function, not a copied literal',
+  /NON_ASCII_SENTINEL\s*=\s*identifierRefusal\(/.test(screenCode),
+);
+checkTrue(
+  'the screen substitutes its own non-ASCII wording',
+  /NON_ASCII_LOOKUP_REFUSAL/.test(screenCode),
+);
+check(
+  'the shared sign-in wording is NOT hard-coded as a literal in the screen',
+  screen.includes('sign you in'),
+  false,
+);
+
+/*
+ * The two texts must differ, and the local one must name the CONSOLE as the
+ * limitation rather than making a claim about the member.
+ */
+const localRefusal = /const NON_ASCII_LOOKUP_REFUSAL\s*=\s*([\s\S]*?);\n/.exec(screen)?.[1] ?? '';
+const serverRefusal = /const REFUSAL\s*=\s*([\s\S]*?);\n/.exec(screen)?.[1] ?? '';
+checkTrue('both refusal texts were found in the source', localRefusal !== '' && serverRefusal !== '');
+check('the local and server refusals are DIFFERENT strings', localRefusal === serverRefusal, false);
+checkTrue(
+  'the local refusal names the console as the limit',
+  /this console|this screen/i.test(localRefusal),
+);
+checkTrue(
+  'the local refusal disclaims any statement about the member',
+  /says nothing about|nothing was looked up/i.test(localRefusal),
+);
+/*
+ * AND THEY MUST NOT SHARE A RENDERING PATH. The local refusal goes into the
+ * `Field`'s error slot — scarlet, iconed, attached to the input, above the
+ * button. The server refusal renders in a neutral block below it. If a future
+ * edit routed the local one through `{ kind: 'refused' }`, they would become
+ * indistinguishable and this check is what would notice.
+ */
+check(
+  'a local refusal never sets the server-refusal state',
+  /setLocalError[\s\S]{0,200}kind:\s*'refused'/.test(screenCode),
+  false,
+);
+checkTrue(
+  'the local refusal is rendered through the field error slot',
+  /error=\{localError\}/.test(screenCode),
+);
 
 console.log('');
 if (failures > 0) {

@@ -61,6 +61,47 @@ export function isKnownPath(path: string): path is RoutePath {
   return KNOWN_PATHS.includes(path);
 }
 
+/**
+ * The Organization detail page: `#/organizations/<organization_id>`.
+ *
+ * THE FIRST ROUTE IN THIS CONSOLE WITH A PATH PARAMETER, and the matcher below
+ * is the smallest thing that serves one rather than a general pattern engine —
+ * there is exactly one such route. If a second arrives, this is the file to
+ * generalise, and it is small on purpose.
+ *
+ * THE IDENTIFIER IS TREATED AS OPAQUE. It is decoded from the hash and passed
+ * through; it is never parsed, split, or interpreted. A value that is not a
+ * plausible identifier is not "corrected" here — Core validates the segment
+ * against the platform identifier grammar and answers the argument-free 404,
+ * and a client that pre-judged it would be inventing a second, divergent rule
+ * about what an identifier is.
+ */
+export function organizationDetailPath(organizationId: string): string {
+  return `${ROUTES.organizations}/${encodeURIComponent(organizationId)}`;
+}
+
+/**
+ * Returns the Organization id when `path` is a detail page, otherwise null.
+ *
+ * IT REQUIRES EXACTLY TWO SEGMENTS. `/organizations` is the list and
+ * `/organizations/a/b` is nothing — matching loosely would send a malformed
+ * address to a detail page that would then request a nonsense identifier and
+ * spend an audit record learning it was nonsense.
+ */
+export function matchOrganizationDetail(path: string): string | null {
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length !== 2) return null;
+  if (`/${segments[0] ?? ''}` !== ROUTES.organizations) return null;
+  const raw = segments[1];
+  if (raw === undefined || raw === '') return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    // A malformed percent-encoding. Not a detail page rather than a crash.
+    return null;
+  }
+}
+
 function read(): RouteMatch {
   const raw = window.location.hash.replace(/^#/, '') || HOME_ROUTE;
   const [pathPart = '', queryPart = ''] = raw.split('?');

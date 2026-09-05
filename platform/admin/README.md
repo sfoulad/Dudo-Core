@@ -41,7 +41,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 132 checks against the shapes Core actually returns
+npm run verify:platform  # 178 checks against the shapes Core actually returns
 npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -79,6 +79,64 @@ absent and a menu missing only its first row both look unremarkable.
 | `GET /api/v1/platform/templates/{template_id}` | One Template. **The first route in this class with a path parameter.** |
 | `POST /api/v1/platform/templates` | Create a Template. Sends `name` and optionally `level_labels`. |
 | `POST /api/v1/platform/organizations` | **Onboard a business.** Creates the Organization, its first admin, that admin's credential and one `owner` membership. |
+| `GET /api/v1/platform/organizations/{id}` | **Organization detail.** Everything the page needs in one request — the Template is embedded. |
+| `POST /api/v1/platform/organizations/{id}/members/resolve` | **Resolve one member** by an identifier the operator already holds. |
+
+### The collapsed refusal, and how this console avoids rebuilding the oracle
+
+`platform.organizations.members.resolve` returns **one argument-free 404 for five conditions** —
+unknown Organization, identifier belonging to nobody, identifier belonging to a non-member,
+suspended membership, and **the principal is a platform operator**. The fifth is the one that
+matters: without it the route is an oracle for who holds platform authority.
+
+**Core enforces that. `OrganizationDetail.tsx` could destroy it, and is written so it cannot:**
+
+- **One refusal string** — a module constant, no parameters, no interpolation, referenced once.
+- **One code path, one visual state.** Every `404` produces `{ kind: 'refused' }`, which
+  **carries no payload** — no error, no request id, no `details`. Nothing downstream can branch on
+  the cause because nothing downstream has it. That is enforced by the type.
+- **No logging anywhere on the screen**, on any branch.
+- **One request either way**, so a hit and a miss take the same round trip.
+
+`verify:platform` asserts all of this **structurally against the source**, including that a `404`
+carrying `details` naming the cause still produces the identical outcome. Negative-controlled: a
+`console.log` of `error.details` on the refusal path makes two checks fail.
+
+**`forbidden` is deliberately distinct.** The resolve declares `core.credential.reset`, so a
+revoked grant closes the lookup entirely — rendering that as "found nothing" would invite endless
+re-probing, each attempt writing into a customer's audit log.
+
+**One local decision, stated because it is the only one:** a malformed identifier is refused before
+submitting. That separates well-formed from malformed — a fact the operator already holds — and
+cannot separate any two of the five cases, since all five need a well-formed identifier to reach
+Core. It also spares a customer's log an audit record for a typo.
+
+### There is no member list, and it is not missing
+
+**No route in Dudo returns member identities.** `member_count` is a count and renders as one — no
+roster, no "view all members", no pagination toward one, no empty table. A count does not invert; a
+list across every Organization an operator can already enumerate would reconstruct every person's
+membership, which `core-object-registry.yaml` CO1 forbids by name. **If the page looks like it is
+missing a list, that is the correct appearance.**
+
+**Every resolve writes a tenant-side audit record into the customer's own log, including
+refusals** — the probe is what is recorded, not the answer.
+
+> **The record is written and the customer cannot yet read it.** `0028`'s amendment of 2026-09-05
+> strikes "tenant-visible" from its own residual: `core.audit.read` is catalogued at organization
+> scope and **has no route**, so this surface is *auditable rather than audited* — the evidence is
+> captured and the party it protects cannot see it. **The screen therefore says "recorded in", not
+> "visible to".** It said the latter, which was false, and the amendment warns specifically against
+> citing `0028` for a control that has never worked.
+>
+> The discipline matters more for it, not less: the records are permanent and become readable when
+> the tenant-side route lands, so every speculative call made today is a line in a customer's log
+> they will eventually read.
+
+So the resolve fires on explicit submit only: no lookup-as-you-type, no debounce, no prefetch, no
+retry-on-blur, no automatic retry. **And the detail read is never polled** — at 2 row-writes a
+call, a thirty-second refresh loop exhausts an operator's daily ceiling in about two and a half
+hours and then answers 503.
 
 ### Onboarding: this browser holds the only copy of the password
 
@@ -290,6 +348,7 @@ src/
   screens/
     SignIn.tsx                           sign-in with measured KDF progress
     Organizations.tsx                    LIVE — the Organization list, with onboarding above it
+    OrganizationDetail.tsx               LIVE — one Organization; the collapsed-refusal lookup
     OnboardOrganization.tsx              LIVE — the form and the shown-once credential panel
     Templates.tsx                        LIVE — list and create; carries the TM-4 notice
     Operators.tsx Audit.tsx              not built; each says what it waits for

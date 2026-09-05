@@ -61,6 +61,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { OnboardOrganization } from '@/screens/OnboardOrganization';
 import { cn } from '@/lib/cn';
+import { buildHash, organizationDetailPath } from '@/lib/router';
 import {
   PLATFORM_DEFAULT_PAGE_SIZE,
   isKnownStatus,
@@ -249,10 +250,18 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                   a placeholder. `break-all` because a 22-character opaque token
                   is one unbreakable word and would otherwise widen the page on a
                   phone.
+
+                  A REAL ANCHOR, NOT A CLICKABLE ROW. It can be opened in a new
+                  tab, copied, and reached by keyboard in the ordinary way — a
+                  `<tr onClick>` gives none of that and is invisible to a screen
+                  reader.
                 */}
-                <span className="font-mono text-[0.8125rem] break-all text-ink">
+                <a
+                  href={buildHash(organizationDetailPath(organization.organization_id))}
+                  className="font-mono text-[0.8125rem] font-semibold break-all text-navy-600 no-underline hover:underline"
+                >
                   {organization.display_name ?? organization.organization_id}
-                </span>
+                </a>
                 {/* The date, on phones, where its own column is hidden. */}
                 <span className="mt-1 block text-xs text-ink-muted sm:hidden">
                   Created <CreatedAt value={organization.created_at} />

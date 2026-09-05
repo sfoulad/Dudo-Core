@@ -37,13 +37,20 @@ import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { Button } from '@/components/ui/button';
 import { SignIn } from '@/screens/SignIn';
 import { Organizations } from '@/screens/Organizations';
+import { OrganizationDetail } from '@/screens/OrganizationDetail';
 import { Templates } from '@/screens/Templates';
 import { Operators } from '@/screens/Operators';
 import { Audit } from '@/screens/Audit';
 import { createAuthClient } from '@/api/auth';
 import { createPlatformClient, type PlatformClient } from '@/api/platform';
 import { useOperatorSession } from '@/lib/use-session';
-import { ROUTES, useLocation, HOME_ROUTE, isKnownPath } from '@/lib/router';
+import {
+  ROUTES,
+  useLocation,
+  HOME_ROUTE,
+  isKnownPath,
+  matchOrganizationDetail,
+} from '@/lib/router';
 
 export function App() {
   // One of each for the life of the application. Recreating them per render
@@ -177,6 +184,17 @@ function Centred({ children }: { children: ReactNode }) {
  * a genuine not-found and must say so, rather than quietly showing a list.
  */
 function Section({ path, platform }: { path: string; platform: PlatformClient }) {
+  /*
+   * THE DETAIL PAGE IS MATCHED BEFORE THE SWITCH, because it is the only route
+   * with a path parameter and a `switch` on a literal cannot express it.
+   * `matchOrganizationDetail` requires exactly two segments, so `/organizations`
+   * still falls through to the list below.
+   */
+  const organizationId = matchOrganizationDetail(path);
+  if (organizationId !== null) {
+    return <OrganizationDetail platform={platform} organizationId={organizationId} />;
+  }
+
   switch (path) {
     case ROUTES.templates:
       return <Templates platform={platform} />;

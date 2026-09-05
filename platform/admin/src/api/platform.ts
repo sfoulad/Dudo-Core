@@ -366,6 +366,114 @@ export function parseListOrganizations(payload: unknown): ListOrganizationsOutpu
 }
 
 /* -------------------------------------------------------------------------
+   Organization detail — `organization-detail-v1`, accepted
+   ------------------------------------------------------------------------- */
+
+/** `membershipRole`. A closed union; Core never emits an unrecognised value. */
+export type MembershipRole = 'owner' | 'member';
+
+export interface EmbeddedTemplate {
+  readonly template_id: string;
+  readonly name: string;
+  readonly level_labels: Readonly<Record<TemplateLevel, string>>;
+}
+
+export interface OrganizationDetail {
+  readonly organization_id: string;
+  readonly status: string;
+  readonly created_at: string;
+  /** ALWAYS null today. Render `organization_id` verbatim — never a placeholder. */
+  readonly display_name: string | null;
+  /** Null when no Template was recorded, which today is every Organization. */
+  readonly template: EmbeddedTemplate | null;
+  /**
+   * A COUNT, NEVER A LIST, AND THE DISTINCTION IS THE RULING.
+   *
+   * "a count does not invert, so it reconstructs nothing about any principal,
+   * while a list over every Organization reconstructs every principal's
+   * Organization list." An operator can enumerate every Organization, so member
+   * lists over all of them invert to exactly that — which
+   * `core-object-registry.yaml` CO1 forbids by name.
+   *
+   * THERE IS NO ROUTE ANYWHERE THAT RETURNS MEMBER IDENTITIES. Not one this
+   * console has not called — one that does not exist. A roster is not unbuilt
+   * here; it is refused.
+   */
+  readonly member_count: number;
+}
+
+export interface ResolveMemberOutput {
+  readonly principal_id: string;
+  /** `owner` or `member` — a fact about the relationship, not about the person. */
+  readonly role: string;
+}
+
+export function isKnownMembershipRole(role: string): role is MembershipRole {
+  return role === 'owner' || role === 'member';
+}
+
+export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
+  const what = 'The Organization detail response';
+  const body = requireObject(payload, what);
+
+  /*
+   * `template` IS `oneOf: [null, object]` — REQUIRED AND NULLABLE, not optional.
+   * An absent key is a contract violation and is refused rather than read as
+   * null, because "the Template was not recorded" and "this response is not the
+   * shape it claims" are different facts and only one of them is safe to render.
+   */
+  if (!('template' in body)) {
+    throw new ShapeError(`${what} is missing the required field "template".`);
+  }
+  const rawTemplate = body.template;
+  let template: EmbeddedTemplate | null = null;
+  if (rawTemplate !== null) {
+    const nested = requireObject(rawTemplate, `${what} field "template"`);
+    const labels = requireObject(nested.level_labels, `${what} field "template.level_labels"`);
+    const level_labels = {} as Record<TemplateLevel, string>;
+    for (const level of TEMPLATE_LEVELS) {
+      // Fully populated by Core, defaults filled in. Never defaulted here — that
+      // is what stops two consoles inventing two ideas of an unlabelled level.
+      level_labels[level] = requireString(labels, level, `${what} field "template.level_labels"`);
+    }
+    template = {
+      template_id: requireString(nested, 'template_id', `${what} field "template"`),
+      name: requireString(nested, 'name', `${what} field "template"`),
+      level_labels: Object.freeze(level_labels),
+    };
+  }
+
+  const memberCount = body.member_count;
+  if (typeof memberCount !== 'number' || !Number.isInteger(memberCount) || memberCount < 0) {
+    throw new ShapeError(`${what} field "member_count" was not a non-negative integer.`);
+  }
+
+  return {
+    organization_id: requireString(body, 'organization_id', what),
+    status: requireString(body, 'status', what),
+    created_at: requireString(body, 'created_at', what),
+    display_name: requireNullableString(body, 'display_name', what),
+    template,
+    member_count: memberCount,
+  };
+}
+
+export function parseResolveMember(payload: unknown): ResolveMemberOutput {
+  const what = 'The member resolve response';
+  const body = requireObject(payload, what);
+  /*
+   * THE SUBMITTED IDENTIFIER IS NOT IN THIS RESPONSE AND IS NOT LOOKED FOR. The
+   * caller sent it and knows it; the contract omits it deliberately so that an
+   * email address is not placed in a response body, nor in the log line of
+   * anyone who logs responses.
+   */
+  return {
+    principal_id: requireString(body, 'principal_id', what),
+    role: requireString(body, 'role', what),
+  };
+}
+
+/* -------------------------------------------------------------------------
    Onboarding — `organization-onboarding-v1`, accepted
    ------------------------------------------------------------------------- */
 
@@ -708,6 +816,8 @@ export interface PlatformClient {
   readTemplate(templateId: string): Promise<Template>;
   createTemplate(input: CreateTemplateInput): Promise<Template>;
   onboardOrganization(input: OnboardOrganizationInput): Promise<OnboardOrganizationOutput>;
+  readOrganization(organizationId: string): Promise<OrganizationDetail>;
+  resolveMember(organizationId: string, identifier: string): Promise<ResolveMemberOutput>;
 }
 
 export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {}): PlatformClient {
@@ -785,6 +895,81 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
         return parseTemplate(
           await platformRequest(TEMPLATES_PATH, { method: 'POST', body }, options.fetchImpl),
           'The created Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async readOrganization(organizationId) {
+      /*
+       * ONE REQUEST RENDERS THE WHOLE PAGE. The Template is embedded, so there
+       * is no second call to resolve it — `theOnePageOneRequestRule`: "A read
+       * costs writes in this class... a page that fires three requests spends
+       * three times the budget of one that fires a single request."
+       *
+       * AND IT IS NEVER POLLED. At 2 row-writes a call, a thirty-second refresh
+       * loop exhausts one operator's daily ceiling in about two and a half hours
+       * and then answers 503 — "a self-inflicted outage produced by a refresh
+       * loop nobody would think of as traffic."
+       */
+      try {
+        return parseOrganizationDetail(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async resolveMember(organizationId, identifier) {
+      /*
+       * =====================================================================
+       * EXACTLY ONE FIELD. NO CONFIRMATION TOKEN, AND THAT IS DELIBERATE.
+       * =====================================================================
+       *
+       * `resolveMemberInput` is `required: ['identifier']` with
+       * `additionalProperties: false`, so any extra field is a validation
+       * failure rather than a courtesy — including a confirmation token.
+       *
+       * AND GATING IT WOULD DEADLOCK THE RESET. A confirmation for a credential
+       * reset must name the principal being reset, and THIS ROUTE IS WHAT
+       * PRODUCES THAT principal_id. Requiring a confirmation to obtain the value
+       * the confirmation needs is a cycle with no entry point.
+       *
+       * THE ORGANIZATION IS A PATH PARAMETER, NOT A BODY FIELD, and encoding it
+       * here means a caller-supplied value cannot add a path segment.
+       *
+       * EVERY CALL WRITES A TENANT-SIDE AUDIT RECORD INTO THE NAMED
+       * ORGANIZATION — INCLUDING EVERY REFUSAL — because "the probe is the thing
+       * being recorded, not the answer".
+       *
+       * THE RECORD IS WRITTEN AND IS NOT YET READABLE BY THE CUSTOMER, and that
+       * distinction is worth keeping straight. `0028`'s amendment of 2026-09-05
+       * strikes "tenant-visible" from its own residual: `core.audit.read` is
+       * catalogued at organization scope and has no route, so "this surface is
+       * auditable rather than audited: the evidence is captured, and the party it
+       * protects cannot read it." An unread audit record is detection nobody
+       * performs.
+       *
+       * SO THE DISCIPLINE HERE MATTERS MORE, NOT LESS. The evidence is permanent
+       * and becomes readable when the tenant-side route lands, which means every
+       * speculative call this console makes today is a line in a customer's log
+       * they will eventually be able to read. It is called on an explicit
+       * operator submit and at no other time: no resolve-as-you-type, no
+       * prefetch, no retry-on-blur, no automatic retry of any kind.
+       */
+      try {
+        return parseResolveMember(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}/members/resolve`,
+            { method: 'POST', body: { identifier } },
+            options.fetchImpl,
+          ),
         );
       } catch (thrown) {
         throw asApiError(thrown);
