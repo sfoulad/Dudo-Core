@@ -114,7 +114,7 @@ export interface OrganizationSummary {
    *
    * NOTHING HERE DEPENDS ON IT — the value is rendered as a date and never
    * compared against a boundary — so the claim is dropped rather than corrected
-   * on a guess. See `toUtcDayEnd` for the one place precision IS load-bearing.
+   * on a guess. See `utcMidnight` for the one place precision IS load-bearing.
    */
   readonly created_at: string;
   /**
@@ -467,7 +467,12 @@ export interface OrganizationFeedOutput {
 export interface PlatformFeedFilters {
   readonly actor_principal_id?: string;
   readonly action_id?: string;
-  /** Strict RFC 3339 UTC with `Z`. See `toUtcDayStart`/`toUtcDayEnd`. */
+  /**
+   * RFC 3339 UTC with EXACTLY THREE fractional digits, `[since, until)`.
+   * Built by `toUtcDayStart` / `toUtcExclusiveDayEnd` — never taken from an
+   * input, and never assembled by concatenation. See their header for why the
+   * width is a correctness rule.
+   */
   readonly since?: string;
   readonly until?: string;
 }
@@ -1036,17 +1041,51 @@ function asApiError(thrown: unknown): ApiError {
    some engines read one as local and some as UTC, so a filter that silently
    meant different ranges on different machines is worse than one that fails.
 
-   ASSUMPTION, STATED BECAUSE THE CONTRACT DOES NOT SPECIFY IT: `since` and
-   `until` are named as query parameters and NO FORMAT IS GIVEN for them
-   anywhere — not in the prose, not in the schema, which covers response shapes
-   only. These take the same form the schema gives `occurred_at`: RFC 3339, UTC.
+   THE FORMAT IS NOW SPECIFIED, AND IT IS NARROWER THAN "RFC 3339". These were
+   an assumption; `platform-audit-read-v1` has since fixed both halves:
 
-   AND THE TYPED DATE IS TREATED AS A UTC CALENDAR DAY. "Since 5 September" is
-   ambiguous between local and UTC midnight; resolving it to UTC means a record
-   at 23:30Z falls in the fifth for every operator wherever they are, and the
-   screens label the fields UTC so nobody is silently offset. The alternative —
-   the operator's local day — is defensible and would need to be a decision
-   rather than an inference.
+     FORMAT     RFC 3339 UTC with EXACTLY THREE fractional digits.
+     INTERVAL   HALF-OPEN — `[since, until)`. `since` is inclusive, `until` is
+                exclusive.
+
+   ===========================================================================
+   WHY EXACTLY THREE DIGITS IS A CORRECTNESS RULE AND NOT A STYLE ONE
+   ===========================================================================
+
+   Comparison against stored timestamps is LEXICOGRAPHIC OVER STRINGS, and that
+   equals temporal comparison ONLY WHEN BOTH OPERANDS ARE THE SAME WIDTH.
+
+   At index 19 a stored value has `.` (0x2E) and a bound written without a
+   fractional part has `Z` (0x5A). `.` sorts first. So EVERY stored value inside
+   a given second sorts BEFORE a bound naming that second with no milliseconds,
+   and both bounds shift forward in time by up to a second. Neither errors:
+
+     `until=…T23:59:59Z`   effective bound becomes the start of second 60 —
+                           OVER-includes, returning the whole of second 59 from
+                           a bound that is meant to be exclusive.
+     `since=…T00:00:00Z`   effective bound becomes the start of second 01 —
+                           UNDER-includes, DROPPING EVERY RECORD IN SECOND 00
+                           from a bound that is meant to be inclusive.
+
+   THE SECOND OF THOSE WAS SHIPPING. `toUtcDayStart` emitted `T00:00:00Z` and
+   was silently losing the first second of every day it was asked for.
+
+   ===========================================================================
+   A UTC DAY IS NOT THE OPERATOR'S DAY, AND THAT IS KNOWN RATHER THAN OVERLOOKED
+   ===========================================================================
+
+   An operator investigating "yesterday" from a local calendar picker gets a
+   window offset by their zone — up to a day's worth of records at each edge
+   belonging to a different local day than the one they had in mind.
+
+   THIS IS ACCEPTED FOR NOW, NOT UNCONSIDERED. An audit trail is read by more
+   than one person, often at once, and two operators discussing "the 5th" must
+   mean the same window or they are comparing different evidence; a local day
+   makes one filter mean different things to different people. The screens
+   label the fields UTC and render record timestamps in UTC, so the offset is
+   VISIBLE rather than silent, which is the property that makes it survivable.
+   Changing it to the operator's local day is a product decision, not an
+   inference to make here.
    ------------------------------------------------------------------------- */
 
 /** `YYYY-MM-DD` from a date input, or `''`. */
@@ -1054,82 +1093,95 @@ function isCalendarDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-export function toUtcDayStart(calendarDate: string): string | null {
-  return isCalendarDate(calendarDate) ? `${calendarDate}T00:00:00Z` : null;
+/**
+ * UTC midnight on the typed date, optionally shifted by whole days.
+ *
+ * `toISOString()` IS THE FORMATTER ON PURPOSE: it emits exactly three
+ * fractional digits, which is precisely the width the contract requires and the
+ * width stored values carry. Building the string by concatenation is what
+ * produced the shipping defect — a literal is one edit away from losing its
+ * `.000`, and nothing would fail.
+ *
+ * `Date.UTC` also normalises day overflow, so the day after 2026-12-31 is
+ * 2027-01-01 without month or year arithmetic here. Everything is UTC, so no
+ * daylight-saving transition can move a boundary.
+ *
+ * A WELL-FORMED BUT NON-EXISTENT DATE IS REFUSED rather than normalised.
+ * `2026-02-31` passes the shape test and `Date.UTC` would silently slide it into
+ * March; the round-trip check below catches that instead of querying a range the
+ * operator did not ask for.
+ */
+function utcMidnight(calendarDate: string, dayOffset: number): string | null {
+  if (!isCalendarDate(calendarDate)) return null;
+  const year = Number(calendarDate.slice(0, 4));
+  const month = Number(calendarDate.slice(5, 7));
+  const day = Number(calendarDate.slice(8, 10));
+
+  const base = new Date(Date.UTC(year, month - 1, day));
+  if (Number.isNaN(base.getTime()) || base.toISOString().slice(0, 10) !== calendarDate) {
+    return null;
+  }
+  return new Date(Date.UTC(year, month - 1, day + dayOffset)).toISOString();
 }
 
 /**
- * The end of the UTC day.
+ * The INCLUSIVE start of the UTC day. `…T00:00:00.000Z`.
  *
- * ===========================================================================
- * `.999Z` — CHOSEN BECAUSE IT IS CORRECT WHETHER `until` IS INCLUSIVE OR
- * EXCLUSIVE, AND THE CONTRACT DOES NOT SAY WHICH.
- * ===========================================================================
- *
- * THE PROPERTY THIS MUST SATISFY, WHICH IS WHAT TO CHECK IF ANYTHING CHANGES:
- * **the end of the range must include every record that falls within the
- * calendar day the operator typed, whatever precision Core emits.** The value
- * below is one way to satisfy that today; the property is what matters.
- *
- * ---------------------------------------------------------------------------
- * TWO EARLIER VERSIONS OF THIS COMMENT WERE WRONG, AND THE SECOND IS THE
- * INSTRUCTIVE ONE
- * ---------------------------------------------------------------------------
- *
- * It first read `T23:59:59Z`, justified with "second precision is what the log
- * records anyway". Then it read `T23:59:59.999Z` justified by the SAME false
- * premise, cited harder — "the log's timestamps are SECOND PRECISION, which the
- * contract says three separate times". The value became right and the reasoning
- * stayed wrong, which is worse, because a confident citation is what stops the
- * next reader checking (`architecture.md` §3c).
- *
- * WHAT THE CONTRACT ACTUALLY SAYS is that timestamps COLLIDE at second
- * precision in a burst — a statement about why the sort key needs `record_id`
- * as a tiebreaker, NOT a statement about what precision is stored. I read a
- * claim about storage out of three sentences about collisions, and never opened
- * the file that decides it.
- *
- * WHAT THE IMPLEMENTATION SAYS, CITED SO IT CAN BE DIFFED:
- * `platform/core/kernel/clock.ts:26` — "formatted RFC 3339 UTC with a `Z`
- * offset and MILLISECOND precision" — and `:33`, `toRfc3339Utc` is
- * `new Date(ms).toISOString()`, which emits exactly three fractional digits.
- * So records DO carry milliseconds, and a plain `T23:59:59Z` silently drops
- * everything from `.001` to `.999` — at the END of the range, where the newest
- * records are, and invisibly.
- *
- * ---------------------------------------------------------------------------
- * WHY `.999Z`, AND WHAT WOULD INVALIDATE IT
- * ---------------------------------------------------------------------------
- *
- * `toISOString()` emits exactly three fractional digits, so the last instant
- * Core can stamp within a day is `T23:59:59.999Z`.
- *
- * `platform-audit-read-v1` names `since` and `until` and states NEITHER their
- * format NOR their inclusivity — both reported as underspecifications rather
- * than resolved quietly. With inclusivity unknown:
- *
- *   `T23:59:59Z`           WRONG BOTH WAYS at millisecond precision — drops
- *                          `.001`–`.999`.
- *   next day `T00:00:00Z`  correct if EXCLUSIVE; if INCLUSIVE it pulls in the
- *                          first millisecond of the following day. Rejected
- *                          also because the operator would have to understand
- *                          that "until the 5th" means "up to the 6th".
- *   `T23:59:59.999Z`       correct if INCLUSIVE. If EXCLUSIVE it drops only a
- *                          record stamped at exactly `.999Z` — a ONE-
- *                          MILLISECOND window, against a one-SECOND one.
- *
- * **THE TRIGGER TO REVISIT, SO IT IS NOT DISCOVERED THE HARD WAY: if
- * `clock.ts` ever emits finer than milliseconds, this value silently starts
- * dropping records again.** The property at the top is what stays true; this
- * constant is only its current expression.
- *
- * AND THE RISK THAT REMAINS: the format is unspecified, so Core might refuse a
- * fractional second with `invalid_argument`. That is a LOUD failure on first
- * use and a one-character fix, against a SILENT gap nobody finds while hunting
- * an event.
+ * The `.000` is load-bearing, not decoration — see the header. Without it the
+ * bound sorts after every record in second 00 and those records are dropped.
  */
-export function toUtcDayEnd(calendarDate: string): string | null {
-  return isCalendarDate(calendarDate) ? `${calendarDate}T23:59:59.999Z` : null;
+export function toUtcDayStart(calendarDate: string): string | null {
+  return utcMidnight(calendarDate, 0);
+}
+
+/**
+ * The EXCLUSIVE end of the UTC day: **the NEXT day at `…T00:00:00.000Z`.**
+ *
+ * ===========================================================================
+ * IT IS THE NEXT DAY'S MIDNIGHT BECAUSE THE INTERVAL IS HALF-OPEN
+ * ===========================================================================
+ *
+ * `platform-audit-read-v1` now specifies `[since, until)` — `since` inclusive,
+ * `until` exclusive. The upper bound is therefore the first instant NOT wanted,
+ * which for a whole UTC day is the following midnight. Every record in the
+ * chosen day is strictly below it, including one stamped at `…T23:59:59.999Z`.
+ *
+ * THE NAME SAYS `EXCLUSIVE` FOR THAT REASON. It was `toUtcDayEnd`, which reads
+ * as a moment inside the day and invites exactly the value that was wrong.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS VALUE HAS BEEN WRONG THREE TIMES. THE SEQUENCE IS THE USEFUL PART.
+ * ---------------------------------------------------------------------------
+ *
+ *   1. `T23:59:59Z`      justified with "second precision is what the log
+ *                        records anyway" — a claim about Core nobody had read.
+ *   2. `T23:59:59.999Z`  right value, SAME false premise, cited harder: "the
+ *                        contract says so three separate times". Fixing the
+ *                        value while strengthening a false justification is
+ *                        worse than leaving both wrong, because the citation is
+ *                        what stops the next reader checking
+ *                        (`architecture.md` §3c).
+ *   3. and it was still wrong, for a reason neither reading had reached: the
+ *                        interval is HALF-OPEN, so an inclusive-looking end
+ *                        drops the final millisecond.
+ *
+ * WHAT THE CONTRACT'S "second precision" SENTENCES ACTUALLY SAY is that
+ * timestamps COLLIDE at second precision in a burst — why the sort key needs
+ * `record_id` as a tiebreaker, not what is stored.
+ * `platform/core/kernel/clock.ts:26` states MILLISECOND precision and `:33` is
+ * `toISOString()`. Cited so the next reader can diff it rather than trust it.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE WIDTH RULE THIS FORM SATISFIES FOR FREE
+ * ---------------------------------------------------------------------------
+ *
+ * `.999Z` was immune to the lexicographic width defect described in the header
+ * — by accident, because it happened to be the same width as a stored value.
+ * `…T00:00:00.000Z` is immune for the same reason and by construction, because
+ * `toISOString()` cannot emit any other width.
+ */
+export function toUtcExclusiveDayEnd(calendarDate: string): string | null {
+  return utcMidnight(calendarDate, 1);
 }
 
 /** Builds `?page_size=&cursor=`, omitting a null or empty cursor. */

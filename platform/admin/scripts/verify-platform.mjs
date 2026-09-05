@@ -40,7 +40,7 @@ import {
   parseResolveMember,
   isKnownAuditOutcome,
   isKnownPlatformRole,
-  toUtcDayEnd,
+  toUtcExclusiveDayEnd,
   toUtcDayStart,
   parseTemplate,
   parseWhoami,
@@ -1329,16 +1329,28 @@ console.log('\n=== The feeds: requests, filters and paging ===\n');
     filters: {
       actor_principal_id: 'pr_a',
       action_id: 'platform.audit.list',
-      since: '2026-09-01T00:00:00Z',
-      // The value `toUtcDayEnd` produces, so this asserts what the screens send.
-      until: '2026-09-05T23:59:59.999Z',
+      /*
+       * DERIVED FROM THE HELPERS, NOT HAND-WRITTEN. These literals previously
+       * read `2026-09-01T00:00:00Z` and `…T23:59:59.999Z` — copied by hand, and
+       * the first was the exact defective form the screens were sending. A
+       * fixture that hard-codes what it expects can pass while the code under
+       * it sends something else, which is what happened here.
+       */
+      since: toUtcDayStart('2026-09-01'),
+      until: toUtcExclusiveDayEnd('2026-09-05'),
     },
   });
   const url = calls[0].url;
   checkTrue('actor_principal_id IS sent on the platform feed', url.includes('actor_principal_id=pr_a'));
   checkTrue('action_id is sent', url.includes('action_id=platform.audit.list'));
-  checkTrue('since is Z-suffixed and URL-encoded', url.includes('since=2026-09-01T00%3A00%3A00Z'));
-  checkTrue('until is Z-suffixed', url.includes('until=2026-09-05T23%3A59%3A59.999Z'));
+  checkTrue(
+    'since is sent with three fractional digits',
+    url.includes(`since=${encodeURIComponent(toUtcDayStart('2026-09-01'))}`),
+  );
+  checkTrue(
+    'until is the NEXT day at .000, not an inclusive end',
+    url.includes(`until=${encodeURIComponent('2026-09-06T00:00:00.000Z')}`),
+  );
   check('no target_principal_id parameter is ever sent', url.includes('target_principal_id'), false);
 }
 
@@ -1374,54 +1386,105 @@ console.log('\n=== The feeds: requests, filters and paging ===\n');
 
 console.log('\n=== The UTC day helpers ===\n');
 
-check('a calendar date becomes a Z-suffixed UTC day start', toUtcDayStart('2026-09-05'), '2026-09-05T00:00:00Z');
+/*
+ * THE FORMAT IS NOW SPECIFIED: RFC 3339 UTC with EXACTLY THREE fractional
+ * digits, and the interval is HALF-OPEN `[since, until)`.
+ *
+ * THE WIDTH IS A CORRECTNESS RULE. Comparison against stored timestamps is
+ * lexicographic, which equals temporal comparison only when both operands are
+ * the same width: at index 19 a stored value has `.` (0x2E) and a bound with no
+ * fractional part has `Z` (0x5A), and `.` sorts first. So a bound written
+ * without milliseconds shifts FORWARD by up to a second —
+ * `since=…T00:00:00Z` silently drops every record in second 00, which is what
+ * this console was shipping.
+ */
+
+check('the day start carries .000', toUtcDayStart('2026-09-05'), '2026-09-05T00:00:00.000Z');
+check(
+  'the exclusive end is the NEXT day at .000',
+  toUtcExclusiveDayEnd('2026-09-05'),
+  '2026-09-06T00:00:00.000Z',
+);
+
+/* THE WIDTH RULE, ASSERTED ON THE OUTPUT RATHER THAN TRUSTED. */
+for (const [label, value] of [
+  ['start', toUtcDayStart('2026-09-05')],
+  ['exclusive end', toUtcExclusiveDayEnd('2026-09-05')],
+]) {
+  checkTrue(
+    `the ${label} has exactly three fractional digits`,
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value ?? ''),
+  );
+  check(`the ${label} is 24 characters, the stored width`, (value ?? '').length, 24);
+}
 
 /*
- * THE DAY END IS `.999Z`, AND THE CHECKS BELOW ARE THE REASON RATHER THAN THE
- * VALUE.
- *
- * CORRECTED: this comment previously said "the log is second-precision (said
- * three times)". THAT WAS FALSE and it was the third copy of the same false
- * premise — the source comment and the README carried the other two, and the
- * value was fixed before any of the three were. Core stamps MILLISECONDS:
- * `platform/core/kernel/clock.ts:26` states it and `:33` is `toISOString()`.
- * The contract's "second precision" sentences are about timestamps COLLIDING in
- * a burst, which is why the sort key needs `record_id` as a tiebreaker — not
- * about what is stored.
- *
- * The contract states neither the format of `until` nor its inclusivity. At
- * millisecond precision `.999Z` is correct if inclusive, and if exclusive drops
- * only a record stamped at exactly `.999Z` — one millisecond, against the full
- * second a plain `T23:59:59Z` would have lost either way.
+ * THE HALF-OPEN INTERVAL COVERS THE WHOLE DAY AND NOTHING MORE. A record at the
+ * first instant is included; one at the last is included; the next day's first
+ * instant is not.
  */
-check('the UTC day end is .999Z', toUtcDayEnd('2026-09-05'), '2026-09-05T23:59:59.999Z');
-checkTrue(
-  'it is strictly greater than T23:59:59Z, so the final second is not lost',
-  new Date('2026-09-05T23:59:59.999Z').getTime() > new Date('2026-09-05T23:59:59Z').getTime(),
-);
-checkTrue(
-  'so an exclusive `until` still includes that final second',
-  new Date('2026-09-05T23:59:59Z').getTime() < new Date(toUtcDayEnd('2026-09-05')).getTime(),
-);
-checkTrue(
-  'and it never reaches the next day, so an inclusive `until` cannot leak into it',
-  new Date(toUtcDayEnd('2026-09-05')).getTime() < new Date('2026-09-06T00:00:00Z').getTime(),
-);
+{
+  const since = new Date(toUtcDayStart('2026-09-05')).getTime();
+  const until = new Date(toUtcExclusiveDayEnd('2026-09-05')).getTime();
+  const at = (v) => new Date(v).getTime();
+  checkTrue('the first instant of the day is included', at('2026-09-05T00:00:00.000Z') >= since);
+  checkTrue('a record in second 00 is included', at('2026-09-05T00:00:00.500Z') >= since);
+  checkTrue('the last instant of the day is included', at('2026-09-05T23:59:59.999Z') < until);
+  checkTrue('the next day is excluded', at('2026-09-06T00:00:00.000Z') >= until);
+  check('the window is exactly one day', until - since, 86_400_000);
+}
+
 /*
- * The regression this replaced: a plain `T23:59:59Z` under an EXCLUSIVE `until`
- * drops every record in the final second — the newest, and the ones an
- * investigation looks at first.
+ * THE REGRESSIONS THIS REPLACED, ASSERTED SO THEY CANNOT RETURN SILENTLY.
  */
 checkTrue(
-  'the superseded T23:59:59Z would have excluded the final second under an exclusive reading',
-  new Date('2026-09-05T23:59:59Z').getTime() >= new Date('2026-09-05T23:59:59Z').getTime(),
+  'the superseded T00:00:00Z sorts AFTER a record in second 00 (the shipped defect)',
+  '2026-09-05T00:00:00Z' > '2026-09-05T00:00:00.500Z',
 );
+checkTrue(
+  'and the superseded T23:59:59.999Z would exclude the final millisecond under a half-open end',
+  !(at2('2026-09-05T23:59:59.999Z') < at2('2026-09-05T23:59:59.999Z')),
+);
+function at2(v) {
+  return new Date(v).getTime();
+}
+
+/*
+ * DAY, MONTH AND YEAR ROLLOVER — the exclusive end is the next day, so these are
+ * the boundaries a hand-built string would get wrong.
+ */
+check('month rollover', toUtcExclusiveDayEnd('2026-09-30'), '2026-10-01T00:00:00.000Z');
+check('year rollover', toUtcExclusiveDayEnd('2026-12-31'), '2027-01-01T00:00:00.000Z');
+check('february in a non-leap year', toUtcExclusiveDayEnd('2026-02-28'), '2026-03-01T00:00:00.000Z');
+check('february in a leap year', toUtcExclusiveDayEnd('2028-02-28'), '2028-02-29T00:00:00.000Z');
+check('and the leap day itself', toUtcExclusiveDayEnd('2028-02-29'), '2028-03-01T00:00:00.000Z');
+
+/*
+ * A WELL-FORMED BUT NON-EXISTENT DATE IS REFUSED rather than normalised into a
+ * range the operator did not ask for.
+ */
+check('a non-existent date is refused, not slid into March', toUtcDayStart('2026-02-31'), null);
+check('and so is its exclusive end', toUtcExclusiveDayEnd('2026-02-31'), null);
+
+/*
+ * THE EQUAL-BOUNDS CASE. A zero-width half-open interval returns nothing, so a
+ * single-day pick must not produce equal bounds. CONFIRMED HERE rather than
+ * taken on assurance.
+ */
+{
+  const since = toUtcDayStart('2026-09-05');
+  const until = toUtcExclusiveDayEnd('2026-09-05');
+  check('one date for both ends does NOT produce equal bounds', since === until, false);
+  checkTrue('and they differ by exactly one day', new Date(until).getTime() - new Date(since).getTime() === 86_400_000);
+}
 check('an empty date yields null, so nothing is sent', toUtcDayStart(''), null);
 check('a zoneless datetime is NOT accepted as a calendar date', toUtcDayStart('2026-09-05T10:00'), null);
-check('a malformed date yields null', toUtcDayEnd('05/09/2026'), null);
+check('a malformed date yields null', toUtcExclusiveDayEnd('05/09/2026'), null);
 checkTrue(
   'every produced timestamp ends in Z',
-  [toUtcDayStart('2026-01-01'), toUtcDayEnd('2026-12-31')].every((v) => v !== null && v.endsWith('Z')),
+  [toUtcDayStart('2026-01-01'), toUtcExclusiveDayEnd('2026-12-31')].every(
+    (v) => v !== null && v.endsWith('Z'),
+  ),
 );
 
 console.log('\n=== Operators: three fields and nothing else ===\n');

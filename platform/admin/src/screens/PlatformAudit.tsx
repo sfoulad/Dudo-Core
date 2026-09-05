@@ -55,7 +55,7 @@ import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
 import { ErrorBlock } from '@/components/StateBlock';
 import {
   PLATFORM_DEFAULT_PAGE_SIZE,
-  toUtcDayEnd,
+  toUtcExclusiveDayEnd,
   toUtcDayStart,
   type PlatformFeedFilters,
   type PlatformFeedOutput,
@@ -127,7 +127,8 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
       if (draft.action.trim() !== '') next.action_id = draft.action.trim();
       // Strict RFC 3339 UTC, built here — never whatever the date input holds.
       const since = toUtcDayStart(draft.since);
-      const until = toUtcDayEnd(draft.until);
+      // EXCLUSIVE: the next day's midnight. `[since, until)`.
+      const until = toUtcExclusiveDayEnd(draft.until);
       if (since !== null) next.since = since;
       if (until !== null) next.until = until;
       setApplied(next);

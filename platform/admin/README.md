@@ -144,21 +144,33 @@ it names `since` and `until` and states **neither their format nor their inclusi
 - **Day:** the typed date is a **UTC calendar day**, and the fields are labelled UTC. An audit
   trail is read by more than one person at once, and two operators discussing "the 5th" must mean
   the same window or they are comparing different evidence.
-- **The end of the day is `T23:59:59.999Z`, not `T23:59:59Z`.** Core stamps records at
-  **millisecond** precision — `platform/core/kernel/clock.ts:26` says so, and `:33` is
-  `toISOString()`, which emits exactly three fractional digits. So `T23:59:59Z` **silently drops
-  everything from `.001` to `.999`**, at the end of the range where the newest records are.
+- **The bounds are `[since, until)` — half-open — with exactly three fractional digits.** The
+  start is `…T00:00:00.000Z`; the end is **the next day** at `…T00:00:00.000Z`.
 
-  > **This README previously said the log was second-precision, citing the contract three times.
-  > That was false.** The contract says timestamps *collide* at second precision in a burst — a
-  > statement about why the sort key needs a tiebreaker, not about what is stored. The value was
-  > corrected before the reasoning was, which is the worse failure: a confident citation is what
-  > stops the next reader checking.
+  > **The width is a correctness rule, not a style one.** Comparison against stored timestamps is
+  > **lexicographic**, which equals temporal comparison only when both operands are the same width.
+  > At index 19 a stored value has `.` (0x2E) and a bound without a fractional part has `Z` (0x5A),
+  > and `.` sorts first — so a fractionless bound shifts **forward by up to a second**.
+  > `until=…T23:59:59Z` over-includes; **`since=…T00:00:00Z` silently drops every record in second
+  > 00, which this console was shipping.**
 
-  With inclusivity unstated, `.999Z` is correct if inclusive, and if exclusive drops only a record
-  stamped at exactly `.999Z` — a **one-millisecond** window against a one-second one.
-  **Revisit if `clock.ts` ever emits finer than milliseconds**, at which point this value starts
-  dropping records again.
+  Built with `toISOString()` rather than string concatenation, because it **cannot** emit another
+  width — a literal is one edit away from losing its `.000` and nothing would fail. `Date.UTC`
+  handles month, year and leap-day rollover; a well-formed but non-existent date such as
+  `2026-02-31` is **refused rather than normalised** into a range nobody asked for.
+
+  > **This value has been wrong three times, and the sequence is the useful part.** First
+  > `T23:59:59Z`, justified by a claim about Core nobody had read. Then `T23:59:59.999Z` with the
+  > **same false premise cited harder** — "the contract says so three times" — which is worse,
+  > because a confident citation is what stops the next reader checking. Then still wrong, because
+  > the interval turned out to be half-open. The contract's "second precision" sentences are about
+  > timestamps *colliding* in a burst, not about what is stored; `clock.ts:26` says **millisecond**.
+
+- **A UTC day is not the operator's day**, and that is known rather than overlooked. Someone
+  investigating "yesterday" from a local picker gets a window offset by their zone. It is accepted
+  for now because an audit trail is read by several people at once and "the 5th" must mean one
+  window — and because the fields are labelled UTC and records render in UTC, so the offset is
+  **visible rather than silent**. Changing it is a product decision.
 
 **Record timestamps are rendered in UTC and labelled**, for the same reason. A screen that filters
 in UTC and renders in local time makes the boundary rows appear to contradict the filter: an
