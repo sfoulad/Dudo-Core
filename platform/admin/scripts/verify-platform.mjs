@@ -1175,9 +1175,19 @@ checkTrue(
   'the screen substitutes its own non-ASCII wording',
   /NON_ASCII_LOOKUP_REFUSAL/.test(screenCode),
 );
+/*
+ * Checked against `screenCode` — comments stripped — because the concern is a
+ * hard-coded literal IN CODE, which would go stale when `platform/web` rewords
+ * the shared sentence. Prose describing the situation is not the hazard.
+ *
+ * (The first version of this check scanned the raw source and failed on the
+ * screen's own explanatory comment, which quoted the sentence. The comment now
+ * paraphrases instead, so neither copy can go stale — but the check still reads
+ * code, because that is what it is actually about.)
+ */
 check(
   'the shared sign-in wording is NOT hard-coded as a literal in the screen',
-  screen.includes('sign you in'),
+  screenCode.includes('sign you in'),
   false,
 );
 
