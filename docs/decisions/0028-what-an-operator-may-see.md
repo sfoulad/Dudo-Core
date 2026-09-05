@@ -159,6 +159,33 @@ reveal *that* membership changed, never who or in which direction) is recorded r
 The information exists at creation and nowhere afterwards. **The fix is a tenant-side view, not a
 platform one.**
 
+## Amendment, 2026-09-05 — "visible to the tenant" is currently written, not readable
+
+**Recorded the same day this was accepted, because the record overstates a control it rests on.**
+
+Decisions 2 and 3 both lean on tenant-side audit records: the resolve writes one on every call
+including 404s, and the Organization feed writes one on every read — *"the tenant must see that read
+happen."* The residual was accepted as **N requests, audited, tenant-visible, rate limited.**
+
+**`core.audit.read` is catalogued at organization scope and has no route.** So today the tenant-side
+records are **written and unreadable**. Nothing in the product lets a customer see what the platform
+did to them.
+
+**The mechanism is sound and the visibility is not yet delivered.** Every argument above stands as
+an argument — the back door is still the same size as the front door, the aggregation still costs N
+audited requests — **but "visible to each victim" is a property of a route that does not exist.**
+Until it does, this surface is auditable rather than audited: the evidence is captured, and the party
+it protects cannot read it.
+
+**This is deliberately not fixed by widening the platform.** The answer is a **tenant-side** audit
+read, which is `PA-3` / `OD-2` and the largest gap left in this surface. A platform-side
+convenience would put the customer's view of the platform's behaviour inside the platform's own
+console, which is the wrong place for it by construction.
+
+**Stated here rather than in a backlog because of what it would otherwise become:** a future reader
+citing `0028` for the proposition that operator actions are visible to tenants would be quoting a
+control that has never worked. **An unread audit record is detection that nobody performs.**
+
 ## What this does NOT decide
 
 - **The operators list**, and specifically whether a **revoke** route should exist where creation
