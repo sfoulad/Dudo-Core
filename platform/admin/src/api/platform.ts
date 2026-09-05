@@ -365,6 +365,106 @@ export function parseListOrganizations(payload: unknown): ListOrganizationsOutpu
   };
 }
 
+/* -------------------------------------------------------------------------
+   Onboarding — `organization-onboarding-v1`, accepted
+   ------------------------------------------------------------------------- */
+
+/**
+ * The two things that can fail AFTER the Organization irrevocably exists.
+ *
+ * A CLOSED SET OF STABLE TOKENS, NEVER FREE TEXT, and the schema says why: "a
+ * closed set means a console can render each one specifically and qa-agent can
+ * assert them; free text would be a message nobody could branch on and everybody
+ * would log."
+ */
+export const ONBOARDING_WARNINGS = [
+  'first_workspace_not_created',
+  'tenant_audit_record_not_written',
+] as const;
+export type OnboardingWarning = (typeof ONBOARDING_WARNINGS)[number];
+
+export interface OnboardOrganizationOutput {
+  readonly organization_id: string;
+  readonly admin_principal_id: string;
+  /** NULL when `warnings` contains `first_workspace_not_created`. */
+  readonly workspace_id: string | null;
+  /**
+   * EMPTY ON A COMPLETE SUCCESS. A 201 WITH WARNINGS IS A SUCCESS, NOT A
+   * FAILURE: the Organization, the admin and the credential all exist and
+   * something after them did not. The response is still 201 because the
+   * credential is irreplaceable and must reach the operator.
+   *
+   * The schema is explicit that rendering this as an ordinary success is the
+   * defect the field exists to prevent — so it is surfaced prominently, and it
+   * is NOT rendered as an error either.
+   */
+  readonly warnings: readonly string[];
+}
+
+export interface OnboardOrganizationInput {
+  /** The normalised identifier. Also the salt the derived value was made with. */
+  readonly admin_identifier: string;
+  readonly template_id: string;
+  /** Exactly 43 base64url characters. The password itself is never sent. */
+  readonly derived_value: string;
+}
+
+export function isKnownOnboardingWarning(value: string): value is OnboardingWarning {
+  return (ONBOARDING_WARNINGS as readonly string[]).includes(value);
+}
+
+/**
+ * ===========================================================================
+ * THE FIXED PLACEHOLDER SENT AS `first_workspace_name`
+ * ===========================================================================
+ *
+ * `first_workspace_name` IS REQUIRED BY THE CONTRACT, VALIDATED BY CORE, AND
+ * DISCARDED. `platform/core/migrations/0002_business.sql` gives the `business`
+ * table exactly two columns — `tenant_id` and `business_id` — and says in terms
+ * that there is "deliberately NO Business name... They belong to the
+ * organization-structure slice, with its own contract."
+ * `onboarding-service.ts` states the consequence plainly: **"SO
+ * `first_workspace_name` IS ACCEPTED, VALIDATED AND DISCARDED."**
+ *
+ * SO THE CONSOLE DOES NOT ASK FOR IT. Team Lead ruling, and it is the right
+ * one: an operator who types "Main Campus" and watches it vanish has been lied
+ * to by the form. Nothing is preserved for later — the value never reaches
+ * storage — so prompting buys nothing and costs the operator's trust in every
+ * other field on the page. Accepting and discarding is worse than not accepting.
+ *
+ * THE VALUE MUST STILL SATISFY `workspaceName`: 1-120 characters, no leading or
+ * trailing whitespace. This one is deliberately self-describing rather than
+ * something like "Main" — if it ever DOES reach storage, because the
+ * organization-structure slice adds the column while this constant is still
+ * here, it should read as an obvious placeholder rather than as a name someone
+ * chose. That is the failure mode worth designing for: the field starting to
+ * matter without anyone revisiting this line.
+ */
+export const DISCARDED_WORKSPACE_NAME_PLACEHOLDER = 'Unnamed (naming arrives with organization structure)';
+
+export function parseOnboardOrganization(payload: unknown): OnboardOrganizationOutput {
+  const what = 'The onboarding response';
+  const body = requireObject(payload, what);
+  const warnings = body.warnings;
+  if (!Array.isArray(warnings) || warnings.some((item) => typeof item !== 'string')) {
+    throw new ShapeError(`${what} field "warnings" was not an array of strings.`);
+  }
+  /*
+   * NO CREDENTIAL FIELD IS READ, BECAUSE NONE EXISTS. `initial_password` was
+   * removed from this response on 2026-09-05 and no tombstone was left. If a
+   * future response ever carried one, this parser would ignore it — and that is
+   * the correct behaviour: the console already holds the only copy, and reading
+   * a password back off the wire would reintroduce exactly the design 0015 §D
+   * and 0026 exist to prevent.
+   */
+  return {
+    organization_id: requireString(body, 'organization_id', what),
+    admin_principal_id: requireString(body, 'admin_principal_id', what),
+    workspace_id: requireNullableString(body, 'workspace_id', what),
+    warnings: Object.freeze([...(warnings as string[])]),
+  };
+}
+
 export function parseTemplate(payload: unknown, what = 'The Template response'): Template {
   const body = requireObject(payload, what);
   const labels = requireObject(body.level_labels, `${what} field "level_labels"`);
@@ -607,6 +707,7 @@ export interface PlatformClient {
   }): Promise<ListTemplatesOutput>;
   readTemplate(templateId: string): Promise<Template>;
   createTemplate(input: CreateTemplateInput): Promise<Template>;
+  onboardOrganization(input: OnboardOrganizationInput): Promise<OnboardOrganizationOutput>;
 }
 
 export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {}): PlatformClient {
@@ -684,6 +785,45 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
         return parseTemplate(
           await platformRequest(TEMPLATES_PATH, { method: 'POST', body }, options.fetchImpl),
           'The created Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async onboardOrganization(input) {
+      /*
+       * EXACTLY THE FOUR DECLARED FIELDS AND NOTHING ELSE.
+       *
+       * `platform-routes.ts` declares `fields: ['admin_identifier',
+       * 'template_id', 'first_workspace_name', 'derived_value']` and the class
+       * REFUSES ANY UNDECLARED FIELD BEFORE AUTHENTICATION. So there is no
+       * `role`, no `permissions`, no `memberships`, no `password`, no
+       * `organization_id` and no `principal_id` here — not even set to null or
+       * empty, because "absent" and "present and empty" are different requests
+       * and only one of them is accepted.
+       *
+       * THAT ABSENCE IS A SECURITY BOUND, NOT TIDINESS. `0025` decision 4 bound
+       * 3: there is no field through which an existing Organization could be
+       * named, so the membership-write step cannot be reached with an identifier
+       * from anywhere but this operation's own generator. A `role` field would
+       * widen a bounded bootstrap exception to `0007` D11 into a general grant
+       * mechanism — which `0025` names as the bound most likely to erode.
+       */
+      const body = {
+        admin_identifier: input.admin_identifier,
+        template_id: input.template_id,
+        // Required, validated, discarded. See the constant.
+        first_workspace_name: DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
+        derived_value: input.derived_value,
+      };
+      try {
+        return parseOnboardOrganization(
+          await platformRequest(
+            ORGANIZATIONS_PATH,
+            { method: 'POST', body },
+            options.fetchImpl,
+          ),
         );
       } catch (thrown) {
         throw asApiError(thrown);

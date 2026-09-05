@@ -59,6 +59,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import { OnboardOrganization } from '@/screens/OnboardOrganization';
 import { cn } from '@/lib/cn';
 import {
   PLATFORM_DEFAULT_PAGE_SIZE,
@@ -108,6 +109,22 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
     setDepth(1);
   }, []);
 
+  /*
+   * After onboarding, return to the first page and re-fetch.
+   *
+   * BACK TO THE FIRST PAGE RATHER THAN RE-FETCHING THE CURRENT ONE: the cursor
+   * is bound to the query and a new row changes what the enumeration contains,
+   * so resuming mid-list after an insert shows a page whose meaning has quietly
+   * changed. `nonce` is bumped as well because `restart` alone is a no-op when
+   * the operator is already on the first page — and that is exactly the common
+   * case here.
+   */
+  const refreshAfterOnboarding = useCallback(() => {
+    setCursor(null);
+    setDepth(1);
+    setNonce((value) => value + 1);
+  }, []);
+
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-4xl">
       <header className="mb-5">
@@ -120,6 +137,18 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
           operator is structurally incapable of making one.
         </p>
       </header>
+
+      {/*
+        ONBOARDING LIVES HERE RATHER THAN IN ITS OWN NAV SECTION. The contract
+        calls the Organization list "the console's home screen and the only way
+        an operator discovers what exists", and creating one belongs beside
+        seeing what exists — the same shape Templates uses. It also keeps the
+        navigation at four items, which matters more than it sounds given how
+        much trouble that navigation has already caused.
+      */}
+      <div className="mb-8">
+        <OnboardOrganization platform={platform} onOnboarded={refreshAfterOnboarding} />
+      </div>
 
       {load.kind === 'loading' ? <LoadingBlock label="Asking Core for the Organizations…" /> : null}
 

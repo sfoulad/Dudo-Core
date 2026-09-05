@@ -87,11 +87,17 @@ Four independent implementations — the **admin console**, the web client, the 
 `node:crypto` reference — are asserted to derive byte-identical values, and a credential enrolled by
 the tool is accepted through the real verifier when derived by **either shipped client**.
 
-**The admin console's KDF is a copy of the web client's and had never been compared to anything
-until 2026-09-05.** A script compared the two files' **text**, character for character — but the
-iteration constant sits **above** the compared region, so a drift there passed the script and would
-have failed only at this login screen. It is now asserted by output, including a case driving the
-admin client at 599,999 iterations and requiring the round trip to refuse it.
+**The admin console's KDF had never been compared to anything by a test suite until 2026-09-05**,
+and is now asserted by **output** rather than only by text — including a case driving the admin
+client at 599,999 iterations and requiring the round trip to refuse it.
+
+**Correction, 2026-09-05.** An earlier version of this line said the iteration constant sat *above*
+the console's drift-checked region, so a change to it would pass that script. **That is false, and I
+recorded it here without opening the file.** The constant is **inside** the compared region, and
+`verify-kdf.mjs` **also** asserts its value directly and independently. `admin-shell` proved it by
+setting the constant to `599_999`, watching **two** checks fail, and restoring it. **The guard had
+no gap; this document invented one** — which is the same defect as a comment claiming a contract
+says something it does not, one document further from the code.
 
 **Two limits remain, and the first sign-in is what tests them:**
 

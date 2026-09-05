@@ -2,10 +2,10 @@
 
 The operator console for **`https://admin.dudo.work`** (ADR 0010, ADR 0022).
 
-**Organizations and Templates are live. Operators and Audit are not.** Sign-in, the session
-probe, the Organization list and the full Template surface call real, accepted, audited
-platform routes. The other two sections say what they are waiting for rather than showing a
-placeholder table.
+**Organizations (including onboarding) and Templates are live. Operators and Audit are not.**
+Sign-in, the session probe, the Organization list, onboarding a business and the full Template
+surface call real, accepted, audited platform routes. The other two sections say what they are
+waiting for rather than showing a placeholder table.
 
 > ### Templates are complete and inert, and the screen says so
 >
@@ -41,7 +41,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 92 checks against the shapes Core actually returns
+npm run verify:platform  # 132 checks against the shapes Core actually returns
 npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -78,6 +78,39 @@ absent and a menu missing only its first row both look unremarkable.
 | `GET /api/v1/platform/templates` | The Template list, keyset-paginated. |
 | `GET /api/v1/platform/templates/{template_id}` | One Template. **The first route in this class with a path parameter.** |
 | `POST /api/v1/platform/templates` | Create a Template. Sends `name` and optionally `level_labels`. |
+| `POST /api/v1/platform/organizations` | **Onboard a business.** Creates the Organization, its first admin, that admin's credential and one `owner` membership. |
+
+### Onboarding: this browser holds the only copy of the password
+
+`0026` option B — **the console generates the password and derives from it**, and
+`onboardOrganizationOutput` carries **no credential field of any kind**. Core stores a verifier it
+cannot invert, so if this screen loses the value the account is unreachable and the only remedy is
+a credential reset.
+
+- 24 CSPRNG bytes, base64url, 32 characters, ~192 bits — matching `seed-principal.ts` exactly.
+  The generator lives in its own module (`api/generate-password.ts`) **so the real function can be
+  tested under Node**; `onboarding-credential.ts` imports the Web Worker and cannot be.
+- The derivation is **`deriveLogin` — the same code path a person signing in uses.** It is called,
+  not reimplemented: if onboarding derived differently from login, the account would be created and
+  could never be signed into, and the failure would appear only when a real customer first tried.
+- **The password is not rendered until Core answers 201.** Showing it beside a request that then
+  failed hands an operator a credential for an account that does not exist.
+- Never persisted, never logged, never in a URL. Dismissing the panel takes a deliberate
+  confirmation, because a mis-click there destroys the only copy.
+- The screen states `0026`'s accepted cost plainly: **there is no self-service password change**,
+  so whoever onboards a business knows that admin's password until an operator resets it.
+
+**The Workspace name is not asked for.** `first_workspace_name` is required by the contract,
+validated by Core, and **discarded** — `business` has exactly two columns and naming belongs to the
+organization-structure slice. The client sends a fixed, self-describing placeholder and the screen
+explains the absence where an operator would look for the field. **Accepting and discarding is
+worse than not accepting:** an operator who types "Main Campus" and watches it vanish has been lied
+to by the form, and nothing is preserved for later.
+
+**A `201` with warnings is a success, not a failure.** `workspace_id: null` plus
+`first_workspace_not_created` means the Organization, the admin and the credential all exist and a
+tenant-side write did not. It is rendered prominently and **not** as an error — treating it as one
+would make an operator discard a live credential for a real customer.
 
 **Two things about `create` that are easy to get wrong, and are asserted in `verify:platform`:**
 
@@ -86,10 +119,12 @@ absent and a menu missing only its first row both look unremarkable.
   validation error. **Omission is what selects the default**, and the client never applies the
   default itself — Core always returns all three labels, which is what stops the web and Apple
   clients drifting into different ideas of what an unlabelled level is called.
-- **Any `2xx` is success.** `template-v1` declares `successStatus: 201`; Core returns **200**,
-  because `http/api.ts` hardcodes it for every platform route and `PlatformRoute` has no
-  `successStatus` field. This client accepts both, so it encodes neither side's bug. **Reported
-  to the Team Lead as a Core/contract divergence.**
+- **Any `2xx` is success.** This client accepts 200 and 201 alike, and that is now belt-and-braces
+  rather than a workaround. **It was a real divergence and it has been fixed:** `template-v1`
+  declared `successStatus: 201` while `http/api.ts` hardcoded 200 for every platform route.
+  `core-agent` added `successStatus` to `PlatformRoute` and `api.ts` now honours it, so Core
+  returns **201** for both `templates.create` and `organizations.create`. Accepting either still
+  costs nothing and means this client cannot break on a status change alone.
 
 **And one about errors:** `rate_limited` and `quota_exceeded` **share HTTP 429**
 (`kernel/errors.ts`), so the status cannot tell them apart. The client reads the **code from the
@@ -221,6 +256,8 @@ src/
     auth.ts                              sign-in and sign-out against login-v1
     platform.ts                          the platform route class; parses, never casts
     platform-session.ts                  the probe, and its four answers
+    generate-password.ts                 24 CSPRNG bytes; split out so it is testable
+    onboarding-credential.ts             generates and derives; the server sees neither
     config.ts                            build config; refuses a cross-origin API
     errors.ts                            the shared error envelope, console wording
   components/
@@ -234,7 +271,8 @@ src/
     cn.ts
   screens/
     SignIn.tsx                           sign-in with measured KDF progress
-    Organizations.tsx                    LIVE — the Organization list
+    Organizations.tsx                    LIVE — the Organization list, with onboarding above it
+    OnboardOrganization.tsx              LIVE — the form and the shown-once credential panel
     Templates.tsx                        LIVE — list and create; carries the TM-4 notice
     Operators.tsx Audit.tsx              not built; each says what it waits for
 scripts/verify-kdf.mjs                   normative checks + the cross-client drift check

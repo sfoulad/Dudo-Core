@@ -32,9 +32,13 @@ import {
   createPlatformClient,
   parseListOrganizations,
   parseListTemplates,
+  parseOnboardOrganization,
   parseTemplate,
   parseWhoami,
+  isKnownOnboardingWarning,
   isKnownStatus,
+  ONBOARDING_WARNINGS,
+  DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
   templateLabelRefusal,
   templateNameRefusal,
   ORGANIZATIONS_PATH,
@@ -45,6 +49,16 @@ import {
   PLATFORM_MAX_PAGE_SIZE,
 } from '../src/api/platform.ts';
 import { probeOperatorSession } from '../src/api/platform-session.ts';
+/*
+ * THE REAL GENERATOR, imported rather than reimplemented. It lives in its own
+ * module precisely so this import is possible — `onboarding-credential.ts`
+ * pulls in the Web Worker and cannot be loaded under Node. For a value whose
+ * only job is to be unguessable, testing a copy would verify nothing.
+ */
+import {
+  generateAdminPassword,
+  GENERATED_PASSWORD_LENGTH,
+} from '../src/api/generate-password.ts';
 
 let failures = 0;
 
@@ -699,6 +713,191 @@ check('a blank label is accepted locally (it means default)', templateLabelRefus
 check('a padded label is refused', templateLabelRefusal(' Campus ') !== null, true);
 check('a 40-character label is accepted', templateLabelRefusal('C'.repeat(40)), null);
 check('a 41-character label is refused', templateLabelRefusal('C'.repeat(41)) !== null, true);
+
+/* =========================================================================
+   7. ONBOARDING — organization-onboarding-v1
+   ========================================================================= */
+
+console.log('\n=== Onboarding: the real shape ===\n');
+
+const ONBOARD_BODY = {
+  organization_id: 'og_synthetic_0000000009',
+  admin_principal_id: 'pr_synthetic_0000000009',
+  workspace_id: 'ws_synthetic_0000000009',
+  warnings: [],
+};
+
+const onboarded = parseOnboardOrganization(ONBOARD_BODY);
+check('organization_id', onboarded.organization_id, 'og_synthetic_0000000009');
+check('admin_principal_id', onboarded.admin_principal_id, 'pr_synthetic_0000000009');
+check('workspace_id', onboarded.workspace_id, 'ws_synthetic_0000000009');
+check('warnings is empty on a clean success', onboarded.warnings.length, 0);
+
+/*
+ * THE PARTIAL SUCCESS. `workspace_id: null` with `first_workspace_not_created`
+ * is a 201: the Organization, the admin and the credential all exist and the
+ * tenant-side write did not. It must parse cleanly — a client that refused it
+ * would discard the only copy of a real customer's credential.
+ */
+const partial = parseOnboardOrganization({
+  ...ONBOARD_BODY,
+  workspace_id: null,
+  warnings: ['first_workspace_not_created'],
+});
+check('a null workspace_id parses (it is a success)', partial.workspace_id, null);
+check('the warning is carried through', partial.warnings[0], 'first_workspace_not_created');
+check('both warnings parse', parseOnboardOrganization({ ...ONBOARD_BODY, warnings: ONBOARDING_WARNINGS }).warnings.length, 2);
+
+checkTrue('first_workspace_not_created is a known warning', isKnownOnboardingWarning('first_workspace_not_created'));
+checkTrue('tenant_audit_record_not_written is a known warning', isKnownOnboardingWarning('tenant_audit_record_not_written'));
+check('an invented warning is NOT claimed as known', isKnownOnboardingWarning('everything_is_fine'), false);
+check(
+  'an unrecognised warning still PARSES and is carried through verbatim',
+  parseOnboardOrganization({ ...ONBOARD_BODY, warnings: ['something_newer'] }).warnings[0],
+  'something_newer',
+);
+
+try {
+  parseOnboardOrganization({ data: ONBOARD_BODY });
+  failures += 1;
+  console.log('FAIL  an ENVELOPED onboarding body is refused\n        expected a throw, got none');
+} catch {
+  console.log('PASS  an ENVELOPED onboarding body is refused, not silently misread');
+}
+try {
+  parseOnboardOrganization({ ...ONBOARD_BODY, warnings: undefined });
+  failures += 1;
+  console.log('FAIL  a missing warnings array is refused\n        expected a throw, got none');
+} catch {
+  console.log('PASS  a missing warnings array is refused (absent is not empty)');
+}
+
+console.log('\n=== Onboarding: the request Core receives ===\n');
+
+{
+  const { impl, calls } = stubFetch(jsonResponse(ONBOARD_BODY, 201));
+  await createPlatformClient({ fetchImpl: impl }).onboardOrganization({
+    admin_identifier: 'admin@example.com',
+    template_id: 'tp_synthetic_0000000001',
+    derived_value: 'A'.repeat(43),
+  });
+  check('onboarding posts to /organizations', calls[0].url, '/api/v1/platform/organizations');
+  check('onboarding is a POST', calls[0].init.method, 'POST');
+  check('the session cookie is attached', calls[0].init.credentials, 'same-origin');
+
+  const sent = JSON.parse(calls[0].init.body);
+  const sentKeys = Object.keys(sent).sort();
+  /*
+   * EXACTLY THE FOUR DECLARED FIELDS. The class refuses any undeclared field
+   * BEFORE AUTHENTICATION, and the absence of `role`/`permissions`/
+   * `organization_id`/`principal_id`/`password` is `0025` decision 4 bound 3
+   * rather than tidiness: there is no field through which an existing
+   * Organization could be named.
+   */
+  check(
+    'exactly the four declared fields are sent',
+    sentKeys.join(','),
+    'admin_identifier,derived_value,first_workspace_name,template_id',
+  );
+  for (const forbidden of ['role', 'permissions', 'memberships', 'password', 'organization_id', 'principal_id', 'workspace_id']) {
+    check(`"${forbidden}" is NOT sent, not even empty`, forbidden in sent, false);
+  }
+  check('the password itself is never sent', JSON.stringify(sent).includes('password'), false);
+  check(
+    'first_workspace_name is the fixed placeholder',
+    sent.first_workspace_name,
+    DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
+  );
+}
+
+/*
+ * THE PLACEHOLDER MUST SATISFY THE CONTRACT'S `workspaceName`: 1-120
+ * characters, no leading or trailing whitespace. Core validates it and REFUSES
+ * the whole request on a bad one — so a placeholder that failed validation would
+ * make onboarding impossible while looking like a Core defect.
+ */
+console.log('\n=== Onboarding: the discarded placeholder is still valid input ===\n');
+checkTrue('the placeholder is at least 1 character', DISCARDED_WORKSPACE_NAME_PLACEHOLDER.length >= 1);
+checkTrue('the placeholder is at most 120 characters', DISCARDED_WORKSPACE_NAME_PLACEHOLDER.length <= 120);
+check(
+  'the placeholder has no leading or trailing whitespace',
+  DISCARDED_WORKSPACE_NAME_PLACEHOLDER.trim(),
+  DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
+);
+
+/* -------------------------------------------------------------------------
+   The generated password — THE REAL FUNCTION, not a copy
+   ------------------------------------------------------------------------- */
+
+console.log('\n=== Onboarding: the generated password ===\n');
+
+const samples = Array.from({ length: 200 }, () => generateAdminPassword());
+
+check('every password is exactly 32 characters', new Set(samples.map((s) => s.length)).size, 1);
+check('and that length is 32', samples[0].length, GENERATED_PASSWORD_LENGTH);
+check('32 characters is the documented length', GENERATED_PASSWORD_LENGTH, 32);
+checkTrue(
+  'every password is base64url with no padding',
+  samples.every((s) => /^[A-Za-z0-9_-]{32}$/.test(s)),
+);
+
+/*
+ * 200 SAMPLES, ALL DISTINCT. This does not prove the source is a CSPRNG — no
+ * test can — but it fails immediately on the mistakes that actually happen: a
+ * constant, a counter, a value derived from the clock, or a generator seeded
+ * once per page load.
+ */
+check('200 generated passwords are all distinct', new Set(samples).size, 200);
+
+/*
+ * AND A CRUDE ENTROPY FLOOR. 200 samples of 32 characters is 6,400 characters
+ * from a 64-symbol alphabet; a generator emitting a narrow range — the classic
+ * symptom of a broken byte-to-character step — would show far fewer distinct
+ * symbols. Deliberately loose: this is a smoke alarm, not a statistical test.
+ */
+const alphabet = new Set(samples.join(''));
+checkTrue(
+  `the alphabet is wide (${String(alphabet.size)} distinct characters of a possible 64)`,
+  alphabet.size >= 60,
+);
+
+console.log('\n=== Onboarding: failures ===\n');
+
+for (const [code, note] of [
+  ['conflict', 'the admin identifier already has a credential'],
+  ['not_found', 'the template_id names no Template'],
+  ['quota_exceeded', 'Core created NOTHING'],
+  ['invalid_argument', 'a field failed validation'],
+]) {
+  const { impl } = stubFetch(ENVELOPE(code, 'synthetic'));
+  await checkThrows(
+    `${code} is surfaced — ${note}`,
+    () =>
+      createPlatformClient({ fetchImpl: impl }).onboardOrganization({
+        admin_identifier: 'admin@example.com',
+        template_id: 'tp_synthetic_0000000001',
+        derived_value: 'A'.repeat(43),
+      }),
+    code,
+  );
+}
+
+{
+  // A 201 whose body is not an onboarding result. It must NOT be reported as a
+  // success — a credential panel drawn from an unreadable response would show a
+  // password for an account nobody can name.
+  const { impl } = stubFetch(jsonResponse({ ok: true }, 201));
+  await checkThrows(
+    'a 201 with an unreadable body is refused, never shown as created',
+    () =>
+      createPlatformClient({ fetchImpl: impl }).onboardOrganization({
+        admin_identifier: 'admin@example.com',
+        template_id: 'tp_synthetic_0000000001',
+        derived_value: 'A'.repeat(43),
+      }),
+    'internal',
+  );
+}
 
 console.log('');
 if (failures > 0) {
