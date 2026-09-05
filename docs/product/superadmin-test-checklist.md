@@ -149,6 +149,26 @@ moments** produces the both-tables state without any write. A restore does not r
 `0010` deliberately does not validate rows that already exist. In that state platform routes deny
 and **Actions do not** — so the Action check is not a second layer there, **it is the only one.**
 
+**Not built, and must not be reported as done** (`core-agent`'s own list, before anyone calls this
+slice finished):
+
+- **Rate limiting is not built.** `0017`'s in-process limiter does not bound a deployed Worker,
+  because each isolate has its own. Two consumers now depend on it — pre-auth and `0027`'s
+  challenge routes.
+- **The operator action log has no retention and no read surface.** Core is writing records that
+  **nothing can read**, and nothing deletes.
+- **Creating a platform operator is the one privileged change in Dudo with no audit trail at all.**
+  It happens out of band, by SQL, by design — and therefore leaves no record anywhere in the
+  system. Everything an operator *does* is logged; **becoming one is not.**
+- **`0027`'s `CF-5` will share the per-principal ceiling** at 4 row-writes per challenge — about
+  **150 challenges per operator per UTC day**, from the same 600 the console already spends from.
+
+**Two type-level guarantees have no regression cover.** The membership receipt and
+`ControlPlaneWriteReservation` are both enforced by the type system, and **no suite can see them** —
+Node strips types without checking them. Relaxing a parameter to optional, or exporting a private
+mint, leaves **typecheck green and every suite green** while the guarantee is gone. A type-negative
+harness is being built; until it lands, **those two protections rest on nobody editing a signature.**
+
 **Accepted costs, recorded rather than discovered:**
 
 - **An operator who creates a credential sees the password.** Unavoidable for operator-created
