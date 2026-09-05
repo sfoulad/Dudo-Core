@@ -385,6 +385,83 @@ if (missing.length === 0) {
 }
 
 /* -------------------------------------------------------------------------
+   CHECK 3c — the drawer clears the sticky header
+   -------------------------------------------------------------------------
+   THE THIRD NAVIGATION DEFECT, AND THE ONE A SCREENSHOT DID NOT CATCH. The
+   header is `sticky top-0 z-30`; the drawer is `z-20`. Pinned to `0`, the
+   drawer's first list row sat underneath the header and "Organizations" was
+   unreachable on mobile — while the remaining three items looked entirely
+   normal.
+
+   A REAL CHECK WOULD MEASURE THE RENDERED BOX. There is no browser available
+   here and none may be installed, so this asserts the GEOMETRY IT CAN: the
+   header height is defined once, and the drawer's top offset resolves to that
+   same value rather than to zero. That is the invariant the defect broke.
+
+   IT IS NOT A SUBSTITUTE FOR LOOKING AT THE PAGE AT PHONE WIDTH, and it is
+   stated that way rather than reported as coverage it does not have.
+   ------------------------------------------------------------------------- */
+
+const HEADER_VAR = '--dudo-header-height';
+
+const headerDefinitions = rules.filter((rule) => rule.body.includes(`${HEADER_VAR}:`));
+if (headerDefinitions.length !== 1) {
+  fail(
+    `\`${HEADER_VAR}\` is defined ${String(headerDefinitions.length)} times, expected exactly 1`,
+    '        More than one definition is how the header and the drawer come to disagree.',
+  );
+} else {
+  const declared = /--dudo-header-height:\s*([^;}]+)/.exec(headerDefinitions[0].body)?.[1]?.trim();
+  pass(`\`${HEADER_VAR}\` is defined exactly once (${declared ?? '?'})`);
+
+  // The drawer's top offset, below the breakpoint.
+  const drawerTop = rules.filter(
+    (rule) =>
+      isSmallScreenOnly(rule) &&
+      /top\s*:/.test(rule.body) &&
+      /\.max-lg\\:top-/.test(rule.selector),
+  );
+  if (drawerTop.length === 0) {
+    fail(
+      'the mobile drawer sets no top offset',
+      '        With no offset it pins to 0 and the first nav row hides behind the header.\n' +
+        '        That is exactly the defect this check exists for.',
+    );
+  } else {
+    const offending = drawerTop.filter((rule) => {
+      const value = /top\s*:\s*([^;}]+)/.exec(rule.body)?.[1]?.trim() ?? '';
+      return !value.includes(HEADER_VAR);
+    });
+    if (offending.length === 0) {
+      pass(`the mobile drawer's top offset resolves to var(${HEADER_VAR}), not 0`);
+    } else {
+      fail(
+        "the mobile drawer's top offset does not track the header height",
+        offending
+          .map((rule) => `        ${rule.selector} -> ${rule.body}`)
+          .join('\n') +
+          '\n        The first nav item will be occluded by the sticky header.',
+      );
+    }
+  }
+}
+
+/*
+ * AND THE SHAPE THAT CAUSED IT: a full-height pin below the breakpoint. If
+ * `max-lg:inset-y-0` ever comes back onto the nav, it sets `top:0` and the row
+ * disappears again.
+ */
+if (used.has('max-lg:inset-y-0') || used.has('inset-y-0')) {
+  fail(
+    'the nav uses a full-height vertical pin below the breakpoint',
+    '        `inset-y-0` sets top:0, which puts the first nav row under the sticky header.\n' +
+      '        Offset the top by var(--dudo-header-height) and pin only the bottom.',
+  );
+} else {
+  pass('no full-height vertical pin on the drawer (top:0 would occlude the first row)');
+}
+
+/* -------------------------------------------------------------------------
    CHECK 4 — nothing renders the nav permanently hidden
    ------------------------------------------------------------------------- */
 

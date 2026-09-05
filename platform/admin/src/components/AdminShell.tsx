@@ -122,7 +122,12 @@ export function AdminShell({
         Skip to content
       </a>
 
-      <header className="on-navy sticky top-0 z-30 flex min-h-14 items-center gap-3 bg-navy-800 px-3 text-white sm:px-5">
+      {/*
+        `min-h-[var(--dudo-header-height)]` rather than a literal, because the
+        navigation is positioned from that same value. See `styles/index.css`:
+        if these two disagree, a row of the menu hides behind the header.
+      */}
+      <header className="on-navy sticky top-0 z-30 flex min-h-[var(--dudo-header-height)] items-center gap-3 bg-navy-800 px-3 text-white sm:px-5">
         <Button
           ref={menuButtonRef}
           variant="onNavy"
@@ -234,14 +239,39 @@ export function AdminShell({
              * `inset-block-0`, which is not a Tailwind utility and compiled to
              * nothing — same family of defect, same detection method.)
              */
-            'max-lg:fixed max-lg:inset-y-0 max-lg:start-0 max-lg:z-20',
+            /*
+             * THE DRAWER STARTS BELOW THE HEADER, NOT AT THE TOP OF THE
+             * VIEWPORT.
+             *
+             * IT WAS `inset-y-0` AND THE FIRST NAV ITEM WAS UNREACHABLE. The
+             * header is `sticky top-0 z-30`; this is `z-20`. Pinning the drawer
+             * to `0` put its first 3.5rem — exactly one list row — underneath
+             * the header, so the menu opened showing Templates, Operators and
+             * Audit, and "Organizations" simply was not there. A menu missing
+             * its first row still looks like a menu, which is why it survived a
+             * screenshot.
+             *
+             * RAISING THE DRAWER ABOVE THE HEADER WOULD HAVE BEEN THE WRONG FIX:
+             * it would cover the Menu button that closes it.
+             *
+             * `bottom-0` rather than the `inset-y` shorthand, because only the
+             * top edge is offset. Both are block-axis and RTL-safe — horizontal
+             * writing modes mirror the inline axis only, which is what
+             * `start-0` handles.
+             */
+            'max-lg:fixed max-lg:top-[var(--dudo-header-height)] max-lg:bottom-0',
+            'max-lg:start-0 max-lg:z-20',
             'max-lg:w-64 max-lg:max-w-[80vw] max-lg:overflow-y-auto',
             'max-lg:transition-transform max-lg:duration-200 max-lg:ease-out',
             drawerOpen ? '' : 'max-lg:ltr:-translate-x-full max-lg:rtl:translate-x-full',
 
             // `lg` and wider: an ordinary in-document column. No position
             // override, no transform to cancel, nothing to out-specify.
-            'lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:w-60 lg:shrink-0',
+            // The same single source as the header and the drawer. Previously
+            // `lg:top-14` and `calc(100dvh-3.5rem)` — two more spellings of the
+            // same number, agreeing by luck rather than by construction.
+            'lg:sticky lg:top-[var(--dudo-header-height)] lg:w-60 lg:shrink-0',
+            'lg:h-[calc(100dvh-var(--dudo-header-height))]',
             'lg:overflow-y-auto lg:border-e lg:border-navy-700',
           )}
         >

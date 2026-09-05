@@ -27,10 +27,35 @@ npm install
 npm run dev          # http://127.0.0.1:5174
 npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
-npm run verify       # typecheck + the KDF drift checks + the platform client checks
+npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
 npm run verify:platform  # 51 checks against the shapes Core actually returns
+npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
 ```
+
+`verify` runs the build before `verify:css` on purpose, so the artifact being checked can
+never be a stale one.
+
+### Why there is a CSS check at all
+
+**Three navigation defects have now shipped where the markup was correct and the artifact was
+wrong**, and on two of them every check in this repository passed:
+
+| Defect | Why the source looked right |
+|---|---|
+| `inset-block-0` | Not a Tailwind utility. Compiled to **nothing**; the drawer lost its vertical bounds. |
+| `lg:` vs `ltr:` | Both classes emitted. The `lg:` one **lost the cascade** — a media query adds no specificity, and the later same-weight rule wins. Sidebar invisible on desktop. |
+| `inset-y-0` on the drawer | Valid, emitted, applied — and pinned the drawer to `0` **under the `z-30` sticky header**, hiding the first nav row. |
+
+So `verify:css` asserts **outcomes against the built stylesheet**: that no `ltr:`/`rtl:` rule
+overrides a breakpoint-scoped one, that the drawer's off-screen transform is confined to small
+screens, that every class used in `src/` actually produced a rule, and that the drawer's top
+offset tracks `--dudo-header-height` rather than zero.
+
+**It is not a substitute for looking at the page.** There is no browser available here and none
+may be installed, so it checks geometry it can compute, not geometry as rendered. **A visual
+check at a single width would have passed two of the three defects above** — a sidebar that is
+absent and a menu missing only its first row both look unremarkable.
 
 ## The two live routes
 

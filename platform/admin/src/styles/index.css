@@ -108,6 +108,28 @@
 }
 
 @layer base {
+  :root {
+    /* -----------------------------------------------------------------------
+       THE HEADER HEIGHT, DEFINED ONCE BECAUSE THREE PLACES DEPEND ON IT
+       -----------------------------------------------------------------------
+       The header is sticky at `z-30`. The navigation sits at `z-20` and is
+       positioned from the top of the viewport, so ANY DISAGREEMENT ABOUT THIS
+       NUMBER HIDES A ROW OF THE MENU BEHIND THE HEADER.
+
+       That is not hypothetical: the mobile drawer shipped pinned to `0`, its
+       first item ("Organizations") was occluded by the header, and it was
+       invisible in a screenshot because the other three items looked perfectly
+       normal — a menu that is missing its first row still looks like a menu.
+
+       The value was previously written three separate times — `min-h-14` on the
+       header, `lg:top-14` on the sidebar and `calc(100dvh-3.5rem)` for its
+       height — with nothing tying them together. They agreed by luck. Now they
+       agree by construction, and `scripts/verify-css.mjs` asserts the drawer's
+       top offset equals this value rather than zero.
+       ----------------------------------------------------------------------- */
+    --dudo-header-height: 3.5rem;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
