@@ -112,6 +112,7 @@ export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
   '0007_membership_role.sql',
   '0008_platform_operator.sql',
   '0009_platform_operator_action.sql',
+  '0011_confirmation.sql',
 ]);
 
 export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';

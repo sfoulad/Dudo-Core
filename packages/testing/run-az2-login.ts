@@ -37,6 +37,7 @@ import { buildBusinessSetSuite } from './suites/az2-login/business-set.ts';
 import { buildSessionRoutesSuite } from './suites/az2-login/session-routes.ts';
 import { buildBusinessSetMarkerSuite } from './suites/az2-login/business-set-marker.ts';
 import { buildEnrolmentRoundTripSuite } from './suites/az2-login/enrolment-round-trip.ts';
+import { buildControlPlaneMigrationCoverageSuite } from './suites/harness/harness-fidelity.ts';
 
 async function runAll(suites: readonly Suite[]): Promise<CaseResult[]> {
   const results: CaseResult[] = [];
@@ -48,6 +49,9 @@ async function runAll(suites: readonly Suite[]): Promise<CaseResult[]> {
 
 async function main(): Promise<void> {
   const suites = [
+    // The fixture's migration set is asserted before anything runs against it. Three drifts —
+    // 0003, 0008, 0011 — each correct when written and silently wrong later.
+    buildControlPlaneMigrationCoverageSuite(),
     buildEqualWorkSuite(),
     buildStoredCredentialSuite(),
     buildTenantResolutionSuite(),

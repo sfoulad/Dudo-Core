@@ -47,6 +47,10 @@ import { buildOrganizationsListSuite } from './suites/platform-operator/organiza
 import { buildHostBindingSuite } from './suites/platform-operator/host-binding.ts';
 import { buildBootstrapBoundsSuite } from './suites/platform-operator/bootstrap-bounds.ts';
 import { buildConfirmationSuite } from './suites/platform-operator/confirmation.ts';
+import {
+  buildPlatformMigrationCoverageSuite,
+  buildSqliteDoubleSuite,
+} from './suites/harness/harness-fidelity.ts';
 
 import {
   withActionSideMutualExclusionRemoved,
@@ -101,6 +105,11 @@ function classify(control: string, results: readonly CaseResult[]): void {
 
 async function main(): Promise<void> {
   const primarySuites = [
+    // The harness's own fidelity comes FIRST, deliberately. Every suite below depends on the D1
+    // double reporting what a statement returned and on the fixture applying the right
+    // migrations; if either is wrong, the results underneath it are not results.
+    buildSqliteDoubleSuite(),
+    buildPlatformMigrationCoverageSuite(),
     buildMutualExclusionSuite(),
     buildMembershipWriteGuardSuite(),
     buildOperatorSessionIsolationSuite(),
