@@ -114,6 +114,39 @@ official source, not the date usage was measured.
 > cookie, an unknown session and a replay each reserve **zero** — so failed logout attempts cannot
 > be used to burn the budget.
 
+> ## THE PLATFORM SURFACE — what the super-admin console costs
+>
+> Added 2026-09-05 from `0025` and `0027`. **Both designs are decided**, so by the rule stated
+> immediately above these are numbers rather than estimates awaiting a design.
+>
+> | Operation | Control-plane row-writes | Platform/day against the 3,000 sub-ceiling |
+> |---|---|---|
+> | Any platform route (audit record, `0025` Decision 5) | **2** | — |
+> | Onboarding an Organization (`0024`, `0025`) | **10** | **300** |
+> | A confirmed critical operation (`0027`) | **+4** over the operation itself | ~**750** confirmations |
+>
+> **The onboarding figure corrects the code.** `control-plane-admission.ts` records **6**; the
+> operation actually writes **10**. `0025`'s consequences flag this and the constant is still wrong
+> in the source. **A budget constant that under-counts is worse than none** — it spends an allowance
+> nobody is watching, and the failure mode is D1 refusing queries account-wide.
+>
+> **Why the confirmation cost is affordable for a structural reason rather than a lucky one:** a
+> critical operation requires a human to read a statement and type a password, so **volume is
+> bounded by human attention, not by traffic.** `0013` Control 5's test — *is the population that
+> can force a write bounded by something other than the attacker?* — passes.
+>
+> **The hazard, named in `confirmation-v1` rather than discovered later:** both challenge routes are
+> **writes reachable by any authenticated principal holding a critical permission**, at 2 row-writes
+> each. An unbounded challenge loop spends the shared ceiling. **`0017`'s in-process limiter does
+> not bound this in a deployed Worker**, because each isolate has its own — so the **durable rate
+> limiter now has two consumers** (pre-auth and confirmation) and has stopped being a
+> single-feature nicety.
+>
+> **Verified by execution 2026-09-05, not by reading:** `0008`–`0010` apply cleanly to a local D1,
+> and all four mutual-exclusion triggers refuse in both directions on INSERT and UPDATE, with the
+> negative controls passing — a principal with no platform row can still be given a membership, and
+> a principal with no membership can still become an operator.
+
 > ## ⚠ D1 DAILY ROW LIMITS ARE ENFORCED, AND EXCEEDING THEM IS AN OUTAGE — NOT A BILL
 >
 > Verified 2026-09-02 against `d1/platform/pricing/`. **These limits are not on the `limits/`
