@@ -102,7 +102,20 @@ export interface OrganizationSummary {
    * a confidently mislabelled row. `isKnownStatus` asks instead.
    */
   readonly status: string;
-  /** RFC 3339, UTC, second precision. */
+  /**
+   * RFC 3339, UTC.
+   *
+   * THE PRECISION IS DELIBERATELY NOT ASSERTED HERE. This comment read "second
+   * precision", transcribed from `platform-operator-v1`'s schema — but
+   * `platform/core/kernel/clock.ts:26` emits MILLISECONDS, so that claim is at
+   * best unverified for this field and at worst a contract/implementation
+   * divergence (reported to the Team Lead; `packages/contracts` is not this
+   * console's to change).
+   *
+   * NOTHING HERE DEPENDS ON IT — the value is rendered as a date and never
+   * compared against a boundary — so the claim is dropped rather than corrected
+   * on a guess. See `toUtcDayEnd` for the one place precision IS load-bearing.
+   */
   readonly created_at: string;
   /**
    * ALWAYS NULL TODAY. Present in the shape so that adding names later is
@@ -1053,35 +1066,67 @@ export function toUtcDayStart(calendarDate: string): string | null {
  * EXCLUSIVE, AND THE CONTRACT DOES NOT SAY WHICH.
  * ===========================================================================
  *
- * THIS WAS `T23:59:59Z` AND THAT WAS WRONG IN ONE READING. `platform-audit-read-v1`
- * names `since` and `until` and states NEITHER their format NOR their
- * inclusivity — a second underspecification beyond the format one, reported
- * rather than resolved quietly.
+ * THE PROPERTY THIS MUST SATISFY, WHICH IS WHAT TO CHECK IF ANYTHING CHANGES:
+ * **the end of the range must include every record that falls within the
+ * calendar day the operator typed, whatever precision Core emits.** The value
+ * below is one way to satisfy that today; the property is what matters.
  *
- * The log's timestamps are SECOND PRECISION, which the contract says three
- * separate times: the schema's `record_id` ("paging over a second-precision
- * timestamp alone either skips records or repeats them"), `pagination.ordering`
- * ("timestamps collide at second precision under a burst"), and
- * `testRequirements` ("Seed a burst at one-second precision"). So a day's
- * records run up to `T23:59:59Z` and no further.
+ * ---------------------------------------------------------------------------
+ * TWO EARLIER VERSIONS OF THIS COMMENT WERE WRONG, AND THE SECOND IS THE
+ * INSTRUCTIVE ONE
+ * ---------------------------------------------------------------------------
  *
- * Against that, with `until` unspecified:
+ * It first read `T23:59:59Z`, justified with "second precision is what the log
+ * records anyway". Then it read `T23:59:59.999Z` justified by the SAME false
+ * premise, cited harder — "the log's timestamps are SECOND PRECISION, which the
+ * contract says three separate times". The value became right and the reasoning
+ * stayed wrong, which is worse, because a confident citation is what stops the
+ * next reader checking (`architecture.md` §3c).
  *
- *   `T23:59:59Z`        correct if INCLUSIVE. If EXCLUSIVE it SILENTLY DROPS
- *                       every record in the final second — the newest ones,
- *                       which is where an investigation looks first.
- *   next day `T00:00:00Z`  correct if EXCLUSIVE. If INCLUSIVE it pulls in a
- *                       second of the FOLLOWING day.
- *   `T23:59:59.999Z`    CORRECT EITHER WAY. Inclusive: captures `…:59Z`,
- *                       excludes the next day. Exclusive: `…:59Z` is strictly
- *                       less than `.999`, so it is still captured, and the next
- *                       day still is not.
+ * WHAT THE CONTRACT ACTUALLY SAYS is that timestamps COLLIDE at second
+ * precision in a burst — a statement about why the sort key needs `record_id`
+ * as a tiebreaker, NOT a statement about what precision is stored. I read a
+ * claim about storage out of three sentences about collisions, and never opened
+ * the file that decides it.
  *
- * THE RISK THIS TAKES, NAMED: the format is unspecified, so Core might refuse a
- * fractional second with `invalid_argument`. That is a LOUD failure on first use
- * and a one-character fix. The alternative risks a SILENT one-second gap that
- * nobody would find while hunting for an event. Loud-and-wrong beats
- * silent-and-wrong, which is the same trade every parser in this file makes.
+ * WHAT THE IMPLEMENTATION SAYS, CITED SO IT CAN BE DIFFED:
+ * `platform/core/kernel/clock.ts:26` — "formatted RFC 3339 UTC with a `Z`
+ * offset and MILLISECOND precision" — and `:33`, `toRfc3339Utc` is
+ * `new Date(ms).toISOString()`, which emits exactly three fractional digits.
+ * So records DO carry milliseconds, and a plain `T23:59:59Z` silently drops
+ * everything from `.001` to `.999` — at the END of the range, where the newest
+ * records are, and invisibly.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY `.999Z`, AND WHAT WOULD INVALIDATE IT
+ * ---------------------------------------------------------------------------
+ *
+ * `toISOString()` emits exactly three fractional digits, so the last instant
+ * Core can stamp within a day is `T23:59:59.999Z`.
+ *
+ * `platform-audit-read-v1` names `since` and `until` and states NEITHER their
+ * format NOR their inclusivity — both reported as underspecifications rather
+ * than resolved quietly. With inclusivity unknown:
+ *
+ *   `T23:59:59Z`           WRONG BOTH WAYS at millisecond precision — drops
+ *                          `.001`–`.999`.
+ *   next day `T00:00:00Z`  correct if EXCLUSIVE; if INCLUSIVE it pulls in the
+ *                          first millisecond of the following day. Rejected
+ *                          also because the operator would have to understand
+ *                          that "until the 5th" means "up to the 6th".
+ *   `T23:59:59.999Z`       correct if INCLUSIVE. If EXCLUSIVE it drops only a
+ *                          record stamped at exactly `.999Z` — a ONE-
+ *                          MILLISECOND window, against a one-SECOND one.
+ *
+ * **THE TRIGGER TO REVISIT, SO IT IS NOT DISCOVERED THE HARD WAY: if
+ * `clock.ts` ever emits finer than milliseconds, this value silently starts
+ * dropping records again.** The property at the top is what stays true; this
+ * constant is only its current expression.
+ *
+ * AND THE RISK THAT REMAINS: the format is unspecified, so Core might refuse a
+ * fractional second with `invalid_argument`. That is a LOUD failure on first
+ * use and a one-character fix, against a SILENT gap nobody finds while hunting
+ * an event.
  */
 export function toUtcDayEnd(calendarDate: string): string | null {
   return isCalendarDate(calendarDate) ? `${calendarDate}T23:59:59.999Z` : null;

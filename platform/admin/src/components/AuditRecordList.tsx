@@ -30,6 +30,29 @@
  * downstream *can* branch on it.
  *
  * ===========================================================================
+ * THE HONEST LIMIT OF THAT GUARANTEE, AND THIS FILE IS WHERE IT WOULD BREAK
+ * ===========================================================================
+ *
+ * The type argument above is real: `AuditRecordCommon` carries neither target
+ * field, so this component cannot reach one. **What the type does NOT prevent
+ * is someone widening the constraint.** Change `T extends AuditRecordCommon` to
+ * a union of the two record types, or add a `scope` prop and branch on it, and
+ * the guarantee is gone — not by defeating a check, but by changing the thing
+ * the check was checking.
+ *
+ * `scripts/verify-platform.mjs` asserts that this file never NAMES either
+ * target field. **That guards the field names, not the intent.** A future
+ * author who reintroduced scope-awareness under different names — a
+ * `variant` prop, a `columns` array, a record type aliased elsewhere — would
+ * pass every check in this repository.
+ *
+ * THIS IS THE WEAKEST POINT IN THE WHOLE ARRANGEMENT AND IT IS WRITTEN HERE
+ * RATHER THAN ONLY IN A REPORT, because a report is read once and this file is
+ * read every time somebody changes it. If you are here to make this component
+ * aware of which feed it is drawing: **that is the change the two routes exist
+ * to prevent, and the reviewer you need is the Team Lead, not this comment.**
+ *
+ * ===========================================================================
  * WHAT AN AUDIT ROW MAY CONTAIN, AND WHY THIS FILE RENDERS SO LITTLE
  * ===========================================================================
  *

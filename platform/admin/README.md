@@ -144,12 +144,21 @@ it names `since` and `until` and states **neither their format nor their inclusi
 - **Day:** the typed date is a **UTC calendar day**, and the fields are labelled UTC. An audit
   trail is read by more than one person at once, and two operators discussing "the 5th" must mean
   the same window or they are comparing different evidence.
-- **The end of the day is `T23:59:59.999Z`, not `T23:59:59Z`.** The log is **second-precision** —
-  the contract says so three times — so a day's records run to `…T23:59:59Z`. With inclusivity
-  unstated, `.999Z` is the only candidate correct **both** ways: inclusive it captures that final
-  second and excludes the next day; exclusive that second is still strictly less than it. A plain
-  `T23:59:59Z` would **silently drop the final second under an exclusive reading** — the newest
-  records, where an investigation looks first.
+- **The end of the day is `T23:59:59.999Z`, not `T23:59:59Z`.** Core stamps records at
+  **millisecond** precision — `platform/core/kernel/clock.ts:26` says so, and `:33` is
+  `toISOString()`, which emits exactly three fractional digits. So `T23:59:59Z` **silently drops
+  everything from `.001` to `.999`**, at the end of the range where the newest records are.
+
+  > **This README previously said the log was second-precision, citing the contract three times.
+  > That was false.** The contract says timestamps *collide* at second precision in a burst — a
+  > statement about why the sort key needs a tiebreaker, not about what is stored. The value was
+  > corrected before the reasoning was, which is the worse failure: a confident citation is what
+  > stops the next reader checking.
+
+  With inclusivity unstated, `.999Z` is correct if inclusive, and if exclusive drops only a record
+  stamped at exactly `.999Z` — a **one-millisecond** window against a one-second one.
+  **Revisit if `clock.ts` ever emits finer than milliseconds**, at which point this value starts
+  dropping records again.
 
 **Record timestamps are rendered in UTC and labelled**, for the same reason. A screen that filters
 in UTC and renders in local time makes the boundary rows appear to contradict the filter: an

@@ -1378,14 +1378,25 @@ check('a calendar date becomes a Z-suffixed UTC day start', toUtcDayStart('2026-
 
 /*
  * THE DAY END IS `.999Z`, AND THE CHECKS BELOW ARE THE REASON RATHER THAN THE
- * VALUE. The contract states neither the format of `until` nor its inclusivity,
- * and the log is second-precision (said three times). `.999Z` is the only
- * candidate correct under BOTH readings: inclusive it captures `…:59Z` and
- * excludes the next day; exclusive `…:59Z` is still strictly less than it.
+ * VALUE.
+ *
+ * CORRECTED: this comment previously said "the log is second-precision (said
+ * three times)". THAT WAS FALSE and it was the third copy of the same false
+ * premise — the source comment and the README carried the other two, and the
+ * value was fixed before any of the three were. Core stamps MILLISECONDS:
+ * `platform/core/kernel/clock.ts:26` states it and `:33` is `toISOString()`.
+ * The contract's "second precision" sentences are about timestamps COLLIDING in
+ * a burst, which is why the sort key needs `record_id` as a tiebreaker — not
+ * about what is stored.
+ *
+ * The contract states neither the format of `until` nor its inclusivity. At
+ * millisecond precision `.999Z` is correct if inclusive, and if exclusive drops
+ * only a record stamped at exactly `.999Z` — one millisecond, against the full
+ * second a plain `T23:59:59Z` would have lost either way.
  */
 check('the UTC day end is .999Z', toUtcDayEnd('2026-09-05'), '2026-09-05T23:59:59.999Z');
 checkTrue(
-  'it is strictly greater than the last second-precision instant of the day (inclusive reading)',
+  'it is strictly greater than T23:59:59Z, so the final second is not lost',
   new Date('2026-09-05T23:59:59.999Z').getTime() > new Date('2026-09-05T23:59:59Z').getTime(),
 );
 checkTrue(
