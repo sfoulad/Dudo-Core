@@ -126,6 +126,44 @@ principal already holds a session. It is the smallest thing that would close thi
 built before any non-operator user exists, alongside `0018`'s reserved allocation and `0021`'s
 `OS-1`.
 
+## Amendment, 2026-09-05 — `CR-5` as decided above would have bricked the account it rescues
+
+**The ruling in the section above is correct for onboarding and unbuildable for credential reset.**
+`architecture-agent` found this while implementing against it, and it is the most serious defect
+caught in this slice.
+
+**The mechanism.** The KDF salt is `normalize(identifier)` — the target's email. For a reset:
+
+- **The console has never seen it.** It holds a `principal_id`.
+- **And the server cannot supply it either.** `principal_credential` stores
+  `identifier_hash = HMAC-SHA-256(IDENTITY_LOOKUP_KEY, normalized_identifier)` — **the keyed hash,
+  not the identifier.** `credential-store.ts` records that an operator cannot answer *"which account
+  is sam@example.com?"* as a deliberate property. **The reverse is equally true, and it is the
+  direction that bites.**
+
+So a reset performed under the original ruling would derive against the wrong salt and **write a
+verifier the target could never reproduce at login.** Not a failed reset — a **silent, permanent
+lockout of the account the operation exists to recover**, discovered only when the person tried to
+sign in.
+
+**The fix, already in `credential-reset-v1`:** the request carries the target's `identifier`
+alongside `principal_id`. Core verifies its HMAC against the stored `identifier_hash`, and a
+mismatch collapses into the existing argument-free 404.
+
+**Why this does not reopen enumeration**, which was the first objection: **the identifier is not how
+the target is found.** `principal_id` finds it; the identifier is only *verified* against it. **A
+lookup by identifier remains impossible on this route**, so the keyed-hash property `0015` was
+protecting is intact.
+
+**The residual, stated rather than discovered later:** an operator who does not know the target's
+email address **cannot reset it**, and Dudo genuinely does not store one to look up. That is the
+honest cost of the keyed-hash design, not a gap in this route.
+
+**The general lesson, and it is why this is an amendment rather than a quiet contract edit:** the
+original ruling was *"do exactly what `seed-principal.ts` does."* That tool works because **the
+operator typed the identifier.** Reset has no such moment. **A decision justified by an existing
+tool inherits the tool's preconditions, and those preconditions are the part nobody writes down.**
+
 ## What this does NOT decide
 
 - **The confirmation mechanism's shape.** Its own contract, and it must satisfy D15 for three

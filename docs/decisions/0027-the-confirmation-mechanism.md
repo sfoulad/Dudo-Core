@@ -141,6 +141,47 @@ service and no new binding. A critical operation costs about **4 additional cont
 row-writes**; against the 3,000/day sub-ceiling that is roughly **750 confirmations a day
 platform-wide.**
 
+## Correction, 2026-09-05 — onboarding is NOT wired to confirmation, and my instruction was wrong
+
+I instructed `architecture-agent` to wire **both** onboarding and credential reset to this
+mechanism. **It applied it to reset, refused it for onboarding, and was right.**
+
+**The requirement is derived from sensitivity, not attached by hand.** `critical` requires
+confirmation; nothing else does. **`0026` reclassified `core.organization.create` to `sensitive`
+precisely so this route would be reachable without one.** Wiring a confirmation into it by hand
+would re-impose, one record later, exactly what `0026` removed — and it would do so invisibly,
+because the route would work.
+
+**And it would damage the thing `0026` was protecting.** The ladder's meaning rests on the classes
+actually differing:
+
+> **"If a `sensitive` operation carries a confirmation, the distinction collapses into a preference
+> and the next reclassification argument has nothing to appeal to."**
+
+`0026` said a ladder keeps its meaning only if something stays at the top. **The converse is equally
+load-bearing: only if the rungs below are genuinely lighter.**
+
+**The consequence, accepted with it:** an operator creates a customer Organization with **one request
+and no second factor.** Defensible — it creates an empty tenant, destroys nothing, and its worst
+outcome is litter plus a wasted credential. **Reset keeps its confirmation**, because it takes over
+an account someone is already using.
+
+**Reset is wired**: `confirmation_id` and `reauth_derived_value` are required, and **the binding
+covers the parameters**, so a confirmation for "reset P" cannot be spent on "reset Q".
+
+## The residual `CF-4` created, which nobody had named
+
+`architecture-agent` added a required `statement_locale` on the response, so *"falls back to English
+and says so"* has a mechanism rather than a hope. **Silent fallback would show a user text they
+cannot read while the client believed it was localised — `CF-4` restored in a smaller and
+harder-to-notice form.**
+
+And it recorded the cost the ruling creates: **Core now maintains a translated catalog in which a
+mistranslation of an irreversible action is a safety defect, not a copy defect.** The English
+fallback backstops a *missing* translation. **A wrong one has no backstop** — it is confidently
+wrong in a language the reviewer may not speak. **Translations of critical statements need the same
+review the operations get.**
+
 ## What this does NOT decide
 
 - **MFA.** `CF-1` stands. The mechanism is shaped so a factor is one more check at step 2 rather
