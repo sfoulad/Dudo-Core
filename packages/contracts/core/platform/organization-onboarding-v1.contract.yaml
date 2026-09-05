@@ -130,33 +130,57 @@ theOrdering:
   theSequence: |
     1. VALIDATE EVERYTHING, INCLUDING THE TEMPLATE REFERENCE. Before any capacity is reserved.
     2. RESERVE control-plane capacity for 12 row-writes (10 + the platform audit record).
-    3. WRITE tenant_directory FIRST.
-    4. WRITE organization, principal, principal_credential, organization_membership.
+    3. WRITE THE FIVE CONTROL-PLANE ROWS IN ONE BATCH, IN DEPENDENCY ORDER:
+         organization -> tenant_directory -> principal -> principal_credential ->
+         organization_membership
+    4. (merged into 3 — see theORDERINGCORRECTION)
     5. WRITE the platform-operator audit record. THE OPERATION IS NOT SUCCESSFUL UNTIL THIS LANDS.
-    6. RESOLVE the tenant store — now possible, because step 3 created the directory entry.
+    6. RESOLVE the tenant store — possible because step 3 created the directory entry.
     7. WRITE the first workspace, and the tenant-side audit record.
     8. RETURN 201 — WITH NO CREDENTIAL IN IT. Corrected 2026-09-05: this read "with the generated
        credential, shown once", which the server cannot do because it never held one. The console
        generated the password before step 1, sent only the derived value, and still holds the only
        copy. See theCONSOLESHOWSITEXACTLYONCE.
-  whyTHEDIRECTORYENTRYISFIRST:
-    theCIRCULARITYITBREAKS: >-
+  theORDERINGCORRECTION:
+    whatWASWRONG: >-
+      ~~"3. WRITE tenant_directory FIRST. 4. WRITE organization, principal, principal_credential,
+      organization_membership."~~ STRUCK 2026-09-05. THAT ORDER IS UNEXECUTABLE AND ALWAYS WAS.
+      `control-plane/0005_tenant_directory.sql` declares
+      `organization_id TEXT NOT NULL PRIMARY KEY REFERENCES organization (organization_id)`, so the
+      directory is the CHILD and the contract instructed a child insert before its parent. Measured
+      on D1 with a positive control: the insert fails with `FOREIGN KEY constraint failed` and zero
+      rows land; the same insert with the parent present succeeds. ONBOARDING WOULD NEVER HAVE
+      WORKED.
+    whyTHECONTRACTSOWNARGUMENTNEVERREQUIREDIT: >-
+      AND THIS IS WHY THE FIX COSTS NOTHING. The circularity being broken is about STEP 6, not step
+      3: the platform audit record at step 5 goes to the CONTROL PLANE and needs no tenant handle,
+      and the tenant-side audit is step 7. BOTH ORDERINGS PUT THE DIRECTORY WRITE BEFORE THE STORE
+      RESOLVES, which is the only thing the argument ever required. "First" was a stronger claim
+      than the reasoning supported, and nothing depended on it.
+    theCIRCULARITYITSTILLBREAKS: >-
       identity/control-plane-admission.ts records onboarding's audit record as having no home:
-      "its audit record cannot go into the new Organization's tenant audit log, because reaching
-      that log needs a tenant store handle, which needs the directory entry that the same operation
-      is still creating."
-      THE CIRCULARITY IS AN ARTEFACT OF ORDERING AND NOT A PROPERTY OF THE PROBLEM. Write the
-      directory entry first and the handle resolves; everything downstream becomes ordinary.
-    whyITISSAFETOWRITEFIRST: >-
-      A tenant_directory row for an Organization that does not yet exist is UNREACHABLE, not
-      dangerous. Reaching a tenant store requires a principal with a validated membership in that
-      Organization, and at step 3 there is no principal, no membership and no organization row. The
-      window is unenterable by construction rather than by timing.
-    theRESIDUALRISKSTATEDPLAINLY: >-
-      IF THE OPERATION FAILS BETWEEN STEP 3 AND STEP 4, AN ORPHAN DIRECTORY ROW SURVIVES. It maps
-      an organization_id to a binding for an Organization that will never exist. It is inert — see
-      above — but it is litter in a table nothing cleans, and it is the price of breaking the
-      circularity in this direction. Recorded as ON-1, with the reconciliation obligation.
+      "reaching that log needs a tenant store handle, which needs the directory entry that the same
+      operation is still creating." THE CIRCULARITY IS AN ARTEFACT OF ORDERING AND NOT A PROPERTY OF
+      THE PROBLEM — the directory entry is written in step 3, the handle resolves in step 6, and
+      everything downstream becomes ordinary. UNCHANGED BY THIS CORRECTION.
+    thisISADIFFERENTFAILUREFROMTHEOTHERFIVE:
+      theCLASSIFICATION: >-
+        `core-agent`'s, and it is worth recording verbatim: "The previous four were prose left
+        behind by a decision. THIS ONE WAS NEVER TRUE — it was written against a schema that already
+        forbade it, and no one compared them."
+      whyTHATMATTERSFORTHESWEEPRULE: >-
+        .claude/rules/workflow.md §12's sweep is CITATION-DRIVEN: when a decision lands or is
+        withdrawn, visit everything that cited it. THAT PROCEDURE CANNOT FIND THIS. A clause that
+        was false on the day it was written has no decision to sweep from, cites nothing that
+        changed, and will still be false after every future sweep completes cleanly.
+        THE ONLY THING THAT FINDS IT IS COMPARING THE CONTRACT AGAINST THE SCHEMA IT CONSTRAINS —
+        which is what building does, and which is why four of the last six contract defects were
+        found by an implementer rather than by a reviewer.
+      andTHECHEAPCHECKTHATWOULDHAVECAUGHTIT: >-
+        ANY CONTRACT THAT SPECIFIES A WRITE ORDER MUST BE READ AGAINST THE FOREIGN KEYS OF THE
+        TABLES IT ORDERS. That is a one-file comparison, it is mechanical, and it applies to exactly
+        the contracts that state a sequence — which is few. Worth doing at authoring time rather
+        than discovering at build time.
   theTWODATABASEPROBLEM:
     statedRatherThanSolved: >-
       CONTROL-PLANE WRITES AND TENANT WRITES ARE TWO DATABASES AND THERE IS NO BATCH THAT COMMITS
@@ -526,8 +550,29 @@ testRequirements:
     - "The created admin cannot see Organization A's customers, and A's owner cannot see B's — the ordinary two-tenant assertion, run against an Organization created by this route rather than by seed SQL."
     - "The Workspace written at step 7 carries B's tenant_id and is invisible from A. Assert against a real engine, not a stub — 0020's correction records a stub that ignored `limit` and produced a false pass."
   ordering:
-    - "VALIDATE-THEN-RESERVE: with the per-principal daily budget exhausted, a request naming an unknown template_id returns 404 and not 429. Reversed ordering is a defect even though both are refusals."
-    - "A forced failure between step 3 and step 4 leaves an orphan tenant_directory row that no principal can use to reach a store."
+    - >-
+      VALIDATE-THEN-RESERVE. ~~"With the per-principal daily budget exhausted, a request naming an
+      unknown template_id returns 404 and not 429."~~ AMENDED 2026-09-05: THAT OBSERVATION IS
+      IMPOSSIBLE AND THE TEST COULD NOT PASS FOR A CORRECT IMPLEMENTATION. P4 makes every platform
+      route write an audit record, that record draws on the SAME per-principal budget, and an
+      unwritable audit record answers `unavailable` — so with the budget FULLY exhausted every route
+      answers `unavailable` and the 404 is unobservable. It is the `sqlite-d1.ts` shape: a test that
+      makes correct behaviour look broken.
+    - >-
+      THE PROPERTY IS REAL AND IS TESTED DIRECTLY INSTEAD: the template read happens BEFORE any
+      reservation, and an unknown template reserves nothing. Observable by deferring ONLY the
+      10-unit onboarding reserve while the 2-unit audit reserve still succeeds — the unknown
+      template then returns 404, and a valid one returns quota_exceeded. THE ORDER IS WHAT IS BEING
+      ASSERTED, and this formulation asserts it without requiring a state in which nothing can be
+      observed at all.
+    - >-
+      WHY THE PROPERTY MATTERS, UNCHANGED: if reservation came first, a caller could exhaust its own
+      budget — which it fully controls — and thereafter distinguish quota_exceeded from not_found.
+      That is an existence oracle built out of a capacity control and switched on at will.
+    - >-
+      ~~"A forced failure between step 3 and step 4 leaves an orphan tenant_directory row."~~ STRUCK:
+      there is no step 4 and no such state. The five control-plane rows are one batch in one
+      transaction. See ON-1, WITHDRAWN.
     - "A forced failure of the platform audit write (step 5) fails the whole operation with unavailable, and no credential is returned."
     - "A forced failure at step 7 returns 201 WITH a populated `warnings` array, and the credential is still present in the body."
   theCredential:
@@ -579,9 +624,27 @@ testRequirements:
 # ---------------------------------------------------------------------------
 openQuestions:
   - id: ON-1
-    question: "A failure between steps 3 and 4 leaves an orphan tenant_directory row. It is inert but nothing cleans it up."
-    recommendation: "Accept for the closed beta and record the reconciliation obligation. A periodic job that deletes directory rows with no matching organization row is a system operation and belongs with retention, not here."
-    blocks: "Nothing."
+    status: WITHDRAWN
+    question: "~~A failure between steps 3 and 4 leaves an orphan tenant_directory row. It is inert but nothing cleans it up.~~"
+    resolution: >-
+      WITHDRAWN 2026-09-05. THE STATE IS UNREACHABLE, so the residual was never real and accepting
+      it implied a failure mode the implementation cannot produce.
+      THE FIVE CONTROL-PLANE ROWS GO IN ONE D1 BATCH — one database, one transaction — so there is
+      no partial state between them. `core-agent` made it ONE PORT METHOD RATHER THAN FIVE
+      deliberately: "five `execute` calls is five transactions, and the atomicity is only available
+      if the boundary is handed the whole operation." THE PRICE THIS ENTRY ACCEPTED DOES NOT HAVE TO
+      BE PAID.
+      AND THE ORPHAN IT DESCRIBED WAS THE IMPOSSIBLE ONE ANYWAY. A `tenant_directory` row without an
+      `organization` row is refused by the foreign key — it is the same defect as theORDERINGCORRECTION
+      seen from the other side. THE ONLY ORPHAN THE CORRECTED ORDER COULD EVER PRODUCE IS THE
+      REVERSE: an `organization` with no directory entry, which is inert, unreachable (no directory
+      entry, no store handle, no way in) and cannot be produced either, for the same batching reason.
+    theLESSONWORTHKEEPING: >-
+      A CONTRACT THAT PLANS FOR A STATE THE IMPLEMENTATION CANNOT PRODUCE SHOULD BE AMENDED RATHER
+      THAN LEFT IMPLYING THE STATE IS LIVE. An accepted residual is a claim that something is
+      possible and tolerated; leaving it in place invites a reconciliation job for a condition that
+      cannot occur, and it spends a reader's attention on the wrong risk.
+    blocks: "Nothing, and it never did."
   - id: ON-2
     question: "A step-7 failure loses the TENANT'S copy of the audit trail while the platform keeps its own — the customer loses the record they most need."
     recommendation: "Surface it as a reconciliation obligation and re-drive the tenant-side write. Do not fail the operation: that costs an unrecoverable credential."

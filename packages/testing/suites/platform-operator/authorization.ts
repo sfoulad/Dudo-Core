@@ -43,7 +43,9 @@ import {
   SESSION_SUSPENDED,
   SESSION_TENANT_MEMBER,
   SESSION_TENANT_OWNER,
+  bodyForPlatformRoute,
   createPlatformWorld,
+  successfulCallFor,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import { createPlatformAuthorityResolver } from '../../../../platform/core/platform/platform-authority.ts';
@@ -78,17 +80,14 @@ function show(value: unknown): string {
  * a case name claiming authorization does.
  *
  * `platform.credentials.reset` IS THE ONLY CONFIRMABLE PLATFORM OPERATION, so it is the only
- * action id that resolves to a permission at all. If a second is added, this map is where a
- * reviewer sees that these cases now cover one of two.
+ * action id that resolves to a permission at all. If a second is added, the fixture's map is where
+ * a reviewer sees that these cases now cover one of two.
+ *
+ * IT IS NOW AN ALIAS FOR THE FIXTURE'S FUNCTION rather than a second copy. Three suites had the
+ * same body-building logic and this file's copy would have been the one that did not get the next
+ * route added to it.
  */
-function bodyForRoute(routeId: PlatformRouteId): string {
-  return routeId === 'platform.confirmations.request'
-    ? JSON.stringify({
-        action_id: 'platform.credentials.reset',
-        parameters: { principal_id: 'prn_target_00000001' },
-      })
-    : '';
-}
+const bodyForRoute = (routeId: PlatformRouteId): string => bodyForPlatformRoute(routeId);
 
 /** A store whose operator row carries a role this build does not recognise. Cause 2. */
 function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
@@ -164,10 +163,22 @@ export function buildPlatformAuthorizationSuite(
       }
       // The control: the SAME routes serve platform-admin, so the refusals above are about the
       // role rather than about the routes being broken.
+      //
+      // THE TWO HALVES USE DIFFERENT REQUESTS AND MUST. The refusals above are decided at step 5,
+      // before any handler runs, so a minimal body reaches the authorization check unchanged. The
+      // control below has to reach the HANDLER, and three routes validate their input there — so
+      // it needs `successfulCallFor`. Using the minimal body for both made this control answer
+      // `invalid_argument`, and `expectOk` reported it as what it was: the control failed, so the
+      // negative case beside it proved nothing.
       for (const routeId of ROUTE_IDS) {
+        const call = await successfulCallFor(routeId);
         expectOk(
           `${routeId} serves platform-admin`,
-          await world.call(routeId, { sessionId: SESSION_ADMIN, bodyText: bodyForRoute(routeId) }),
+          await world.call(routeId, {
+            sessionId: SESSION_ADMIN,
+            bodyText: call.bodyText,
+            pathParams: call.pathParams,
+          }),
         );
       }
     } finally {
@@ -395,10 +406,53 @@ export function buildPlatformAuthorizationSuite(
         !reachable.includes('core.principal.grant-platform-scope'),
         reachable.join(','),
       );
+      // =====================================================================================
+      // EACH UNREACHABLE PERMISSION IS NAMED WITH WHY IT IS UNREACHABLE. A COUNT WOULD ERODE.
+      // =====================================================================================
+      //
+      // This asserted a two-element string. On 2026-09-05 `core-agent` added
+      // `core.platform-audit.read` and `core.principal.revoke-platform-scope` to the role — the
+      // catalog had granted them since it was written and this list had transcribed eight of ten —
+      // and the case went red on a string that had to be updated, which teaches nothing.
+      //
+      // FOUR IS NOT A WORSE ANSWER THAN TWO. `reachablePlatformPermissions` is the intersection of
+      // the role's floor with the class's ceiling, and a permission whose ROUTE is not built yet is
+      // correctly outside it. What must never happen silently is a permission becoming unreachable
+      // that a route DOES serve, or one becoming reachable with no route to serve it — and a map
+      // from permission to reason catches both, because the reason names the route or its absence.
+      const permittedUnreachable: Readonly<Record<string, string>> = {
+        'core.principal.grant-platform-scope':
+          '0025 publishes NO route that creates platform authority, and platform-operator-v1 ' +
+          'records why: "a route that grants platform authority is the single most valuable ' +
+          'target in the platform". Deliberately outside the envelope, so the ceiling refuses it ' +
+          'for every caller. IT ACQUIRING A ROUTE IS THE MOST DANGEROUS CHANGE THIS TABLE COULD SEE',
+        'core.marketplace.moderate':
+          'there is no marketplace to moderate. AZ8 records that the platform-scope view of ' +
+          'published Apps moderation needs does not exist as a permission at all',
+        'core.platform-audit.read':
+          'ADDED 2026-09-05. `platform-audit-read-v1` is contracted and its route is not built, so ' +
+          'the permission is held and unreachable. This is the permission 0028 is about, and when ' +
+          'that route lands it must LEAVE this map — a permission that stays here after its route ' +
+          'ships is a console that renders nothing',
+        'core.principal.revoke-platform-scope':
+          'ADDED 2026-09-05. `platform-operators-v1` is accepted and the revoke route is next. It ' +
+          'is CRITICAL, so when the route lands the confirmation gate applies to it automatically ' +
+          '— which is only true because the permission is in CRITICAL_PERMISSIONS, and it was not ' +
+          'until today. See suites/platform-operator/registry-coherence.ts',
+      };
+      const unreachable = held.filter((permissionId) => !reachable.includes(permissionId)).sort();
       assertEqual(
-        'the omitted two are exactly the two the contract names',
-        held.filter((permissionId) => !reachable.includes(permissionId)).sort().join(','),
-        'core.marketplace.moderate,core.principal.grant-platform-scope',
+        'every held-but-unreachable permission is named here with why no route serves it',
+        unreachable.filter((permissionId) => !(permissionId in permittedUnreachable)).join(','),
+        '',
+      );
+      assertEqual(
+        'and every permission named here is still unreachable — one becoming reachable is a ' +
+          'change to argue, because it means a route now serves it',
+        Object.keys(permittedUnreachable)
+          .filter((permissionId) => !unreachable.includes(permissionId))
+          .join(','),
+        '',
       );
 
       const answer = expectOk(

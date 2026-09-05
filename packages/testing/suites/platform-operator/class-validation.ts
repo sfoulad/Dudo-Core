@@ -84,10 +84,51 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         'a route in this class has no permission, which is what distinguishes it from a session route',
       );
     }
+    // =======================================================================================
+    // THE TABLE IS PINNED, AND EACH ENTRY CARRIES THE DECISION THAT PUT IT THERE.
+    // =======================================================================================
+    //
+    // `0025` fixes membership in this class and says an addition needs its own argument. This
+    // list going red IS that argument being demanded — so the repair is to write the argument
+    // down here, not to paste in the new sorted string.
+    //
+    // UPDATED 2026-09-05: `platform.organizations.create` joined the class. It is not an
+    // append — it is the only operation in Dudo that brings a tenant into existence, and it is
+    // the only route in the class whose handler reaches a tenant store, through an
+    // `OnboardingService` held outside `platform/core/platform/**`. See `no-tenant-reach.ts`
+    // for P1 as that amendment leaves it.
+    const declaredRoutes: Readonly<Record<string, string>> = {
+      'platform.organizations.list': '0025 decision 3. The enumeration this class was built for',
+      'platform.session.whoami':
+        '0025. Declares core.organization.list rather than inventing a core.platform.whoami — ' +
+        'PO-5 records the cost, which is that marketplace-moderator can render no console',
+      'platform.confirmations.request':
+        '0027. The challenge route, and the ONE route whose permission is resolved from the ' +
+        'body. Exempt from the confirmation gate, because gating it would require a ' +
+        'confirmation in order to request one and the lock would have no key',
+      'platform.organizations.create':
+        'organization-onboarding-v1, 0026 decisions 1 and 2. NOT confirmation-gated, and that ' +
+        'is a decision: 0026 reclassified core.organization.create from critical to sensitive ' +
+        'so onboarding stays reachable in one request',
+      'platform.templates.create': 'template-v1, 0025 decision 2. Its own permission, not shared',
+      'platform.templates.list': 'template-v1. Enumeration is its own disclosure, so its own permission',
+      'platform.templates.read': 'template-v1. THE ONLY ROUTE IN THE CLASS WITH A PATH PARAMETER',
+    };
+    const actualRoutes = ROUTES.map((route) => route.id).sort();
     assertEqual(
-      'and the table is the closed set this slice ships',
-      ROUTES.map((route) => route.id).sort().join(','),
-      'platform.confirmations.request,platform.organizations.list,platform.session.whoami',
+      'every route in the shipped table is named here with the decision that added it',
+      actualRoutes.filter((id) => !(id in declaredRoutes)).join(','),
+      '',
+    );
+    assertEqual(
+      'and every route named here is still shipped — a removal is also a change to argue',
+      Object.keys(declaredRoutes)
+        // `actualRoutes` is `PlatformRouteId[]` and these keys are plain strings — the map is
+        // keyed by string on purpose, so that a route id REMOVED from the union still fails here
+        // rather than becoming a type error nobody sees at runtime.
+        .filter((id) => !actualRoutes.some((actual) => actual === id))
+        .join(','),
+      '',
     );
   });
 

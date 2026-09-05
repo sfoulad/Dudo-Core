@@ -214,7 +214,10 @@ export function withForeignOrganizationReservation(
  * refusal is of the shape rather than of the provenance.
  */
 export function withForgedWriteReservation(inner: RequestCoordinator): RequestCoordinator {
-  return decorate(inner, (coordination, request) => ({
+  // `_coordination` IS UNUSED ON PURPOSE AND THE NAME SAYS SO. The forgery is the whole point:
+  // this control must build a reservation from NOTHING the real coordination produced, because a
+  // value derived from it would carry the brand and would be accepted for the right reason.
+  return decorate(inner, (_coordination, request) => ({
     async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
       return {
         ok: true,

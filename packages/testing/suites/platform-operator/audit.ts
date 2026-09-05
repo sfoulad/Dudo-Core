@@ -56,6 +56,7 @@ import {
   SESSION_STRANGER,
   createPlatformWorld,
   bodyForPlatformRoute,
+  successfulCallFor,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import { withFailingActionLog } from '../../harness/broken-platform-controls.ts';
@@ -84,7 +85,21 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
     suite.test(`${route.id} writes exactly one action record, and it is a READ`, async () => {
       const world = await make();
       try {
-        expectOk(`${route.id} succeeds for a platform-admin`, await world.call(route.id, { sessionId: SESSION_ADMIN, bodyText: bodyForPlatformRoute(route.id) }));
+        // `successfulCallFor` RATHER THAN `bodyForPlatformRoute`, since 2026-09-05. This case
+        // asserts a SUCCESS, and three of the seven routes now need a real request to produce one:
+        // onboarding needs four validated fields and a seeded `template_id`, Template creation
+        // needs a name, and Template read needs a path parameter. With the minimal body they
+        // answered `invalid_argument` and `internal` — and `expectOk` correctly refused to call
+        // that a pass, which is how the drift surfaced instead of hiding.
+        const call = await successfulCallFor(route.id);
+        expectOk(
+          `${route.id} succeeds for a platform-admin`,
+          await world.call(route.id, {
+            sessionId: SESSION_ADMIN,
+            bodyText: call.bodyText,
+            pathParams: call.pathParams,
+          }),
+        );
         const rows = world.actionRows();
         assertEqual(`${route.id} produced exactly one record`, rows.length, 1);
         assertEqual('the action id is the route id, a Core-owned literal', rows[0].action_id, route.id);
@@ -98,7 +113,29 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
         // an identifier and may never carry the CONTENTS of what was touched. So the assertion is
         // now per route, and a target is required to be an identifier or nothing — never a name, a
         // value or a summary.
-        const expectedTarget = route.id === 'platform.confirmations.request' ? 'principal' : 'none';
+        //
+        // UPDATED AGAIN 2026-09-05 when onboarding joined the class, and the ternary became a MAP
+        // for the same reason the other pinned sets in this suite did: a route added to one branch
+        // of a two-way choice is a route nobody had to think about. `0025` decision 5 permits
+        // exactly two target kinds and this is where each route's answer is argued.
+        const TARGET_KINDS: Readonly<Record<string, string>> = {
+          'platform.organizations.list': 'none — an enumeration has no single target, and 0025 D5 forbids recording what it returned',
+          'platform.session.whoami': 'none — the target would be the caller, which every row already names',
+          'platform.confirmations.request': 'principal — the challenge names the principal it is for',
+          'platform.organizations.create': 'organization — the Organization it created, and nothing about what it contains',
+          'platform.templates.create': 'none — a Template is tenant-independent configuration and names neither an Organization nor a principal, so template_id is not one of the two kinds D5 permits',
+          'platform.templates.list': 'none — an enumeration, as above',
+          'platform.templates.read': 'none — the target would be a template_id, which D5 does not permit',
+        };
+        const declared = TARGET_KINDS[route.id];
+        assertTrue(
+          `${route.id}'s target kind is argued in this suite`,
+          declared !== undefined,
+          `${route.id} joined the class and no target kind was decided for it. 0025 decision 5 ` +
+            'permits organization and principal and nothing else; write down which this route ' +
+            'names and why, rather than letting it default',
+        );
+        const expectedTarget = declared!.split(' ')[0]!;
         assertEqual(`${route.id} names the target kind it should`, rows[0].target_kind, expectedTarget);
         if (expectedTarget === 'none') {
           assertEqual('so the target identifier is null', rows[0].target_id, null);

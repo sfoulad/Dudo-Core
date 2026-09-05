@@ -86,8 +86,39 @@ const COMBINING_DIAERESIS = '̈';
 /** U+1F511 KEY. A surrogate pair in UTF-16; four bytes in UTF-8, six in CESU-8. */
 const ASTRAL_KEY = '\u{1f511}';
 
-const PASSWORD_COMPOSED = `caf${E_ACUTE_COMPOSED}-passphrase-0002`;
-const PASSWORD_DECOMPOSED = `caf${E_ACUTE_DECOMPOSED}-passphrase-0002`;
+/**
+ * ===========================================================================================
+ * ANNOTATED `: string`, AND IT IS NOT A CAST AND NOT A SILENCING. READ THIS BEFORE REMOVING IT.
+ * ===========================================================================================
+ *
+ * Without the annotation TypeScript infers two distinct STRING LITERAL types for these, sees that
+ * `PASSWORD_COMPOSED !== PASSWORD_DECOMPOSED` can never be false, and reports TS2367 — *"this
+ * comparison appears to be unintentional... no overlap"*. `npm run typecheck:tests` was red on it.
+ *
+ * **THE TEMPTING FIX IS A CAST, AND THE CAST WOULD BE THE WRONG INSTINCT.** The previous
+ * `qa-agent` flagged that and was right: a cast asserts something about a value in order to stop
+ * the compiler talking, and the next reader cannot tell a silencing from a fact.
+ *
+ * *** BUT THE COMPILE-TIME SIGNAL IS INVERTED, AND THAT IS WHY THE ANNOTATION IS CORRECT. ***
+ * The runtime assertion below exists to catch ONE failure: an editor, a tool or a merge
+ * normalising this file on disk, which would make the two vectors identical and every NFC vector
+ * in the table vacuous. Consider what TypeScript does in each state:
+ *
+ *   VECTORS STILL DISTINCT (correct)  -> two different literal types -> TS2367 IS REPORTED.
+ *   VECTORS NORMALISED ON DISK (bug)  -> one identical literal type  -> TS2367 DISAPPEARS.
+ *
+ * **The diagnostic fires when the file is right and goes silent when it is wrong.** It is not a
+ * check that was designed; it is a tautology detector pointed at a deliberate tautology, and
+ * keeping the gate red for it would mean keeping a red gate for a signal that means the opposite
+ * of what a reader would assume.
+ *
+ * `: string` IS A TRUE STATEMENT ABOUT BOTH VALUES and changes nothing at runtime. The assertion
+ * in `the composed and decomposed vectors really are different byte sequences` still runs, still
+ * compares the real strings, and still goes red the day the file is normalised — which is the
+ * check that was actually built for this, and the only one that behaves the right way round.
+ */
+const PASSWORD_COMPOSED: string = `caf${E_ACUTE_COMPOSED}-passphrase-0002`;
+const PASSWORD_DECOMPOSED: string = `caf${E_ACUTE_DECOMPOSED}-passphrase-0002`;
 const PASSWORD_LIGATURE = `a${LIGATURE_FI}ne-passphrase-0003`;
 const PASSWORD_LIGATURE_EXPANDED = 'afine-passphrase-0003';
 

@@ -102,6 +102,7 @@ import { createRouter } from '../../../../platform/core/http/router.ts';
 import type { PrincipalResolver } from '../../../../platform/core/identity/principal-resolver.ts';
 import { createCustomerRoutes, CUSTOMERS_BASE_PATH } from '../../../../apps/customers/api/routes.ts';
 import { ok } from '../../../../platform/core/kernel/result.ts';
+import type { Result } from '../../../../platform/core/kernel/result.ts';
 
 type MakeWorld = (options?: WorldOptions) => Promise<World>;
 
@@ -1023,8 +1024,11 @@ export function buildWriteAdmissionSuite(makeWorld: MakeWorld): Suite {
     // in the exhausted world would prove neither, because a `not_found` and a `quota_exceeded`
     // differ for reasons that have nothing to do with either ceiling.
     const healthy = await makeWorld();
-    let healthyProbe: unknown;
-    let healthyCreate: unknown;
+    // `Result<unknown>` RATHER THAN `unknown`, since 2026-09-05. `World.invoke` returns a result
+    // and `expectOk`/`expectError` need to see that; declaring the variable as `unknown` threw
+    // the shape away between the call and the assertion.
+    let healthyProbe: Result<unknown>;
+    let healthyCreate: Result<unknown>;
     try {
       healthyProbe = await healthy.invoke(healthy.actions.get, healthy.ownerA, { customer_id: CUST_B_ANNA });
       healthyCreate = await healthy.invoke(healthy.actions.create, healthy.ownerA, {

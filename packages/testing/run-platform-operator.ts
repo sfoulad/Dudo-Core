@@ -47,6 +47,14 @@ import { buildOrganizationsListSuite } from './suites/platform-operator/organiza
 import { buildHostBindingSuite } from './suites/platform-operator/host-binding.ts';
 import { buildBootstrapBoundsSuite } from './suites/platform-operator/bootstrap-bounds.ts';
 import {
+  buildPlatformConfirmationScopeSuite,
+  buildPlatformConfirmationSuite,
+} from './suites/platform-operator/platform-confirmation.ts';
+import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
+import { buildTemplatesSuite } from './suites/platform-operator/templates.ts';
+import { buildRegistryCoherenceSuite } from './suites/platform-operator/registry-coherence.ts';
+import { buildBusinessTypeBoundarySuite } from './suites/platform-operator/business-type-boundary.ts';
+import {
   buildConfirmationChallengeSuite,
   buildConfirmationRefusalShapeSuite,
   buildConfirmationSuite,
@@ -127,9 +135,18 @@ async function main(): Promise<void> {
     buildOrganizationsListSuite(),
     buildHostBindingSuite(),
     buildBootstrapBoundsSuite(),
+    buildOnboardingSuite(),
+    buildTemplatesSuite(),
+    // The two standing controls. Neither builds a world: one reads the contract registry and
+    // compares it with Core's frozen transcriptions, the other greps `platform/core/**`. They run
+    // in the primary set and in no negative control, because neither has a runtime port to break.
+    buildRegistryCoherenceSuite(),
+    buildBusinessTypeBoundarySuite(),
     buildConfirmationSuite(),
     buildConfirmationRefusalShapeSuite(),
     buildConfirmationChallengeSuite(),
+    buildPlatformConfirmationSuite(),
+    buildPlatformConfirmationScopeSuite(),
   ];
   const registered = primarySuites.reduce((total, suite) => total + suite.caseNames.length, 0);
   const primary = await runAll(primarySuites);
@@ -244,7 +261,7 @@ async function main(): Promise<void> {
   );
 
   // -----------------------------------------------------------------------------------------
-  // `docs/decisions/0027`'s CENTRAL NEGATIVE CONTROL. Performed for the first time.
+  // `docs/decisions/0027`'s CENTRAL NEGATIVE CONTROL, NOW ACROSS **BOTH** GATED CLASSES.
   //
   //   "REMOVE THE CONFIRMATION CHECK FROM THE PIPELINE AND EVERY CRITICAL-OPERATION TEST MUST GO
   //   RED. If removing the check turns only some tests red, coverage is incomplete and the suite
@@ -254,16 +271,39 @@ async function main(): Promise<void> {
   // agrees. That is the shape the defect would take: not a deleted call site, which a reviewer
   // would notice, but a check that runs and never refuses.
   //
-  // READ THE STILL-GREEN LIST AS THE RECORD INSTRUCTS. A case that stays green here is not testing
-  // the gate, and that makes the SUITE the thing to fix — not the control to narrow.
+  // =========================================================================================
+  // *** WHY ONE CONTROL AND NOT TWO, AND WHY THIS WAS A PARTIAL CONTROL UNTIL 2026-09-05. ***
+  // =========================================================================================
+  //
+  // The gate is enforced at TWO INDEPENDENT POINTS: `action/pipeline.ts` step 6 and
+  // `dispatchPlatformRoute` step 5b. Each composes its own `ConfirmationGate` instance —
+  // `confirmation-fixture.ts` builds one, `platform-fixture.ts` builds another — so wrapping one
+  // leaves the other enforcing.
+  //
+  // BEFORE THIS, THE CONTROL REACHED ONLY THE PIPELINE AND STILL PRINTED `STILL GREEN: 0`. That
+  // zero was true of the two suites it was applied to and said nothing about the class it never
+  // touched, which is exactly the standing requirement in `README.md`:
+  //
+  //   "wherever an invariant is enforced at N points, the suite needs a control that removes all
+  //   N — not N controls that each remove one. Every layer added makes the suite less able to
+  //   detect that any single layer has died, and a control that removes one of two redundant
+  //   checks prints green and means nothing."
+  //
+  // SO THE WRAPPER IS APPLIED TO BOTH FIXTURES IN ONE RUN AND THE RESULTS ARE CLASSIFIED TOGETHER.
+  // `STILL GREEN` must stay 0 across the combined set — which is a strictly stronger claim than
+  // the same number was yesterday, over four suites instead of two.
   // -----------------------------------------------------------------------------------------
   const confirmationRemoved = (options?: ConfirmationWorldOptions) =>
     createConfirmationWorld({ ...options, wrapGate: withConfirmationCheckRemoved });
+  const platformGateRemoved: MakeWorld = (options) =>
+    createPlatformWorld({ ...options, wrapGate: withConfirmationCheckRemoved });
   classify(
-    "0027's CENTRAL CONTROL — the confirmation check removed from the pipeline",
+    "0027's CENTRAL CONTROL — the confirmation check removed from BOTH the Action pipeline AND " +
+      'the platform route class',
     await runAll([
       buildConfirmationSuite(confirmationRemoved),
       buildConfirmationRefusalShapeSuite(confirmationRemoved),
+      buildPlatformConfirmationSuite(platformGateRemoved),
     ]),
   );
 

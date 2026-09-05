@@ -67,6 +67,15 @@ function migrationsOnDisk(): string[] {
  * be typed here, beside its reason, is one a reviewer sees.
  */
 const CONTROL_PLANE_DELIBERATE_OMISSIONS: Readonly<Record<string, string>> = Object.freeze({
+  '0013_organization_template.sql':
+    'ADDS `organization.template_id`, nullable. Added to this list 2026-09-05, when this control ' +
+    'went red on the migration landing — which is the control working rather than a chore. It is ' +
+    'OMITTED and not applied because no AZ2 suite reads or writes the column: login resolves ' +
+    'principals, sessions, memberships and credentials, and none of those statements names it. ' +
+    'THE TRIPWIRE SHAPE IS THE POINT, exactly as for 0011 and 0012 — the column is nullable, so ' +
+    'an AZ2 statement that started selecting `organization.*` would go red HERE, on a missing ' +
+    'column, rather than silently reading a NULL in production. The platform fixture applies it, ' +
+    'because there the onboarding write is the subject.',
   '0012_template.sql':
     'The Template table. `template-v1` is accepted and unimplemented, nothing on the authenticated ' +
     'path reads it, and no AZ2 suite touches Templates. Same tripwire shape as 0011: if login ever ' +

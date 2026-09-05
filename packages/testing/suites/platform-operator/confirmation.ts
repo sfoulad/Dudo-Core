@@ -41,12 +41,10 @@
 import { ISOLATION, Suite, assertEqual, assertTrue, expectError, expectOk } from '../../harness/runner.ts';
 import {
   CALLER_EMAIL,
-  CALLER_PRINCIPAL,
   OTHER_EMAIL,
   OTHER_PRINCIPAL,
   OTHER_SESSION_ID,
   OTHER_CUSTOMER,
-  SESSION_ID,
   TARGET_CUSTOMER,
   createConfirmationWorld,
 } from '../../harness/confirmation-fixture.ts';
@@ -551,16 +549,27 @@ export function buildConfirmationChallengeSuite(
     // A permission in the critical set whose Action has no catalog entry is an operation that
     // CANNOT BE CONFIRMED AND THEREFORE CANNOT BE PERFORMED — the gate refuses, the challenge
     // refuses, and the operation is unreachable. Recorded per permission rather than in aggregate.
-    const withStatements = criticalPermissions().filter((permissionId) => hasStatement(permissionId));
+    // CORRECTED 2026-09-05, AND THE CORRECTION IS THE FINDING WORKING. This asserted
+    // `hasStatement('customers.customer.delete')` — a PERMISSION identifier — because that was how
+    // the catalog was keyed. I reported that the real deferred Action is `customers.DeleteCustomer`
+    // and would therefore have found no statement the day it was built; `core-agent` re-keyed the
+    // catalog to ACTION ids. So the assertion now names Action ids, and asserting the permission
+    // would be asserting the defect.
     assertTrue(
-      'at least one critical permission has a statement',
-      withStatements.length > 0,
-      'the statement catalog is empty, so no critical operation is confirmable at all',
+      'the critical set is non-empty',
+      criticalPermissions().length > 0,
+      'no permission is classified critical, so the gate guards nothing',
     );
     assertTrue(
-      'customers.customer.delete has one',
-      hasStatement('customers.customer.delete'),
-      'the one critical operation reachable today has no statement',
+      'the Action whose gate this suite exercises has a statement',
+      hasStatement('customers.DeleteCustomer'),
+      'the synthetic Action stands in for customers.DeleteCustomer under its real id; without a ' +
+        'statement it cannot obtain a challenge and the gate is unexercisable',
+    );
+    assertTrue(
+      'and so does the one confirmable platform operation',
+      hasStatement('platform.credentials.reset'),
+      'the only confirmable platform-class operation has no statement, so it is unperformable',
     );
   });
 

@@ -45,7 +45,16 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { ISOLATION, Suite, assertEqual, assertTrue } from '../../harness/runner.ts';
+import { ISOLATION, Suite, assertEqual, assertTrue, expectOk } from '../../harness/runner.ts';
+import {
+  ORG_ALPHA,
+  SESSION_ADMIN,
+  createPlatformWorld,
+  onboardingRequest,
+  successfulCallFor,
+} from '../../harness/platform-fixture.ts';
+import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
+import { platformRoutes } from '../../../../platform/core/platform/platform-routes.ts';
 import { PLATFORM_PERMISSION_ENVELOPE } from '../../../../platform/core/platform/platform-permissions.ts';
 import { MEMBERSHIP_ROLES, grantsForRole } from '../../../../platform/core/authorization/roles.ts';
 import type { MembershipRole } from '../../../../platform/core/authorization/roles.ts';
@@ -89,7 +98,13 @@ const GRANT_CARRYING_FIELD_NAMES: readonly string[] = Object.freeze([
   'scopes',
 ]);
 
-export function buildBootstrapBoundsSuite(): Suite {
+/**
+ * TAKES A `MakePlatformWorld` SINCE 2026-09-05. Bounds 1-3 became runnable cases when
+ * `platform.organizations.create` landed, and a suite that built its own world could not be put
+ * under a negative control without editing the suite — which is how a control ends up being
+ * argued about instead of run.
+ */
+export function buildBootstrapBoundsSuite(make: MakePlatformWorld = createPlatformWorld): Suite {
   const suite = new Suite('Platform — the bootstrap exception to 0007 D11 (0025 decision 4)');
 
   suite.test('the onboarding request declares exactly four fields and closes the object', () => {
@@ -241,25 +256,200 @@ export function buildBootstrapBoundsSuite(): Suite {
   // Not run, with the reason recorded. Never reported as passing.
   // ---------------------------------------------------------------------------------------
 
-  suite.skip(
+  // =========================================================================================
+  // BOUNDS 1, 2 AND 3, RUN RATHER THAN SKIPPED — SINCE 2026-09-05, WHEN THE OPERATION LANDED.
+  // =========================================================================================
+  //
+  // These three were `suite.skip` with the reason *"a statement about the behaviour of an
+  // operation that does not exist"*. `platform.organizations.create` now exists, so the reason is
+  // no longer true and the skips are cases. **The contract-half tripwires above are unchanged and
+  // still run**: they are what catches a `role` field being added to the request, which no
+  // behavioural test can see, because a request shape that never arrives is never exercised.
+  //
+  // THE BEHAVIOURAL HALF AND THE CONTRACT HALF ARE BOTH NEEDED AND NEITHER SUBSTITUTES. The
+  // schema check would stay green if the handler ignored the schema; these would stay green if
+  // the schema grew a field nothing sent yet.
+
+  suite.test(
     'bound 1: onboarding creates a membership only in the operation that creates the Organization',
-    'organization-onboarding-v1 has no implementation: no platform.organizations.create route, ' +
-      'no handler, and no code anywhere that writes an organization_membership row. This is a ' +
-      'statement about the behaviour of an operation that does not exist. NOT RUN.',
+    async () => {
+      const world = await make();
+      try {
+        const before = world.controlRows('organization_membership').length;
+        const request = await onboardingRequest();
+        const created = expectOk(
+          'the onboarding succeeds',
+          await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: request.bodyText,
+          }),
+        ) as { organization_id: string; admin_principal_id: string };
+
+        const after = world.controlRows('organization_membership');
+        assertEqual(
+          `${ISOLATION} exactly one membership row was created`,
+          after.length,
+          before + 1,
+        );
+
+        // ---- AND NO OTHER ROUTE IN THE CLASS CREATES ONE. That is the whole of bound 1: not
+        // "this operation creates one", but "only this operation does". Asserted by driving every
+        // other route in the shipped table and counting again — over the TABLE rather than a list,
+        // so a route added tomorrow is covered without anyone remembering to add it here.
+        const others = platformRoutes().filter(
+          (route) => route.id !== 'platform.organizations.create',
+        );
+        assertTrue('there are other routes to check', others.length > 0, 'the table has one route');
+        for (const route of others) {
+          const call = await successfulCallFor(route.id);
+          await world.call(route.id, {
+            sessionId: SESSION_ADMIN,
+            bodyText: call.bodyText,
+            pathParams: call.pathParams,
+          });
+        }
+        assertEqual(
+          `${ISOLATION} no other platform route created a membership`,
+          world.controlRows('organization_membership').length,
+          after.length,
+        );
+
+        // The created membership belongs to the created Organization and the created principal,
+        // and to nothing that existed before.
+        const fresh = after.filter((row) => row.organization_id === created.organization_id);
+        assertEqual('the new membership is in the new Organization', fresh.length, 1);
+        assertEqual(
+          `${ISOLATION} and it belongs to the principal this operation created`,
+          fresh[0]!.principal_id,
+          created.admin_principal_id,
+        );
+      } finally {
+        world.close();
+      }
+    },
   );
 
-  suite.skip(
+  suite.test(
     'bound 2: onboarding creates exactly one membership, at exactly the role `owner`',
-    'Same reason. The CONTRACT half of this bound — that no role can be named in the request — ' +
-      'IS tested above and is green; the BEHAVIOURAL half needs the operation to exist. NOT RUN.',
+    async () => {
+      const world = await make();
+      try {
+        const request = await onboardingRequest();
+        const created = expectOk(
+          'the onboarding succeeds',
+          await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: request.bodyText,
+          }),
+        ) as { organization_id: string };
+
+        const rows = world
+          .controlRows('organization_membership')
+          .filter((row) => row.organization_id === created.organization_id);
+        assertEqual(`${ISOLATION} exactly one membership, not two`, rows.length, 1);
+        assertEqual(
+          `${ISOLATION} at exactly the role 'owner', a literal with no input that could influence it`,
+          rows[0]!.role,
+          'owner',
+        );
+
+        // *** THE BOUND `0025` NAMES AS THE ONE MOST LIKELY TO ERODE, ASSERTED FROM THE INPUT END.
+        // A request naming a role must be refused BY THE CLASS, before the handler, because the
+        // route's declared field set is the complete accepted set. This is the runtime half of the
+        // schema tripwire above: the schema says the field cannot be declared, and this says a
+        // request carrying it anyway is refused rather than ignored.
+        for (const field of GRANT_CARRYING_FIELD_NAMES) {
+          const body = JSON.parse(request.bodyText) as Record<string, unknown>;
+          body[field] = 'owner';
+          const answer = await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: JSON.stringify(body),
+          });
+          assertTrue(
+            `${ISOLATION} a request carrying '${field}' is refused, not silently ignored`,
+            !answer.ok,
+            `the onboarding route ACCEPTED a request carrying '${field}': ${JSON.stringify(answer)}`,
+          );
+          assertEqual(
+            `and '${field}' is refused as an undeclared field, by the class`,
+            (answer as { error: { code: string } }).error.code,
+            'invalid_argument',
+          );
+        }
+      } finally {
+        world.close();
+      }
+    },
   );
 
-  suite.skip(
+  suite.test(
     'bound 3: onboarding is unavailable once the Organization has any membership row',
-    'Same reason, and architecture-agent recorded that this bound "holds trivially, because the ' +
-      'operation creates the Organization and never sees an existing membership". The schema ' +
-      'tripwire above is what stops it being lost silently; the runtime check cannot be written ' +
-      'until there is a runtime. NOT RUN.',
+    async () => {
+      // ===================================================================================
+      // *** THIS BOUND HOLDS STRUCTURALLY, AND THE CASE ASSERTS THE STRUCTURE RATHER THAN
+      // PRETENDING TO REACH A STATE THAT CANNOT BE REACHED. ***
+      // ===================================================================================
+      //
+      // `architecture-agent`: *"it holds trivially, because the operation creates the Organization
+      // and never sees an existing membership — which is exactly why it could be lost without
+      // anyone noticing. A bound that is true by accident is not a bound."*
+      //
+      // SO THERE IS NO "CALL IT TWICE FOR THE SAME ORGANIZATION" TEST TO WRITE. The request has no
+      // field naming an Organization, `organizationId` is generated by the server per call, and
+      // two calls produce two different Organizations. **A case that called it twice and observed
+      // two Organizations would be reporting that the identifier generator works.**
+      //
+      // WHAT IS ASSERTED INSTEAD IS THE THING THAT WOULD HAVE TO CHANGE FOR THE BOUND TO BREAK:
+      // that every membership this operation writes goes to an Organization created in the SAME
+      // call, and that a second call cannot touch the first Organization. That is checkable, and
+      // it goes red on the change that would matter — an `organization_id` on the request.
+      const world = await make();
+      try {
+        const first = expectOk(
+          'the first onboarding succeeds',
+          await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: (await onboardingRequest()).bodyText,
+          }),
+        ) as { organization_id: string };
+
+        const second = expectOk(
+          'the second onboarding succeeds',
+          await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: (await onboardingRequest({ adminIdentifier: 'second.admin@example.invalid' }))
+              .bodyText,
+          }),
+        ) as { organization_id: string };
+
+        assertTrue(
+          `${ISOLATION} two calls create two Organizations, never a second membership in the first`,
+          first.organization_id !== second.organization_id,
+          'both onboardings returned the same organization_id, so the second added a membership ' +
+            'to an Organization that already had one — bound 3 is broken',
+        );
+        assertEqual(
+          `${ISOLATION} the first Organization still has exactly one membership`,
+          world
+            .controlRows('organization_membership')
+            .filter((row) => row.organization_id === first.organization_id).length,
+          1,
+        );
+
+        // AND THE SEEDED ORGANIZATIONS ARE UNTOUCHED. `ORG_ALPHA` already holds a membership, and
+        // it is the Organization an escalation would aim at: adding an owner to a tenant that
+        // exists. Two onboardings later it must hold exactly what it held.
+        assertEqual(
+          `${ISOLATION} an Organization that already had a membership gained none`,
+          world
+            .controlRows('organization_membership')
+            .filter((row) => row.organization_id === ORG_ALPHA).length,
+          2,
+        );
+      } finally {
+        world.close();
+      }
+    },
   );
 
   return suite;

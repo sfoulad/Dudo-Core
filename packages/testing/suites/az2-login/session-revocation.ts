@@ -60,6 +60,7 @@ import {
 import type { DayWriteBudget } from '../../../../platform/core/protection/write-admission.ts';
 import { createDenyAllPrincipalAuthorizationSource } from '../../../../platform/core/identity/principal-authorization-source.ts';
 import { quotaExceeded } from '../../../../platform/core/kernel/errors.ts';
+import { toRfc3339Utc } from '../../../../platform/core/kernel/clock.ts';
 import type { SqliteHarness } from '../../harness/sqlite-d1.ts';
 
 const PRINCIPAL = 'prn_logout_0001';
@@ -87,7 +88,20 @@ function createFixture(budgetTotal: number): Fixture {
       exhaustible.budget as unknown as DayWriteBudget,
     ),
     ids: createSequentialIds(),
-    clock: { nowMs: () => NOW_MS },
+    // ===================================================================================
+    // `now` WAS MISSING, AND NOTHING AT RUNTIME COULD HAVE TOLD US.
+    // ===================================================================================
+    //
+    // `Clock` requires both `now()` and `nowMs()`. This literal supplied only `nowMs`, so any
+    // code path in `createSessionResolver` that called `clock.now()` would have thrown
+    // `TypeError: clock.now is not a function` — and the paths these cases exercise happen not
+    // to call it. **A fixture that satisfies a port by accident is exactly what
+    // `npm run typecheck:tests` was added for**, and this is the diagnostic the previous
+    // `qa-agent` flagged first because it is invisible until the day a code path moves.
+    //
+    // `toRfc3339Utc(NOW_MS)` rather than a transcribed timestamp string: the two must agree, and
+    // a literal is one edit from not agreeing with `NOW_MS`.
+    clock: { now: () => toRfc3339Utc(NOW_MS), nowMs: () => NOW_MS },
     sessionLifetimeMs: TWELVE_HOURS_MS,
   });
   return {

@@ -48,6 +48,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { ISOLATION, Suite, assertEqual, assertTrue, expectOk } from '../../harness/runner.ts';
+import { stripComments } from '../../harness/source-text.ts';
 import { createPlatformWorld, REQUEST_ID, CORRELATION_ID, SESSION_ADMIN } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import {
@@ -103,37 +104,21 @@ function listTypeScriptFiles(directory: string): string[] {
 }
 
 /**
- * Removes `/* ... *\/` and `// ...` before the grep runs.
+ * The comment stripper MOVED to `harness/source-text.ts` on 2026-09-05, unchanged in behaviour.
  *
- * WITHOUT THIS THE CHECK IS UNRUNNABLE, and the reason is worth stating rather than working
- * around silently: the class's own files explain at length that they hold no `TenantStoreResolver`
- * — that documentation is where the property is recorded — so a grep over raw text would fail on
- * the sentence asserting the thing it is testing.
+ * WITHOUT IT THIS CHECK IS UNRUNNABLE, and the reason is worth restating where the check lives:
+ * the class's own files explain at length that they hold no `TenantStoreResolver` — that
+ * documentation is where the property is recorded — so a grep over raw text would fail on the
+ * sentence asserting the thing it is testing.
  *
- * IT IS A LEXER'S APPROXIMATION AND NOT A PARSER. A `//` inside a string literal would be treated
- * as a comment. That is stated rather than hidden; the failure direction is toward removing MORE
- * text, which can only make this check weaker, never falsely red — so a green result here is a
- * slightly weaker claim than "the code does not contain these names", and a red one is exact.
+ * IT IS A LEXER'S APPROXIMATION AND NOT A PARSER, and the limit is stated at the definition. The
+ * failure direction is toward removing MORE text, which can only make this check weaker, never
+ * falsely red — so a green result here is a slightly weaker claim than "the code does not contain
+ * these names", and a red one is exact.
+ *
+ * It moved because `business-type-boundary.ts` needs the same lexer, and a heuristic with two
+ * copies is two heuristics: the one that gets fixed and the one that does not.
  */
-function stripComments(source: string): string {
-  let output = '';
-  let index = 0;
-  while (index < source.length) {
-    if (source.startsWith('/*', index)) {
-      const end = source.indexOf('*/', index + 2);
-      index = end === -1 ? source.length : end + 2;
-      continue;
-    }
-    if (source.startsWith('//', index)) {
-      const end = source.indexOf('\n', index);
-      index = end === -1 ? source.length : end;
-      continue;
-    }
-    output += source[index];
-    index += 1;
-  }
-  return output;
-}
 
 /** Every value reachable from `value`, one level of objects and arrays deep, plus `value` itself. */
 function reachableValues(value: unknown, depth = 3): unknown[] {
@@ -210,11 +195,56 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
         offenders.length,
         0,
       );
-      // The keys, pinned. A new field is a deliberate act and this is what makes it visible.
+      // =====================================================================================
+      // EACH DEPENDENCY IS NAMED WITH THE REASON IT IS NOT A TENANT HANDLE. A COUNT WOULD ERODE.
+      // =====================================================================================
+      //
+      // This assertion used to pin a sorted key string reading "the seven the class declares".
+      // When `createPlatformComposition` began returning `confirmations` it went red, and the
+      // tempting repair was to add the word to the string and change seven to eight — which is a
+      // control that gets bumped rather than one that has to be argued.
+      //
+      // THE FIELD-TO-REASON FORM IS THE ONE THE TEAM LEAD ALREADY RULED FOR THE HANDLER CONTEXT
+      // twenty lines below, when `objects` and `sessionId` were added there. The same argument
+      // applies with more force here, because THIS is the object `0025` decision 3's binding
+      // property is a statement about: *"`PlatformRouteDependencies` has no field for a resolver."*
+      // A key set that can be updated by copying the actual output is not evidence for that.
+      //
+      // Adding a dependency means writing down here why it cannot reach a tenant. An unexplained
+      // one fails, and so does a removed one.
+      const permittedDependencies: Readonly<Record<string, string>> = {
+        adminHosts: 'a frozen list of hostnames. Strings, and 0025 requires them to be the SECOND layer',
+        audit: 'a PlatformAuditRecorder over the platform store; it writes platform_operator_action and reads nothing tenant-scoped',
+        authenticatePrincipal:
+          'a function from a session id to a principal id. Deliberately NOT a SessionResolver — ' +
+          'composition.ts states the least-privilege split, and the narrow function cannot select ' +
+          'an Organization',
+        authority:
+          'a PlatformAuthorityResolver. It reads platform_operator and probes ' +
+          'organization_membership for the mutual exclusion, and returns a role and a grant set — ' +
+          'never a handle to either table',
+        authorizer: 'the same pure Authorizer every Action uses. It holds no store at all',
+        confirmations:
+          'the ConfirmationGate, ADDED 2026-09-05 by 0027. It is a gate and not a service: its ' +
+          'only method is `enforce`, so this class cannot ISSUE a challenge, only spend one. ' +
+          'composition.ts passes it through rather than building it precisely so the class does ' +
+          'not acquire a CredentialVerifier. It reads `confirmation`, a control-plane table with ' +
+          'no tenant column, and it is undefined in a deployment that composes no gate',
+        handlers: 'the route handlers. The context they receive is asserted field by field below',
+        readSessionId: 'the shared credential reader. Headers in, a session id out',
+      };
+      const actualDependencies = Object.keys(world.dependencies).sort();
       assertEqual(
-        'the dependency set is exactly the seven the class declares',
-        Object.keys(world.dependencies).sort().join(','),
-        'adminHosts,audit,authenticatePrincipal,authority,authorizer,handlers,readSessionId',
+        `${ISOLATION} every composed dependency is named here with why it is not a tenant handle`,
+        actualDependencies.filter((key) => !(key in permittedDependencies)).join(','),
+        '',
+      );
+      assertEqual(
+        'and every dependency named here is still composed — a removed one is also a change to argue',
+        Object.keys(permittedDependencies)
+          .filter((key) => !actualDependencies.includes(key))
+          .join(','),
+        '',
       );
     } finally {
       world.close();
@@ -245,6 +275,10 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
             ['authorization', `Bearer ${await world.signer.mint(SESSION_ADMIN)}`],
           ]),
           queryString: '',
+          // `platform.session.whoami` declares no path parameter, so `{}` is the correct value —
+          // but OMITTING it was a type error the runtime ignored, and `npm run typecheck:tests`
+          // is what found it. The case stayed green while the fixture no longer matched the port.
+          pathParams: {},
           requestId: REQUEST_ID,
           correlationId: CORRELATION_ID,
         }),
@@ -273,6 +307,11 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
           'the session the confirmation binds to. A session is not a tenant: an operator\'s ' +
           'session carries a null active_organization_id for its whole life (0024), so this ' +
           'yields no Organization even indirectly',
+        pathParams:
+          'path parameters the route declared, decoded and validated by the class. They name an ' +
+          'Organization or a principal on the routes that take one — an identifier, never a store ' +
+          'and never a handle. `0025`\'s honest limit applies: this class may NAME a tenant and may ' +
+          'never read a row behind `whereWithTenant`',
         requestId: 'an observability value',
         correlationId: 'an observability value, shape-validated at the transport boundary',
       };

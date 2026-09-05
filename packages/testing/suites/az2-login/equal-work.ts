@@ -62,6 +62,8 @@ import {
 } from '../../../../platform/core/identity/credential-verifier.ts';
 import type { CredentialStore } from '../../../../platform/core/identity/credential-store.ts';
 import { err } from '../../../../platform/core/kernel/result.ts';
+import type { Result } from '../../../../platform/core/kernel/result.ts';
+import type { CredentialVerification } from '../../../../platform/core/identity/credential-verifier.ts';
 import { unavailable } from '../../../../platform/core/kernel/errors.ts';
 import { createSqliteDatabase } from '../../harness/sqlite-d1.ts';
 
@@ -120,7 +122,18 @@ async function observeDerivations<T>(
 }
 
 type Harness = {
-  readonly verify: (identifier: string, value: string) => Promise<unknown>;
+  /**
+   * `Promise<Result<CredentialVerification>>` RATHER THAN `Promise<unknown>`, since 2026-09-05.
+   *
+   * The `unknown` was not deliberate looseness — it made every `expectOk` call on this harness a
+   * type error the moment `packages/testing` was typechecked, because `expectOk` needs to see a
+   * result shape. Widening a return to `unknown` in a harness hides the port's shape from exactly
+   * the assertions that are supposed to be checking it.
+   */
+  readonly verify: (
+    identifier: string,
+    value: string,
+  ) => Promise<Result<CredentialVerification>>;
   close(): void;
 };
 

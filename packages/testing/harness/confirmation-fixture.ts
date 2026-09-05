@@ -110,11 +110,13 @@ type CriticalInput = { readonly customer_id: string };
 /**
  * A `critical` Action that reads nothing, writes nothing, and exists to be gated.
  *
- * ITS `id` IS `customers.customer.delete` AND THAT IS NOT A TYPO. `statements.ts`'s catalog is
- * keyed by that string, and `issueChallenge` refuses an action with no statement — so an Action id
- * outside the catalog cannot obtain a challenge at all. See the suite's case on the catalog for
- * what that implies for the real `customers.DeleteCustomer`, which is deferred and has a different
- * id.
+ * ITS `id` IS `customers.DeleteCustomer` — THE REAL DEFERRED ACTION'S ID — AND THAT CHANGED.
+ *
+ * It was `customers.customer.delete`, because `statements.ts`'s catalog was keyed by that string.
+ * I reported that as an observation: the catalog was keyed by a PERMISSION identifier, so the real
+ * `customers.DeleteCustomer` would have found no statement and been unconfirmable the day it was
+ * built. `core-agent` re-keyed the catalog to Action ids, which is the right fix — and this fixture
+ * follows it, so the synthetic Action now stands in for the real one under its real name.
  *
  * `parseInput` ACCEPTS THE THREE CONFIRMATION FIELDS AND IGNORES THEM, and every real critical
  * Action will have to. The pipeline validates at step 4 and gates at step 6, so a `parseInput` that
@@ -133,7 +135,7 @@ export function createSyntheticCriticalAction(
   observe: { calls: number; failNext: boolean } = { calls: 0, failNext: false },
 ): ActionDefinition<CriticalInput, { readonly performed: true }> {
   return {
-    id: 'customers.customer.delete',
+    id: 'customers.DeleteCustomer',
     appId: 'customers',
     title: 'Synthetic critical operation',
     description:
