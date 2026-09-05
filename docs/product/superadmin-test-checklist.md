@@ -15,13 +15,13 @@ testing can begin the moment they are given, rather than being written afterward
 | # | Blocker | Who |
 |---|---|---|
 | 1 | **`wrangler deploy` is refused by a permission classifier.** Nothing new is live. Both Worker configs pass `--dry-run`, including the cross-Worker Durable Object binding, so this is permission and not configuration | **User** |
-| 2 | **Migrations `0008`–`0010` are not applied to the staging control plane.** Applied and verified locally only | **User** |
+| 2 | **Migrations `0008`–`0012` are not applied to the staging control plane.** Applied and verified locally only | **User** |
 | 3 | Open **HIGH** security finding — see "Known gaps" | `core-agent` |
 
 **The deploys are ordered and the order matters.** A custom domain is claimed by exactly one Worker.
 `admin.dudo.work` has been removed from `wrangler.jsonc`, so:
 
-1. **Apply migrations `0008`–`0010` FIRST.** See below — this is not merely "before you test."
+1. **Apply migrations `0008`–`0012` FIRST.** See below — this is not merely "before you test."
 2. Deploy `dudo-core` — this **releases** `admin.dudo.work`
 3. Deploy `dudo-admin` — this **claims** it
 
@@ -193,6 +193,17 @@ slice finished):
   system. Everything an operator *does* is logged; **becoming one is not.**
 - **`0027`'s `CF-5` will share the per-principal ceiling** at 4 row-writes per challenge — about
   **150 challenges per operator per UTC day**, from the same 600 the console already spends from.
+- **⚠ The Arabic confirmation statements have not been read by anyone who speaks Arabic.** Core
+  composes the statement a human reads before confirming an irreversible action, in `en` and `ar`.
+  **`0027` records that a mistranslation of an irreversible action is a safety defect, not a copy
+  defect** — the English fallback backstops a *missing* translation; a *wrong* one has no backstop,
+  because it is confidently wrong in a language the reviewer may not speak. **This needs a human
+  Arabic reader before any operator relies on it**, and it is the one open item on this surface a
+  test cannot close.
+- **The confirmation gate is absent from the platform route class.** It exists in the Action
+  pipeline only. **`core.credential.reset` is critical and is a platform route**, so this must land
+  before reset is built — otherwise reset arrives in a class with no gate, **looking gated because
+  the mechanism exists elsewhere.**
 - **There is no credential rotation path.** `credential-verifier.ts` derives entirely from the
   stored row — **no parameter comes from configuration**, so a config change cannot silently
   invalidate credentials. But `record.iterations` is also an *acceptance gate* against a source
