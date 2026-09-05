@@ -6,9 +6,78 @@ The operator console for **`https://admin.dudo.work`** (ADR 0010, ADR 0022).
 a business, the member resolve, the full Template surface, both audit feeds and the operator roster
 all call real, accepted, audited platform routes.
 
-**One thing is deliberately not built: revoking an operator.** It is the first confirmation-gated
-route in Dudo and needs a flow of its own — the roster renders a list and stops, with no control
-hinting otherwise.
+**Both confirmation-gated routes are built** — revoking an operator, and resetting a member's
+credential.
+
+### Confirmations
+
+Three properties, and losing any one turns the mechanism into theatre.
+
+- **The statement is server-authored and renders verbatim.** `{challenge.statement}` and nothing
+  else — never paraphrased, templated, transformed or composed from the parameters. Core *cannot*
+  verify the client displayed it (CF-2 is unclosable), so this is a client obligation. Asserted
+  structurally, and negative-controlled: adding a `.replace()` to the render fails two checks.
+- **The token is echoed, not remembered** — byte-for-byte as issued.
+- **Re-authentication is the operator's OWN password**, through the same login KDF, salted with the
+  **operator's own** normalised identifier. Never the target's — that confusion is what made
+  `credential-reset-v1` unbuildable for half a day, and is why the fields are now
+  `reauth_identifier` and `target_identifier`.
+
+**The binding is derived once.** `buildConfirmedRequest` produces the URL, the bound parameters and
+the submission body from **one call**, so the challenge and the submission cannot disagree. Path
+parameter names come from the same template string used to build the URL — the template *is* the
+declaration. The bound value is the **decoded** segment as a **JSON string**; the URL carries the
+encoded form. It refuses a reserved name on either side, a name that is both a path parameter and a
+body field, a declared parameter with no value, and a value the template does not declare.
+
+**This client does not canonically serialise.** Sorted-keys/NFC is Core's hashing rule, applied on
+both sides — which is why the contract states order is irrelevant. The obligation is that the
+*object* matches, not the bytes.
+
+> ### English only, and the console cannot be made to render otherwise
+>
+> **It never sends `locale`.** No setting, no browser sniff, no code path — so Core cannot return a
+> language the console cannot vouch for. Verified absent from the shipped bundle.
+>
+> **And it checks `statement_locale` anyway rather than trusting its own request.** If it comes back
+> as anything but `en`, **the approve control is not rendered at all** — the operator is told the
+> statement is in an unrequested language and that nothing was changed. Not warn-and-proceed:
+> asking someone to approve a destructive action described in an unreviewed sentence is worse than
+> not offering the action. **If it ever happens, it is a Core defect to report.**
+
+### The credential reset, and why the password exists before the challenge
+
+`derived_value` is the **new** credential and is **part of the binding**, so the password must be
+generated and derived *before* the challenge is requested.
+
+**That is the point of the flow, not an artefact of it.** Binding `derived_value` makes the human's
+approval cover **which credential is written**, not merely that a reset happens — without it, the
+statement approved and the credential written could come apart. So the obvious tidy (generate after
+approval, to avoid holding a secret) would **silently remove `derived_value` from the binding**.
+
+The trade: hold a generated secret in browser memory across the confirmation, in exchange for the
+confirmation covering the credential. The handling is what makes it acceptable — never logged,
+never in a URL, never stored; the operator's typed password dropped the moment it is derived from,
+the generated one when the panel is dismissed.
+
+> #### If the submission fails after approval, the dangerous case is not failure — it is not knowing
+>
+> | Outcome | What the operator is told |
+> |---|---|
+> | `conflict`, `quota_exceeded`, `rate_limited`, `forbidden`, `not_found`, `invalid_argument`, `failed_precondition` | **Nothing happened, the old password still works.** The generated string was never written — do not send it to anyone. |
+> | `unavailable`, `timeout`, `internal`, `unauthenticated` | **It is not known whether the reset landed.** The request may have been applied and the answer lost. |
+>
+> **On an unknown outcome the password is still shown**, labelled as possibly-live. If the write
+> landed, this browser holds the only copy and discarding it strands the account permanently;
+> showing an inert string costs nothing. The screen names the one action that resolves it — check
+> the audit trail or ask the person to try it — and warns against re-running the reset first, which
+> would replace a credential that may already be live.
+>
+> `writeIsCertainlyAbsent` lives in `api/errors.ts` because it is a property of the error code, not
+> of a screen — and because a `.tsx` file cannot be loaded by Node's type stripping, so on a screen
+> it would have been assertable only by grepping source. It is an **exhaustive switch with no
+> `default`**: adding a code to `ERROR_CODES` **fails the build** rather than falling silently into
+> the dangerous side. Negative-controlled by adding one and watching `tsc` refuse.
 
 > ### Templates are complete and inert, and the screen says so
 >
@@ -44,7 +113,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 255 checks against the shapes Core actually returns
+npm run verify:platform  # 345 checks against the shapes Core actually returns
 npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -446,6 +515,7 @@ src/
     auth.ts                              sign-in and sign-out against login-v1
     platform.ts                          the platform route class; parses, never casts
     platform-session.ts                  the probe, and its four answers
+    confirmation.ts                      the binding: body-minus-three UNION path params
     generate-password.ts                 24 CSPRNG bytes; split out so it is testable
     onboarding-credential.ts             generates and derives; the server sees neither
     config.ts                            build config; refuses a cross-origin API
@@ -455,6 +525,7 @@ src/
     StateBlock.tsx                       loading / error / empty, drawn once
     AuditRecordList.tsx                  the seven shared fields; layout only, never scope
     CeilingNotice.tsx                    rate_limited vs quota_exceeded, never merged
+    ConfirmationGate.tsx                 verbatim statement, re-auth, echoed token
     NotBuiltYet.tsx                      the honest "not built" state
     ui/button.tsx ui/field.tsx           shadcn copy-in source
   lib/
@@ -469,7 +540,8 @@ src/
     Templates.tsx                        LIVE — list and create; carries the TM-4 notice
     OrganizationAudit.tsx                LIVE — one customer's trail; does not load on mount
     PlatformAudit.tsx                    LIVE — the oversight feed; no principal target
-    Operators.tsx                        LIVE — the roster; list only, no revoke
+    Operators.tsx                        LIVE — the roster, with the gated revoke
+    ResetCredential.tsx                  LIVE — gated reset; refused vs unknown outcomes
 scripts/verify-kdf.mjs                   normative checks + the cross-client drift check
 scripts/verify-platform.mjs              the platform client against Core's real shapes
 scripts/node-resolve-*.mjs               dev-only ESM hooks so the scripts import real modules

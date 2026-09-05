@@ -77,6 +77,7 @@ import { join } from 'node:path';
  * imports nothing, so a bare loader resolves it.
  */
 import { identifierRefusal } from '../src/api/kdf.ts';
+import { ERROR_CODES, writeIsCertainlyAbsent } from '../src/api/errors.ts';
 import {
   buildConfirmedRequest,
   declaredPathParameters,
@@ -1921,6 +1922,88 @@ check(
   'the reset screen never handles a reauth value itself',
   /reauth_derived_value|reauthDerivedValue\s*=/.test(resetScreen),
   false,
+);
+
+console.log('\n=== A reset that fails AFTER approval: refused vs unknown ===\n');
+
+/*
+ * THE DANGEROUS CASE IS NOT FAILURE, IT IS NOT KNOWING. Getting this wrong one
+ * way hands a customer a password that was never written; the other way discards
+ * the only copy of one that is live.
+ */
+checkTrue(
+  'the reset distinguishes a refusal from an indeterminate outcome',
+  /writeIsCertainlyAbsent/.test(resetScreen),
+);
+checkTrue(
+  'a refusal and an unknown outcome are separate render paths',
+  /certainlyNotWritten/.test(resetScreen),
+);
+/*
+ * ON AN INDETERMINATE OUTCOME THE PASSWORD IS STILL SHOWN. If the write landed,
+ * this browser holds the only copy; discarding it strands the account
+ * permanently, while showing an inert string costs nothing.
+ */
+checkTrue(
+  'the uncertain branch still renders the password',
+  /ResetUncertain[\s\S]*?credential\.password/.test(resetScreen),
+);
+checkTrue(
+  'and says plainly that it may or may not be live',
+  /not known whether|possibly-live|Possibly-live/i.test(resetScreen),
+);
+/*
+ * A SUBMISSION FAILURE IS NOT ROUTED THROUGH THE GATE'S GENERIC HANDLER, whose
+ * "Nothing was changed" is true for a challenge that never issued and MAY BE
+ * FALSE for a submission that timed out.
+ */
+checkTrue(
+  'the reset catches its own submission failure rather than rethrowing',
+  /catch\s*\([\s\S]{0,80}onFailedAfterApproval/.test(resetScreen),
+);
+
+/*
+ * THE CLASSIFICATION ITSELF, EXERCISED RATHER THAN GREPPED. Refusals are
+ * decisions Core made before writing; transport and server faults are not. This
+ * calls the real function — a regex over the source would pass on a file that
+ * merely mentions the codes.
+ *
+ * EVERY CODE IN THE ENVELOPE IS COVERED, so a new one cannot be added without
+ * this failing and forcing a decision about which side it falls on. An
+ * unclassified code defaulting to "nothing was written" is the dangerous
+ * default, and this is what stops it arriving silently.
+ */
+{
+  const certain = [
+    'conflict',
+    'quota_exceeded',
+    'rate_limited',
+    'forbidden',
+    'not_found',
+    'invalid_argument',
+    'failed_precondition',
+  ];
+  const uncertain = ['unavailable', 'timeout', 'internal', 'unauthenticated'];
+
+  for (const code of certain) {
+    checkTrue(`${code} -> nothing was written`, writeIsCertainlyAbsent({ code }));
+  }
+  for (const code of uncertain) {
+    check(`${code} -> outcome UNKNOWN, not "nothing happened"`, writeIsCertainlyAbsent({ code }), false);
+  }
+  check(
+    'every error code in the envelope is classified',
+    [...certain, ...uncertain].sort().join(','),
+    [...ERROR_CODES].sort().join(','),
+  );
+}
+
+/* And the reasoning that stops the ordering being "simplified" away. */
+checkTrue(
+  'the file records why derived_value must be generated before the challenge',
+  /DO NOT "SIMPLIFY" THIS BY GENERATING THE PASSWORD AFTER THE CONFIRMATION/.test(
+    readScreen('ResetCredential.tsx'),
+  ),
 );
 
 console.log('');

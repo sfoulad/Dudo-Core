@@ -112,6 +112,61 @@ export function isRetryable(error: Pick<ApiError, 'code'> | null | undefined): b
   );
 }
 
+/**
+ * Whether a failed write means Core **certainly** wrote nothing.
+ *
+ * ===========================================================================
+ * THE DANGEROUS CASE IS NOT FAILURE. IT IS NOT KNOWING.
+ * ===========================================================================
+ *
+ * "It failed" and "it may have happened" are different facts, and a caller must
+ * not have to guess which they are holding. On the credential reset — the
+ * operation this was written for — getting it wrong one way hands a customer a
+ * password that was never written, turning an account that was merely broken
+ * into one that is confirmed broken. The other way discards the only copy of a
+ * credential that is live, which cannot be undone.
+ *
+ * REFUSALS ARE DECISIONS CORE MADE BEFORE WRITING: a `conflict`, a
+ * `quota_exceeded`, a `forbidden`, an `invalid_argument`, a `not_found`, a
+ * `rate_limited`, a `failed_precondition`. Nothing was changed.
+ *
+ * EVERYTHING ELSE IS INDETERMINATE, INCLUDING THE ORDINARY ONES. A timeout, an
+ * unreachable server, a 500 — the request may have arrived and succeeded with
+ * the response lost on the way back. **This client cannot tell**, and reporting
+ * "nothing was changed" there would be a confident claim with no basis.
+ * `unauthenticated` is indeterminate too: a session that expired mid-flight says
+ * nothing about whether the request that carried it was applied first.
+ *
+ * IT LIVES HERE RATHER THAN ON A SCREEN because it is a property of the error
+ * code, not of any one operation — and because a screen is a `.tsx` file, which
+ * Node's type stripping cannot load, so the classification would have been
+ * assertable only by grepping its source. A regex over a file that merely
+ * MENTIONS the codes proves nothing about how they are classified.
+ */
+export function writeIsCertainlyAbsent(error: Pick<ApiError, 'code'>): boolean {
+  switch (error.code) {
+    case 'conflict':
+    case 'quota_exceeded':
+    case 'rate_limited':
+    case 'forbidden':
+    case 'not_found':
+    case 'invalid_argument':
+    case 'failed_precondition':
+      return true;
+    case 'unavailable':
+    case 'timeout':
+    case 'internal':
+    case 'unauthenticated':
+      return false;
+    /*
+     * NO `default`, DELIBERATELY. `noFallthroughCasesInSwitch` plus an
+     * exhaustive union means adding a code to `ERROR_CODES` fails the build here
+     * rather than silently falling into one side — and the side it would fall
+     * into is the dangerous one.
+     */
+  }
+}
+
 const TITLES: Record<ErrorCode, string> = {
   invalid_argument: 'Check what was sent',
   unauthenticated: 'You need to sign in',

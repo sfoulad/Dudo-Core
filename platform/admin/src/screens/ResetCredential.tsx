@@ -91,7 +91,7 @@ import {
   type PlatformClient,
   type ResetCredentialOutput,
 } from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { toApiError, writeIsCertainlyAbsent, type ApiError } from '@/api/errors';
 
 /** The new credential, held only while this screen is mounted. */
 interface NewCredential {
@@ -106,7 +106,25 @@ type Stage =
   | { readonly kind: 'preparing'; readonly progress: DerivationProgress }
   | { readonly kind: 'confirming'; readonly credential: NewCredential }
   | { readonly kind: 'done'; readonly credential: NewCredential; readonly result: ResetCredentialOutput }
-  | { readonly kind: 'failed'; readonly error: ApiError };
+  /** Failed BEFORE anything was sent — generation or derivation. */
+  | { readonly kind: 'failed'; readonly error: ApiError }
+  /**
+   * THE SUBMISSION FAILED AFTER THE OPERATOR APPROVED. The credential was
+   * derived and bound; whether it was WRITTEN depends on the code. See
+   * `writeIsCertainlyAbsent`.
+   */
+  | {
+      readonly kind: 'failed-after-approval';
+      readonly credential: NewCredential;
+      readonly error: ApiError;
+    };
+
+/*
+ * `writeIsCertainlyAbsent` LIVES IN `api/errors.ts`, not here. It is a property
+ * of the error code rather than of this screen — and a `.tsx` file cannot be
+ * loaded by Node's type stripping, so keeping it here would have made the
+ * classification assertable only by grepping source. See its header.
+ */
 
 export function ResetCredential({
   platform,
@@ -204,6 +222,10 @@ export function ResetCredential({
     return <ResetResult credential={stage.credential} result={stage.result} />;
   }
 
+  if (stage.kind === 'failed-after-approval') {
+    return <ResetUncertain credential={stage.credential} error={stage.error} />;
+  }
+
   return (
     <ResetConfirmation
       platform={platform}
@@ -212,6 +234,9 @@ export function ResetCredential({
       credential={stage.credential}
       onDone={(result) => {
         setStage({ kind: 'done', credential: stage.credential, result });
+      }}
+      onFailedAfterApproval={(error) => {
+        setStage({ kind: 'failed-after-approval', credential: stage.credential, error });
       }}
       onCancel={() => {
         // The generated password is dropped unused. Nothing was sent, so
@@ -228,6 +253,7 @@ function ResetConfirmation({
   targetIdentifier,
   credential,
   onDone,
+  onFailedAfterApproval,
   onCancel,
 }: {
   platform: PlatformClient;
@@ -235,6 +261,7 @@ function ResetConfirmation({
   targetIdentifier: string;
   credential: NewCredential;
   onDone: (result: ResetCredentialOutput) => void;
+  onFailedAfterApproval: (error: ApiError) => void;
   onCancel: () => void;
 }) {
   /*
@@ -279,17 +306,138 @@ function ResetConfirmation({
             parameters: request.parameters,
           })
         }
+        /*
+         * THE SUBMISSION'S FAILURE IS HANDLED HERE, NOT BY THE GATE, and it does
+         * not rethrow. The gate's generic failure says "Nothing was changed",
+         * which is true for a challenge that never issued and MAY BE FALSE for a
+         * submission that timed out — only this screen knows a credential is at
+         * stake, so only this screen may describe the outcome.
+         */
         submit={async (confirmation) => {
-          const result = await platform.resetCredential({
-            path: request.path,
-            bodyWithoutConfirmation: request.bodyWithoutConfirmation,
-            ...confirmation,
-          });
-          onDone(result);
+          try {
+            const result = await platform.resetCredential({
+              path: request.path,
+              bodyWithoutConfirmation: request.bodyWithoutConfirmation,
+              ...confirmation,
+            });
+            onDone(result);
+          } catch (thrown) {
+            onFailedAfterApproval(toApiError(thrown));
+          }
         }}
         onCancel={onCancel}
       />
     </div>
+  );
+}
+
+/**
+ * The submission failed AFTER the operator approved.
+ *
+ * ===========================================================================
+ * TWO OUTCOMES, AND THE OPERATOR MUST NOT HAVE TO GUESS WHICH THEY HOLD
+ * ===========================================================================
+ *
+ * CORE REFUSED — a conflict, a quota, a forbidden. Nothing was written, the old
+ * password still works, and the generated one is an inert random string. Said
+ * plainly, so nobody sends a customer a password that was never written and
+ * turns an account that was merely broken into one that is confirmed broken.
+ *
+ * OR IT IS UNKNOWN — a timeout, an unreachable server, a 500. The request may
+ * have arrived and succeeded with the response lost. **THE PASSWORD IS STILL
+ * SHOWN IN THIS CASE**, and that is the deliberate part: if the write did land,
+ * this browser holds the only copy and discarding it strands the account
+ * permanently. Showing an inert string costs nothing; discarding a live
+ * credential cannot be undone. So it is shown, labelled as uncertain, with the
+ * one action that resolves it — try signing in as that person.
+ */
+function ResetUncertain({
+  credential,
+  error,
+}: {
+  credential: NewCredential;
+  error: ApiError;
+}) {
+  const certainlyNotWritten = writeIsCertainlyAbsent(error);
+
+  if (certainlyNotWritten) {
+    return (
+      <section
+        role="alert"
+        className="mt-4 rounded-[12px] border-2 border-scarlet-600 bg-scarlet-50 p-5"
+      >
+        <h3 className="text-base font-bold text-scarlet-700">
+          The password was not reset
+        </h3>
+        <p className="mt-2 leading-relaxed text-ink">
+          Dudo refused the change, so{' '}
+          <span className="font-bold">nothing happened and the old password still works.</span> The
+          password generated here was never written — do not send it to anyone.
+        </p>
+        <p className="mt-2 text-[0.875rem] text-ink-soft">{error.message}</p>
+        {error.request_id ? (
+          <p className="mt-2 font-mono text-xs break-all text-ink-muted">
+            Reference {error.request_id}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      role="alert"
+      className="mt-4 rounded-[12px] border-2 border-gold-500 bg-gold-50 p-5"
+    >
+      <h3 className="text-base font-bold text-gold-700">
+        It is not known whether the password was reset
+      </h3>
+      <p className="mt-2 leading-relaxed text-ink">
+        The request did not come back. It may have been applied and the answer lost on the way, or
+        it may never have arrived —{' '}
+        <span className="font-bold">this console cannot tell, and is not going to guess.</span>
+      </p>
+      <p className="mt-2 leading-relaxed text-ink">
+        <span className="font-bold">Record the password below before leaving this screen.</span> If
+        the reset did land, this is the only copy that exists anywhere. If it did not, the string is
+        harmless and the old password still works.
+      </p>
+
+      <dl className="mt-4 grid gap-3">
+        <div>
+          <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
+            They would sign in with
+          </dt>
+          <dd className="mt-1 font-mono text-[0.9375rem] break-all text-ink">
+            {credential.identifier}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
+            Possibly-live password
+          </dt>
+          <dd className="mt-1 rounded-[7px] border border-line-strong bg-surface px-3 py-2 font-mono text-[0.9375rem] break-all select-all text-ink">
+            {credential.password}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="mt-4 leading-relaxed text-ink-soft">
+        <span className="font-semibold">To find out which:</span> check this business&rsquo;s audit
+        trail for a credential-reset record, or ask the person to try the new password.{' '}
+        <span className="font-semibold">
+          Do not simply run the reset again before checking
+        </span>{' '}
+        — a second reset would replace a credential that may already be the live one, and you would
+        then be holding two passwords and know less than you do now.
+      </p>
+      <p className="mt-2 text-[0.875rem] text-ink-soft">{error.message}</p>
+      {error.request_id ? (
+        <p className="mt-2 font-mono text-xs break-all text-ink-muted">
+          Reference {error.request_id}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
