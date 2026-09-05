@@ -214,6 +214,49 @@ files, which is `.claude/rules/workflow.md` §2a's failure mode with a rename on
 **before a second App ships a contract using the word**, because at that point the divergence stops
 being one legacy contract and becomes the convention.
 
+## Amendment, 2026-09-05 — `P1` is weakened by onboarding, and here is the true sentence
+
+Decision 3 says **"No `TenantStoreResolver` is reachable from this class"**, and that the guarantee
+should be **structural** — *nothing in the class can reach a tenant, rather than nothing does.*
+
+**Onboarding breaks it, and it cannot not break it.** Creating a tenant means writing into that
+tenant's storage. `organization-onboarding-v1` names this itself as *"the sharpest risk in this
+contract."*
+
+**The alternative was considered and rejected.** Moving onboarding out of the platform class means
+inventing a fifth request class for one operation — and `0025` Decision 3 rejected exactly that
+shape: *"a class containing both would be a class with no consistent context."* The cure is worse.
+
+### What is preserved, and it is most of it
+
+- **No resolver on `PlatformRouteContext`.** No handler's context can reach a tenant store.
+- **No resolver on `PlatformRouteDependencies`.** The class does not carry one.
+- **The onboarding service holds it**; the handler receives the service and never the resolver.
+- **The handle's lifetime is the operation.**
+- **The service lives in `platform/core/onboarding/`, not `platform/core/platform/`** — deliberately
+  outside the class whose property is that it cannot reach a tenant.
+
+**That file placement is the load-bearing part.** `qa-agent`'s structural control greps
+`platform/core/platform/**` for tenant primitives. Putting the one component that *can* reach a
+tenant store inside that directory would have forced an exception into the control — and
+`core-agent`'s own rule from the seed tool applies: **a control with no exceptions is worth more
+than one with a justified exception, because the next exception argues from the first.**
+
+### The honest wording, which replaces Decision 3's for this class
+
+> **No platform route handler's *context* can reach a tenant store, and `PlatformRouteDependencies`
+> carries no resolver. Exactly one handler's closure holds a service that can resolve exactly one
+> store, for the lifetime of one operation, for an Organization that operation just created.**
+
+**That is weaker than "structurally unreachable" and it is true.** Decision 3's wording is no longer
+accurate for this class and is superseded by the paragraph above.
+
+**Recorded rather than implemented quietly**, because `P1` is what every future proposal to give the
+platform class tenant access will be measured against — and **a property quietly weakened once is a
+property the next weakening argues from.** The bound that matters is not *"a resolver exists
+somewhere"* but *"it is reachable only from a closure serving an Organization created by the same
+operation."* **Any proposal that widens either half is widening `P1`, and should be made to say so.**
+
 ## What this does NOT decide
 
 - **Break-glass access to tenant data (AZ3).** Nothing here permits a platform operator to read a
