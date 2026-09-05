@@ -1664,9 +1664,13 @@ export function readInstantParameter(
     return err(invalidArgument([detail(name, 'must_be_an_rfc3339_utc_instant')]));
   }
   const parsed = Date.parse(raw);
-  if (Number.isNaN(parsed) || new Date(parsed).toISOString().slice(0, 19) !== raw.slice(0, 19)) {
-    // A SHAPE THAT IS NOT A DATE — `2026-02-31`. The round trip is compared on the seconds prefix
-    // because `toISOString` always emits milliseconds and the input may not.
+  // THE WHOLE STRING NOW, NOT A 19-CHARACTER PREFIX. The prefix comparison existed because the
+  // fractional part was optional and `toISOString` always emits it; with the grammar narrowed both
+  // sides are the same width, so **comparing the full round trip is both possible and stricter** —
+  // it now also catches a value whose milliseconds `Date` would have silently renormalised.
+  if (Number.isNaN(parsed) || new Date(parsed).toISOString() !== raw) {
+    // A SHAPE THAT IS NOT A DATE — `2026-02-31T00:00:00.000Z` matches the grammar and is not a
+    // day. The round trip catches it, and now catches renormalisation too.
     return err(invalidArgument([detail(name, 'must_be_an_rfc3339_utc_instant')]));
   }
   return ok(raw);
