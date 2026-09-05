@@ -8,6 +8,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
+
+    "//typecheck:tests": "NOT part of `typecheck`, and deliberately so: it is currently RED with 14 diagnostics, and wiring a red gate into the green one makes the green one worthless. `packages/testing` was checked by nothing until 2026-09-05, which concealed a fixture that had silently stopped matching its port while 400+ assertions kept passing. Three of the 14 are that same class — `templates`, `pathParams` and `nowMs` missing from fixture-built shapes. Clear them, then fold this into `typecheck`.",
+    "typecheck:tests": "tsc -p packages/testing/tsconfig.json --noEmit",
     "//migrations": "LOCAL variants act on the local simulated D1 and are safe to run freely. REMOTE variants act on the deployed database and are a production-class action requiring explicit user approval each time (.claude/rules/security.md §7). They are separate scripts, and named, so neither can be run by accident.",
     "d1:migrate:tenant:local": "wrangler d1 migrations apply dudo-tenant --local",
     "d1:migrate:control:local": "wrangler d1 migrations apply dudo-control-plane --local",

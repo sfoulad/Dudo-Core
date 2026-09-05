@@ -1,0 +1,59 @@
+{
+  // Dudo-Core — the test tree's compiler configuration.
+  //
+  // OWNER: Team Lead. This is root-adjacent shared test configuration
+  // (docs/decisions/0001), so `qa-agent` proposed it and did not add it.
+  //
+  // ===========================================================================================
+  // WHY THIS EXISTS: A FIXTURE DRIFTED FROM A PORT AND EVERY SUITE STAYED GREEN
+  // ===========================================================================================
+  //
+  // `packages/testing` was excluded from the root config and therefore typechecked by nothing.
+  // On 2026-09-05 that concealed a real defect: `PlatformRouteRequest` gained a `pathParams`
+  // field, a fixture kept building the old shape, and JavaScript ignored the missing property —
+  // so the fixture no longer matched the port it was standing in for and 400+ assertions
+  // continued to pass. `qa-agent` found it by hand.
+  //
+  // A test double that has silently stopped matching its port is worse than an absent one: the
+  // suites keep reporting on a shape the product no longer has. That is the same class as the
+  // `RETURNING` defect in `sqlite-d1.ts` — a harness that runs and means something other than
+  // what it says.
+  //
+  // ===========================================================================================
+  // IT `extends` THE ROOT, FOR THE REASON `type-negative/tsconfig.json` GIVES
+  // ===========================================================================================
+  //
+  // Every compiler option comes from the root by inheritance, so a suite is checked against the
+  // same language the product is compiled with. If `strict`, `verbatimModuleSyntax` or
+  // `noUncheckedIndexedAccess` change at the root, this follows. A copied block would drift, and
+  // it would drift SILENTLY — the suites would keep passing while checked under different rules
+  // than the code they exercise.
+  //
+  // ===========================================================================================
+  // BOTH `include` AND `exclude` MUST BE OVERRIDDEN. `exclude` IS THE TRAP.
+  // ===========================================================================================
+  //
+  // The root `exclude`s `packages/testing`, and `exclude` is INHERITED by `extends`. Without the
+  // override below this project resolves to ZERO FILES and `tsc` exits 0 having checked nothing
+  // — a gate that passes because it never ran. `qa-agent` hit exactly this while writing the
+  // type-negative config and documented it there; it is repeated here rather than assumed known,
+  // because the failure is invisible and the exit code is 0.
+  //
+  // ===========================================================================================
+  // `types: ["node"]` — THE ONE OPTION THAT IS NOT INHERITED, AND WHY
+  // ===========================================================================================
+  //
+  // The root sets `"types": []` because a Worker has no Node globals and admitting them there
+  // would let Core accidentally depend on one. This tree is the opposite: it runs under Node and
+  // imports `node:sqlite`, `node:fs` and `node:crypto`. So `@types/node` is admitted HERE and
+  // nowhere else, which keeps the root's guarantee intact — Core still cannot see a Node global.
+  //
+  // `lib` is inherited unchanged. It includes `WebWorker`, which is correct: these suites drive
+  // Core's own types, and Core is Worker code.
+  "extends": "../../tsconfig.json",
+  "include": ["."],
+  "exclude": ["type-negative", "node_modules"],
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}
