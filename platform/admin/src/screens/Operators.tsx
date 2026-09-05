@@ -35,16 +35,21 @@
  * makes none.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
+import { ConfirmationGate } from '@/components/ConfirmationGate';
+import { buildConfirmedRequest } from '@/api/confirmation';
 import { cn } from '@/lib/cn';
 import {
   PLATFORM_DEFAULT_PAGE_SIZE,
+  REVOKE_OPERATOR_ACTION_ID,
+  REVOKE_OPERATOR_PATH_TEMPLATE,
   isKnownPlatformRole,
   type ListOperatorsOutput,
   type PlatformClient,
+  type RevokeOperatorOutput,
   type WhoamiOutput,
 } from '@/api/platform';
 import { toApiError, type ApiError } from '@/api/errors';
@@ -66,6 +71,9 @@ export function Operators({
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [nonce, setNonce] = useState(0);
+  /** The principal whose revoke gate is open, or null. At most one at a time. */
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [revoked, setRevoked] = useState<RevokeOperatorOutput | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +106,26 @@ export function Operators({
           Every principal holding platform authority, and which role each one holds.
         </p>
       </header>
+
+      {revoked !== null ? (
+        <div
+          role="status"
+          className="mb-5 rounded-[12px] border border-green-500 bg-green-50 p-4 text-[0.875rem] leading-relaxed text-ink"
+        >
+          <p className="font-bold text-green-700">Platform authority removed.</p>
+          <p className="mt-1">
+            <code className="font-mono break-all">{revoked.principal_id}</code> no longer holds
+            platform authority.{' '}
+            {revoked.was_self ? (
+              <span className="font-semibold">
+                That was your own account — you will be refused on the next request, and there is
+                no route that grants it back.
+              </span>
+            ) : null}{' '}
+            {revoked.remaining_operator_count} {revoked.remaining_operator_count === 1 ? 'operator remains' : 'operators remain'}.
+          </p>
+        </div>
+      ) : null}
 
       {load.kind === 'loading' ? <LoadingBlock label="Asking Core who holds platform authority…" /> : null}
 
@@ -162,8 +190,45 @@ export function Operators({
                         </span>
                       ) : null}
                       <RoleBadge role={operator.platform_role} />
+                      {/*
+                        THE GATE OPENS ONLY ON THIS PRESS. No challenge is
+                        requested on render, hover or focus — one costs
+                        control-plane writes and runs the full authorization of
+                        the operation it names.
+                      */}
+                      {revoking === null ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setRevoked(null);
+                            setRevoking(operator.principal_id);
+                          }}
+                        >
+                          Remove authority
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
+
+                  {revoking === operator.principal_id ? (
+                    <RevokeOperator
+                      platform={platform}
+                      principalId={operator.principal_id}
+                      isSelf={isYou}
+                      remainingCount={load.page.data.length}
+                      onDone={(result) => {
+                        setRevoking(null);
+                        setRevoked(result);
+                        // The roster changed, so re-read it. One audited call,
+                        // triggered by a completed action rather than a timer.
+                        setNonce((value) => value + 1);
+                      }}
+                      onCancel={() => {
+                        setRevoking(null);
+                      }}
+                    />
+                  ) : null}
                 </li>
               );
             })}
@@ -219,10 +284,92 @@ export function Operators({
       </p>
 
       <p className="mt-3 text-[0.8125rem] leading-relaxed text-ink-muted">
-        <span className="font-semibold text-ink-soft">Removing an operator is not done here.</span>{' '}
-        It requires a typed confirmation and your own password, and that flow is not built yet.
+        <span className="font-semibold text-ink-soft">Removing an operator</span> asks Dudo what it
+        will do, shows you that sentence, and needs your own password. It cannot be undone from
+        here — there is no route that grants platform authority.
       </p>
     </section>
+  );
+}
+
+/**
+ * The revoke action for one operator.
+ *
+ * ===========================================================================
+ * THE BINDING IS THE PATH PARAMETER, AND THAT IS THE WHOLE OF IT
+ * ===========================================================================
+ *
+ * `revokeOperatorInput` carries only the three confirmation fields, so
+ * body-minus-three is the EMPTY OBJECT. The target lives in the path, and the
+ * parameters are `{principal_id}` **only because of the union clause added on
+ * 2026-09-05** — before it, a confirmation minted to revoke operator A could
+ * have been spent on operator B, and the sentence promising otherwise was false.
+ *
+ * So `buildConfirmedRequest` derives the name from the path template, binds the
+ * DECODED value as a JSON string, and produces the URL and the parameters
+ * together. There is no second place the target could differ.
+ */
+function RevokeOperator({
+  platform,
+  principalId,
+  isSelf,
+  remainingCount,
+  onDone,
+  onCancel,
+}: {
+  platform: PlatformClient;
+  principalId: string;
+  isSelf: boolean;
+  remainingCount: number;
+  onDone: (result: RevokeOperatorOutput) => void;
+  onCancel: () => void;
+}) {
+  const request = useMemo(
+    () =>
+      buildConfirmedRequest({
+        pathTemplate: REVOKE_OPERATOR_PATH_TEMPLATE,
+        pathValues: { principal_id: principalId },
+        // No body fields at all — the three confirmation fields are added at
+        // submission and are never part of the binding.
+        bodyFields: {},
+      }),
+    [principalId],
+  );
+
+  return (
+    <div className="mt-4">
+      {isSelf ? (
+        <p
+          role="alert"
+          className="mb-4 rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.875rem] leading-relaxed text-ink"
+        >
+          <span className="font-bold">This is your own account.</span> Removing your own platform
+          authority signs you out of everything here, and there is no route that grants it back —
+          it has to be re-seeded out of band.
+          {remainingCount <= 1 ? ' You may also be the last operator.' : null}
+        </p>
+      ) : null}
+
+      <ConfirmationGate
+        title={isSelf ? 'Remove your own platform authority' : 'Remove platform authority'}
+        boundParameters={request.parameters}
+        requestChallenge={() =>
+          platform.requestConfirmation({
+            actionId: REVOKE_OPERATOR_ACTION_ID,
+            parameters: request.parameters,
+          })
+        }
+        submit={async (confirmation) => {
+          const result = await platform.revokeOperator({
+            path: request.path,
+            bodyWithoutConfirmation: request.bodyWithoutConfirmation,
+            ...confirmation,
+          });
+          onDone(result);
+        }}
+        onCancel={onCancel}
+      />
+    </div>
   );
 }
 

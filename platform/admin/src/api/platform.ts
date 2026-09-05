@@ -65,6 +65,14 @@
  */
 
 import { ApiError, toApiError, ERROR_CODES, type ErrorCode } from './errors';
+import {
+  PLATFORM_CONFIRMATIONS_PATH,
+  asConfirmationError,
+  parseConfirmationChallenge,
+  withConfirmation,
+  type ConfirmationChallenge,
+  type ConfirmationParameters,
+} from './confirmation';
 import { CONFIG } from './config';
 
 /** `platform-routes.ts`: `PLATFORM_BASE_PATH`. */
@@ -564,6 +572,20 @@ export function parseOrganizationFeed(payload: unknown): OrganizationFeedOutput 
    ------------------------------------------------------------------------- */
 
 export const OPERATORS_PATH = `${PLATFORM_BASE_PATH}/operators`;
+
+/**
+ * THE PATH TEMPLATE IS THE DECLARATION of this route's bound parameters.
+ *
+ * `{principal_id}` is the one declared name, and it is derived from THIS STRING
+ * by `declaredPathParameters` — the same string used to build the URL. "One
+ * source, two readers", so no list on either side can drift.
+ */
+export const REVOKE_OPERATOR_PATH_TEMPLATE = `${OPERATORS_PATH}/{principal_id}/revoke`;
+export const REVOKE_OPERATOR_ACTION_ID = 'platform.operators.revoke';
+
+/** No path parameters — the target is a body field. */
+export const CREDENTIAL_RESET_PATH = `${PLATFORM_BASE_PATH}/credentials/reset`;
+export const CREDENTIAL_RESET_ACTION_ID = 'platform.credentials.reset';
 
 export interface OperatorSummary {
   readonly principal_id: string;
@@ -1234,6 +1256,82 @@ export interface PlatformClient {
     pageSize?: number;
     cursor?: string | null;
   }): Promise<ListOperatorsOutput>;
+  /**
+   * Obtain a confirmation challenge. **Never speculatively** — a challenge costs
+   * control-plane row-writes and runs the full authorization of the target
+   * operation, so it is requested when a human has decided to act.
+   */
+  requestConfirmation(input: {
+    actionId: string;
+    parameters: ConfirmationParameters;
+  }): Promise<ConfirmationChallenge>;
+  revokeOperator(input: ConfirmedSubmission): Promise<RevokeOperatorOutput>;
+  resetCredential(input: ConfirmedSubmission): Promise<ResetCredentialOutput>;
+}
+
+/** What a confirmed submission carries, built by `buildConfirmedRequest`. */
+export interface ConfirmedSubmission {
+  /** The path with values substituted and encoded. */
+  readonly path: string;
+  /** The body WITHOUT the three confirmation fields. */
+  readonly bodyWithoutConfirmation: Readonly<Record<string, string>>;
+  readonly confirmationId: string;
+  readonly reauthIdentifier: string;
+  readonly reauthDerivedValue: string;
+}
+
+export interface RevokeOperatorOutput {
+  readonly principal_id: string;
+  readonly was_self: boolean;
+  readonly remaining_operator_count: number;
+}
+
+export interface ResetCredentialOutput {
+  readonly principal_id: string;
+  readonly sessions_revoked: number;
+  readonly warnings: readonly string[];
+}
+
+export function parseRevokeOperator(payload: unknown): RevokeOperatorOutput {
+  const what = 'The revoke response';
+  const body = requireObject(payload, what);
+  const wasSelf = body.was_self;
+  const remaining = body.remaining_operator_count;
+  if (typeof wasSelf !== 'boolean') {
+    throw new ShapeError(`${what} field "was_self" was not a boolean.`);
+  }
+  if (typeof remaining !== 'number' || !Number.isInteger(remaining) || remaining < 0) {
+    throw new ShapeError(`${what} field "remaining_operator_count" was not a non-negative integer.`);
+  }
+  return {
+    principal_id: requireString(body, 'principal_id', what),
+    was_self: wasSelf,
+    remaining_operator_count: remaining,
+  };
+}
+
+export function parseResetCredential(payload: unknown): ResetCredentialOutput {
+  const what = 'The credential reset response';
+  const body = requireObject(payload, what);
+  const revoked = body.sessions_revoked;
+  const warnings = body.warnings;
+  if (typeof revoked !== 'number' || !Number.isInteger(revoked) || revoked < 0) {
+    throw new ShapeError(`${what} field "sessions_revoked" was not a non-negative integer.`);
+  }
+  if (!Array.isArray(warnings) || warnings.some((item) => typeof item !== 'string')) {
+    throw new ShapeError(`${what} field "warnings" was not an array of strings.`);
+  }
+  /*
+   * NO CREDENTIAL IS READ BACK. `resetCredentialOutput` carries
+   * `principal_id`, `sessions_revoked` and `warnings` and nothing else — the
+   * console already holds the only copy of the new password, exactly as at
+   * onboarding.
+   */
+  return {
+    principal_id: requireString(body, 'principal_id', what),
+    sessions_revoked: revoked,
+    warnings: Object.freeze([...(warnings as string[])]),
+  };
 }
 
 export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {}): PlatformClient {
@@ -1375,6 +1473,58 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
           await platformRequest(
             query === '' ? base : `${base}?${query}`,
             { method: 'GET' },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async requestConfirmation({ actionId, parameters }) {
+      /*
+       * NO `locale` FIELD IS SENT, EVER. Absent means `en`, and this console
+       * must not ask for a language whose statements nobody has reviewed — a
+       * human is being asked to APPROVE this sentence. See
+       * `EXPECTED_STATEMENT_LOCALE`.
+       *
+       * NOT SPECULATIVE. This runs the full authorization of the target
+       * operation and costs control-plane row-writes, so it is called from an
+       * explicit press and never on hover, focus, mount or render.
+       */
+      try {
+        return parseConfirmationChallenge(
+          await platformRequest(
+            PLATFORM_CONFIRMATIONS_PATH,
+            { method: 'POST', body: { action_id: actionId, parameters } },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asConfirmationError(thrown);
+      }
+    },
+
+    async revokeOperator(input) {
+      try {
+        return parseRevokeOperator(
+          await platformRequest(
+            input.path,
+            { method: 'POST', body: withConfirmation(input.bodyWithoutConfirmation, input) },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async resetCredential(input) {
+      try {
+        return parseResetCredential(
+          await platformRequest(
+            input.path,
+            { method: 'POST', body: withConfirmation(input.bodyWithoutConfirmation, input) },
             options.fetchImpl,
           ),
         );

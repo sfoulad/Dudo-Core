@@ -77,6 +77,13 @@ import { join } from 'node:path';
  * imports nothing, so a bare loader resolves it.
  */
 import { identifierRefusal } from '../src/api/kdf.ts';
+import {
+  buildConfirmedRequest,
+  declaredPathParameters,
+  isPresentableStatement,
+  parseConfirmationChallenge,
+  withConfirmation,
+} from '../src/api/confirmation.ts';
 
 let failures = 0;
 
@@ -1606,17 +1613,313 @@ check(
   false,
 );
 
-/* No revoke UI anywhere. */
-for (const [label, source] of [
-  ['operators', operatorsScreen],
-  ['platform audit', platformScreen],
-  ['Organization audit', orgAuditScreen],
-]) {
-  check(`${label}: no revoke call`, /revokeOperator|operators\/.*\/revoke|\.revoke\(/.test(source), false);
-}
+/*
+ * REVOKE, AND THE CONSTRAINT THAT REPLACED "IT DOES NOT EXIST".
+ *
+ * These two checks previously asserted that no screen called revoke and that the
+ * client exposed no method for it — correct while the confirmation flow was
+ * unbuilt and the Team Lead had ruled it out of scope. **That ruling was
+ * withdrawn when the flow was commissioned**, so asserting the old constraint
+ * would have been `workflow.md` §12's exact shape: a test enforcing a decision
+ * that no longer holds, which the natural fix makes pass by removing the
+ * feature.
+ *
+ * WHAT IS ASSERTED INSTEAD IS THE CONSTRAINT THAT SURVIVED: revoke exists, and
+ * it is reachable ONLY through the confirmation gate. A direct call — one that
+ * did not carry the three fields — is what the old rule was really protecting
+ * against.
+ */
+checkTrue(
+  'the audit screens still make no revoke call',
+  ![platformScreen, orgAuditScreen].some((source) =>
+    /revokeOperator|\/revoke/.test(source),
+  ),
+);
+checkTrue('the operators screen uses the confirmation gate', /ConfirmationGate/.test(operatorsScreen));
+/*
+ * EXACTLY ONE CALL SITE, and the next check pins where it is. Counting rather
+ * than forbidding: the call inside the gate's `submit` handler is the correct
+ * one, so a check that banned the identifier outright — as the first version of
+ * this did — would have failed on the right implementation.
+ */
 check(
-  'the platform client exposes no revoke method',
-  /revokeOperator/.test(readFileSync(join(import.meta.dirname, '..', 'src', 'api', 'platform.ts'), 'utf8')),
+  'revoke has exactly one call site',
+  (operatorsScreen.match(/revokeOperator\(/g) ?? []).length,
+  1,
+);
+checkTrue(
+  'revoke is submitted from inside the gate, carrying a confirmation',
+  /submit=\{[\s\S]{0,400}revokeOperator\([\s\S]{0,300}\.\.\.confirmation/.test(
+    strip(readScreen('Operators.tsx')),
+  ),
+);
+
+/* =========================================================================
+   11. CONFIRMATIONS — confirmation-v1
+   ========================================================================= */
+
+console.log('\n=== The binding: body-minus-three UNION path parameters ===\n');
+
+check(
+  'the path template is the declaration',
+  declaredPathParameters('/api/v1/platform/operators/{principal_id}/revoke').join(','),
+  'principal_id',
+);
+check('a template with no braces declares nothing', declaredPathParameters('/credentials/reset').length, 0);
+
+/*
+ * REVOKE: the body is empty, so the binding is the path parameter ALONE. Before
+ * the union clause of 2026-09-05 this was the empty object and a confirmation
+ * minted for operator A could have been spent on operator B.
+ */
+{
+  const built = buildConfirmedRequest({
+    pathTemplate: '/api/v1/platform/operators/{principal_id}/revoke',
+    pathValues: { principal_id: 'pr_target_0000000001' },
+    bodyFields: {},
+  });
+  check('revoke binds exactly one parameter', Object.keys(built.parameters).join(','), 'principal_id');
+  check('and it is the target', built.parameters.principal_id, 'pr_target_0000000001');
+  check('the URL substitutes it', built.path, '/api/v1/platform/operators/pr_target_0000000001/revoke');
+  check('the submission body is empty', Object.keys(built.bodyWithoutConfirmation).length, 0);
+}
+
+/* THE DECODED SEGMENT IS BOUND; THE ENCODED ONE GOES IN THE URL. */
+{
+  const built = buildConfirmedRequest({
+    pathTemplate: '/api/v1/platform/operators/{principal_id}/revoke',
+    pathValues: { principal_id: 'a b/c' },
+    bodyFields: {},
+  });
+  check('the bound value is the DECODED segment', built.parameters.principal_id, 'a b/c');
+  checkTrue('the URL carries the encoded form', built.path.includes('a%20b%2Fc'));
+  check('and the two differ, which is the point', built.parameters.principal_id === 'a%20b%2Fc', false);
+}
+
+/* A numeric-looking segment binds as a STRING and is never coerced. */
+{
+  const built = buildConfirmedRequest({
+    pathTemplate: '/x/{principal_id}',
+    pathValues: { principal_id: '42' },
+    bodyFields: {},
+  });
+  check('a numeric-looking segment binds as a string', typeof built.parameters.principal_id, 'string');
+  check('and its value is "42", not 42', built.parameters.principal_id, '42');
+}
+
+/*
+ * RESET: no path parameters, so the binding is body-minus-three — which
+ * INCLUDES `derived_value`, the new credential. That is what forces the password
+ * to be generated before the challenge.
+ */
+{
+  const built = buildConfirmedRequest({
+    pathTemplate: '/api/v1/platform/credentials/reset',
+    pathValues: {},
+    bodyFields: {
+      principal_id: 'pr_x',
+      target_identifier: 'someone@example.com',
+      derived_value: 'A'.repeat(43),
+    },
+  });
+  check(
+    'reset binds all three body fields',
+    Object.keys(built.parameters).sort().join(','),
+    'derived_value,principal_id,target_identifier',
+  );
+  check('the path has no substitution', built.path, '/api/v1/platform/credentials/reset');
+  check(
+    'the submission body equals the bound parameters when there are no path parameters',
+    JSON.stringify(Object.keys(built.bodyWithoutConfirmation).sort()),
+    JSON.stringify(Object.keys(built.parameters).sort()),
+  );
+}
+
+console.log('\n=== The binding refuses what would make it ambiguous ===\n');
+
+for (const [label, input] of [
+  [
+    'a reserved name as a body field',
+    { pathTemplate: '/x', pathValues: {}, bodyFields: { confirmation_id: 'c' } },
+  ],
+  [
+    'a reserved name as a path parameter',
+    { pathTemplate: '/x/{reauth_identifier}', pathValues: { reauth_identifier: 'a' }, bodyFields: {} },
+  ],
+  [
+    'reauth_derived_value as a body field',
+    { pathTemplate: '/x', pathValues: {}, bodyFields: { reauth_derived_value: 'v' } },
+  ],
+  [
+    'a name that is both a path parameter and a body field',
+    { pathTemplate: '/x/{principal_id}', pathValues: { principal_id: 'a' }, bodyFields: { principal_id: 'b' } },
+  ],
+  [
+    'a declared path parameter with no value',
+    { pathTemplate: '/x/{principal_id}', pathValues: {}, bodyFields: {} },
+  ],
+  [
+    'a path value the template does not declare',
+    { pathTemplate: '/x', pathValues: { principal_id: 'a' }, bodyFields: {} },
+  ],
+]) {
+  try {
+    buildConfirmedRequest(input);
+    failures += 1;
+    console.log(`FAIL  ${label} is refused\n        expected a throw, got none`);
+  } catch {
+    console.log(`PASS  ${label} is refused`);
+  }
+}
+
+console.log('\n=== The challenge, and the locale this console never asks for ===\n');
+
+const CHALLENGE = {
+  confirmation_id: 'cf_synthetic_00000000001',
+  statement: 'This will reset the password for principal pr_x and sign them out everywhere.',
+  statement_locale: 'en',
+  expires_at: '2026-09-05T10:05:00.000Z',
+};
+
+const parsedChallenge = parseConfirmationChallenge(CHALLENGE);
+check('the statement is carried verbatim', parsedChallenge.statement, CHALLENGE.statement);
+check('statement_locale is carried', parsedChallenge.statement_locale, 'en');
+checkTrue('an English statement is presentable', isPresentableStatement(parsedChallenge));
+check(
+  'a NON-ENGLISH statement is NOT presentable, so no approve control is offered',
+  isPresentableStatement({ ...parsedChallenge, statement_locale: 'ar' }),
+  false,
+);
+
+for (const field of ['confirmation_id', 'statement', 'statement_locale', 'expires_at']) {
+  const body = { ...CHALLENGE };
+  delete body[field];
+  try {
+    parseConfirmationChallenge(body);
+    failures += 1;
+    console.log(`FAIL  a challenge missing "${field}" is refused\n        expected a throw`);
+  } catch {
+    console.log(`PASS  a challenge missing "${field}" is refused`);
+  }
+}
+
+{
+  const { impl, calls } = stubFetch(jsonResponse(CHALLENGE, 201));
+  await createPlatformClient({ fetchImpl: impl }).requestConfirmation({
+    actionId: 'platform.credentials.reset',
+    parameters: { principal_id: 'pr_x' },
+  });
+  check('the challenge path', calls[0].url, '/api/v1/platform/confirmations');
+  check('it is a POST', calls[0].init.method, 'POST');
+  const sent = JSON.parse(calls[0].init.body);
+  check('exactly two fields are sent', Object.keys(sent).sort().join(','), 'action_id,parameters');
+  /*
+   * NO `locale` FIELD, EVER. Absent means English. The non-English statement
+   * catalog has never been reviewed by a speaker of the language, and a human is
+   * being asked to APPROVE the sentence.
+   */
+  check('no locale is requested', 'locale' in sent, false);
+}
+
+console.log('\n=== The submission: three fields merged, token echoed ===\n');
+
+{
+  const merged = withConfirmation(
+    { principal_id: 'pr_x', target_identifier: 'a@b.co', derived_value: 'D'.repeat(43) },
+    {
+      confirmationId: 'cf_ISSUED_EXACTLY_THIS',
+      reauthIdentifier: 'operator@example.com',
+      reauthDerivedValue: 'R'.repeat(43),
+    },
+  );
+  check(
+    'the three confirmation fields are MERGED, not wrapped',
+    Object.keys(merged).sort().join(','),
+    'confirmation_id,derived_value,principal_id,reauth_derived_value,reauth_identifier,target_identifier',
+  );
+  check('the token is echoed byte-for-byte', merged.confirmation_id, 'cf_ISSUED_EXACTLY_THIS');
+  check('no envelope key is introduced', 'confirmation' in merged, false);
+}
+
+{
+  const { impl, calls } = stubFetch(
+    jsonResponse({ principal_id: 'pr_x', was_self: false, remaining_operator_count: 2 }),
+  );
+  await createPlatformClient({ fetchImpl: impl }).revokeOperator({
+    path: '/api/v1/platform/operators/pr_x/revoke',
+    bodyWithoutConfirmation: {},
+    confirmationId: 'cf_a',
+    reauthIdentifier: 'op@example.com',
+    reauthDerivedValue: 'R'.repeat(43),
+  });
+  const sent = JSON.parse(calls[0].init.body);
+  check('revoke sends only the three fields', Object.keys(sent).sort().join(','), 'confirmation_id,reauth_derived_value,reauth_identifier');
+  check('and no target in the body — it is the path', 'principal_id' in sent, false);
+}
+
+console.log('\n=== The password never leaves, and is never named ===\n');
+
+const gate = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'ConfirmationGate.tsx'), 'utf8'),
+);
+const resetScreen = strip(readScreen('ResetCredential.tsx'));
+const confirmationModule = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'api', 'confirmation.ts'), 'utf8'),
+);
+
+for (const [label, source] of [
+  ['the confirmation gate', gate],
+  ['the reset screen', resetScreen],
+  ['the confirmation module', confirmationModule],
+]) {
+  check(`${label} logs nothing`, /console\s*\./.test(source), false);
+  check(
+    `${label} never persists anything`,
+    /(localStorage|sessionStorage)\s*\.\s*setItem/.test(source),
+    false,
+  );
+}
+
+/* The typed password is cleared before the submission is sent. */
+checkTrue(
+  'the gate clears the password before submitting',
+  /setPassword\(''\);[\s\S]{0,200}setPhase\(\{\s*kind:\s*'submitting'/.test(gate),
+);
+checkTrue('and clears it on every failure path', /catch[\s\S]{0,120}setPassword\(''\)/.test(gate));
+
+/* THE STATEMENT IS RENDERED VERBATIM — one interpolation, no transformation. */
+checkTrue('the statement is rendered as a bare interpolation', /\{challenge\.statement\}/.test(gate));
+check(
+  'the statement is never transformed',
+  /statement\s*\.\s*(replace|slice|toUpperCase|toLowerCase|trim|split|substring|normalize)/.test(gate),
+  false,
+);
+check(
+  'and never composed from the parameters',
+  /statement\s*=\s*[`'"]|`[^`]*\$\{[^}]*parameters/.test(gate),
+  false,
+);
+
+/* No speculative challenges. */
+check(
+  'the gate requests no challenge on hover or focus',
+  /onMouseEnter|onFocus[\s\S]{0,200}requestChallenge/.test(gate),
+  false,
+);
+check(
+  'the operators screen opens the gate only from a click',
+  /onMouseEnter[\s\S]{0,200}setRevoking/.test(strip(readScreen('Operators.tsx'))),
+  false,
+);
+
+/* The reset derives with the TARGET's identifier, the gate with the CALLER's. */
+checkTrue(
+  'the reset salts the new credential with the target identifier',
+  /createOnboardingCredential\(targetIdentifier/.test(resetScreen),
+);
+check(
+  'the reset screen never handles a reauth value itself',
+  /reauth_derived_value|reauthDerivedValue\s*=/.test(resetScreen),
   false,
 );
 

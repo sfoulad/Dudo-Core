@@ -88,6 +88,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/field';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import { ResetCredential } from '@/screens/ResetCredential';
 import { cn } from '@/lib/cn';
 import { buildHash, organizationAuditPath, ROUTES } from '@/lib/router';
 import { identifierRefusal } from '@/api/kdf';
@@ -228,7 +229,18 @@ type Load =
 type Lookup =
   | { readonly kind: 'idle' }
   | { readonly kind: 'looking' }
-  | { readonly kind: 'found'; readonly member: ResolveMemberOutput }
+  /**
+   * `submittedIdentifier` is the value that was actually SENT, captured at
+   * submit time — not the current field contents, which the operator may edit
+   * afterwards. It is the KDF salt for a subsequent reset, so reading it from
+   * live input would salt the new credential with an address that was never
+   * resolved.
+   */
+  | {
+      readonly kind: 'found';
+      readonly member: ResolveMemberOutput;
+      readonly submittedIdentifier: string;
+    }
   | { readonly kind: 'refused' }
   | { readonly kind: 'forbidden'; readonly error: ApiError }
   | { readonly kind: 'failed'; readonly error: ApiError };
@@ -483,7 +495,7 @@ function MemberLookup({
 
       void platform.resolveMember(organizationId, identifier).then(
         (member) => {
-          setLookup({ kind: 'found', member });
+          setLookup({ kind: 'found', member, submittedIdentifier: identifier });
         },
         (thrown: unknown) => {
           const error = toApiError(thrown);
@@ -587,7 +599,7 @@ function MemberLookup({
         <p className="text-[0.8125rem] text-ink-muted">One lookup per press.</p>
       </div>
 
-      <LookupResult lookup={lookup} />
+      <LookupResult lookup={lookup} platform={platform} />
     </form>
   );
 }
@@ -600,7 +612,7 @@ function MemberLookup({
  * could differ between the five cases. That is enforced by the type, not by
  * remembering.
  */
-function LookupResult({ lookup }: { lookup: Lookup }) {
+function LookupResult({ lookup, platform }: { lookup: Lookup; platform: PlatformClient }) {
   if (lookup.kind === 'idle' || lookup.kind === 'looking') return null;
 
   if (lookup.kind === 'found') {
@@ -636,6 +648,22 @@ function LookupResult({ lookup }: { lookup: Lookup }) {
             </dd>
           </div>
         </dl>
+
+        {/*
+          THE RESET IS OFFERED HERE AND NOWHERE ELSE, because this is the only
+          place both required values exist: `principal_id` from the resolve, and
+          `target_identifier` — the address the operator typed into it, which is
+          the KDF salt for the new credential.
+
+          There is no route that finds a principal by email, so a reset cannot
+          be started from anywhere else. Offering it somewhere it could not be
+          completed would be an affordance that fails on press.
+        */}
+        <ResetCredential
+          platform={platform}
+          principalId={lookup.member.principal_id}
+          targetIdentifier={lookup.submittedIdentifier}
+        />
       </div>
     );
   }
