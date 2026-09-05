@@ -874,6 +874,30 @@ export function encodeAuditAnchor(record: PlatformAuditRecord): string {
   return `${record.occurredAt} ${record.actionRecordId}`;
 }
 
+/**
+ * ===========================================================================================
+ * *** DO NOT CALL THIS ON A STRING THAT CAME FROM A REQUEST. It parses an anchor that has
+ * ALREADY been verified. ***
+ * ===========================================================================================
+ *
+ * IF YOU ARE ADDING A SECOND AUDIT FEED AND REACHING FOR THIS DIRECTLY, you are not reusing the
+ * anchor format — **you are skipping the signature and binding checks**, and the skip looks like
+ * reuse from where you are standing. Call `dependencies.cursors.decode(cursor, binding, nowMs)`
+ * and pass ITS output here, which is what the one existing caller does.
+ *
+ * What the codec establishes and this function cannot: that the cursor was signed by this build's
+ * key, has not expired, was issued to THIS operator, was issued for THIS page size, and was issued
+ * for THIS query — `PlatformCursorBinding.scope`, whose absence would let page 2 of one filter
+ * resume from a position in another, **with no error and a plausible-looking page**. A raw request
+ * string has none of that, and nothing below this comment can tell the difference.
+ *
+ * IT WAS MODULE-PRIVATE UNTIL 29b2f3e, AND THE PRIVACY WAS DOING THIS JOB — the language made the
+ * wrong call impossible, so no test ever had to assert it. It was exported so `packages/testing`
+ * can assert `decodeAuditAnchor(encodeAuditAnchor(record))` round-trips, which is the class of
+ * defect that shipped once here: encode and decode disagreed about the separator, typecheck was
+ * clean, the suite was green, and only a request for page 2 found it. **The export bought a
+ * detector and spent a guarantee. This comment is all that replaces the guarantee.**
+ */
 export function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
   const parts = anchor.split(String.fromCharCode(0));
   if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
