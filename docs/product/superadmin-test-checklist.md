@@ -12,17 +12,31 @@ testing can begin the moment they are given, rather than being written afterward
 
 ## What is blocking, and who can clear it
 
-| # | Blocker | Who |
-|---|---|---|
-| 1 | **Everything built after the first deploy is unshipped.** Both Workers *were* deployed successfully on 2026-09-05 — `dudo-core` on `app.`/`api.` and `dudo-admin` on `admin.dudo.work`, with its three secrets set. **What is live is that morning build and nothing since:** no Organization detail, no member resolve, no audit feeds, no operators list, no confirmation-gated route, and none of the write-budget fixes | **User** |
-| 2 | **Migrations `0011`–`0014` are not applied to the remote control plane.** `0008`–`0010` are applied and verified. **Four pending**, not two: `0011_confirmation`, `0012_template`, `0013_organization_template`, `0014_platform_operator_action_organization`. Applied and verified locally only | **User** |
-| 3 | **Console screens for the audit feeds and the operators list are in flight** — the detail screen has landed | `web-agent` |
+## ✅ DEPLOYED AND TESTABLE — 2026-09-05
 
-**Corrected 2026-09-05.** This table previously said `wrangler deploy` was refused by a permission
-classifier and that nothing was live. **Both were true when written and both stopped being true the
-same day**, once the deploys succeeded. It also listed two pending migrations when four are pending.
-A blocker table that overstates what is blocked is as misleading as one that understates it — it
-sends the user to fix something already fixed and leaves the real gap unnamed.
+**Nothing is blocking. The slice is live and awaiting your acceptance (step 7).**
+
+| | |
+|---|---|
+| **Console** | **https://admin.dudo.work** |
+| **Commit** | `674b01f31f2bc3b1497afeef8b26f40988fe09d7` |
+| **`dudo-core` version** | `9c4213fe-f5e3-4915-a218-3a2013d66e29` — `app.dudo.work`, `api.dudo.work` |
+| **`dudo-admin` version** | `3570b967-1d71-4afa-ab16-5cb9750f5ab0` — `admin.dudo.work` |
+| **Migrations** | `0011`–`0014` applied to the remote control plane, in order. `wrangler d1 migrations list` reports **no migrations to apply** |
+| **Sign-in** | 1 platform operator seeded. 3 Organizations, 0 Templates |
+
+**Verified after deploy, not assumed:** `admin.dudo.work` returns 200; the platform API returns
+`401 unauthenticated` with a proper error envelope rather than a 500, so the three secrets survived
+the redeploy; `organizations`, `audit`, `operators` and `templates` all answer `401` rather than
+`404`, so the routes built today are genuinely live; and the confirmation challenge route answers a
+`POST` with `action_id: not_a_confirmable_operation`, which is the route working. The shipped bundle
+contains `reauth_identifier`, `target_identifier` and `confirmation_id`, and contains no `locale`.
+
+**Previous contents of this section, kept because the drift is the lesson.** It said `wrangler
+deploy` was refused by a permission classifier and that nothing was live; then it said everything
+after the first deploy was unshipped and four migrations were pending. **Each was true when written
+and each stopped being true without anything going red.** A blocker table is the part of a document
+most likely to be acted on and least likely to be re-read by whoever last changed the system.
 
 **The deploys are ordered and the order matters.** A custom domain is claimed by exactly one Worker.
 `admin.dudo.work` has been removed from `wrangler.jsonc`, so:
