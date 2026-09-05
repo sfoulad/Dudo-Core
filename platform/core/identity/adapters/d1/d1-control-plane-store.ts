@@ -481,6 +481,80 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       );
     },
 
+    async listLiveSessionIds(
+      principalId: string,
+      nowIso: string,
+      limit: number,
+    ): Promise<Result<readonly string[]>> {
+      if (!Number.isInteger(limit) || limit < 1) {
+        return err(internal());
+      }
+      // OLDEST FIRST. See the port: if the cap truncates, the sessions that survive should be the
+      // most recent — an attacker's freshly minted session is the one being raced.
+      //
+      // `expires_at > ?` USES THE SERVER'S CLOCK PASSED IN, never SQLite's `datetime('now')`, so
+      // the same instant governs the count, the reservation and the delete.
+      const rows = await selectRows(
+        database,
+        'SELECT session_id FROM session WHERE principal_id = ? AND expires_at > ? ' +
+          `ORDER BY created_at LIMIT ${String(limit)}`,
+        [principalId, nowIso],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      const ids: string[] = [];
+      for (const row of rows.value) {
+        const id = requiredText(row, 'session_id');
+        if (id === null) {
+          return err(internal());
+        }
+        ids.push(id);
+      }
+      return ok(Object.freeze(ids));
+    },
+
+    async resetCredential(
+      identifierHash: string,
+      replacement: {
+        readonly algorithm: string;
+        readonly iterations: number;
+        readonly salt: string;
+        readonly verifier: string;
+      },
+      sessionIds: readonly string[],
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<void>> {
+      consumeControlPlaneWriteReservation(reservation, 1 + sessionIds.length);
+
+      // ONE BATCH, ONE TRANSACTION: the credential is replaced and the sessions are deleted
+      // together. See the port for why the ORDER of these two is a security property and why one
+      // batch removes the window rather than shrinking it.
+      const statements: { readonly sql: string; readonly parameters: readonly unknown[] }[] = [
+        {
+          sql:
+            'UPDATE principal_credential SET algorithm = ?, iterations = ?, salt = ?, ' +
+            'verifier = ? WHERE identifier_hash = ?',
+          parameters: [
+            replacement.algorithm,
+            replacement.iterations,
+            replacement.salt,
+            replacement.verifier,
+            identifierHash,
+          ],
+        },
+      ];
+      for (const sessionId of sessionIds) {
+        // ONE STATEMENT PER SESSION, matching the reservation exactly. A predicate delete would
+        // remove however many exist rather than however many were paid for.
+        statements.push({
+          sql: 'DELETE FROM session WHERE session_id = ?',
+          parameters: [sessionId],
+        });
+      }
+      return executeBatch(database, statements);
+    },
+
     async createOrganizationWithFirstAdmin(
       rows,
       reservation: ControlPlaneWriteReservation,

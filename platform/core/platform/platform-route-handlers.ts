@@ -55,6 +55,7 @@ import { rejectedCursor } from '../pagination/cursor.ts';
 import { checkIdentifier } from '../identity/credential-store.ts';
 import type { OnboardingInput, OnboardingService } from '../onboarding/onboarding.ts';
 import type { MemberResolutionService } from '../directory/member-resolution.ts';
+import type { CredentialResetService } from '../credential/reset-service.ts';
 import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
@@ -1188,6 +1189,76 @@ function revokeOperator(dependencies: {
   };
 }
 
+/**
+ * Credential reset. `credential-reset-v1`. **The second gated route.**
+ *
+ * THIN, LIKE THE OTHERS, AND FOR THE SAME REASON: everything that touches a tenant store lives in
+ * `credential/`, outside this directory. This function names no resolver and no store handle.
+ *
+ * IT DOES NOT CHECK THE CONFIRMATION. Step 5b did, for this route as for revoke, and a handler
+ * that checked would be a second place the requirement lives.
+ *
+ * **NO CREDENTIAL IN THE RESPONSE.** The server never held one — the console generated the
+ * password, derived from it with the TARGET's identifier as salt, and still holds the only copy.
+ */
+function resetCredential(dependencies: { readonly reset: CredentialResetService }) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const principalId = body.principal_id;
+    const targetIdentifier = body.target_identifier;
+    const derivedValue = body.derived_value;
+
+    const details: ErrorDetail[] = [];
+    if (typeof principalId !== 'string' || !IDENTIFIER_PATTERN.test(principalId)) {
+      details.push(detail('principal_id', 'must_be_an_identifier'));
+    }
+    // `checkIdentifier` MINTS THE BRAND, so the service cannot be handed an unchecked value. The
+    // check and the value it licenses are one expression.
+    const checkedTarget =
+      typeof targetIdentifier === 'string' ? checkIdentifier(targetIdentifier) : null;
+    if (checkedTarget === null) {
+      details.push(detail('target_identifier', 'must_be_a_submittable_identifier'));
+    }
+    if (typeof derivedValue !== 'string' || !DERIVED_VALUE_PATTERN.test(derivedValue)) {
+      details.push(detail('derived_value', 'must_be_32_bytes_base64url'));
+    }
+    if (details.length > 0 || checkedTarget === null) {
+      return err(invalidArgument(details));
+    }
+
+    const outcome = await dependencies.reset.reset({
+      principalId: principalId as string,
+      targetIdentifier: checkedTarget,
+      derivedValue: derivedValue as string,
+      actorPrincipalId: context.authority.principalId,
+      charge: context.charge,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+    });
+    if (!outcome.ok) {
+      return err(outcome.error);
+    }
+
+    return ok({
+      body: {
+        principal_id: outcome.value.principalId,
+        revoked_session_count: outcome.value.revokedSessionCount,
+        notified_organization_count: outcome.value.notifiedOrganizationCount,
+      },
+      // THE TARGET PRINCIPAL, IN NO ORGANIZATION. A credential is a control-plane object and the
+      // reset is not scoped to a tenant — the per-Organization records are written separately, one
+      // per membership, into each customer's own trail.
+      target: {
+        kind: 'principal',
+        principalId: outcome.value.principalId,
+        organizationId: null,
+      },
+    });
+  };
+}
+
 /** List Templates. Keyset paging, identical in shape to the Organization list. */
 function listTemplates(dependencies: {
   readonly templates: TemplateStore;
@@ -1296,6 +1367,12 @@ export function createPlatformRouteHandlers(dependencies: {
    * cannot reach a tenant store. See `directory/member-resolution.ts`.
    */
   readonly members: MemberResolutionService;
+  /**
+   * The credential reset. REQUIRED — there is no degraded mode for the route that recovers a
+   * locked-out account, and an optional dependency would make it answer `unavailable` in a
+   * deployment that forgot it, indistinguishable from an outage.
+   */
+  readonly reset: CredentialResetService;
   readonly admission: ControlPlaneWriteAdmission;
   readonly ids: IdGenerator;
   readonly cursors: PlatformCursorCodec;
@@ -1319,6 +1396,7 @@ export function createPlatformRouteHandlers(dependencies: {
     'platform.organizations.members.resolve': resolveMember({
       members: dependencies.members,
     }),
+    'platform.credentials.reset': resetCredential({ reset: dependencies.reset }),
     'platform.operators.revoke': revokeOperator({
       store: dependencies.store,
       admission: dependencies.admission,

@@ -605,6 +605,59 @@ export type IdentityControlPlaneStore = {
    * "every membership write is preceded by the mutual-exclusion check" true of the port rather
    * than of the callers that happen to remember.
    */
+  /**
+   * ===========================================================================================
+   * REPLACE A CREDENTIAL AND REVOKE THE TARGET'S SESSIONS, IN ONE STATEMENT BATCH.
+   * `credential-reset-v1` steps 4 and 5.
+   * ===========================================================================================
+   *
+   * *** THE CREDENTIAL CHANGES FIRST AND THE ORDER IS A SECURITY PROPERTY, NOT A PREFERENCE. ***
+   * The contract considered revoke-then-reset and rejected it: *"the target could simply log in
+   * again between the two steps, using the password the operator is about to replace, and end up
+   * with a fresh session that survives."* **One batch removes the window entirely** — D1 runs a
+   * batch as one transaction, so there is no instant at which the old credential works and the
+   * sessions are already gone, or the reverse.
+   *
+   * IT IS AN `UPDATE`, NOT A DELETE-AND-INSERT. The primary key is the identifier hash, which does
+   * not change: **the same account keeps the same row.** A delete-and-insert would briefly leave a
+   * principal with no credential at all, and would make the operation indistinguishable from
+   * enrollment in the write log.
+   *
+   * `sessionIds` ARE COUNTED AND PASSED IN RATHER THAN DELETED BY PREDICATE, because the caller
+   * reserved capacity for exactly that many rows. **A `DELETE … WHERE principal_id = ?` could
+   * remove more sessions than were reserved for**, which `0014` §A.12 calls the outage direction —
+   * and the cap at 50 is `CR-2`'s bound, which a predicate delete would silently ignore.
+   */
+  resetCredential(
+    identifierHash: string,
+    replacement: {
+      readonly algorithm: string;
+      readonly iterations: number;
+      readonly salt: string;
+      readonly verifier: string;
+    },
+    sessionIds: readonly string[],
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<void>>;
+
+  /**
+   * The target's live session identifiers, oldest first, capped.
+   *
+   * *** THE CAP IS `CR-2` AND IT IS A REAL HOLE, BOUNDED AND REPORTED. *** A target with more than
+   * `limit` live sessions **keeps some of them** after a reset. The contract records it rather than
+   * hiding it: the right fix is a per-principal session cap, which does not exist and is a decision
+   * of its own.
+   *
+   * OLDEST FIRST, DELIBERATELY. If some must survive, the ones that survive should be the ones
+   * most recently created by the legitimate holder — an attacker's freshly minted session is the
+   * one an operator is racing, so **dropping the oldest first would revoke exactly the wrong set.**
+   */
+  listLiveSessionIds(
+    principalId: string,
+    nowIso: string,
+    limit: number,
+  ): Promise<Result<readonly string[]>>;
+
   createOrganizationWithFirstAdmin(
     rows: {
       readonly organization: NewOrganization;

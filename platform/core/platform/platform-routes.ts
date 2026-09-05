@@ -181,6 +181,7 @@ export type PlatformRouteId =
   | 'platform.organizations.audit.list'
   | 'platform.operators.list'
   | 'platform.operators.revoke'
+  | 'platform.credentials.reset'
   | 'platform.session.whoami'
   | 'platform.confirmations.request'
   | 'platform.templates.create'
@@ -620,6 +621,43 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // NONE. Query parameters remain refused on a gated route — a path parameter is structurally
     // required and always present; a query parameter may be absent, and binding a sometimes-absent
     // value forces every implementation to agree on how absence is represented.
+    queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  // ===========================================================================================
+  // CREDENTIAL RESET. `credential-reset-v1`. **THE SECOND GATED ROUTE, AND THE MOST DANGEROUS
+  // OPERATION IN THE PLATFORM.** It takes over an account somebody is using.
+  //
+  // *** THE TARGET IS A BODY FIELD HERE AND A PATH PARAMETER ON REVOKE, AND THAT IS THE
+  // CONTRACT'S CHOICE RATHER THAN AN INCONSISTENCY. *** The path is `/credentials/reset` with no
+  // segment, so `principal_id` arrives in the body — where it is bound automatically, because the
+  // binding is body-minus-the-three UNION the path parameters and this route has none.
+  //
+  // SIX FIELDS, AND THE ROUTE CARRIES **TWO DIFFERENT PRINCIPALS' IDENTIFIERS**:
+  // `target_identifier` for the account being reset, `reauth_identifier` for the operator doing
+  // it. They were one field called `identifier` until `54ab239`, and the route was unbuildable —
+  // the gate would have consumed the target's identifier as the caller's.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.credentials.reset' as const,
+    method: 'POST' as const,
+    path: `${PLATFORM_BASE_PATH}/credentials/reset`,
+    permission: fixedPermission('core.credential.reset'),
+    // `principal_id`, `target_identifier` and `derived_value` are the operation's parameters and
+    // are ALL BOUND — the confirmation covers the account being reset AND the new credential's
+    // derived value, so a confirmation obtained for one target cannot be spent on another.
+    //
+    // THE THREE CONFIRMATION FIELDS ARE STRIPPED BEFORE THE BINDING, which is why the target's
+    // identifier had to stop being called `identifier`: it would have been stripped with them.
+    fields: Object.freeze([
+      'principal_id',
+      'target_identifier',
+      'derived_value',
+      CONFIRMATION_ID_FIELD,
+      REAUTH_DERIVED_VALUE_FIELD,
+      REAUTH_IDENTIFIER_FIELD,
+    ]),
+    objectFields: Object.freeze([]),
     queryParameters: Object.freeze([]),
     successStatus: 200 as const,
   }),
@@ -1551,7 +1589,68 @@ function splitObjectFields(
  * whose textual form is not byte-specified does not belong in a place two implementations must
  * agree about.
  */
-const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+/**
+ * ===========================================================================================
+ * *** THE FRACTIONAL PART IS REQUIRED. NARROWED 2026-09-05, AND THE OPTIONAL FORM WAS A LIVE
+ * DEFECT RATHER THAN A LOOSE GRAMMAR. ***
+ * ===========================================================================================
+ *
+ * **LEXICOGRAPHIC COMPARISON EQUALS TEMPORAL COMPARISON ONLY WHEN BOTH OPERANDS ARE THE SAME
+ * WIDTH.** The feeds compare `occurred_at >= ?` and `< ?` as TEXT, which is correct precisely
+ * because every stored value is `YYYY-MM-DDTHH:MM:SS.mmmZ` — fixed width.
+ *
+ * **AT INDEX 19 A STORED VALUE HAS `.` (0x2E) AND A SHORT BOUND HAS `Z` (0x5A), AND `.` SORTS
+ * FIRST.** So every stored value inside a given second sorts BEFORE a bound naming that second
+ * without a fractional part.
+ *
+ * *** BOTH BOUNDS MOVE FORWARD IN TIME BY UP TO ONE SECOND. IT IS THE EFFECT THAT IS OPPOSITE,
+ * NOT THE DIRECTION. *** (Worth stating carefully: "opposite senses" is the natural phrasing and
+ * says something false.)
+ *
+ *   `until=…T23:59:59Z`  effective bound is the start of second 60 → **OVER-includes** the whole
+ *                        of second 59, on a parameter documented as exclusive.
+ *   `since=…T00:00:00Z`  effective bound is the start of second 01 → **UNDER-includes**, dropping
+ *                        every record in second 00.
+ *
+ * **NEITHER ERRORS. Both silently return the wrong set.**
+ *
+ * ===========================================================================================
+ * IT WAS SHIPPING. THE CONSOLE'S `toUtcDayStart` EMITTED `T00:00:00Z`.
+ * ===========================================================================================
+ *
+ * So every audit query bounded by a day start was **dropping every record in the first second of
+ * that day**, and nothing reported it. Fixed on the client at `103b542`: both bounds are now built
+ * from `Date.UTC` through `toISOString()` rather than assembled from template literals, **so they
+ * cannot emit another width**, and the end bound was renamed `toUtcExclusiveDayEnd` because the old
+ * name read as a moment inside the day.
+ *
+ * ===========================================================================================
+ * WHY NARROW THE GRAMMAR RATHER THAN NORMALISE THE INPUT
+ * ===========================================================================================
+ *
+ * The alternative — appending `.000` for `since` and `.999` for `until` inside Core — was refused,
+ * and there are two reasons. The first is `architecture-agent`'s: **that is a second place deciding
+ * what a bound means, and it differs per parameter**, so a reader of either the client or the query
+ * would have to know the rule.
+ *
+ * **THE SECOND IS THAT IT IS UNFALSIFIABLE FROM THE CLIENT'S SIDE.** A console sending a short
+ * bound could not tell whether it had been normalised or refused **without reading Core's source.**
+ * A grammar admitting only unambiguous values needs no such rule and can be checked from outside.
+ *
+ * **WIDENING THE COMPARISON IS ALSO REFUSED**: the comparison is lexicographic *because* the stored
+ * form is fixed-width, and making it tolerate variable widths trades a specification for a special
+ * case.
+ *
+ * ===========================================================================================
+ * BREAKING, AND FREE AT THIS INSTANT
+ * ===========================================================================================
+ *
+ * The only consumer already sends three digits, verified in the console's source before this
+ * landed. **One limit carried from `web-agent`: the three-digit form is verified as EMITTED, not as
+ * ACCEPTED — nothing has run against live Core.** The negative control below is the first thing
+ * that actually proves the two sides agree, which makes it more load-bearing than usual.
+ */
+const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 export function readInstantParameter(
   query: ReadonlyMap<string, string>,

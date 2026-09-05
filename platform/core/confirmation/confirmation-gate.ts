@@ -98,7 +98,37 @@ export const REAUTH_DERIVED_VALUE_FIELD = 'reauth_derived_value';
  * cannot know the TARGET's identifier. Both come from `0015` §D moving derivation to the client;
  * every route that touches a credential inherits a salt problem and has to solve it separately.
  */
-export const REAUTH_IDENTIFIER_FIELD = 'identifier';
+/**
+ * ===========================================================================================
+ * *** `reauth_identifier`, NOT `identifier`. RENAMED 2026-09-05 (`54ab239`), AND THE BARE WORD
+ * WAS UNBUILDABLE. ***
+ * ===========================================================================================
+ *
+ * **THE BARE WORD NEVER SAID WHOSE.** `confirmation-v1` meant the CALLER'S; `credential-reset-v1`
+ * meant the TARGET'S. Each was coherent inside its own document, and **the request that carries
+ * both needed one field to hold two different principals' identifiers.**
+ *
+ * TRACED THROUGH THIS FILE, THE CONSEQUENCE WAS TOTAL: `splitConfirmedRequest` strips this field,
+ * so the gate would have consumed the **target's** identifier as the **caller's**, the
+ * caller-identity assertion could never hold, and `reauth_derived_value` — the operator's password
+ * salted with the OPERATOR's identifier — could not match the target's stored verifier either.
+ * **Both halves fail; the route returns `forbidden` on every well-formed request, permanently,
+ * with no path around the gate because the permission is `critical`.**
+ *
+ * ===========================================================================================
+ * THE LOAD-BEARING REASON FOR THE PREFIX IS THE RESERVED NAMESPACE, NOT READABILITY
+ * ===========================================================================================
+ *
+ * These three names are **forbidden to every gated route's body fields and path parameters** —
+ * `assertConfirmationCoverageIsCoherent` refuses a collision at construction. So reserving the
+ * generic word `identifier` would **permanently forbid the most natural name for the most common
+ * kind of field, on every route that will ever be gated** — a cost paid by routes with nothing to
+ * do with confirmation.
+ *
+ * `reauth_identifier` costs nobody anything they will want, and it pairs with
+ * `reauth_derived_value`, which already carried the prefix.
+ */
+export const REAUTH_IDENTIFIER_FIELD = 'reauth_identifier';
 
 const CONFIRMATION_FIELDS: readonly string[] = Object.freeze([
   CONFIRMATION_ID_FIELD,

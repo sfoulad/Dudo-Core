@@ -102,6 +102,7 @@ import { createD1PlatformStore } from '../../platform/adapters/d1/d1-platform-st
 import { createD1TemplateStore } from '../../platform/adapters/d1/d1-template-store.ts';
 import { createOnboardingService } from '../../onboarding/onboarding-service.ts';
 import { createMemberResolutionService } from '../../directory/member-resolution.ts';
+import { createCredentialResetService } from '../../credential/reset-service.ts';
 import { createHmacIdentifierHasher } from '../../identity/credential-store.ts';
 import { createStoreAuditSink } from '../../audit/store-audit-sink.ts';
 import type { TenantScopedStore } from '../../storage/store.ts';
@@ -468,9 +469,31 @@ export async function createCoreRuntime(
     clock,
   });
 
+  // THE CREDENTIAL RESET. `credential-reset-v1`. Assembled here for the reason the other two are:
+  // it needs the tenant resolver — one audit record per Organization the target belongs to — and
+  // the platform class's composition root must not hold one.
+  //
+  // IT RECEIVES `identity.credentials` READ-ONLY FOR VERIFICATION and writes through
+  // `controlPlane.identity`, which is the same split onboarding uses: the port that can find a
+  // credential cannot change one, and the port that can change one cannot find one by identifier.
+  const credentialReset = createCredentialResetService({
+    controlPlane: controlPlane.identity,
+    credentials: createD1CredentialStore(controlDatabase),
+    identifiers: await createHmacIdentifierHasher(lookupKey),
+    operators: platformStore,
+    admission,
+    resolver: tenantResolver,
+    coordinator: createDurableObjectRequestCoordinator(coordinationNamespace),
+    auditSinkFor: (store: TenantScopedStore) =>
+      createStoreAuditSink(store, createRandomIdGenerator()),
+    ids: createRandomIdGenerator(),
+    clock,
+  });
+
   const platformRoutes = await createPlatformComposition({
     onboarding,
     members,
+    reset: credentialReset,
     confirmations,
     // THE SAME GATE INSTANCE THE ACTION PIPELINE RECEIVES, and passing it here is what makes
     // `confirmation-v1`'s "EVERY entry point" true rather than true of one class. Composed

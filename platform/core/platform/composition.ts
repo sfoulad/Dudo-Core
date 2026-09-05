@@ -46,6 +46,7 @@ import type { PlatformOperatorStore } from './platform-operator-store.ts';
 import type { TemplateStore } from './template-store.ts';
 import type { OnboardingService } from '../onboarding/onboarding.ts';
 import type { MemberResolutionService } from '../directory/member-resolution.ts';
+import type { CredentialResetService } from '../credential/reset-service.ts';
 import type { PlatformRouteDependencies } from './platform-routes.ts';
 import { createPlatformAuthorityResolver } from './platform-authority.ts';
 import { createPlatformAuditRecorder } from './platform-audit.ts';
@@ -90,6 +91,16 @@ export type PlatformCompositionInput = {
    * `0025`'s amendment is the sentence to measure it against.
    */
   readonly members: MemberResolutionService;
+  /**
+   * The credential reset. Passed in for the reason `onboarding` and `members` are: building it
+   * here would mean this file taking a `TenantStoreResolver`.
+   *
+   * *** THIS IS THE THIRD SERVICE ARRIVING THIS WAY AND `0025`'s AMENDMENT SAYS "EXACTLY ONE". ***
+   * The substance holds — each is one operation, bounded, reading no business data — but the
+   * count in the record is now wrong, and it is flagged here rather than left for a reader to
+   * discover by counting. **A fourth is the point to ask whether P1 still means anything.**
+   */
+  readonly reset: CredentialResetService;
   /**
    * The SAME admission port the identity slice uses, drawing from the SAME `DayWriteBudget`.
    *
@@ -170,6 +181,7 @@ export async function createPlatformComposition(
       templates: input.templates,
       onboarding: input.onboarding,
       members: input.members,
+      reset: input.reset,
       admission: input.admission,
       ids: input.ids,
       cursors,
