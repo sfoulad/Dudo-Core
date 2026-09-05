@@ -99,6 +99,7 @@ import { createInProcessControlPlaneWriteAdmission } from '../../identity/contro
 import { createMembershipPrincipalAuthorizationSource } from '../../identity/principal-authorization-source.ts';
 import { createIdentityComposition } from '../../identity/composition.ts';
 import { createD1PlatformStore } from '../../platform/adapters/d1/d1-platform-store.ts';
+import { createD1TemplateStore } from '../../platform/adapters/d1/d1-template-store.ts';
 import { createD1ConfirmationStore } from '../../confirmation/adapters/d1/d1-confirmation-store.ts';
 import { createConfirmationBinder } from '../../confirmation/binding.ts';
 import { createConfirmationService } from '../../confirmation/confirmation-service.ts';
@@ -379,6 +380,9 @@ export async function createCoreRuntime(
   const platformRoutes = await createPlatformComposition({
     confirmations,
     store: platformStore,
+    // A SEPARATE STORE OVER THE SAME BINDING. `template` is tenant-independent configuration and
+    // shares nothing with the operator tables but the database it sits in.
+    templates: createD1TemplateStore(controlDatabase),
     admission,
     authorizer: createAuthorizer(),
     ids: createRandomIdGenerator(),

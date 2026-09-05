@@ -40,7 +40,13 @@
 import type { Clock } from '../kernel/clock.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
-import { detail, internal, invalidArgument } from '../kernel/errors.ts';
+import { conflict, detail, internal, invalidArgument, notFound, quotaExceeded } from '../kernel/errors.ts';
+import { toRfc3339Utc } from '../kernel/clock.ts';
+import type { IdGenerator } from '../kernel/ids.ts';
+import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
+import { TEMPLATE_ROW_WRITES } from '../identity/control-plane-admission.ts';
+import type { TemplateStore } from './template-store.ts';
+import { normalizeTemplateName, parseTemplateCreate, toTemplateOutput } from './templates.ts';
 import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
 import type { ConfirmationParameters } from '../confirmation/binding.ts';
 import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
@@ -303,8 +309,180 @@ function auditTargetFor(actionId: string, parameters: ConfirmationParameters): P
     : { kind: 'organization', organizationId: target.id };
 }
 
+/**
+ * Create a Template — a business type.
+ *
+ * ===========================================================================================
+ * NOTHING IN THIS FUNCTION READS WHAT THE NAME SAYS.
+ * ===========================================================================================
+ *
+ * It validates lengths and the closed level set, normalises the name for collision detection, and
+ * stores it. **There is no branch anywhere here that depends on the value of `name`** — no
+ * `switch`, no lookup table, no special case. That is `CORE_BOUNDARIES.md` §6 rule 1's row/column
+ * distinction held in code: the word "Dental Clinic" is a value an operator typed, which Core no
+ * more understands than it understands a customer's name.
+ *
+ * A CONFLICT IS DISCLOSED, WHICH IS UNUSUAL HERE AND IS RULED SAFE FOR A REASON THAT DOES NOT
+ * GENERALISE. `template-v1`: *"Templates are platform configuration visible to every operator
+ * through `platform.templates.list`. A conflict discloses the existence of something the caller
+ * may already enumerate."* Every `not_found` collapse elsewhere in this platform exists precisely
+ * because the caller may NOT enumerate what it is probing. **Copy the reasoning, never the
+ * outcome.**
+ */
+function createTemplate(dependencies: {
+  readonly templates: TemplateStore;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly ids: IdGenerator;
+  readonly clock: Clock;
+}) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const parsed = parseTemplateCreate({
+      name: body.name,
+      labels: context.objects.level_labels ?? {},
+    });
+    if (!parsed.ok) {
+      return err(parsed.error);
+    }
+
+    const nowMs = dependencies.clock.nowMs();
+    const admitted = await dependencies.admission.reserve({
+      principalId: context.authority.principalId,
+      estimatedRowWrites: TEMPLATE_ROW_WRITES,
+      nowMs,
+    });
+    if (!admitted.ok) {
+      return err(admitted.error);
+    }
+    if (admitted.value.kind === 'deferred') {
+      // `quota_exceeded` IS DECLARED ON THIS ROUTE, so it is reported honestly rather than
+      // collapsed. Nothing degrades for any tenant when this refuses — no tenant depends on this
+      // surface at all.
+      return err(quotaExceeded());
+    }
+
+    const templateId = dependencies.ids.generate();
+    const written = await dependencies.templates.create(
+      {
+        templateId,
+        name: parsed.value.name,
+        normalizedName: normalizeTemplateName(parsed.value.name),
+        labels: parsed.value.labels,
+        createdAt: toRfc3339Utc(nowMs),
+      },
+      admitted.value.reservation,
+    );
+    if (!written.ok) {
+      return err(written.error);
+    }
+    if (!written.value) {
+      return err(conflict());
+    }
+
+    return ok({
+      body: toTemplateOutput({
+        templateId,
+        name: parsed.value.name,
+        labels: parsed.value.labels,
+        // ALWAYS `active`. No route sets `status` in version 1 (TM-2), and the field exists in the
+        // shape only so that adding the retire route later changes no published response.
+        status: 'active',
+        createdAt: toRfc3339Utc(nowMs),
+      }),
+      // NO TARGET. A Template is tenant-independent platform configuration and names neither an
+      // Organization nor a principal, so there is nothing for the operator log's target columns to
+      // hold — and `template_id` is not one of the two kinds `0025` Decision 5 permits there.
+      target: NO_TARGET,
+    });
+  };
+}
+
+/** List Templates. Keyset paging, identical in shape to the Organization list. */
+function listTemplates(dependencies: {
+  readonly templates: TemplateStore;
+  readonly cursors: PlatformCursorCodec;
+  readonly clock: Clock;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const pageSize = readPageSize(context.query);
+    if (!pageSize.ok) {
+      return err(pageSize.error);
+    }
+    const offered = readCursorParameter(context.query);
+    if (!offered.ok) {
+      return err(offered.error);
+    }
+    const nowMs = dependencies.clock.nowMs();
+    const binding = { principalId: context.authority.principalId, pageSize: pageSize.value };
+    let anchor: string | null = null;
+    if (offered.value !== null) {
+      const decoded = await dependencies.cursors.decode(offered.value, binding, nowMs);
+      if (!decoded.ok) {
+        return err(decoded.error);
+      }
+      anchor = decoded.value;
+    }
+
+    const limit = Math.min(pageSize.value + 1, PLATFORM_MAX_PAGE_SIZE + 1);
+    const rows = await dependencies.templates.list(limit, anchor);
+    if (!rows.ok) {
+      return err(rows.error);
+    }
+    const page = rows.value.slice(0, pageSize.value);
+    const hasMore = rows.value.length > pageSize.value;
+    const last = page.length === 0 ? undefined : page[page.length - 1];
+
+    return ok({
+      body: {
+        data: page.map(toTemplateOutput),
+        // NO not_found, EVER. Zero Templates is `200` with `data: []` — an empty collection is not
+        // a missing one, and both clients must render it as a first-class state.
+        next_cursor:
+          hasMore && last !== undefined
+            ? await dependencies.cursors.encode(last.templateId, binding, nowMs)
+            : null,
+      },
+      target: NO_TARGET,
+    });
+  };
+}
+
+/**
+ * Read one Template.
+ *
+ * `not_found` IS AN HONEST `not_found` HERE, AND THAT IS UNUSUAL IN THIS CODEBASE. Everywhere else
+ * Dudo collapses "does not exist" with "not yours" to close an existence oracle. Templates are
+ * tenant-independent platform configuration and **every caller who can reach this route may
+ * already enumerate all of them, so there is no population to protect and nothing a distinction
+ * could leak.** Stated because a reviewer comparing this to `customer-directory-v1` will otherwise
+ * read it as an inconsistency — and because the reasoning, not the habit, is what should be copied.
+ */
+function readTemplate(dependencies: { readonly templates: TemplateStore }) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    // ALREADY VALIDATED BY THE MATCHER against the platform identifier grammar — a value that
+    // could not be an identifier never reached this handler and cost no database read.
+    const templateId = context.pathParams.template_id;
+    if (templateId === undefined) {
+      return err(internal());
+    }
+    const found = await dependencies.templates.findById(templateId);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    if (found.value === null) {
+      return err(notFound());
+    }
+    return ok({ body: toTemplateOutput(found.value), target: NO_TARGET });
+  };
+}
+
 export function createPlatformRouteHandlers(dependencies: {
   readonly store: PlatformOperatorStore;
+  readonly templates: TemplateStore;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly ids: IdGenerator;
   readonly cursors: PlatformCursorCodec;
   readonly clock: Clock;
   /**
@@ -317,6 +495,18 @@ export function createPlatformRouteHandlers(dependencies: {
   const handlers: Record<string, unknown> = {
     'platform.organizations.list': listOrganizations(dependencies),
     'platform.session.whoami': whoami(),
+    'platform.templates.create': createTemplate({
+      templates: dependencies.templates,
+      admission: dependencies.admission,
+      ids: dependencies.ids,
+      clock: dependencies.clock,
+    }),
+    'platform.templates.list': listTemplates({
+      templates: dependencies.templates,
+      cursors: dependencies.cursors,
+      clock: dependencies.clock,
+    }),
+    'platform.templates.read': readTemplate({ templates: dependencies.templates }),
   };
   if (dependencies.confirmations !== undefined) {
     handlers['platform.confirmations.request'] = requestConfirmation({

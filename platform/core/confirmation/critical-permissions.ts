@@ -304,6 +304,38 @@ export function assertActionSensitivityMatchesCatalog(
   // discovering it the first time somebody gets a confirmation wrong — which is the moment the
   // message matters most. `qa-agent` found exactly this shape as five `internal`s where
   // `forbidden` was expected.
+  // =========================================================================================
+  // A CRITICAL ACTION MUST HAVE A STATEMENT, KEYED BY ITS **ACTION ID**.
+  // =========================================================================================
+  //
+  // `qa-agent` asserted the intent — *"every critical permission that has a reachable Action has a
+  // statement"* — by looking the catalog up by PERMISSION id, and it can never pass that way: the
+  // catalog is keyed by OPERATION id, because that is what the pipeline looks up (`action.id`).
+  //
+  // **CORE CANNOT CHECK THE PROPERTY THE WAY QA STATED IT.** Core holds the critical permission
+  // set but does not know which Actions exist — they live in `apps/**` and arrive at composition —
+  // so there is no permission → operation mapping to walk.
+  //
+  // **IT CAN CHECK IT FROM THE OTHER END, WHICH IS BETTER**: at router construction, for each
+  // Action, if its permission is critical then a statement must exist under its id. That is the
+  // same property, asserted where both halves are in hand, and it makes a missing statement a
+  // BUILD failure rather than a `no_confirmation_statement` at request time.
+  //
+  // IT WOULD HAVE CAUGHT THE KEY MISMATCH `qa-agent` FOUND — the catalog was keyed
+  // `customers.customer.delete`, the permission, while the Action is `customers.DeleteCustomer` —
+  // the moment that Action was wired, instead of the first time somebody tried to delete a
+  // customer.
+  if (catalogSaysCritical && !hasStatement(actionId)) {
+    throw new ActionSensitivityMismatchError(
+      `The Action '${actionId}' has the critical permission '${permissionId}' and there is no ` +
+        'confirmation statement keyed by its id. Every critical operation must be describable to ' +
+        'a human before they agree to it — docs/decisions/0007 D15 requires the statement to say ' +
+        'exactly what will happen, and an action identifier is not that. NOTE THE KEY: the ' +
+        'catalog is keyed by the OPERATION id, not the permission id; the two are similar enough ' +
+        'to confuse and are not interchangeable.',
+    );
+  }
+
   if (catalogSaysCritical && declaredErrors.length > 0) {
     for (const required of ['forbidden', 'invalid_argument'] as const) {
       if (!declaredErrors.includes(required)) {

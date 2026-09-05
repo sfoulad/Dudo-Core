@@ -342,8 +342,15 @@ export async function handleRequest(
     }
     const platformOutcome = await dispatchPlatformRoute(
       dependencies.platformRoutes,
-      platformRoute,
+      platformRoute.route,
       {
+        // DECLARED `{name}` SEGMENTS, ALREADY VALIDATED BY THE MATCHER against the platform
+        // identifier grammar — a value that could not be an identifier never reached this line.
+        // They are passed separately from the body and never merged into it: `mergeInputSources`
+        // exists for the Action path, and merging here would let a body field and a path segment
+        // of the same name shadow one another, which is a precedence rule and therefore a way for
+        // a caller to shadow a value a reviewer assumed was authoritative.
+        pathParams: platformRoute.pathParams,
         bodyText: platformBodyText,
         headers: new Map(
           [...request.headers.entries()].map(([name, value]) => [name.toLowerCase(), value]),

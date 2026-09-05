@@ -48,12 +48,18 @@ export function createD1ConfirmationStore(database: D1Database): ConfirmationSto
         await database.batch([
           database
             .prepare(
-              'INSERT INTO confirmation (binding_hash, principal_id, expires_at, spent_at) ' +
-                'VALUES (?, ?, ?, NULL) ' +
-                'ON CONFLICT (binding_hash) DO UPDATE SET expires_at = excluded.expires_at, ' +
-                'spent_at = NULL',
+              'INSERT INTO confirmation (binding_hash, confirmation_id, principal_id, ' +
+                'expires_at, spent_at) VALUES (?, ?, ?, ?, NULL) ' +
+                'ON CONFLICT (binding_hash) DO UPDATE SET ' +
+                'confirmation_id = excluded.confirmation_id, ' +
+                'expires_at = excluded.expires_at, spent_at = NULL',
             )
-            .bind(record.bindingHash, record.principalId, record.expiresAt),
+            .bind(
+              record.bindingHash,
+              record.confirmationId,
+              record.principalId,
+              record.expiresAt,
+            ),
         ]);
         return ok(undefined);
       } catch {
@@ -63,6 +69,7 @@ export function createD1ConfirmationStore(database: D1Database): ConfirmationSto
 
     async spend(
       bindingHash: string,
+      confirmationId: string,
       nowIso: string,
       reservation: ControlPlaneWriteReservation,
     ): Promise<Result<boolean>> {
@@ -99,10 +106,11 @@ export function createD1ConfirmationStore(database: D1Database): ConfirmationSto
         const outcome = await database
           .prepare(
             'UPDATE confirmation SET spent_at = ? ' +
-              'WHERE binding_hash = ? AND spent_at IS NULL AND expires_at > ? ' +
+              'WHERE binding_hash = ? AND confirmation_id = ? ' +
+              'AND spent_at IS NULL AND expires_at > ? ' +
               'RETURNING binding_hash',
           )
-          .bind(nowIso, bindingHash, nowIso)
+          .bind(nowIso, bindingHash, confirmationId, nowIso)
           .all<{ binding_hash: string }>();
         return ok(outcome.results.length === 1);
       } catch {

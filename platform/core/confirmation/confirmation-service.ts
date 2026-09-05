@@ -179,8 +179,11 @@ export function createConfirmationService(
       }
 
       const expiresAt = toRfc3339Utc(nowMs + CONFIRMATION_LIFETIME_MS);
+      // GENERATED BEFORE THE WRITE AND STORED WITH IT. The first version generated this in the
+      // response object and stored nothing, which made it decorative — see `ConfirmationRecord`.
+      const confirmationId = ids.generate();
       const written = await store.issue(
-        { bindingHash, principalId: input.principalId, expiresAt },
+        { bindingHash, confirmationId, principalId: input.principalId, expiresAt },
         admitted.value.reservation,
       );
       if (!written.ok) {
@@ -196,7 +199,7 @@ export function createConfirmationService(
         // IT IS DELIBERATELY NOT THE BINDING HASH ITSELF. Returning the hash would hand a caller
         // the output of a keyed function over values it controls, which is a chosen-message oracle
         // against the confirmation key — cheap to avoid, and expensive to discover later.
-        confirmationId: ids.generate(),
+        confirmationId,
         statement: rendered.value.statement,
         statementLocale: rendered.value.locale,
         expiresAt,
@@ -244,13 +247,22 @@ export function createConfirmationService(
         return err(quotaExceeded());
       }
 
-      const spent = await store.spend(bindingHash, toRfc3339Utc(nowMs), admitted.value.reservation);
+      // THE PRESENTED TOKEN IS PASSED IN AND COMPARED INSIDE THE UPDATE. It is NOT used to find
+      // the row — the binding hash is — so a caller cannot reach a confirmation by guessing a
+      // token, and cannot reach one by guessing a binding without also holding the token.
+      const spent = await store.spend(
+        bindingHash,
+        input.confirmationId,
+        toRfc3339Utc(nowMs),
+        admitted.value.reservation,
+      );
       if (!spent.ok) {
         return err(spent.error);
       }
       if (!spent.value) {
-        // NOT SPENT BY THIS CALL: already used, expired, or never existed. ONE ANSWER FOR ALL
-        // THREE, and `forbidden()` takes no arguments so there is nothing here to vary.
+        // NOT SPENT BY THIS CALL: the token did not match, the binding did not match, it was
+        // already used, or it expired. ONE ANSWER FOR ALL FOUR, and `forbidden()` takes no
+        // arguments so there is nothing here to vary.
         //
         // `forbidden` RATHER THAN `not_found`, and the choice is about which neighbour this hides
         // among: on the operation's own route a missing confirmation is an authorization failure,

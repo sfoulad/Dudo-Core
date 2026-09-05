@@ -117,6 +117,27 @@ CREATE TABLE IF NOT EXISTS confirmation (
   -- nothing whatsoever about what they were for.
   binding_hash  TEXT NOT NULL PRIMARY KEY,
 
+  -- ===========================================================================================
+  -- THE OPAQUE TOKEN THE CLIENT ECHOES. ADDED 2026-09-05 AFTER `qa-agent` FOUND IT UNCHECKED.
+  -- ===========================================================================================
+  --
+  -- The first version issued this value and stored it NOWHERE, so a submission carrying a
+  -- FABRICATED token with everything else correct was admitted. The field was decorative and
+  -- `confirmation-v1`'s "carrying that confirmation_id" was a normative sentence the code did not
+  -- honour.
+  --
+  -- WHY IT MATTERS EVEN THOUGH THE BINDING ALREADY HELD: the echo is the difference between having
+  -- CAUSED a challenge to exist and having RECEIVED the challenge response. Those are equivalent
+  -- only because of properties that live elsewhere — no CORS, a host-only SameSite cookie, and a
+  -- submit step needing the password — and any of them could change without anyone thinking about
+  -- confirmations.
+  --
+  -- IT IS NOT A KEY AND MUST NEVER BECOME ONE. The row is found by `binding_hash`; this is
+  -- COMPARED against the row that lookup returned, inside the same UPDATE. A second unique index
+  -- here would give a caller two ways to reach one row, and the weaker one would eventually be the
+  -- one somebody queried.
+  confirmation_id TEXT NOT NULL CHECK (length(confirmation_id) > 0),
+
   -- WHO. Server-derived from a verified session credential, never a request field.
   --
   -- IT IS HERE DESPITE ALSO BEING INSIDE THE HASH, and the redundancy is deliberate: it is what

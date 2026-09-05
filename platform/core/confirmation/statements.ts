@@ -203,7 +203,22 @@ type StatementTemplate = {
  * English is safe, and a wrong Arabic one is not.
  */
 const CATALOG: Readonly<Record<string, StatementTemplate>> = Object.freeze({
-  'customers.customer.delete': Object.freeze({
+  // ===========================================================================================
+  // *** KEYED BY THE **OPERATION** IDENTIFIER, NOT THE PERMISSION. `qa-agent`, 2026-09-05. ***
+  // ===========================================================================================
+  //
+  // The first version keyed this `customers.customer.delete`, which is the PERMISSION id from
+  // `permission-catalog.yaml`. The pipeline looks a statement up by `action.id`, and the deferred
+  // Action is `customers.DeleteCustomer` — so **the challenge would have been refused with
+  // `no_confirmation_statement` the day the Action was built**, and the failure would have looked
+  // like a missing translation rather than a wrong key.
+  //
+  // The two identifier spaces are similar enough to confuse and are not interchangeable: an
+  // operation id names a thing you can invoke, a permission id names a thing you can hold.
+  // `assertConfirmableOperationsAreCoherent` catches this for the PLATFORM class, because those
+  // ids are declared in Core — it could not catch it here, because the Action is deferred and its
+  // id lives in a contract Core does not read.
+  'customers.DeleteCustomer': Object.freeze({
     interpolates: Object.freeze(['customer_id']),
     // NULL, AND THE NULL IS THE POINT. A customer identifier is TENANT BUSINESS DATA, and `0025`
     // Decision 5 forbids it in the operator log absolutely: "an operator log that accumulates

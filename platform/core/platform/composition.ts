@@ -42,6 +42,7 @@ import type { Authorizer } from '../authorization/authorizer.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
 import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
 import type { PlatformOperatorStore } from './platform-operator-store.ts';
+import type { TemplateStore } from './template-store.ts';
 import type { PlatformRouteDependencies } from './platform-routes.ts';
 import { createPlatformAuthorityResolver } from './platform-authority.ts';
 import { createPlatformAuditRecorder } from './platform-audit.ts';
@@ -50,6 +51,16 @@ import { createPlatformRouteHandlers } from './platform-route-handlers.ts';
 
 export type PlatformCompositionInput = {
   readonly store: PlatformOperatorStore;
+  /**
+   * The Template catalogue. A SEPARATE PORT FROM `store`, deliberately.
+   *
+   * `PlatformOperatorStore` answers questions about operators, memberships and Organizations —
+   * every one of them a question ABOUT a tenant or a principal. `TemplateStore` answers questions
+   * about tenant-independent platform configuration and holds no identifier of either kind. One
+   * port with both would be a handle that reaches strictly more than any single route needs, which
+   * is the split `control-plane-store.ts` property 3 makes for the same reason.
+   */
+  readonly templates: TemplateStore;
   /**
    * The SAME admission port the identity slice uses, drawing from the SAME `DayWriteBudget`.
    *
@@ -110,6 +121,9 @@ export async function createPlatformComposition(
   return {
     handlers: createPlatformRouteHandlers({
       store: input.store,
+      templates: input.templates,
+      admission: input.admission,
+      ids: input.ids,
       cursors,
       clock: input.clock,
       confirmations: input.confirmations,

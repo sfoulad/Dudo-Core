@@ -224,6 +224,23 @@ export const PLATFORM_OPERATOR_ACTION_ROW_WRITES = 2;
 export const CONFIRMATION_ROW_WRITES = 2;
 
 /**
+ * `template` (`0012`): 1 table row + 1 primary-key autoindex + 1 uniqueness index on the
+ * normalised name = 3, CHARGED 4 with the platform-operator audit record.
+ *
+ * OVER-CHARGED BY DESIGN, per `0014` §A.12 — *"over-reserving delays a write, under-reserving is a
+ * platform outage"* — and `template-v1` charges 4 for the same reason.
+ *
+ * THE POPULATION IS BOUNDED BY HUMAN EFFORT. A business type is created by an operator typing, so
+ * the realistic ceiling is tens of rows in Dudo's life, not thousands. At operator volume this is
+ * under 100 row-writes a day against the 3,000/day control-plane sub-ceiling, and **nothing
+ * degrades for any tenant when it refuses, because no tenant depends on this surface.**
+ *
+ * WHEN A MIGRATION ADDS AN INDEX — a `status` index for a retire route is the obvious candidate —
+ * THIS NUMBER MUST MOVE WITH IT.
+ */
+export const TEMPLATE_ROW_WRITES = 4;
+
+/**
  * `principal_credential` (`0006`): 1 table row + 1 implicit primary-key index.
  *
  * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL:

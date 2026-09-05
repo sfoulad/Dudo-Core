@@ -147,7 +147,10 @@ export const PLATFORM_BASE_PATH = '/api/v1/platform';
 export type PlatformRouteId =
   | 'platform.organizations.list'
   | 'platform.session.whoami'
-  | 'platform.confirmations.request';
+  | 'platform.confirmations.request'
+  | 'platform.templates.create'
+  | 'platform.templates.list'
+  | 'platform.templates.read';
 
 export type PlatformRouteMethod = 'GET' | 'POST';
 
@@ -336,6 +339,47 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     objectFields: Object.freeze(['parameters']),
     queryParameters: Object.freeze([]),
   }),
+  // ===========================================================================================
+  // TEMPLATES. `template-v1`, `docs/decisions/0025` decision 2.
+  //
+  // THREE PERMISSIONS, NOT ONE, AND THE SEPARATION IS TESTED: a platform operator holding
+  // `core.template.list` but not `core.template.create` gets 200 on list and `forbidden` on
+  // create. `list` is separate from `read` because enumeration is its own disclosure.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.templates.create' as const,
+    method: 'POST' as const,
+    path: `${PLATFORM_BASE_PATH}/templates`,
+    permission: fixedPermission('core.template.create'),
+    // `name` is flat; `level_labels` is the declared object field. THERE IS NO `template_id`:
+    // the operator does not choose it. A client-chosen identifier would make Templates guessable
+    // and would put a naming decision in an operator's hands on a permanent, referenced key.
+    // AND THERE IS NO `status`: no route sets it in version 1 (TM-2).
+    fields: Object.freeze(['name']),
+    objectFields: Object.freeze(['level_labels']),
+    queryParameters: Object.freeze([]),
+  }),
+  Object.freeze({
+    id: 'platform.templates.list' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/templates`,
+    permission: fixedPermission('core.template.list'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze(['page_size', 'cursor']),
+  }),
+  Object.freeze({
+    id: 'platform.templates.read' as const,
+    method: 'GET' as const,
+    // THE FIRST ROUTE IN THIS CLASS WITH A PATH PARAMETER. See `matchPlatformRoute`: single
+    // segment, validated against the platform identifier grammar before any lookup.
+    path: `${PLATFORM_BASE_PATH}/templates/{template_id}`,
+    permission: fixedPermission('core.template.read'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    // NONE, so any query string at all is refused. The identifier is in the path.
+    queryParameters: Object.freeze([]),
+  }),
 ]);
 
 /**
@@ -345,15 +389,92 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
  * exists, which on a host where these routes should not appear at all is exactly the disclosure
  * the host binding exists to prevent.
  */
-export function matchPlatformRoute(method: string, path: string): PlatformRoute | undefined {
-  const normalized = normalizePath(path);
+export type PlatformRouteMatch = {
+  readonly route: PlatformRoute;
+  /** Declared `{name}` segments, extracted. Empty for a route with none. */
+  readonly pathParams: Readonly<Record<string, string>>;
+};
+
+/**
+ * ===========================================================================================
+ * SINGLE-SEGMENT PATH PARAMETERS. THE FOURTH EXTENSION TO THIS CLASS, AND DELIBERATELY THE
+ * SMALLEST ONE THAT SERVES `GET /templates/{template_id}`.
+ * ===========================================================================================
+ *
+ * THE CLASS HAD NONE, AND THE REASON IT HAD NONE DOES NOT TRANSFER. `pre-auth-registry.ts`
+ * refuses path parameters because *"a pre-auth route has no authenticated context in which to
+ * interpret a path segment, so a `{token}` would be an unauthenticated caller-supplied string
+ * reaching a lookup through the URL — the shape that ends up in access logs, in referrers and in
+ * browser history."* **A platform route is authenticated, authority-resolved, authorized and
+ * audited before any handler runs**, so every clause of that argument is absent here.
+ *
+ * WHAT IS PERMITTED IS EXACTLY ONE THING: a whole segment written `{name}`. **No wildcards, no
+ * optional segments, no regex, no multi-segment captures, and no parameter in the final position
+ * that could swallow a trailing path.** A matcher that can express more is a matcher whose
+ * behaviour on an unusual URL has to be reasoned about rather than read.
+ *
+ * *** THE EXTRACTED VALUE IS VALIDATED BEFORE ANY LOOKUP. *** It must match
+ * `^[A-Za-z0-9_-]{8,64}$` — the platform identifier grammar `readIdentifierField` already uses —
+ * and a value that could not possibly be an identifier is refused with `not_found` costing no
+ * database read. `not_found` RATHER THAN `invalid_argument`, because on a route whose whole
+ * purpose is to fetch one record by identifier, distinguishing "malformed" from "no such record"
+ * tells a caller which identifiers are well-formed. Here that is harmless — Templates are
+ * enumerable — but the matcher serves the whole class, and the next route with a path parameter
+ * may not be.
+ */
+export function matchPlatformRoute(method: string, path: string): PlatformRouteMatch | undefined {
+  const requested = normalizePath(path).split('/').filter((segment) => segment.length > 0);
   for (const route of ROUTES) {
-    if (route.method === method && route.path === normalized) {
-      return route;
+    if (route.method !== method) {
+      continue;
+    }
+    const pattern = route.path.split('/').filter((segment) => segment.length > 0);
+    if (pattern.length !== requested.length) {
+      continue;
+    }
+    const pathParams: Record<string, string> = Object.create(null);
+    let matched = true;
+    for (let index = 0; index < pattern.length; index += 1) {
+      const expected = pattern[index];
+      const actual = requested[index];
+      if (expected.startsWith('{') && expected.endsWith('}')) {
+        // DECODED ONCE, THEN VALIDATED. Decoding after the grammar check would let `%2E%2E` pass a
+        // check it should have failed; decoding twice would let a doubly-encoded value slip
+        // through one of them.
+        let decoded: string;
+        try {
+          decoded = decodeURIComponent(actual);
+        } catch {
+          matched = false;
+          break;
+        }
+        if (!IDENTIFIER_PATTERN.test(decoded)) {
+          matched = false;
+          break;
+        }
+        pathParams[expected.slice(1, -1)] = decoded;
+        continue;
+      }
+      if (expected !== actual) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) {
+      return { route, pathParams: Object.freeze(pathParams) };
     }
   }
   return undefined;
 }
+
+/**
+ * The platform identifier grammar — `^[A-Za-z0-9_-]{8,64}$`, the same one `kernel/ids.ts`
+ * generates at 22 characters and `session-routes.ts` validates a tenant hint against.
+ *
+ * IT ADMITS NO `/`, NO `.` AND NO `%`, which is what makes a path parameter incapable of carrying
+ * a traversal, a second segment, or an encoded delimiter into a lookup.
+ */
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 
 /** Collapses `//a//b/` to `/a/b`, so a reservation cannot be stepped around with a slash. */
 function normalizePath(path: string): string {
@@ -436,6 +557,13 @@ export type PlatformRouteContext = {
    */
   readonly objects: Readonly<Record<string, PlatformObjectField>>;
   /**
+   * Declared `{name}` path segments, already validated against the platform identifier grammar.
+   *
+   * A HANDLER RECEIVES ONLY DECLARED SEGMENTS. There is no way for an undeclared one to appear,
+   * because the matcher extracts by pattern rather than by parsing whatever the URL contained.
+   */
+  readonly pathParams: Readonly<Record<string, string>>;
+  /**
    * The session this request arrived on. Server-derived from a verified credential.
    *
    * IT IS HERE FOR THE CONFIRMATION BINDING AND FOR NOTHING ELSE — a confirmation is bound to the
@@ -505,6 +633,8 @@ export type PlatformRouteDependencies = {
 };
 
 export type PlatformRouteRequest = {
+  /** Declared `{name}` segments, validated by `matchPlatformRoute`. Empty for most routes. */
+  readonly pathParams: Readonly<Record<string, string>>;
   readonly bodyText: string;
   readonly headers: ReadonlyMap<string, string>;
   /** The raw query string, without the leading `?`. */
@@ -892,6 +1022,7 @@ export async function dispatchPlatformRoute(
       authority: authority.value,
       query: query.value,
       objects,
+      pathParams: request.pathParams,
       sessionId: sessionId.value,
       requestId: request.requestId,
       correlationId: request.correlationId,
