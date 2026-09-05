@@ -89,7 +89,7 @@ import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/field';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { cn } from '@/lib/cn';
-import { buildHash, ROUTES } from '@/lib/router';
+import { buildHash, organizationAuditPath, ROUTES } from '@/lib/router';
 import { identifierRefusal } from '@/api/kdf';
 import {
   TEMPLATE_LEVELS,
@@ -377,6 +377,25 @@ function DetailCard({ detail }: { detail: Detail }) {
       </p>
 
       <TemplateBlock template={detail.template} />
+
+      {/*
+        A LINK, NOT AN EMBEDDED FEED. Reading that trail costs the customer five
+        tenant row-writes per page, so it must not load because someone opened
+        this page — and the destination itself does not load on arrival either.
+        The cost is named here so the operator knows before they click.
+      */}
+      <div className="mt-5 border-t border-line pt-4">
+        <a
+          href={buildHash(organizationAuditPath(detail.organization_id))}
+          className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
+        >
+          What has the platform done to this business? &rarr;
+        </a>
+        <p className="mt-1 text-[0.8125rem] leading-relaxed text-ink-muted">
+          Their own audit trail, including which person each action named. Reading it writes to it,
+          against this business&rsquo;s daily allowance — so it opens without loading anything.
+        </p>
+      </div>
     </div>
   );
 }

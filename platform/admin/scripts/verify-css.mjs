@@ -294,9 +294,33 @@ function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
+/**
+ * Removes the right-hand side of an equality comparison.
+ *
+ * WITHOUT THIS THE CHECK REPORTS VALUES AS MISSING CLASSES. A conditional class
+ * inside `cn(...)` reads `role === 'platform-admin' && 'bg-scarlet-50 …'`, and
+ * the extractor cannot tell the OPERAND from the CLASS — both are string
+ * literals in the same region. `'platform-admin'` then looks exactly like a
+ * utility that failed to compile.
+ *
+ * IT WAS FOUND BY THE CHECK FIRING ON TWO ROLE NAMES, and the tempting fix was a
+ * skip list. A skip list would have grown with every enum value this console
+ * ever renders and would eventually have hidden a real miss. Removing comparison
+ * operands is the general form: an operand is never a class, and a class is
+ * never an operand.
+ *
+ * Values compared with `includes`, `startsWith` or a `switch` are not covered,
+ * and would still show up as false positives — recorded rather than solved,
+ * because none is used in a `cn()` region today and a checker that guesses at
+ * more syntax is a checker nobody trusts.
+ */
+function stripComparisonOperands(source) {
+  return source.replace(/(===|!==|==|!=)\s*(['"`])(?:\\.|(?!\2)[^\\])*\2/g, '$1 __OPERAND__');
+}
+
 /** Collects string literals that sit inside a className / cn() / cva() region. */
 function classCandidates(input) {
-  const source = stripComments(input);
+  const source = stripComparisonOperands(stripComments(input));
   const found = new Set();
   const regions = [];
   const marker = /\bclassName\s*=\s*|(?<![\w$])cn\s*\(|(?<![\w$])cva\s*\(/g;

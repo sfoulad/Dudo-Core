@@ -80,6 +80,32 @@ export function organizationDetailPath(organizationId: string): string {
   return `${ROUTES.organizations}/${encodeURIComponent(organizationId)}`;
 }
 
+/** `#/organizations/<id>/audit` — that Organization's own trail. */
+export function organizationAuditPath(organizationId: string): string {
+  return `${organizationDetailPath(organizationId)}/audit`;
+}
+
+/**
+ * Returns the Organization id when `path` is that Organization's audit feed.
+ *
+ * EXACTLY THREE SEGMENTS, ending in `audit`. Matched BEFORE the two-segment
+ * detail route by the caller, since a loose match would send `/organizations/x/audit`
+ * to the detail screen and request an Organization named `x/audit`.
+ */
+export function matchOrganizationAudit(path: string): string | null {
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length !== 3) return null;
+  if (`/${segments[0] ?? ''}` !== ROUTES.organizations) return null;
+  if (segments[2] !== 'audit') return null;
+  const raw = segments[1];
+  if (raw === undefined || raw === '') return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Returns the Organization id when `path` is a detail page, otherwise null.
  *

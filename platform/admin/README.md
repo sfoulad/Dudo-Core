@@ -2,10 +2,13 @@
 
 The operator console for **`https://admin.dudo.work`** (ADR 0010, ADR 0022).
 
-**Organizations (including onboarding) and Templates are live. Operators and Audit are not.**
-Sign-in, the session probe, the Organization list, onboarding a business and the full Template
-surface call real, accepted, audited platform routes. The other two sections say what they are
-waiting for rather than showing a placeholder table.
+**Every section is live.** Sign-in, the session probe, the Organization list and detail, onboarding
+a business, the member resolve, the full Template surface, both audit feeds and the operator roster
+all call real, accepted, audited platform routes.
+
+**One thing is deliberately not built: revoking an operator.** It is the first confirmation-gated
+route in Dudo and needs a flow of its own — the roster renders a list and stops, with no control
+hinting otherwise.
 
 > ### Templates are complete and inert, and the screen says so
 >
@@ -41,7 +44,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 178 checks against the shapes Core actually returns
+npm run verify:platform  # 255 checks against the shapes Core actually returns
 npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -81,6 +84,70 @@ absent and a menu missing only its first row both look unremarkable.
 | `POST /api/v1/platform/organizations` | **Onboard a business.** Creates the Organization, its first admin, that admin's credential and one `owner` membership. |
 | `GET /api/v1/platform/organizations/{id}` | **Organization detail.** Everything the page needs in one request — the Template is embedded. |
 | `POST /api/v1/platform/organizations/{id}/members/resolve` | **Resolve one member** by an identifier the operator already holds. |
+| `GET /api/v1/platform/audit` | **The platform feed.** Every operator action, **without** the principal-level target. |
+| `GET /api/v1/platform/organizations/{id}/audit` | **The Organization feed.** One customer's trail, **with** the principal target. |
+| `GET /api/v1/platform/operators` | Who holds platform authority. **List only — no revoke.** |
+
+### The two feeds differ by one field, and that is the security property
+
+The platform feed has **no `target_principal_id`**; the Organization feed has one. Every resolve
+record is *"principal P was resolved in Organization O"* — a membership fact — so a bulk read
+would collect every one of them in a single request the affected tenants cannot see, aggregating
+into the CO1 mapping `organization-detail-v1` refuses.
+
+**They are two types, not one with optional fields.** `PlatformFeedRecord` has no such property to
+read, so no screen can render it. Asserted from the client side: **a record that arrives carrying
+`target_principal_id` is not carried through the platform parser**, and the value appears nowhere
+in the serialised page. Negative-controlled — adding the field to the parser makes two checks fail.
+
+**One shared presentation component**, `AuditRecordList`, renders the seven common fields. It is
+parameterised by **layout, never by scope**: it receives `AuditRecordCommon` (which has *neither*
+target field) plus a `renderTarget` callback, so it cannot reach a field its caller did not hand
+it. Asserted: it names neither target field anywhere.
+
+**The filter sets differ too.** Platform: `page_size, cursor, actor_principal_id, action_id, since,
+until`. Organization: the same **minus `actor_principal_id`**. And **neither has a
+`target_principal_id` filter** — filtering by a principal and counting results would disclose that
+principal's Organizations one bit at a time. The types have no member for it, so this client cannot
+send one even by mistake.
+
+### Reading an Organization's trail writes to it
+
+Five tenant row-writes per page, against that customer's own daily allowance, plus two
+control-plane. So the Organization feed is **the only screen in this console that does not load on
+mount** — arriving at the address, or landing there from a mistyped link, costs the customer
+nothing. The operator presses *Read the trail*, having been told the cost first. No polling, no
+focus refetch, no page-2 prefetch, no automatic retry, anywhere.
+
+That trail contains reads of itself, so an operator finds their own earlier visits in it. That is
+stated on screen so nobody reports it as a defect.
+
+### Two refusals that mean opposite things
+
+| | Means | Rendered |
+|---|---|---|
+| `rate_limited` | **The platform** has spent its share of this customer's day — about **operator activity** | Gold. Offers a retry. |
+| `quota_exceeded` | **The customer** is at their own allocation — about **the customer** | Azure. **No retry offered** — it will not clear before 00:00 UTC, and retrying spends what they have left on a refusal. |
+
+Merging them produces a retry, which is the behaviour the ceilings exist to stop. `CeilingNotice`
+takes a `scope` that selects **whose ledger the message describes**, never what is disclosed.
+
+### Time filters are built, not passed through
+
+A date input yields `YYYY-MM-DD`: no time, no zone, and a zoneless timestamp is refused
+deliberately because engines disagree on whether to read it as local or UTC. **The contract names
+`since` and `until` and specifies no format for them anywhere** — the assumption taken is the form
+the schema gives `occurred_at`: RFC 3339 UTC. The typed date is treated as a **UTC calendar day**
+(`T00:00:00Z` / `T23:59:59Z`) and the fields are labelled UTC, so a record at 23:30Z falls on the
+same day for every operator. Following the operator's *local* day is defensible and would need to
+be a decision rather than an inference.
+
+### No revoke UI
+
+`platform.operators.revoke` is the first confirmation-gated route in Dudo — server-authored
+statement rendered verbatim, echoed token, re-authentication. That is its own design problem.
+**There is no revoke button, no menu, and no disabled control hinting at one**, because a greyed-out
+button is a promise. Asserted: no screen calls it and the client exposes no method for it.
 
 ### The collapsed refusal, and how this console avoids rebuilding the oracle
 
@@ -351,6 +418,8 @@ src/
   components/
     AdminShell.tsx                       header, sidebar, main; drawer below lg
     StateBlock.tsx                       loading / error / empty, drawn once
+    AuditRecordList.tsx                  the seven shared fields; layout only, never scope
+    CeilingNotice.tsx                    rate_limited vs quota_exceeded, never merged
     NotBuiltYet.tsx                      the honest "not built" state
     ui/button.tsx ui/field.tsx           shadcn copy-in source
   lib/
@@ -363,7 +432,9 @@ src/
     OrganizationDetail.tsx               LIVE — one Organization; the collapsed-refusal lookup
     OnboardOrganization.tsx              LIVE — the form and the shown-once credential panel
     Templates.tsx                        LIVE — list and create; carries the TM-4 notice
-    Operators.tsx Audit.tsx              not built; each says what it waits for
+    OrganizationAudit.tsx                LIVE — one customer's trail; does not load on mount
+    PlatformAudit.tsx                    LIVE — the oversight feed; no principal target
+    Operators.tsx                        LIVE — the roster; list only, no revoke
 scripts/verify-kdf.mjs                   normative checks + the cross-client drift check
 scripts/verify-platform.mjs              the platform client against Core's real shapes
 scripts/node-resolve-*.mjs               dev-only ESM hooks so the scripts import real modules

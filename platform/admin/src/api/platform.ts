@@ -366,6 +366,234 @@ export function parseListOrganizations(payload: unknown): ListOrganizationsOutpu
 }
 
 /* -------------------------------------------------------------------------
+   The audit feeds — `platform-audit-read-v1`, accepted
+   -------------------------------------------------------------------------
+   THE TWO RECORD SHAPES DIFFER BY EXACTLY ONE FIELD AND THAT DIFFERENCE IS THE
+   SECURITY PROPERTY OF THE CONTRACT.
+
+   `PlatformFeedRecord` carries `target_organization_id` and HAS NO
+   `target_principal_id`. `OrganizationFeedRecord` carries
+   `target_principal_id` and has no `target_organization_id` — the path
+   parameter already fixed the Organization, and repeating it "would invite a
+   client to trust the body over the path".
+
+   THEY ARE TWO TYPES RATHER THAN ONE WITH OPTIONAL FIELDS, DELIBERATELY. A
+   single record type with both fields optional would make "render the principal
+   target on the platform feed" a reachable state that only a convention
+   forbids. Here it does not compile: `PlatformFeedRecord` has no such property
+   to read, so the omission is held by the type rather than by an `if` a later
+   author could invert.
+
+   WHY THE FIELD IS OMITTED AT ALL: every resolve record is "principal P was
+   resolved in Organization O", which is a membership fact. A bulk read collects
+   every one of them in a single request the affected tenants cannot see, and
+   they aggregate into exactly the CO1 mapping `organization-detail-v1` refuses.
+   The Organization-level target is fine — an operator can enumerate
+   Organizations from their own home screen.
+   ------------------------------------------------------------------------- */
+
+export const AUDIT_PATH = `${PLATFORM_BASE_PATH}/audit`;
+
+export type PlatformRoleName = 'platform-admin' | 'marketplace-moderator';
+export type AuditOutcome = 'succeeded' | 'failed';
+
+/** The seven fields both feeds share. Neither target field is in here. */
+export interface AuditRecordCommon {
+  readonly record_id: string;
+  readonly occurred_at: string;
+  /**
+   * WHICH OPERATOR ACTED. Not a leak: "operators are a known set to anyone who
+   * can read this feed at all, and identifying the actor is the entire point of
+   * an operator log."
+   */
+  readonly actor_principal_id: string;
+  /** The role AT THE TIME OF THE ACTION — a later change must not rewrite history. */
+  readonly actor_platform_role: string;
+  readonly action_id: string;
+  readonly outcome: string;
+  /** The only identifier crossing the two audit homes. */
+  readonly correlation_id: string;
+}
+
+export interface PlatformFeedRecord extends AuditRecordCommon {
+  /** Null for an action naming no Organization — a Template create, a whoami. */
+  readonly target_organization_id: string | null;
+  /**
+   * THERE IS NO `target_principal_id` HERE AND THERE MUST NEVER BE ONE.
+   * Stated as a comment because a type cannot carry a prohibition — but the
+   * absence itself is the enforcement: nothing can render what nothing holds.
+   */
+}
+
+export interface OrganizationFeedRecord extends AuditRecordCommon {
+  /** THE FIELD THE PLATFORM FEED OMITS. Null for an action naming no principal. */
+  readonly target_principal_id: string | null;
+}
+
+export interface PlatformFeedOutput {
+  readonly data: readonly PlatformFeedRecord[];
+  readonly next_cursor: string | null;
+}
+
+export interface OrganizationFeedOutput {
+  readonly data: readonly OrganizationFeedRecord[];
+  readonly next_cursor: string | null;
+}
+
+/**
+ * The filters each feed accepts. **THE TWO SETS DIFFER.**
+ *
+ * The platform feed takes `actor_principal_id`; the Organization feed does not.
+ * And NEITHER takes `target_principal_id`: filtering by a principal and counting
+ * results discloses that principal's Organizations one bit at a time, which is
+ * the omitted field reconstructed through a query parameter. The contract is
+ * explicit that supplying one is REFUSED rather than ignored — "an ignored
+ * parameter is a parameter someone will later honour" — so this client has no
+ * way to express it and never sends one.
+ */
+export interface PlatformFeedFilters {
+  readonly actor_principal_id?: string;
+  readonly action_id?: string;
+  /** Strict RFC 3339 UTC with `Z`. See `toUtcDayStart`/`toUtcDayEnd`. */
+  readonly since?: string;
+  readonly until?: string;
+}
+
+export interface OrganizationFeedFilters {
+  readonly action_id?: string;
+  readonly since?: string;
+  readonly until?: string;
+}
+
+export function isKnownAuditOutcome(value: string): value is AuditOutcome {
+  return value === 'succeeded' || value === 'failed';
+}
+
+export function isKnownPlatformRole(value: string): value is PlatformRoleName {
+  return value === 'platform-admin' || value === 'marketplace-moderator';
+}
+
+function parseAuditCommon(
+  entry: Record<string, unknown>,
+  what: string,
+): AuditRecordCommon {
+  return {
+    record_id: requireString(entry, 'record_id', what),
+    occurred_at: requireString(entry, 'occurred_at', what),
+    actor_principal_id: requireString(entry, 'actor_principal_id', what),
+    actor_platform_role: requireString(entry, 'actor_platform_role', what),
+    action_id: requireString(entry, 'action_id', what),
+    outcome: requireString(entry, 'outcome', what),
+    correlation_id: requireString(entry, 'correlation_id', what),
+  };
+}
+
+/**
+ * The platform feed.
+ *
+ * IT DOES NOT READ `target_principal_id`, AND THAT IS NOT AN OVERSIGHT. If Core
+ * ever emitted one, this parser would drop it on the floor rather than carry it
+ * into a type that has nowhere to put it — the field never enters the client's
+ * memory, let alone its render tree. That is the client half of "assert the
+ * field is absent from the shape AND that no code path populates it".
+ */
+export function parsePlatformFeed(payload: unknown): PlatformFeedOutput {
+  const what = 'The platform audit feed response';
+  const body = requireObject(payload, what);
+  const rows = body.data;
+  if (!Array.isArray(rows)) {
+    throw new ShapeError(`${what} field "data" was not an array.`);
+  }
+  return {
+    data: Object.freeze(
+      rows.map((row, index) => {
+        const label = `Platform audit record ${String(index)}`;
+        const entry = requireObject(row, label);
+        return {
+          ...parseAuditCommon(entry, label),
+          target_organization_id: requireNullableString(entry, 'target_organization_id', label),
+        };
+      }),
+    ),
+    next_cursor: requireNullableString(body, 'next_cursor', what),
+  };
+}
+
+export function parseOrganizationFeed(payload: unknown): OrganizationFeedOutput {
+  const what = 'The Organization audit feed response';
+  const body = requireObject(payload, what);
+  const rows = body.data;
+  if (!Array.isArray(rows)) {
+    throw new ShapeError(`${what} field "data" was not an array.`);
+  }
+  return {
+    data: Object.freeze(
+      rows.map((row, index) => {
+        const label = `Organization audit record ${String(index)}`;
+        const entry = requireObject(row, label);
+        return {
+          ...parseAuditCommon(entry, label),
+          target_principal_id: requireNullableString(entry, 'target_principal_id', label),
+        };
+      }),
+    ),
+    next_cursor: requireNullableString(body, 'next_cursor', what),
+  };
+}
+
+/* -------------------------------------------------------------------------
+   Platform operators — `platform-operators-v1`, accepted. LIST ONLY.
+   ------------------------------------------------------------------------- */
+
+export const OPERATORS_PATH = `${PLATFORM_BASE_PATH}/operators`;
+
+export interface OperatorSummary {
+  readonly principal_id: string;
+  readonly platform_role: string;
+  /** When platform authority was GRANTED — not when the principal was created. */
+  readonly created_at: string;
+}
+
+export interface ListOperatorsOutput {
+  readonly data: readonly OperatorSummary[];
+  readonly next_cursor: string | null;
+}
+
+/**
+ * NOTE WHAT IS ABSENT AND MUST STAY ABSENT: no identifier, no email, no display
+ * name, no last-seen. `0001_principal.sql` refused an email column outright,
+ * because "a directory of every user's personal details, readable without any
+ * tenant scope, would be the highest-value target in the system" — and an
+ * operator roster showing email addresses would be that directory at the most
+ * privileged end of the platform.
+ *
+ * The cost is real and named: an operator cannot tell colleagues apart on
+ * screen. That is OP-3, closed by display names, never by adding a column here.
+ */
+export function parseListOperators(payload: unknown): ListOperatorsOutput {
+  const what = 'The operators list response';
+  const body = requireObject(payload, what);
+  const rows = body.data;
+  if (!Array.isArray(rows)) {
+    throw new ShapeError(`${what} field "data" was not an array.`);
+  }
+  return {
+    data: Object.freeze(
+      rows.map((row, index) => {
+        const label = `Operator row ${String(index)}`;
+        const entry = requireObject(row, label);
+        return {
+          principal_id: requireString(entry, 'principal_id', label),
+          platform_role: requireString(entry, 'platform_role', label),
+          created_at: requireString(entry, 'created_at', label),
+        };
+      }),
+    ),
+    next_cursor: requireNullableString(body, 'next_cursor', what),
+  };
+}
+
+/* -------------------------------------------------------------------------
    Organization detail — `organization-detail-v1`, accepted
    ------------------------------------------------------------------------- */
 
@@ -787,6 +1015,47 @@ function asApiError(thrown: unknown): ApiError {
   return toApiError(thrown);
 }
 
+/* -------------------------------------------------------------------------
+   Time range — strict RFC 3339 UTC, built here rather than taken from an input
+   -------------------------------------------------------------------------
+   A `<input type="date">` yields `YYYY-MM-DD`: no time, no zone. Sending that
+   verbatim would be a ZONELESS timestamp, which is refused deliberately —
+   some engines read one as local and some as UTC, so a filter that silently
+   meant different ranges on different machines is worse than one that fails.
+
+   ASSUMPTION, STATED BECAUSE THE CONTRACT DOES NOT SPECIFY IT: `since` and
+   `until` are named as query parameters and NO FORMAT IS GIVEN for them
+   anywhere — not in the prose, not in the schema, which covers response shapes
+   only. These take the same form the schema gives `occurred_at`: RFC 3339, UTC.
+
+   AND THE TYPED DATE IS TREATED AS A UTC CALENDAR DAY. "Since 5 September" is
+   ambiguous between local and UTC midnight; resolving it to UTC means a record
+   at 23:30Z falls in the fifth for every operator wherever they are, and the
+   screens label the fields UTC so nobody is silently offset. The alternative —
+   the operator's local day — is defensible and would need to be a decision
+   rather than an inference.
+   ------------------------------------------------------------------------- */
+
+/** `YYYY-MM-DD` from a date input, or `''`. */
+function isCalendarDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+export function toUtcDayStart(calendarDate: string): string | null {
+  return isCalendarDate(calendarDate) ? `${calendarDate}T00:00:00Z` : null;
+}
+
+/**
+ * Inclusive end of the UTC day.
+ *
+ * `23:59:59Z` rather than the next day's midnight: a half-open range would need
+ * the operator to understand that "until the 5th" means "up to the 6th", and
+ * second precision is what the log records anyway.
+ */
+export function toUtcDayEnd(calendarDate: string): string | null {
+  return isCalendarDate(calendarDate) ? `${calendarDate}T23:59:59Z` : null;
+}
+
 /** Builds `?page_size=&cursor=`, omitting a null or empty cursor. */
 function pageQuery(pageSize: number | undefined, cursor: string | null | undefined): string {
   const params = new URLSearchParams();
@@ -818,6 +1087,25 @@ export interface PlatformClient {
   onboardOrganization(input: OnboardOrganizationInput): Promise<OnboardOrganizationOutput>;
   readOrganization(organizationId: string): Promise<OrganizationDetail>;
   resolveMember(organizationId: string, identifier: string): Promise<ResolveMemberOutput>;
+  /** The oversight view. No principal-level target, and no filter for one. */
+  listPlatformAudit(options?: {
+    pageSize?: number;
+    cursor?: string | null;
+    filters?: PlatformFeedFilters;
+  }): Promise<PlatformFeedOutput>;
+  /** The accountability view for one named Organization. WRITES TENANT-SIDE. */
+  listOrganizationAudit(
+    organizationId: string,
+    options?: {
+      pageSize?: number;
+      cursor?: string | null;
+      filters?: OrganizationFeedFilters;
+    },
+  ): Promise<OrganizationFeedOutput>;
+  listOperators(options?: {
+    pageSize?: number;
+    cursor?: string | null;
+  }): Promise<ListOperatorsOutput>;
 }
 
 export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {}): PlatformClient {
@@ -895,6 +1183,87 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
         return parseTemplate(
           await platformRequest(TEMPLATES_PATH, { method: 'POST', body }, options.fetchImpl),
           'The created Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async listPlatformAudit({ pageSize, cursor, filters } = {}) {
+      /*
+       * THE FILTER SET IS CLOSED AND `target_principal_id` IS NOT IN IT. There
+       * is no parameter on `PlatformFeedFilters` through which one could be
+       * expressed, so this client cannot send one even by mistake — the
+       * contract requires Core to REFUSE one rather than ignore it, and a
+       * client that sent one would be asking to be refused.
+       */
+      const params = new URLSearchParams(pageQuery(pageSize, cursor).replace(/^\?/, ''));
+      if (filters?.actor_principal_id) params.set('actor_principal_id', filters.actor_principal_id);
+      if (filters?.action_id) params.set('action_id', filters.action_id);
+      if (filters?.since) params.set('since', filters.since);
+      if (filters?.until) params.set('until', filters.until);
+      const query = params.toString();
+      try {
+        return parsePlatformFeed(
+          await platformRequest(
+            query === '' ? AUDIT_PATH : `${AUDIT_PATH}?${query}`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async listOrganizationAudit(organizationId, { pageSize, cursor, filters } = {}) {
+      /*
+       * ===================================================================
+       * READING THIS TRAIL WRITES TO IT — FIVE TENANT ROW-WRITES PER PAGE,
+       * AGAINST THAT CUSTOMER'S OWN DAILY ALLOCATION.
+       * ===================================================================
+       *
+       * So there is no polling, no refetch on focus or reconnect, no prefetch
+       * of the next page, and no automatic retry anywhere on this path. A page
+       * is fetched because a person pressed something.
+       *
+       * This is not a performance preference. A platform sub-ceiling bounds
+       * these writes per Organization per day, and a component that refetched
+       * on window focus would spend a customer's support budget while an
+       * operator sat reading.
+       *
+       * NOTE THERE IS NO `actor_principal_id` FILTER HERE. The two feeds accept
+       * different sets and `OrganizationFeedFilters` omits it, so this cannot
+       * send one.
+       */
+      const params = new URLSearchParams(pageQuery(pageSize, cursor).replace(/^\?/, ''));
+      if (filters?.action_id) params.set('action_id', filters.action_id);
+      if (filters?.since) params.set('since', filters.since);
+      if (filters?.until) params.set('until', filters.until);
+      const query = params.toString();
+      const base = `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}/audit`;
+      try {
+        return parseOrganizationFeed(
+          await platformRequest(
+            query === '' ? base : `${base}?${query}`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async listOperators({ pageSize, cursor } = {}) {
+      // `page_size` and `cursor` only. No filters are declared and none is sent.
+      try {
+        return parseListOperators(
+          await platformRequest(
+            `${OPERATORS_PATH}${pageQuery(pageSize, cursor)}`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
         );
       } catch (thrown) {
         throw asApiError(thrown);

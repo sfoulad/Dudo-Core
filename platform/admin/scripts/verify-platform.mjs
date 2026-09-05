@@ -34,7 +34,14 @@ import {
   parseListTemplates,
   parseOnboardOrganization,
   parseOrganizationDetail,
+  parseOrganizationFeed,
+  parsePlatformFeed,
+  parseListOperators,
   parseResolveMember,
+  isKnownAuditOutcome,
+  isKnownPlatformRole,
+  toUtcDayEnd,
+  toUtcDayStart,
   parseTemplate,
   parseWhoami,
   isKnownMembershipRole,
@@ -1222,6 +1229,291 @@ check(
 checkTrue(
   'the local refusal is rendered through the field error slot',
   /error=\{localError\}/.test(screenCode),
+);
+
+/* =========================================================================
+   9. THE AUDIT FEEDS — platform-audit-read-v1
+   ========================================================================= */
+
+console.log('\n=== The two feeds differ by exactly one field ===\n');
+
+const COMMON = {
+  record_id: 'rc_synthetic_0000000001',
+  occurred_at: '2026-09-05T10:00:00Z',
+  actor_principal_id: 'pr_synthetic_0000000001',
+  actor_platform_role: 'platform-admin',
+  action_id: 'platform.credentials.reset',
+  outcome: 'succeeded',
+  correlation_id: 'co_synthetic_0000000001',
+};
+
+const PLATFORM_RECORD = { ...COMMON, target_organization_id: 'og_synthetic_0000000001' };
+const ORG_RECORD = { ...COMMON, target_principal_id: 'pr_synthetic_0000000002' };
+
+const platformPage = parsePlatformFeed({ data: [PLATFORM_RECORD], next_cursor: null });
+check('platform feed: data is top-level', platformPage.data.length, 1);
+check('platform feed: the Organization target', platformPage.data[0].target_organization_id, 'og_synthetic_0000000001');
+check('platform feed: a null Organization target parses', parsePlatformFeed({ data: [{ ...COMMON, target_organization_id: null }], next_cursor: null }).data[0].target_organization_id, null);
+
+/*
+ * THE ASSERTION THE WHOLE CONTRACT TURNS ON, FROM THE CLIENT SIDE. Even when
+ * Core hands the platform parser a record that CARRIES `target_principal_id`,
+ * the parsed value must not contain one — the field never enters the client's
+ * memory, let alone its render tree.
+ */
+const smuggled = parsePlatformFeed({
+  data: [{ ...PLATFORM_RECORD, target_principal_id: 'pr_should_never_appear' }],
+  next_cursor: null,
+});
+check(
+  'platform feed: a smuggled target_principal_id is NOT carried through',
+  'target_principal_id' in smuggled.data[0],
+  false,
+);
+check(
+  'and it is nowhere in the serialised parsed page',
+  JSON.stringify(smuggled).includes('pr_should_never_appear'),
+  false,
+);
+
+const orgPage = parseOrganizationFeed({ data: [ORG_RECORD], next_cursor: null });
+check('Organization feed: the principal target IS carried', orgPage.data[0].target_principal_id, 'pr_synthetic_0000000002');
+check('Organization feed: a null principal target parses', parseOrganizationFeed({ data: [{ ...COMMON, target_principal_id: null }], next_cursor: null }).data[0].target_principal_id, null);
+check(
+  'Organization feed: no target_organization_id is carried (the path fixed it)',
+  'target_organization_id' in orgPage.data[0],
+  false,
+);
+
+for (const field of ['record_id', 'occurred_at', 'actor_principal_id', 'actor_platform_role', 'action_id', 'outcome', 'correlation_id']) {
+  const body = { ...PLATFORM_RECORD };
+  delete body[field];
+  try {
+    parsePlatformFeed({ data: [body], next_cursor: null });
+    failures += 1;
+    console.log(`FAIL  a record missing "${field}" is refused\n        expected a throw, got none`);
+  } catch {
+    console.log(`PASS  a record missing "${field}" is refused`);
+  }
+}
+
+try {
+  parsePlatformFeed({ data: [{ ...COMMON }], next_cursor: null });
+  failures += 1;
+  console.log('FAIL  a platform record missing target_organization_id is refused\n        expected a throw');
+} catch {
+  console.log('PASS  a platform record missing target_organization_id is refused (required, nullable)');
+}
+try {
+  parseOrganizationFeed({ data: [{ ...COMMON }], next_cursor: null });
+  failures += 1;
+  console.log('FAIL  an Organization record missing target_principal_id is refused\n        expected a throw');
+} catch {
+  console.log('PASS  an Organization record missing target_principal_id is refused (required, nullable)');
+}
+
+console.log('\n=== The feeds: requests, filters and paging ===\n');
+
+{
+  const { impl, calls } = stubFetch(jsonResponse({ data: [], next_cursor: null }));
+  await createPlatformClient({ fetchImpl: impl }).listPlatformAudit();
+  check('platform feed path', calls[0].url, '/api/v1/platform/audit');
+  check('it is a GET', calls[0].init.method, 'GET');
+  check('no body', calls[0].init.body, undefined);
+}
+
+{
+  const { impl, calls } = stubFetch(jsonResponse({ data: [], next_cursor: null }));
+  await createPlatformClient({ fetchImpl: impl }).listPlatformAudit({
+    pageSize: 25,
+    filters: {
+      actor_principal_id: 'pr_a',
+      action_id: 'platform.audit.list',
+      since: '2026-09-01T00:00:00Z',
+      until: '2026-09-05T23:59:59Z',
+    },
+  });
+  const url = calls[0].url;
+  checkTrue('actor_principal_id IS sent on the platform feed', url.includes('actor_principal_id=pr_a'));
+  checkTrue('action_id is sent', url.includes('action_id=platform.audit.list'));
+  checkTrue('since is Z-suffixed and URL-encoded', url.includes('since=2026-09-01T00%3A00%3A00Z'));
+  checkTrue('until is Z-suffixed', url.includes('until=2026-09-05T23%3A59%3A59Z'));
+  check('no target_principal_id parameter is ever sent', url.includes('target_principal_id'), false);
+}
+
+{
+  const { impl, calls } = stubFetch(jsonResponse({ data: [], next_cursor: null }));
+  await createPlatformClient({ fetchImpl: impl }).listOrganizationAudit('og_abc', {
+    pageSize: 25,
+    filters: { action_id: 'x' },
+  });
+  checkTrue(
+    'Organization feed path includes the id and /audit',
+    calls[0].url.startsWith('/api/v1/platform/organizations/og_abc/audit?'),
+  );
+  check('and no target_principal_id parameter', calls[0].url.includes('target_principal_id'), false);
+  check('and no actor_principal_id parameter (not accepted here)', calls[0].url.includes('actor_principal_id'), false);
+}
+
+{
+  const { impl, calls } = stubFetch(jsonResponse({ data: [], next_cursor: null }));
+  await createPlatformClient({ fetchImpl: impl }).listOrganizationAudit('a/b', {});
+  check(
+    'a hostile organization id is percent-encoded',
+    calls[0].url,
+    '/api/v1/platform/organizations/a%2Fb/audit',
+  );
+}
+
+{
+  const { impl, calls } = stubFetch(jsonResponse({ data: [], next_cursor: null }));
+  await createPlatformClient({ fetchImpl: impl }).listPlatformAudit({ pageSize: 25, cursor: null });
+  check('a null cursor is omitted', calls[0].url, '/api/v1/platform/audit?page_size=25');
+}
+
+console.log('\n=== The UTC day helpers ===\n');
+
+check('a calendar date becomes a Z-suffixed UTC day start', toUtcDayStart('2026-09-05'), '2026-09-05T00:00:00Z');
+check('and an inclusive UTC day end', toUtcDayEnd('2026-09-05'), '2026-09-05T23:59:59Z');
+check('an empty date yields null, so nothing is sent', toUtcDayStart(''), null);
+check('a zoneless datetime is NOT accepted as a calendar date', toUtcDayStart('2026-09-05T10:00'), null);
+check('a malformed date yields null', toUtcDayEnd('05/09/2026'), null);
+checkTrue(
+  'every produced timestamp ends in Z',
+  [toUtcDayStart('2026-01-01'), toUtcDayEnd('2026-12-31')].every((v) => v !== null && v.endsWith('Z')),
+);
+
+console.log('\n=== Operators: three fields and nothing else ===\n');
+
+const OPERATOR = {
+  principal_id: 'pr_synthetic_0000000001',
+  platform_role: 'platform-admin',
+  created_at: '2026-09-05T09:00:00Z',
+};
+
+const operators = parseListOperators({ data: [OPERATOR], next_cursor: null });
+check('principal_id', operators.data[0].principal_id, 'pr_synthetic_0000000001');
+check('platform_role', operators.data[0].platform_role, 'platform-admin');
+check('created_at', operators.data[0].created_at, '2026-09-05T09:00:00Z');
+check('an empty roster parses as a page, not an error', parseListOperators({ data: [], next_cursor: null }).data.length, 0);
+
+/*
+ * NO IDENTIFIER, NO EMAIL, NO DISPLAY NAME. `0001_principal.sql` refused an
+ * email column because a directory of personal details readable without tenant
+ * scope "would be the highest-value target in the system", and an operator
+ * roster showing addresses would be that directory at the most privileged end.
+ * If Core ever sent one, this parser must not carry it.
+ */
+const rosterSmuggled = parseListOperators({
+  data: [{ ...OPERATOR, identifier: 'someone@example.com', display_name: 'Sam' }],
+  next_cursor: null,
+});
+check(
+  'a smuggled identifier is NOT carried through',
+  JSON.stringify(rosterSmuggled).includes('someone@example.com'),
+  false,
+);
+check('nor a display name', JSON.stringify(rosterSmuggled).includes('Sam'), false);
+
+{
+  const { impl, calls } = stubFetch(jsonResponse({ data: [], next_cursor: null }));
+  await createPlatformClient({ fetchImpl: impl }).listOperators({ pageSize: 25 });
+  check('operators path', calls[0].url, '/api/v1/platform/operators?page_size=25');
+  check('it is a GET', calls[0].init.method, 'GET');
+}
+
+checkTrue('platform-admin is a known role', isKnownPlatformRole('platform-admin'));
+checkTrue('marketplace-moderator is a known role', isKnownPlatformRole('marketplace-moderator'));
+check('an invented role is not claimed as known', isKnownPlatformRole('root'), false);
+checkTrue('succeeded is a known outcome', isKnownAuditOutcome('succeeded'));
+checkTrue('failed is a known outcome', isKnownAuditOutcome('failed'));
+check('an invented outcome is not claimed as known', isKnownAuditOutcome('partial'), false);
+
+/* =========================================================================
+   10. STRUCTURAL — the screens cannot undo the contract's properties
+   ========================================================================= */
+
+console.log('\n=== The screens: structural guarantees ===\n');
+
+const readScreen = (name) =>
+  readFileSync(join(import.meta.dirname, '..', 'src', 'screens', name), 'utf8');
+const strip = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+const platformScreen = strip(readScreen('PlatformAudit.tsx'));
+const orgAuditScreen = strip(readScreen('OrganizationAudit.tsx'));
+const operatorsScreen = strip(readScreen('Operators.tsx'));
+const auditList = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'AuditRecordList.tsx'), 'utf8'),
+);
+
+check(
+  'the platform screen never mentions target_principal_id',
+  /target_principal_id/.test(platformScreen),
+  false,
+);
+/*
+ * THE SHARED LIST COMPONENT MUST NOT KNOW EITHER TARGET FIELD. It receives
+ * `AuditRecordCommon` plus a caller-supplied callback, so it cannot reach a
+ * field its caller did not hand it — that is what keeps one component from
+ * becoming the `if` the two routes exist to avoid.
+ */
+check('the shared list never names target_principal_id', /target_principal_id/.test(auditList), false);
+check('the shared list never names target_organization_id', /target_organization_id/.test(auditList), false);
+checkTrue('the shared list takes a renderTarget callback', /renderTarget/.test(auditList));
+
+/* No polling anywhere on the audited screens. */
+for (const [label, source] of [
+  ['platform audit', platformScreen],
+  ['Organization audit', orgAuditScreen],
+  ['operators', operatorsScreen],
+]) {
+  check(
+    `${label}: no interval or focus/reconnect refetch`,
+    /setInterval|addEventListener\(\s*['"](focus|visibilitychange|online)/.test(source),
+    false,
+  );
+}
+
+/*
+ * THE ORGANIZATION FEED MUST NOT FETCH ON MOUNT. Opening it spends five writes
+ * from a customer's daily allowance, so arriving at the address — or landing
+ * there from a mistyped link — must cost them nothing.
+ */
+checkTrue(
+  'the Organization feed does not load until a person asks',
+  /if\s*\(\s*nonce\s*===\s*0\s*\)\s*return/.test(orgAuditScreen),
+);
+check(
+  'the Organization feed offers no actor filter',
+  /actor_principal_id/.test(orgAuditScreen),
+  false,
+);
+
+/* The two ceilings must be rendered as different statements. */
+const ceiling = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'CeilingNotice.tsx'), 'utf8'),
+);
+checkTrue('the ceiling notice distinguishes the two codes', /rate_limited/.test(ceiling) && /quota_exceeded/.test(ceiling));
+checkTrue('and branches its wording on which one', /isRateLimit/.test(ceiling));
+check(
+  'quota_exceeded is not given an automatic retry',
+  /onRetry\s*&&\s*!isRateLimit/.test(ceiling),
+  false,
+);
+
+/* No revoke UI anywhere. */
+for (const [label, source] of [
+  ['operators', operatorsScreen],
+  ['platform audit', platformScreen],
+  ['Organization audit', orgAuditScreen],
+]) {
+  check(`${label}: no revoke call`, /revokeOperator|operators\/.*\/revoke|\.revoke\(/.test(source), false);
+}
+check(
+  'the platform client exposes no revoke method',
+  /revokeOperator/.test(readFileSync(join(import.meta.dirname, '..', 'src', 'api', 'platform.ts'), 'utf8')),
+  false,
 );
 
 console.log('');

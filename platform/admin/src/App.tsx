@@ -40,9 +40,14 @@ import { Organizations } from '@/screens/Organizations';
 import { OrganizationDetail } from '@/screens/OrganizationDetail';
 import { Templates } from '@/screens/Templates';
 import { Operators } from '@/screens/Operators';
-import { Audit } from '@/screens/Audit';
+import { PlatformAudit } from '@/screens/PlatformAudit';
+import { OrganizationAudit } from '@/screens/OrganizationAudit';
 import { createAuthClient } from '@/api/auth';
-import { createPlatformClient, type PlatformClient } from '@/api/platform';
+import {
+  createPlatformClient,
+  type PlatformClient,
+  type WhoamiOutput,
+} from '@/api/platform';
 import { useOperatorSession } from '@/lib/use-session';
 import {
   ROUTES,
@@ -50,6 +55,7 @@ import {
   HOME_ROUTE,
   isKnownPath,
   matchOrganizationDetail,
+  matchOrganizationAudit,
 } from '@/lib/router';
 
 export function App() {
@@ -163,7 +169,7 @@ export function App() {
       signingOut={session.signingOut}
       onSignOut={session.signOut}
     >
-      <Section path={location.path} platform={platform} />
+      <Section path={location.path} platform={platform} whoami={session.whoami} />
     </AdminShell>
   );
 }
@@ -183,13 +189,32 @@ function Centred({ children }: { children: ReactNode }) {
  * IDENTIFIERS — `/organizations/:id` for an Organization that does not exist is
  * a genuine not-found and must say so, rather than quietly showing a list.
  */
-function Section({ path, platform }: { path: string; platform: PlatformClient }) {
+function Section({
+  path,
+  platform,
+  whoami,
+}: {
+  path: string;
+  platform: PlatformClient;
+  /** Passed to Operators so it can mark which row is the signed-in operator. */
+  whoami: WhoamiOutput;
+}) {
   /*
-   * THE DETAIL PAGE IS MATCHED BEFORE THE SWITCH, because it is the only route
-   * with a path parameter and a `switch` on a literal cannot express it.
-   * `matchOrganizationDetail` requires exactly two segments, so `/organizations`
-   * still falls through to the list below.
+   * PARAMETERISED ROUTES ARE MATCHED BEFORE THE SWITCH, because a `switch` on a
+   * literal cannot express them.
+   *
+   * THE AUDIT FEED IS TRIED FIRST, AND THE ORDER MATTERS. Both matchers are
+   * exact on segment count — three and two — so they cannot both match; but
+   * ordering the more specific one first means a future loosening of either
+   * cannot silently route `/organizations/x/audit` to the detail screen, which
+   * would then request an Organization named `x/audit` and spend an audit
+   * record learning it does not exist.
    */
+  const auditOrganizationId = matchOrganizationAudit(path);
+  if (auditOrganizationId !== null) {
+    return <OrganizationAudit platform={platform} organizationId={auditOrganizationId} />;
+  }
+
   const organizationId = matchOrganizationDetail(path);
   if (organizationId !== null) {
     return <OrganizationDetail platform={platform} organizationId={organizationId} />;
@@ -199,9 +224,9 @@ function Section({ path, platform }: { path: string; platform: PlatformClient })
     case ROUTES.templates:
       return <Templates platform={platform} />;
     case ROUTES.operators:
-      return <Operators />;
+      return <Operators platform={platform} whoami={whoami} />;
     case ROUTES.audit:
-      return <Audit />;
+      return <PlatformAudit platform={platform} />;
     case ROUTES.organizations:
     default:
       return <Organizations platform={platform} />;
