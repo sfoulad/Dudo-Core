@@ -37,6 +37,7 @@ import { printResults, tally } from './harness/runner.ts';
 import type { CaseResult, Suite } from './harness/runner.ts';
 
 import { buildMutualExclusionSuite } from './suites/platform-operator/mutual-exclusion.ts';
+import { buildMembershipWriteGuardSuite } from './suites/platform-operator/membership-write-guard.ts';
 import { buildOperatorSessionIsolationSuite } from './suites/platform-operator/operator-session-isolation.ts';
 import { buildNoTenantReachSuite } from './suites/platform-operator/no-tenant-reach.ts';
 import { buildPlatformAuthorizationSuite } from './suites/platform-operator/authorization.ts';
@@ -101,6 +102,7 @@ function classify(control: string, results: readonly CaseResult[]): void {
 async function main(): Promise<void> {
   const primarySuites = [
     buildMutualExclusionSuite(),
+    buildMembershipWriteGuardSuite(),
     buildOperatorSessionIsolationSuite(),
     buildNoTenantReachSuite(),
     buildPlatformAuthorizationSuite(),
@@ -179,7 +181,14 @@ async function main(): Promise<void> {
     });
   classify(
     'BOTH HALVES OF THE MUTUAL EXCLUSION — the platform probe AND the Action-side flag',
-    await runAll([buildMutualExclusionSuite(bothHalvesRemoved)]),
+    await runAll([
+      buildMutualExclusionSuite(bothHalvesRemoved),
+      // The membership write guard is included here on purpose. Removing BOTH runtime halves of
+      // the mutual exclusion does NOT reach layer 2 — the guard lives in the SQL, not in a port
+      // the harness can wrap — so these cases must stay GREEN under this control. A layer that
+      // survives every wrapper the harness can apply is the layer with no window.
+      buildMembershipWriteGuardSuite(bothHalvesRemoved),
+    ]),
   );
 
   // -----------------------------------------------------------------------------------------
