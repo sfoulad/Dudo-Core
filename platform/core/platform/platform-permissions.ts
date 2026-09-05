@@ -115,6 +115,8 @@ const TEMPLATE_CREATE = 'core.template.create';
 const CREDENTIAL_RESET = 'core.credential.reset';
 /** `platform-audit-read-v1`. BOTH feeds declare it; `0028` leaves them splittable later. */
 const PLATFORM_AUDIT_READ = 'core.platform-audit.read';
+/** `platform-operators-v1`. The revoke route, and the challenge that confirms it. */
+const PRINCIPAL_REVOKE_PLATFORM_SCOPE = 'core.principal.revoke-platform-scope';
 
 /**
  * `core.organization.list`, exported because the two routes in this slice declare it.
@@ -166,6 +168,7 @@ export const PLATFORM_PERMISSION_ENVELOPE: AppPermissionEnvelope = Object.freeze
     Object.freeze({ permissionId: TEMPLATE_CREATE, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: CREDENTIAL_RESET, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: PLATFORM_AUDIT_READ, scope: PLATFORM_SCOPE }),
+    Object.freeze({ permissionId: PRINCIPAL_REVOKE_PLATFORM_SCOPE, scope: PLATFORM_SCOPE }),
   ]),
 });
 
@@ -211,8 +214,13 @@ const HELD_BUT_UNREACHABLE: readonly string[] = Object.freeze([
   // ---- Unreachable UNTIL BUILT, not by design. See above.
   //
   // `core.platform-audit.read` LEFT THIS LIST ON 2026-09-05 when `platform-audit-read-v1` landed,
-  // exactly as this comment said it would. It is now in `PLATFORM_PERMISSION_ENVELOPE`.
-  'core.principal.revoke-platform-scope',
+  // exactly as this comment said it would.
+  //
+  // *** SO DID `core.principal.revoke-platform-scope`, LATER THE SAME DAY — AND NOT ON TIME. ***
+  // The revoke route shipped while this permission was still here, which made it `forbidden` to
+  // every operator alive. **The instruction above was written by the person who then skipped it**,
+  // one route later. `assertEveryRoutePermissionIsReachable` in `platform-routes.ts` now makes
+  // that omission a build failure rather than a comment nobody re-reads.
 ]);
 
 function platformGrant(permissionId: string): PermissionGrant {
@@ -277,6 +285,20 @@ const PLATFORM_ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
   // `reachablePlatformPermissions('platform-admin')` and reading it**, which is the whole argument
   // for measuring the thing rather than reasoning about the edit.
   PLATFORM_AUDIT_READ,
+  // ---- AND `core.principal.revoke-platform-scope`, ADDED IN THE SAME EDIT THAT REMOVED IT FROM
+  // `HELD_BUT_UNREACHABLE` — BECAUSE I MADE THE IDENTICAL MISTAKE TWICE IN ONE DAY.
+  //
+  // Removing a permission from `HELD_BUT_UNREACHABLE` also removes it from THIS list, which
+  // spreads that constant. The first time, `core.platform-audit.read` spent minutes in the
+  // envelope and in no role. **I wrote a comment about it at the line above, and then did it again
+  // one route later.**
+  //
+  // BOTH HALVES ARE REQUIRED AND NEITHER IMPLIES THE OTHER: the envelope is the ceiling, this list
+  // is the floor, and `authorize()` needs the permission in both. A permission in one and not the
+  // other is `forbidden` to every operator — which is the same symptom from opposite causes, and
+  // is why `assertEveryRoutePermissionIsReachable` now checks the whole chain rather than the
+  // ceiling alone.
+  PRINCIPAL_REVOKE_PLATFORM_SCOPE,
 ]);
 
 /**
@@ -370,9 +392,34 @@ export function reachablePlatformPermissions(role: PlatformRole | null): readonl
  * THE SEVENTH'S ARGUMENT: `platform-audit-read-v1` is accepted, `0028` Decision 3 designs its two
  * feeds around a disclosure rule, and the permission was already in the catalog and already
  * granted to `platform-admin` — it sat in `HELD_BUT_UNREACHABLE` precisely so that the ceiling
- * would rise when the routes landed rather than in advance. **An eighth needs its own.**
+ * would rise when the routes landed rather than in advance.
+ *
+ * ===========================================================================================
+ * THE EIGHTH'S ARGUMENT — `core.principal.revoke-platform-scope`, 2026-09-05
+ * ===========================================================================================
+ *
+ * **`platform-operators-v1` is accepted and `platform.operators.revoke` is registered.** Without
+ * this entry the route is `forbidden` to every caller regardless of role, because the envelope is
+ * the class ceiling — which is exactly what happened, and is why
+ * `assertEveryRoutePermissionIsReachable` now exists.
+ *
+ * **WHY THE CLASS SHOULD WIDEN FOR IT RATHER THAN THE ROUTE BEING REFUSED**, which is the question
+ * this constant asks: revocation is the only mechanism by which platform authority can be
+ * withdrawn at all. `0025` publishes no route that GRANTS it — that stays out-of-band SQL,
+ * deliberately, because *"a route that grants platform authority is the single most valuable target
+ * in the platform"*. **Grant and revoke are not symmetric and should not be**: the dangerous
+ * direction is creating authority, and the dangerous state is authority that cannot be taken away.
+ * A platform with no revoke route is one where a compromised operator is removed by editing the
+ * database by hand, under incident conditions.
+ *
+ * **AND IT IS THE MOST CONSTRAINED ENTRY IN THIS ENVELOPE.** It is the only one whose route is
+ * confirmation-gated, so reaching it requires re-authentication and a confirmation bound to the
+ * specific principal being revoked — `session theft alone cannot revoke anyone`, which is the
+ * property the catalog states and which is true only because all of this holds together.
+ *
+ * **A NINTH NEEDS ITS OWN.**
  */
-const PLATFORM_ROUTE_PERMISSION_COUNT = 7;
+const PLATFORM_ROUTE_PERMISSION_COUNT = 8;
 
 export class PlatformPermissionModelIncoherentError extends Error {
   constructor(message: string) {

@@ -124,8 +124,10 @@ import type {
 } from './platform-audit.ts';
 import { NO_TARGET } from './platform-audit.ts';
 import {
+  grantsForPlatformRole,
   PLATFORM_ORGANIZATION_LIST_PERMISSION,
   PLATFORM_PERMISSION_ENVELOPE,
+  PLATFORM_ROLES,
 } from './platform-permissions.ts';
 import {
   borrowsCriticalPermissionWithoutPerforming,
@@ -941,7 +943,123 @@ function pathParameterNames(path: string): readonly string[] {
   return names;
 }
 
+export class PlatformRoutePermissionUnreachableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlatformRoutePermissionUnreachableError';
+  }
+}
+
+/**
+ * ===========================================================================================
+ * *** EVERY ROUTE'S PERMISSION MUST BE IN THE ENVELOPE, OR THE ROUTE SERVES NOBODY. ***
+ * ===========================================================================================
+ *
+ * The envelope is the CLASS CEILING. `authorize()` refuses any permission it does not declare,
+ * **whatever role the caller holds** — so a route declaring a permission the envelope omits is
+ * `forbidden` to every operator alive, including the one who holds it.
+ *
+ * ===========================================================================================
+ * WHY THIS EXISTS: IT HAPPENED, AND EVERY EXISTING GUARD WAS GREEN
+ * ===========================================================================================
+ *
+ * `platform.operators.revoke` shipped declaring `core.principal.revoke-platform-scope` while the
+ * envelope held seven entries and that was not one of them. **The route that revokes platform
+ * authority could not be called by anyone.**
+ *
+ * NOTHING CAUGHT IT AND THE REASONS ARE INSTRUCTIVE:
+ *
+ *   - **`typecheck`**: clean. A permission is a string; both strings exist.
+ *   - **`assertConfirmationCoverageIsCoherent`**: green. The route IS a confirmable operation with
+ *     a statement — a different question, correctly answered.
+ *   - **`PLATFORM_ROUTE_PERMISSION_COUNT`**: green, and this is the sharp one. **It compares the
+ *     envelope's SIZE against a stated number.** Seven equalled seven while a route was
+ *     unreachable, because a count says nothing about WHICH permissions are in the set or whether
+ *     they cover the routes.
+ *
+ * **A CHECK DERIVED FROM A MODEL MISSES THE STATE THE MODEL DOES NOT HAVE.** The count guard
+ * encodes "the class has N permissions"; this encodes "every route can be reached", which is the
+ * property anyone actually cares about. `qa-agent` found the defect with the equivalent comparison
+ * in its suite; **it belongs here too, so the build fails rather than a suite going red.**
+ *
+ * ===========================================================================================
+ * IT IS THE MIRROR OF A DEFECT FROM THE DAY BEFORE, AND BOTH ARE NOW CAUGHT
+ * ===========================================================================================
+ *
+ * That one: a permission in the ENVELOPE and in no ROLE — reachable by nobody because the floor
+ * did not grant it. This one: a permission on a ROUTE and in no ENVELOPE — reachable by nobody
+ * because the ceiling did not admit it. **Both compile. Both are `forbidden` to every operator.
+ * Both were found by comparing artifacts rather than by reasoning about intent.**
+ *
+ * `from-body` ROUTES ARE CHECKED THROUGH `confirmableOperations()`, because their permission is
+ * resolved at request time from a Core-owned map rather than declared on the route.
+ */
+export function assertEveryRoutePermissionIsReachable(
+  routes: readonly PlatformRoute[] = ROUTES,
+  declared: readonly string[] = PLATFORM_PERMISSION_ENVELOPE.declared.map(
+    (entry) => entry.permissionId,
+  ),
+  /**
+   * Does SOME platform role grant this permission? The floor half of the chain.
+   *
+   * A FUNCTION RATHER THAN A LIST so the check reads the live role mapping rather than a snapshot
+   * of it — the snapshot is exactly what went stale in the defect this exists to catch.
+   */
+  roleHolders: (permissionId: string) => boolean = (permissionId) =>
+    PLATFORM_ROLES.some((role) =>
+      grantsForPlatformRole(role).grants.some((grant) => grant.permissionId === permissionId),
+    ),
+): void {
+  for (const route of routes) {
+    const required =
+      route.permission.kind === 'fixed'
+        ? [route.permission.permissionId]
+        : confirmableOperations().map((id) => confirmablePermissionFor(id) ?? '');
+    for (const permissionId of required) {
+      if (permissionId === '') {
+        continue;
+      }
+      // ---- THE CEILING.
+      if (!declared.includes(permissionId)) {
+        throw new PlatformRoutePermissionUnreachableError(
+          `'${route.id}' declares the permission '${permissionId}', which is not in ` +
+            'PLATFORM_PERMISSION_ENVELOPE. The envelope is the class ceiling, so authorize() ' +
+            'refuses this route for EVERY caller regardless of role — the route serves nobody. ' +
+            'Add it to the envelope and increment PLATFORM_ROUTE_PERMISSION_COUNT, which will ' +
+            'then demand the argument for widening the class.',
+        );
+      }
+      // =====================================================================================
+      // ---- *** AND THE FLOOR. THE CEILING ALONE WAS NOT ENOUGH, MEASURED THE HARD WAY. ***
+      // =====================================================================================
+      //
+      // Adding the permission to the envelope FIXED THE CEILING AND BROKE THE FLOOR in the same
+      // edit: `PLATFORM_ADMIN_PERMISSIONS` spreads `HELD_BUT_UNREACHABLE`, so removing the entry
+      // from that list removed it from the role. **The route went from "ceiling refuses it" to
+      // "no role grants it" — the same `forbidden`, the opposite cause.**
+      //
+      // THAT IS THE SECOND TIME IN ONE DAY, with a comment about the first one written at the very
+      // line that caused the second. **A guard checking only the half that failed last time is a
+      // guard for last time's defect.**
+      //
+      // SO THE CHECK IS THE WHOLE CHAIN: route → envelope → some role. It does not assert WHICH
+      // role should hold it — that is not declared anywhere and inventing it here would be this
+      // file deciding the permission model — but **"no role at all" is unambiguous and is what
+      // both defects looked like.**
+      if (!roleHolders(permissionId)) {
+        throw new PlatformRoutePermissionUnreachableError(
+          `'${route.id}' declares the permission '${permissionId}', which is in the envelope but ` +
+            'granted to NO platform role. The ceiling admits it and the floor does not supply it, ' +
+            'so authorize() refuses the route for every caller — the same symptom as an omitted ' +
+            'envelope entry, from the opposite cause. Add it to a role in platform-permissions.ts.',
+        );
+      }
+    }
+  }
+}
+
 assertConfirmationCoverageIsCoherent();
+assertEveryRoutePermissionIsReachable();
 
 /**
  * Matches an ABSOLUTE path and method. Exact match only, no path parameters and no patterns.
