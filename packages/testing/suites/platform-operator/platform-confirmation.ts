@@ -59,12 +59,15 @@ import {
   MODERATOR_IDENTIFIER,
   MODERATOR_PASSWORD,
   PRN_ADMIN,
+  PRN_MODERATOR,
   PRN_RESET_TARGET,
+  PRN_SUSPENDED_ADMIN,
   SESSION_ADMIN,
   SESSION_MODERATOR,
   SYNTHETIC_CRITICAL_ROUTE_ID,
   createPlatformWorld,
   createSyntheticCriticalRoute,
+  expectedInvalidArgument,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld, PlatformWorld } from '../../harness/platform-fixture.ts';
 import {
@@ -317,6 +320,109 @@ export function buildPlatformConfirmationSuite(make: MakePlatformWorld = createP
     }
   });
 
+  // ===========================================================================================
+  // THE PATH-SUBSTITUTION CONTROL. `confirmation-v1` as amended at `aa48dd4`.
+  // ===========================================================================================
+  //
+  // *** IT IS A SEPARATE CASE FROM THE BODY SUBSTITUTION ABOVE, AND NEITHER SUBSUMES THE OTHER. ***
+  //
+  // `confirmation-v1`'s test list has a case labelled THE CENTRAL TEST OF THIS CONTRACT — confirm
+  // a delete of customer X, submit a delete of customer Y. **It varies a BODY field, and on
+  // `platform.operators.revoke` it is NOT CONSTRUCTIBLE**: that route declares exactly the three
+  // confirmation fields, so body-minus-three is the EMPTY OBJECT and there is no body value to
+  // vary. A suite running only the body form would report the contract's central property as
+  // covered while the only axis this route has went untested.
+  //
+  // WHAT WAS WRONG UNDER THE STRUCK WORDING, in the contract's words: *"`revokeOperatorInput`
+  // requires exactly the three confirmation fields and nothing else, so body-minus-three is the
+  // EMPTY OBJECT; the target lives in the path and the path was not in the binding. A
+  // CONFIRMATION MINTED TO REVOKE ONE OPERATOR WOULD HAVE BEEN SPENDABLE ON ANOTHER."*
+  //
+  // `platform-operators-v1`'s schema PROMISED the property — *"the binding covers principal_id"* —
+  // and the implementation would not have held it. That is the gap this case closes.
+  suite.test(
+    'SUBSTITUTION ON THE PATH: a confirmation to revoke operator A cannot revoke operator B',
+    async () => {
+      const world = await make();
+      try {
+        const revoke = platformRoutes().find((r) => r.id === 'platform.operators.revoke');
+        assertTrue(
+          'the revoke route is registered',
+          revoke !== undefined,
+          'platform.operators.revoke is not in the shipped table',
+        );
+        assertTrue(
+          'and it is confirmation-gated, or this case tests nothing',
+          isConfirmationGated(revoke!),
+          'the revoke route is not gated, so a confirmation is not required and substitution is ' +
+            'not the question — the question would be why the most dangerous route in the class ' +
+            'asks for nothing',
+        );
+        assertEqual(
+          'its body carries ONLY the three confirmation fields — which is why the body-substitution ' +
+            'case above cannot be written for it',
+          [...revoke!.fields].sort().join(','),
+          'confirmation_id,identifier,reauth_derived_value',
+        );
+
+        const submission = async (confirmationId: string) => ({
+          confirmation_id: confirmationId,
+          reauth_derived_value: await world.operatorDerivedValue(),
+          identifier: world.operatorIdentifier,
+        });
+
+        // A confirmation minted to revoke PRN_MODERATOR.
+        const issued = expectOk(
+          'a challenge for revoking operator A',
+          await world.confirmations.issueChallenge({
+            principalId: PRN_ADMIN,
+            sessionId: SESSION_ADMIN,
+            actionId: 'platform.operators.revoke',
+            permissionId: 'core.principal.revoke-platform-scope',
+            parameters: { principal_id: PRN_MODERATOR },
+            locale: 'en',
+          }),
+        ) as { confirmationId: string };
+
+        // ---- THE CASE. The SAME confirmation, one path segment changed.
+        const observed = { calls: 0 };
+        const onB = await world.callRoute(revoke!, observingHandler(observed), {
+          sessionId: SESSION_ADMIN,
+          bodyText: JSON.stringify(await submission(issued.confirmationId)),
+          pathParams: { principal_id: PRN_SUSPENDED_ADMIN },
+        });
+        assertTrue(
+          `${ISOLATION} a confirmation for operator A does not revoke operator B`,
+          !onB.ok,
+          'A CONFIRMATION MINTED FOR ONE OPERATOR WAS SPENT ON ANOTHER. The human confirmed a ' +
+            'statement naming A and B lost their platform authority. This is the defect the ' +
+            `aa48dd4 amendment exists to close: ${JSON.stringify(onB)}`,
+        );
+        assertEqual(`${ISOLATION} and the operation did not run`, observed.calls, 0);
+
+        // ---- THE POSITIVE CONTROL. The same confirmation on the RIGHT path is served, so the
+        // refusal is about the substitution and not about the confirmation being unusable.
+        expectOk(
+          'the same confirmation on operator A IS served',
+          await world.callRoute(revoke!, observingHandler(observed), {
+            sessionId: SESSION_ADMIN,
+            bodyText: JSON.stringify(await submission(issued.confirmationId)),
+            pathParams: { principal_id: PRN_MODERATOR },
+          }),
+        );
+        assertEqual('and the operation ran exactly once, on A', observed.calls, 1);
+      } finally {
+        world.close();
+      }
+    },
+  );
+
+  // NOTE: `THE STRUCK DEFINITION IS DEAD` LIVES IN THE SCOPE SUITE BELOW, not here. It printed
+  // STILL GREEN under `0027`'s control on its first run — correctly, because it only ISSUES a
+  // challenge and never spends one, so a gate that always agrees cannot affect it. Moved rather
+  // than explained, for this suite's standing reason: an explanation that must be re-made
+  // correctly every run is one that will eventually be made wrongly.
+
   suite.test('a confirmation refusal IS audited, as denied, with no target', async () => {
     // `dispatchPlatformRoute` step 5b: the caller is a real operator holding a real permission who
     // failed to prove intent or presence on a critical operation — precisely what the trail exists
@@ -451,19 +557,109 @@ export function buildPlatformConfirmationScopeSuite(
       'no route exercises the exemption, so its correctness is asserted by nothing',
     );
 
-    // THE HONEST STATE OF THE SHIPPED TABLE. No route in it is gated today — the exemption covers
-    // the only two that declare a critical permission — which is why the suite above is synthetic.
-    // If a real gated route lands, this goes red, and the repair is to point the suite at it and
-    // delete the synthetic route, not to update the string.
+    // =====================================================================================
+    // *** THIS TRIPWIRE FIRED ON 2026-09-05, WHICH IS WHAT IT WAS FOR. ***
+    // =====================================================================================
+    //
+    // It read "no shipped route is confirmation-gated today, which is why the suite above is
+    // synthetic", and said the repair would be to point the suite at the real route rather than
+    // update the string. `platform.operators.revoke` shipped and it went red. So:
+    //
+    //   THE REAL ROUTE IS NOW TESTED — see `SUBSTITUTION ON THE PATH` below, which drives the
+    //   shipped `platform.operators.revoke` through the shipped dispatcher and gate.
+    //
+    //   AND THE SYNTHETIC ROUTE STAYS, WHICH IS THE PART THAT NEEDED ARGUING. It covers an axis
+    //   the shipped route structurally cannot: `revoke`'s body is exactly the three confirmation
+    //   fields, so body-minus-three is the EMPTY OBJECT and there is no body value to substitute.
+    //   `confirmation-v1`'s amendment says it in terms — the body case and the path case are
+    //   separate tests because **neither subsumes the other**. Deleting the synthetic route would
+    //   silently drop body substitution from the platform class's coverage.
+    //
+    // The list is asserted by NAME rather than by count, so a SECOND gated route also has to be
+    // argued rather than absorbed.
     assertEqual(
-      'no shipped route is confirmation-gated today, which is why the suite above is synthetic',
+      'exactly the gated routes this suite knows about are gated',
       platformRoutes()
         .filter((route) => isConfirmationGated(route))
         .map((route) => route.id)
+        .sort()
         .join(','),
-      '',
+      'platform.operators.revoke',
     );
   });
+
+  suite.test(
+    'THE STRUCK DEFINITION IS DEAD: a revoke challenge over the EMPTY object cannot be issued',
+    async () => {
+      // =====================================================================================
+      // `architecture-agent`'s clause, quoted because it is the whole point of this case:
+      // *"it must be shown to go red against the struck definition, or it has verified nothing."*
+      // =====================================================================================
+      //
+      // Under the struck wording the binding for `platform.operators.revoke` was
+      // **body-minus-the-three**, which for that route is `{}` — the same value for every
+      // operator. A confirmation bound over `{}` would have been spendable against any principal
+      // in the path, which is precisely what `platform-operators-v1`'s schema promised could not
+      // happen.
+      //
+      // *** IT CANNOT BE ISSUED AT ALL, AND THAT IS A STRONGER RESULT THAN THE ONE I EXPECTED. ***
+      // I wrote this to mint an empty-bound confirmation and show it refused at SPEND time. The
+      // challenge is refused at ISSUE time, with `principal_id: required_for_statement` — because
+      // the confirmation STATEMENT for this operation interpolates the target, so a challenge that
+      // does not name it cannot be rendered for a human to read.
+      //
+      // **THAT CLOSES THE STRUCK DEFINITION FROM THE OTHER END.** The bound parameters ALWAYS name
+      // the target, because the statement will not render without it. So under the struck wording
+      // the challenge would have carried `{principal_id: A}` while the spend recomputed `{}`, and
+      // the two could never be equal — the route would have been permanently unusable rather than
+      // exploitable. Either way the struck definition is dead.
+      //
+      // Recorded as what was measured rather than what was predicted.
+      //
+      // IT LIVES IN THIS SUITE AND NOT THE GATED ONE because it only ISSUES a challenge and never
+      // spends one, so a gate that always agrees cannot affect it. It printed STILL GREEN under
+      // `0027`'s control on its first run, correctly, and was moved rather than explained.
+      const world = await make();
+      try {
+        const answer = await world.confirmations.issueChallenge({
+          principalId: PRN_ADMIN,
+          sessionId: SESSION_ADMIN,
+          actionId: 'platform.operators.revoke',
+          permissionId: 'core.principal.revoke-platform-scope',
+          parameters: {},
+          locale: 'en',
+        });
+        assertTrue(
+          `${ISOLATION} a revoke challenge that names no target cannot be issued`,
+          !answer.ok,
+          'a confirmation was issued over the empty object. Its statement cannot name whose ' +
+            'authority is being removed, so a human would be asked to confirm a sentence with a ' +
+            `hole in it — and under the struck binding it would have been spendable on anyone: ${JSON.stringify(answer)}`,
+        );
+        assertEqual(
+          'and it is refused for the missing target specifically, not for some other reason',
+          JSON.stringify((answer as { error: unknown }).error),
+          JSON.stringify(expectedInvalidArgument('principal_id', 'required_for_statement')),
+        );
+
+        // THE POSITIVE CONTROL. The same challenge WITH the target is issued, so the refusal is
+        // about the missing parameter and not about revoke being unconfirmable.
+        expectOk(
+          'the same challenge naming the target IS issued',
+          await world.confirmations.issueChallenge({
+            principalId: PRN_ADMIN,
+            sessionId: SESSION_ADMIN,
+            actionId: 'platform.operators.revoke',
+            permissionId: 'core.principal.revoke-platform-scope',
+            parameters: { principal_id: PRN_MODERATOR },
+            locale: 'en',
+          }),
+        );
+      } finally {
+        world.close();
+      }
+    },
+  );
 
   suite.test('a route declaring a critical permission and in NEITHER list stops the build', () => {
     // THE NEGATIVE CONTROL FOR THE CASE ABOVE. Without it, "every route is in one of the two

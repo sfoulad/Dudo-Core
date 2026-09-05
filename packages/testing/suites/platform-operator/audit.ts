@@ -102,7 +102,7 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
         // needs a name, and Template read needs a path parameter. With the minimal body they
         // answered `invalid_argument` and `internal` — and `expectOk` correctly refused to call
         // that a pass, which is how the drift surfaced instead of hiding.
-        const call = await successfulCallFor(route.id);
+        const call = await successfulCallFor(route.id, world);
         expectOk(
           `${route.id} succeeds for a platform-admin`,
           await world.call(route.id, {
@@ -142,6 +142,18 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
           // required field exists to prevent. What is lost: a challenge is attributable to the
           // operator and the action, not to the person it names.
           'platform.confirmations.request': 'none — it has no Organization, and 0014 forbids naming a principal without one',
+          // NONE, and the interesting half is WHY it is not the operators it returned. Recording
+          // them would put the roster INTO the operator log — where the audit feeds would then
+          // disclose it, which is 0028 Decision 3's shape arriving through the target field
+          // rather than through a response. An enumeration also names no single affected party,
+          // and D5 permits only an Organization or a principal.
+          'platform.operators.list': 'none — an enumeration names no one, and naming the roster here would leak it into the feeds',
+          // PRINCIPAL, with a NULL organizationId — and the null is the interesting part. `0014`
+          // made `organizationId` required on the principal variant precisely so a principal
+          // could not be recorded without its Organization; a platform operator HAS no
+          // Organization, so widening the type back was the alternative to recording the
+          // platform's most dangerous operation against no one at all.
+          'platform.operators.revoke': 'principal — the operator whose authority was removed, with no Organization because they have none',
           'platform.audit.list': 'none — a feed read has no single target, and 0025 D5 forbids recording what it returned',
           'platform.organizations.audit.list': 'organization — the Organization whose trail was read',
           'platform.organizations.create': 'organization — the Organization it created, and nothing about what it contains',

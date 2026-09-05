@@ -127,6 +127,20 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         'platform-audit-read-v1, 0028 Decision 3, added 2026-09-05. One Organization\'s feed, ' +
         'which DOES disclose principals, and which writes a record into that Organization\'s own ' +
         'trail on every call — "it keeps the back door the same size as the front one"',
+      'platform.operators.revoke':
+        'platform-operators-v1, added 2026-09-05. **THE FIRST CONFIRMATION-GATED ROUTE IN THE ' +
+        'SHIPPED TABLE**, and the first with both a path parameter and a gate — a combination the ' +
+        'coverage guard REFUSED until `aa48dd4` widened the binding to cover path parameters. Its ' +
+        'body is exactly the three confirmation fields, so body-minus-three is the empty object ' +
+        'and the target lives entirely in the path; see platform-confirmation.ts for the ' +
+        'substitution control that closes what the struck wording left open',
+      'platform.operators.list':
+        'platform-operators-v1, added 2026-09-05. The operator roster. It declares ' +
+        'core.platform-audit.read — the SAME permission as the two audit feeds — because reading ' +
+        'who holds authority is oversight, and 0028 keeps oversight and support splittable later ' +
+        'without inventing a permission nobody could hold on its own today. Three fields per row ' +
+        'and no identifier, no email, no display name: an operator roster showing addresses would ' +
+        'be the directory 0001_principal.sql refused, at the most privileged end of the platform',
       'platform.templates.create': 'template-v1, 0025 decision 2. Its own permission, not shared',
       'platform.templates.list': 'template-v1. Enumeration is its own disclosure, so its own permission',
       'platform.templates.read': 'template-v1. THE ONLY ROUTE IN THE CLASS WITH A PATH PARAMETER',

@@ -226,7 +226,58 @@ export function bodyForPlatformRoute(routeId: string): string {
  */
 export async function successfulCallFor(
   routeId: string,
+  /**
+   * Required for a CONFIRMATION-GATED route, and for nothing else.
+   *
+   * ===========================================================================================
+   * A GATED ROUTE CANNOT SUCCEED WITHOUT A REAL CONFIRMATION, AND THAT IS THE GATE WORKING.
+   * ===========================================================================================
+   *
+   * `platform.operators.revoke` joined the class on 2026-09-05 as the FIRST shipped gated route.
+   * Every suite that loops over the route table asserting a success — the P4 audit cases, and
+   * authorization's control that a role holding the permission is served — then needed a valid,
+   * unspent, correctly bound confirmation for it, minted through the shipped service.
+   *
+   * **THE ALTERNATIVE WAS TO SKIP GATED ROUTES IN THOSE LOOPS, AND THAT WOULD HAVE BEEN WRONG.**
+   * The loops exist to assert a property of EVERY route in the class; excluding the one route
+   * with the most dangerous permission because it is inconvenient is how a class-wide claim
+   * quietly becomes a claim about the easy members.
+   */
+  world?: PlatformWorld,
 ): Promise<{ readonly bodyText: string; readonly pathParams: Readonly<Record<string, string>> }> {
+  if (routeId === 'platform.operators.revoke') {
+    if (world === undefined) {
+      throw new Error(
+        'platform.operators.revoke is confirmation-gated: successfulCallFor needs the world in ' +
+          'order to mint a real confirmation. Passing no world would produce a request that is ' +
+          'refused by the gate, and a case asserting success would report the gate as a defect.',
+      );
+    }
+    // A REAL CHALLENGE THROUGH THE SHIPPED SERVICE. The bound parameters are the route's whole
+    // input under `aa48dd4`: body-minus-the-three (empty here) UNION the path parameters.
+    const issued = await world.confirmations.issueChallenge({
+      principalId: PRN_ADMIN,
+      sessionId: SESSION_ADMIN,
+      actionId: 'platform.operators.revoke',
+      permissionId: 'core.principal.revoke-platform-scope',
+      parameters: { principal_id: PRN_MODERATOR },
+      locale: 'en',
+    });
+    if (!issued.ok) {
+      throw new Error(`the fixture could not obtain a confirmation: ${JSON.stringify(issued.error)}`);
+    }
+    return {
+      bodyText: JSON.stringify({
+        confirmation_id: issued.value.confirmationId,
+        reauth_derived_value: await world.operatorDerivedValue(),
+        identifier: world.operatorIdentifier,
+      }),
+      pathParams: { principal_id: PRN_MODERATOR },
+    };
+  }
+  if (routeId === 'platform.operators.list') {
+    return { bodyText: '', pathParams: {} };
+  }
   if (routeId === 'platform.organizations.create') {
     return { bodyText: (await onboardingRequest()).bodyText, pathParams: {} };
   }

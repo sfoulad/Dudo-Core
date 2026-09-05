@@ -185,6 +185,161 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
     );
   }
 
+  // ===========================================================================================
+  // THE ROUND TRIP. A REGRESSION REACHED `main` THROUGH THIS GAP AND IT IS WORTH BEING EXACT.
+  // ===========================================================================================
+  //
+  // `7254f4b` changed `decodeAuditAnchor` to split on the LITERAL six-character string ` `
+  // while `encodeAuditAnchor` kept joining with a real NUL. **Page 1 worked and page 2 was
+  // unreachable on every request, on both feeds.** `typecheck` was exit 0 and the platform suite
+  // was green; the only thing that caught it was a probe asking for page 2.
+  //
+  // WHAT THIS SUITE ALREADY HAD, STATED HONESTLY: the per-dimension cases above DO round-trip a
+  // cursor through a second request, and their `expectOk` positive control WOULD have gone red on
+  // that defect — but those cases did not exist when it landed, and they only ever assert that
+  // page 2 SUCCEEDS. **A decode that returned a wrong-but-well-formed anchor would satisfy every
+  // one of them**, and that is the residual gap: nothing here checked what page 2 CONTAINED.
+  //
+  // These two cases close it on both feeds, by paging the whole result set one row at a time and
+  // requiring the pages to reconstruct it exactly — no gap, no repeat, no reorder.
+  for (const scoped of [false, true] as const) {
+    suite.test(
+      `the ${scoped ? 'ORGANIZATION' : 'PLATFORM'} feed pages through the WHOLE set, in order, ` +
+        'with no gap and no repeat',
+      async () => {
+        const world = await make();
+        try {
+          seedFeed(world);
+
+          // ===============================================================================
+          // BOUNDED TO BEFORE THE RUN, AND THAT IS THE RECURSION RATHER THAN A CONVENIENCE.
+          // ===============================================================================
+          //
+          // **Every feed read WRITES an audit record**, including the reads this case makes —
+          // the handler states it: *"reading an Organization's trail writes to that
+          // Organization's trail."* So an unbounded reference page taken before the walk is
+          // stale by the time the walk starts, and the walk sees a row the reference never had.
+          // That is not a paging defect and a case that reported it as one would be wrong.
+          //
+          // `until` is a real filter and it excludes exactly the records this case creates: the
+          // seeded rows are dated 2026-09-01..04 and the fixture clock is 2026-09-05T09:00.
+          const window = 'until=2026-09-05T00:00:00Z';
+
+          // The whole set in one page, as the reference. `page_size=25` exceeds the six seeded.
+          const whole = await feed(world, { scoped, query: `page_size=25&${window}` });
+          assertTrue(
+            'the reference page has several rows, so paging it is a real test',
+            whole.data.length >= 3,
+            `only ${String(whole.data.length)} rows; this case cannot detect a paging defect`,
+          );
+          assertEqual('and the reference is a single page', whole.next_cursor, null);
+          const reference = whole.data.map((row) => String(row.record_id));
+
+          // Now one row at a time, following the cursor through the REAL encode/decode pair.
+          const paged: string[] = [];
+          let page = await feed(world, { scoped, query: `page_size=1&${window}` });
+          for (let guard = 0; guard <= reference.length + 1; guard += 1) {
+            assertEqual(`page ${String(guard + 1)} holds exactly one row`, page.data.length, 1);
+            paged.push(String(page.data[0]!.record_id));
+            if (page.next_cursor === null) {
+              break;
+            }
+            page = await feed(world, {
+              scoped,
+              query: `page_size=1&${window}&cursor=${encodeURIComponent(page.next_cursor)}`,
+            });
+          }
+
+          // THE THREE PROPERTIES, SEPARATELY, BECAUSE THEY FAIL DIFFERENTLY. A dead cursor stops
+          // the walk short; a mis-decoded anchor repeats or skips; a wrong ORDER BY reorders.
+          assertEqual(
+            `${ISOLATION} paging reconstructs the whole set, in the same order`,
+            paged.join(','),
+            reference.join(','),
+          );
+          assertEqual('no row appears twice', new Set(paged).size, paged.length);
+          assertEqual('and none is missing', paged.length, reference.length);
+        } finally {
+          world.close();
+        }
+      },
+    );
+  }
+
+  suite.test(
+    'THE CONSTRUCTED FAILING INPUT: an anchor whose separator differs is refused — 7254f4b, rebuilt',
+    async () => {
+      // =====================================================================================
+      // THE DEFECT ITSELF, NOT A DESCRIPTION OF IT.
+      // =====================================================================================
+      //
+      // `encodeAuditAnchor` and `decodeAuditAnchor` are module-private, so they cannot be called
+      // directly and a different separator cannot be injected into Core. What CAN be built is the
+      // value the broken pair produced: a cursor that is **correctly signed, correctly bound, and
+      // whose anchor payload uses the wrong separator.** That is byte-for-byte what a page-2
+      // request carried under `7254f4b`.
+      //
+      // If the feed accepted it, `decodeAuditAnchor` would not be checking the separator at all
+      // and the round-trip cases above would be passing for some other reason.
+      const world = await make();
+      try {
+        seedFeed(world);
+        const codec = await createPlatformCursorCodec(new Uint8Array(32).fill(0x2a));
+        const binding = {
+          principalId: PRN_ADMIN,
+          pageSize: 1,
+          // The scope the platform feed composes with no filters set: route id then five empties.
+          scope: ['platform.audit.list', '', '', '', '', ''].join(String.fromCharCode(0)),
+        };
+        // NOTE the scope above must match what the handler composes for a request with NO
+        // filters. If the handler's scope composition changes, both calls below are refused and
+        // the positive control turns this case red rather than letting it pass vacuously.
+        const nowMs = Date.UTC(2026, 8, 5, 9, 0, 0);
+        const occurredAt = '2026-09-04T12:00:00.000Z';
+        const recordId = 'par_0000000000006';
+
+        // ---- THE POSITIVE CONTROL. The SAME anchor with the REAL separator is accepted, so the
+        // refusal below is about the separator and not about the binding or the signature.
+        expectOk(
+          'an anchor joined with the real separator resumes the feed',
+          await world.call('platform.audit.list', {
+            sessionId: SESSION_ADMIN,
+            queryString:
+              'page_size=1&cursor=' +
+              encodeURIComponent(
+                await codec.encode(
+                  `${occurredAt}${String.fromCharCode(0)}${recordId}`,
+                  binding,
+                  nowMs,
+                ),
+              ),
+          }),
+        );
+
+        // ---- THE CASE. The literal six-character string ` `, which is exactly what the
+        // broken decode split on and what an encode written the same way would emit.
+        const mismatched = await codec.encode(
+          `${occurredAt}\\u0000${recordId}`,
+          binding,
+          nowMs,
+        );
+        const answer = await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString: `page_size=1&cursor=${encodeURIComponent(mismatched)}`,
+        });
+        assertTrue(
+          `${ISOLATION} an anchor whose separator does not match the decoder is refused`,
+          !answer.ok,
+          'a correctly signed cursor whose anchor used a different separator was ACCEPTED. The ' +
+            'decoder is not checking the separator, so the round-trip cases above are green for ' +
+            `some other reason: ${JSON.stringify(answer)}`,
+        );
+      } finally {
+        world.close();
+      }
+    },
+  );
+
   suite.test('a cursor from the PLATFORM feed cannot resume the ORGANIZATION feed', async () => {
     // THE SEPARATION THAT MATTERS MOST, because the two feeds disclose different things. A cursor
     // obtained in the omitting feed must not be usable to page the principal-disclosing one from a

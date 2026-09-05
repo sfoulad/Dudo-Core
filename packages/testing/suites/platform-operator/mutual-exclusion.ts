@@ -394,6 +394,12 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       async listOrganizationAudit() {
         return ok([]);
       },
+      async listOperators() {
+        return ok([]);
+      },
+      async revokeOperator() {
+        return ok(null);
+      },
       async recordAction() {
         return ok(undefined);
       },

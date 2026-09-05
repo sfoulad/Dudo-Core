@@ -301,7 +301,7 @@ export function buildBootstrapBoundsSuite(make: MakePlatformWorld = createPlatfo
         );
         assertTrue('there are other routes to check', others.length > 0, 'the table has one route');
         for (const route of others) {
-          const call = await successfulCallFor(route.id);
+          const call = await successfulCallFor(route.id, world);
           await world.call(route.id, {
             sessionId: SESSION_ADMIN,
             bodyText: call.bodyText,

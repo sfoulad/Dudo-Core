@@ -165,7 +165,15 @@ export function withExhaustedWriteBudget(
 ): RequestCoordinator {
   return decorate(inner, () => ({
     async reserveWrites(): Promise<Result<WriteAdmissionOutcome>> {
-      return { ok: true, value: { kind: 'deferred', resumeAfterMs, retryAfterSeconds } };
+      // `refusedBy` ADDED 2026-09-05 when `WriteAdmissionOutcome` gained it. `'organization'` and
+      // NOT `'platform-share'`: this control models THE ORGANIZATION'S OWN DAY being spent, which
+      // is what every case using it asserts about. `'platform-share'` is the bounded operator
+      // slice — a different refusal with a different meaning to the caller — and choosing it here
+      // would make these cases assert a cause they were not written for.
+      return {
+        ok: true,
+        value: { kind: 'deferred', refusedBy: 'organization', resumeAfterMs, retryAfterSeconds },
+      };
     },
   }));
 }

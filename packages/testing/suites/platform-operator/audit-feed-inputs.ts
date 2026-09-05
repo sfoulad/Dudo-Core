@@ -327,29 +327,29 @@ export function buildCeilingFloorSuite(): Suite {
     },
   );
 
-  suite.test('the envelope is SEVEN, and an eighth still throws at module load', () => {
+  suite.test('the envelope is EIGHT, and a ninth still throws at module load', () => {
     assertEqual(
-      'seven, as PLATFORM_ROUTE_PERMISSION_COUNT states',
+      'eight, as PLATFORM_ROUTE_PERMISSION_COUNT states',
       PLATFORM_PERMISSION_ENVELOPE.declared.length,
-      7,
+      8,
     );
     // AND THE GUARD STILL BITES. The count is only a control if adding one is refused; asserting
     // the number alone would pass with the guard deleted.
-    const eighth = {
+    const oneTooMany = {
       ...PLATFORM_PERMISSION_ENVELOPE,
       declared: Object.freeze([
         ...PLATFORM_PERMISSION_ENVELOPE.declared,
-        Object.freeze({ permissionId: 'core.eighth.permission', scope: 'platform' as const }),
+        Object.freeze({ permissionId: 'core.one.too.many', scope: 'platform' as const }),
       ]),
     };
     let thrown: unknown = null;
     try {
-      assertPlatformPermissionModelIsCoherent(undefined, eighth);
+      assertPlatformPermissionModelIsCoherent(undefined, oneTooMany);
     } catch (cause) {
       thrown = cause;
     }
     assertTrue(
-      `${ISOLATION} an eighth permission in the envelope stops the build`,
+      `${ISOLATION} one more permission in the envelope stops the build`,
       thrown instanceof PlatformPermissionModelIncoherentError,
       `the class's ceiling was widened by one and nothing refused: ${String(thrown)}`,
     );

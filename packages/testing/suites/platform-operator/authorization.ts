@@ -117,6 +117,12 @@ function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
     async listOrganizationAudit() {
       return ok([]);
     },
+    async listOperators() {
+      return ok([]);
+    },
+    async revokeOperator() {
+      return ok(null);
+    },
     async recordAction() {
       return ok(undefined);
     },
@@ -187,7 +193,7 @@ export function buildPlatformAuthorizationSuite(
       // `invalid_argument`, and `expectOk` reported it as what it was: the control failed, so the
       // negative case beside it proved nothing.
       for (const routeId of ROUTE_IDS) {
-        const call = await successfulCallFor(routeId);
+        const call = await successfulCallFor(routeId, world);
         expectOk(
           `${routeId} serves platform-admin`,
           await world.call(routeId, {
@@ -363,7 +369,7 @@ export function buildPlatformAuthorizationSuite(
     });
   });
 
-  suite.test('the envelope is exactly seven platform-scope permissions, and refuses an eighth', () => {
+  suite.test('the envelope is exactly eight platform-scope permissions, and refuses a ninth', () => {
     // SIX BECAME SEVEN ON 2026-09-05, and the guard is what made that a decision rather than a
     // side effect: adding `core.platform-audit.read` threw at module load until
     // `PLATFORM_ROUTE_PERMISSION_COUNT` was edited. Its argument is that `platform-audit-read-v1`
@@ -372,17 +378,26 @@ export function buildPlatformAuthorizationSuite(
     //
     // See `audit-feed-inputs.ts::buildCeilingFloorSuite` for the property this count is a proxy
     // for, and for why a permission in this envelope and in no role is unambiguously a defect.
-    assertEqual('seven, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 7);
+    //
+    // SEVEN BECAME EIGHT ON 2026-09-05 with `core.principal.revoke-platform-scope`, and this
+    // count was RED IN BETWEEN in the informative direction: `platform.operators.revoke` was
+    // registered and composed while its permission was still outside the ceiling, so the route
+    // was refused to every operator. `typecheck` was clean and no load-time guard fired — the
+    // count guard compares the envelope's size against the stated constant, and 7 == 7 was true
+    // of a table that had eight routes' worth of permissions. The check that caught it is `and
+    // the separation is real: the envelope is exactly what the ROUTES declare`.
+    assertEqual('eight, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 8);
     assertEqual(
       'and every one is declared at platform scope',
       PLATFORM_PERMISSION_ENVELOPE.declared.filter((entry) => entry.scope !== 'platform').length,
       0,
     );
     assertEqual(
-      'they are the seven the platform contracts name',
+      'they are the eight the platform contracts name',
       PLATFORM_PERMISSION_ENVELOPE.declared.map((entry) => entry.permissionId).sort().join(','),
       'core.credential.reset,core.organization.create,core.organization.list,' +
-        'core.platform-audit.read,core.template.create,core.template.list,core.template.read',
+        'core.platform-audit.read,core.principal.revoke-platform-scope,core.template.create,' +
+        'core.template.list,core.template.read',
     );
     assertEqual('the envelope is attributed to platform, not to an App', PLATFORM_PERMISSION_ENVELOPE.appId, 'platform');
 
@@ -476,12 +491,13 @@ export function buildPlatformAuthorizationSuite(
         // argument** — it is what this map exists to make happen, and the assertion below is what
         // demanded it. A permission left here after its route ships is a console rendering
         // nothing; the entry going stale in the other direction is caught by the same assertion.
-        'core.principal.revoke-platform-scope':
-          'ADDED 2026-09-05. `platform-operators-v1` is accepted and the revoke route is next. It ' +
-          'is CRITICAL, so when the route lands the confirmation gate applies automatically — ' +
-          'which is only true because the permission is in CRITICAL_PERMISSIONS, and it was NOT ' +
-          'until 2026-09-05. See suites/platform-operator/registry-coherence.ts, which is the ' +
-          'control that now stops that drift recurring',
+        // AND `core.principal.revoke-platform-scope` IS DELETED TOO, later the same day, when
+        // `platform.operators.revoke` shipped. **The map is now empty, and emptying it is the
+        // outcome it was built for** — each deletion is the one edit here that needs no argument.
+        //
+        // AN EMPTY MAP IS NOT A DEAD CHECK. The assertion below still runs against the permanent
+        // map, and a NEW pending permission arriving with no entry still fails. What has gone
+        // away is the backlog, not the mechanism.
       };
 
       const unreachable = held.filter((permissionId) => !reachable.includes(permissionId)).sort();
@@ -527,10 +543,11 @@ export function buildPlatformAuthorizationSuite(
       // moved into this list the day its routes shipped, which is the whole point of reporting
       // reachable rather than held: a console renders exactly the actions the operator can take.
       assertEqual(
-        'whoami reports the reachable seven and not the held ten',
+        'whoami reports the reachable eight and not the held ten',
         [...answer.permissions].sort().join(','),
         'core.credential.reset,core.organization.create,core.organization.list,' +
-          'core.platform-audit.read,core.template.create,core.template.list,core.template.read',
+          'core.platform-audit.read,core.principal.revoke-platform-scope,core.template.create,' +
+          'core.template.list,core.template.read',
       );
     } finally {
       world.close();

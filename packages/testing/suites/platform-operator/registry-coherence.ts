@@ -222,6 +222,9 @@ const OPERATION_CONTRACTS: readonly string[] = Object.freeze([
   'organization-detail-v1.contract.yaml',
   // ADDED 2026-09-05 with the two audit feeds.
   'platform-audit-read-v1.contract.yaml',
+  // ADDED 2026-09-05 with the operator roster. It also contracts `platform.operators.revoke`,
+  // which is NOT built yet — see the statement-orphan case for why that distinction matters.
+  'platform-operators-v1.contract.yaml',
 ]);
 
 /**
@@ -619,6 +622,37 @@ export function buildRegistryCoherenceSuite(): Suite {
     //
     // `statementCatalogEntries()` exists for exactly this — see its header: the correspondence
     // must be asserted over the WHOLE catalog rather than over the entries somebody remembered.
+    // ===================================================================================
+    // A CONTRACTED-BUT-UNBUILT OPERATION IS NOT AN ORPHAN, AND THE DIFFERENCE IS MECHANICAL.
+    // ===================================================================================
+    //
+    // `platform.operators.revoke` has a statement and no route: `platform-operators-v1` contracts
+    // it and Core implements it next. **A statement written AHEAD of its route is the intended
+    // order** — `assertConfirmableOperationsAreCoherent` requires a confirmable operation to have
+    // one, so the statement must exist before the operation can be registered.
+    //
+    // THE ORPHAN THIS CASE IS FOR IS THE OTHER DIRECTION: a statement whose operation was RENAMED
+    // OR REMOVED, which no guard catches and which nobody would ever be shown.
+    //
+    // So the known set includes every operation any platform contract DECLARES, not only those
+    // that are routed. **That is a distinction the contracts already draw and this case can read
+    // — it needs no list of pending exceptions**, which is the same reasoning that kept the
+    // ceiling-and-floor check list-free. A statement naming something in no contract at all is
+    // still an orphan and still fails.
+    const contracted = new Set<string>();
+    for (const fileName of OPERATION_CONTRACTS) {
+      for (const operationId of successStatusByOperation(
+        readFileSync(`${PLATFORM_CONTRACT_DIRECTORY}${fileName}`, 'utf8'),
+      ).keys()) {
+        contracted.add(operationId);
+      }
+    }
+    assertTrue(
+      'the contracts were read, so the allowance above is not blanket',
+      contracted.size >= 7,
+      `only ${String(contracted.size)} contracted operations parsed`,
+    );
+
     const known = new Set<string>([
       ...createCustomerRoutes({ businesses: createStoreBusinessDirectory() }).map((route) =>
         route.kind === 'action'
@@ -627,6 +661,7 @@ export function buildRegistryCoherenceSuite(): Suite {
       ),
       ...platformRoutes().map((route) => route.id),
       ...confirmableOperations(),
+      ...contracted,
     ]);
     const entries = statementCatalogEntries();
     assertTrue(

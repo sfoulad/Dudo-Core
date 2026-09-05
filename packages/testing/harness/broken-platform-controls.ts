@@ -54,6 +54,13 @@ export function withMutualExclusionProbeRemoved(store: PlatformOperatorStore): P
     listPlatformAudit: (filters, limit, after) => store.listPlatformAudit(filters, limit, after),
     listOrganizationAudit: (organizationId, filters, limit, after) =>
       store.listOrganizationAudit(organizationId, filters, limit, after),
+    // `listOperators` ADDED 2026-09-05 and DELEGATED. It is the operator roster, and this control
+    // breaks only `principalHasAnyMembership` — a roster that answered an empty list here would
+    // break a second thing and a red case could no longer be attributed to the probe.
+    listOperators: (limit, after) => store.listOperators(limit, after),
+    // DELEGATED. This control breaks the membership PROBE, not the revocation write.
+    revokeOperator: (principalId, isSelfRevocation, reservation) =>
+      store.revokeOperator(principalId, isSelfRevocation, reservation),
   };
 }
 
@@ -182,5 +189,12 @@ export function withFailingActionLog(store: PlatformOperatorStore): PlatformOper
     listPlatformAudit: (filters, limit, after) => store.listPlatformAudit(filters, limit, after),
     listOrganizationAudit: (organizationId, filters, limit, after) =>
       store.listOrganizationAudit(organizationId, filters, limit, after),
+    // DELEGATED. This control breaks the action-log WRITE and every read must keep working, or
+    // the request fails before it reaches the recorder and the case passes for the wrong reason.
+    listOperators: (limit, after) => store.listOperators(limit, after),
+    // AND THE REVOCATION WRITE IS DELEGATED TOO. It is not the action log, and a control that
+    // broke both could not show that the action-log failure is what fails the operation.
+    revokeOperator: (principalId, isSelfRevocation, reservation) =>
+      store.revokeOperator(principalId, isSelfRevocation, reservation),
   };
 }

@@ -110,6 +110,21 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
           'ADDED 2026-09-05 for organization-detail-v1. One Organization id in; its Template ' +
           'reference and a member COUNT out. It returns a count and never a member list, so it ' +
           'cannot be used to enumerate the people in a tenant',
+        revokeOperator:
+          'ADDED 2026-09-05 for platform-operators-v1. **THE ONLY WRITE ON THIS PORT BESIDES THE ' +
+          'ACTION LOG**, and it is a CONDITIONAL DELETE rather than a read-then-write: it takes a ' +
+          'reservation, and it returns null for both "no such operator" and "the precondition ' +
+          'failed" — a statement reporting WHICH would be the oracle the collapse closes. ' +
+          '`isSelfRevocation` is a parameter rather than something it infers, so the caller has ' +
+          'to have decided. It reaches one principal and no tenant',
+        listOperators:
+          'ADDED 2026-09-05 for platform-operators-v1. A bounded, keyset-anchored page of the ' +
+          'operator roster. **THE REACH IT GRANTS IS BOUNDED BY THE ROW TYPE, NOT BY THE CALLER: ' +
+          '`PlatformOperatorSummary` has three fields — principal id, platform role, granted-at — ' +
+          'and no email, no display name, no last-seen.** So a handler could not leak a personal ' +
+          'detail through this question even if it tried, which is the guarantee being in the ' +
+          'type rather than in a caller\'s restraint. It enumerates operators and nothing about ' +
+          'any tenant',
         listPlatformAudit:
           'ADDED 2026-09-05 for platform-audit-read-v1. A bounded, keyset-anchored page of the ' +
           'action log with four optional filters. **IT SELECTS `NULL AS target_principal_id`** — ' +
