@@ -21,10 +21,25 @@ testing can begin the moment they are given, rather than being written afterward
 **The deploys are ordered and the order matters.** A custom domain is claimed by exactly one Worker.
 `admin.dudo.work` has been removed from `wrangler.jsonc`, so:
 
-1. Deploy `dudo-core` — this **releases** `admin.dudo.work`
-2. Deploy `dudo-admin` — this **claims** it
+1. **Apply migrations `0008`–`0010` FIRST.** See below — this is not merely "before you test."
+2. Deploy `dudo-core` — this **releases** `admin.dudo.work`
+3. Deploy `dudo-admin` — this **claims** it
 
-`admin.dudo.work` is briefly unrouted in between. That is expected, not a fault.
+`admin.dudo.work` is briefly unrouted between 2 and 3. That is expected, not a fault.
+
+### ⚠ Migrations before deploy, and the reason is not tidiness
+
+**`findPrincipal` now reads `platform_operator` and `organization_membership` in the same statement**
+— that is how the Action-side mutual-exclusion check costs no extra round trip. The consequence:
+
+> **A control plane without `0008` fails that statement, and NOTHING AUTHENTICATES.**
+
+Not the platform routes — **nothing**. Every login on `app.dudo.work` included. `qa-agent` found
+this the hard way when five unrelated session-revocation cases went red against a fixture that
+applied only five migrations.
+
+**So deploying this Worker against an unmigrated control plane takes the whole product down, not
+just the new surface.** Migrations first, then deploy.
 
 ---
 
