@@ -69,6 +69,12 @@ import { dispatchPreAuthRequest } from '../identity/pre-auth-admission.ts';
 import { matchPreAuthEntryPoint } from '../identity/pre-auth-registry.ts';
 import type { SessionRouteDependencies } from '../identity/session-routes.ts';
 import { dispatchSessionRoute, matchSessionRoute } from '../identity/session-routes.ts';
+import type { PlatformRouteDependencies } from '../platform/platform-routes.ts';
+import {
+  dispatchPlatformRoute,
+  isPlatformHost,
+  matchPlatformRoute,
+} from '../platform/platform-routes.ts';
 import { CORE_APP_PERMISSIONS, CORE_BASE_PATH, createCoreRouter } from './core-routes.ts';
 
 /**
@@ -110,6 +116,17 @@ export type ApiDependencies = PipelineDependencies & {
    * resolver and the credential reader these need.
    */
   readonly sessionRoutes?: SessionRouteDependencies;
+  /**
+   * THE PLATFORM ROUTE CLASS. `docs/decisions/0025`. Optional here, and absent means the routes
+   * are UNREACHABLE — not open: `not_found`, exactly as an unregistered path gets.
+   *
+   * Composed by `platform/composition.ts`, which is the only place that holds the platform store,
+   * the credential reader and the admission port these need.
+   *
+   * IT CARRIES ITS OWN HOST LIST, and the block below refuses on a host outside it. Both halves
+   * matter: an uncomposed runtime and a request on `app.dudo.work` answer the identical 404.
+   */
+  readonly platformRoutes?: PlatformRouteDependencies;
 };
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
@@ -268,6 +285,83 @@ export async function handleRequest(
     // 200 for both. Neither route creates a resource — selection MOVES the row behind an existing
     // session rather than making one — so a 201 would misdescribe it.
     return renderSuccess(outcome.value, 200, requestId, correlationId);
+  }
+
+  // ===========================================================================================
+  // THE PLATFORM ROUTE CLASS. `docs/decisions/0025`. Matched AFTER the session routes and BEFORE
+  // Core's own Actions and the App router.
+  // ===========================================================================================
+  //
+  // BEFORE THE `basePath` TEST AND BEFORE BOTH ROUTERS: these are ABSOLUTE `/api/v1/platform/**`
+  // paths. The prefix sits in `RESERVED_PRE_AUTH_PATH_PREFIXES`, so
+  // `assertNoReservedPathCollision` refuses at CONSTRUCTION any App route table that could
+  // resolve onto them, and this block answers first at RUNTIME. Both halves are needed: an App
+  // that could serve a path here could present itself to an operator as the admin console.
+  //
+  // THE HOST BINDING IS CHECKED HERE AND IT ANSWERS 404, NOT 403. `docs/decisions/0022` as
+  // amended made admin a SECOND WORKER with THE SAME `main`, so this route table is present in
+  // both deployments; without this test `/api/v1/platform/**` would be reachable on
+  // `app.dudo.work`, where every tenant user already has a session. It would still be REFUSED
+  // there — authorization runs on the `platform_operator` row and not on the hostname — so this
+  // is not a hole, but it is an unnecessary surface that exists purely as a side effect of a
+  // deployment decision taken for an unrelated reason.
+  //
+  // 404 RATHER THAN 403 BECAUSE ANSWERING 403 WOULD CONFIRM THE ROUTE EXISTS on a host where it
+  // should not appear to. The same choice `organization-selection-v1` makes when it requires GET
+  // on the singular path to be 404 rather than 405.
+  //
+  // *** THE AUTHORIZATION CHECK IS THE CONTROL; THIS IS A SECOND LAYER AND MUST NEVER BECOME THE
+  // FIRST. *** An implementation that bound the host and skipped the `platform_operator` check
+  // would be relying on routing for authorization, which is "UI hiding is presentation, never
+  // security" moved down a layer.
+  //
+  // NOTHING BELOW THIS BLOCK RUNS FOR A PLATFORM ROUTE. No `AuthenticatedPrincipal` is built, no
+  // tenant store is obtained, and `invokeAction` is never called. That is `0025` decision 3 as
+  // control flow: an Action always has a tenant, and these are not Actions.
+  const platformRoute = matchPlatformRoute(request.method, url.pathname);
+  if (platformRoute !== undefined) {
+    if (
+      dependencies.platformRoutes === undefined ||
+      !isPlatformHost(dependencies.platformRoutes.adminHosts, url.hostname)
+    ) {
+      // Uncomposed, or the wrong host. ONE ANSWER FOR BOTH, so a caller cannot tell a deployment
+      // that does not serve this class from a host that does not.
+      return renderError(notFound(), requestId, correlationId);
+    }
+    let platformBodyText = '';
+    if (METHODS_WITH_BODY.has(request.method)) {
+      try {
+        platformBodyText = await request.text();
+      } catch {
+        return renderError(
+          invalidArgument([detail('', 'must_be_valid_json')]),
+          requestId,
+          correlationId,
+        );
+      }
+    }
+    const platformOutcome = await dispatchPlatformRoute(
+      dependencies.platformRoutes,
+      platformRoute,
+      {
+        bodyText: platformBodyText,
+        headers: new Map(
+          [...request.headers.entries()].map(([name, value]) => [name.toLowerCase(), value]),
+        ),
+        // THE RAW QUERY STRING. The class parses it against the route's DECLARED parameter set
+        // and refuses the whole string for a route that declares none — it is not merged into an
+        // Action input, because there is no Action here.
+        queryString: url.search.startsWith('?') ? url.search.slice(1) : url.search,
+        requestId,
+        correlationId,
+      },
+    );
+    if (!platformOutcome.ok) {
+      return renderError(platformOutcome.error, requestId, correlationId);
+    }
+    // 200 for both. Neither route creates a resource, and neither writes anything the caller
+    // asked for — the only write on either path is the audit record P4 requires.
+    return renderSuccess(platformOutcome.value, 200, requestId, correlationId);
   }
 
   // ===========================================================================================

@@ -337,10 +337,41 @@ const BY_ID: ReadonlyMap<PreAuthEntryPointId, PreAuthEntryPoint> = new Map(
   ENTRY_POINTS.map((point) => [point.id, point]),
 );
 
-/** The reserved prefixes. A path under one of these belongs to Core and to nothing else. */
+/**
+ * The reserved prefixes. A path under one of these belongs to Core and to nothing else.
+ *
+ * ===========================================================================================
+ * THE LIST IS WIDER THAN ITS NAME. `/api/v1/platform/` IS NOT A PRE-AUTHENTICATION PREFIX.
+ * ===========================================================================================
+ *
+ * `docs/decisions/0025` adds the platform route class at `/api/v1/platform`, and
+ * `platform-operator-v1` requires that no App route table be able to resolve onto it: "An App
+ * that could serve a path under /api/v1/platform could present itself as the admin console."
+ *
+ * `isReservedPreAuthPath` and `assertNoReservedPathCollision` are the platform's only
+ * reservation mechanism, and both read this constant, so the prefix belongs here. THE EXPORTED
+ * NAME IS DELIBERATELY NOT CHANGED — it is referenced by `qa-agent`'s suites and by
+ * `assertRegistryIsCoherent`'s error message, and a rename would be a wide edit for a comment's
+ * worth of accuracy. Read it as "paths reserved to Core", of which the pre-authentication entry
+ * points are the majority.
+ *
+ * `assertRegistryIsCoherent` is unaffected: it checks that every ENTRY POINT sits under one of
+ * these prefixes, not that every prefix has an entry point under it.
+ *
+ * THE TRAILING SLASH ON `/api/v1/platform/` IS LOAD-BEARING, exactly as it is on `/auth/`.
+ * `isReservedPreAuthPath` also matches the prefix with its trailing slash trimmed, so
+ * `/api/v1/platform` itself is reserved while `/api/v1/platforms` — a plausible future App path
+ * — is not. Without the slash, `startsWith` would reserve it.
+ *
+ * THIS IS THE CODE HALF OF THE RESERVATION. The contract also requires `platform` to be added to
+ * `reservedApiPathSegments` in `packages/contracts/registries/core-object-registry.yaml`, which
+ * is `architecture-agent`'s file and is NOT changed by this work — requested through the Team
+ * Lead.
+ */
 export const RESERVED_PRE_AUTH_PATH_PREFIXES: readonly string[] = Object.freeze([
   '/auth/',
   '/health',
+  '/api/v1/platform/',
 ]);
 
 /**

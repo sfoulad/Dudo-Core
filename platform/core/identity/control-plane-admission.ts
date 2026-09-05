@@ -151,6 +151,49 @@ export const ORGANIZATION_MEMBERSHIP_ROW_WRITES = 2;
 export const TENANT_DIRECTORY_ROW_WRITES = 2;
 
 /**
+ * `platform_operator` (`0008`): 1 table row + 1 implicit primary-key index.
+ *
+ * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL —
+ * the same property `PRINCIPAL_CREDENTIAL_ROW_WRITES` has, and the one place in the whole
+ * super-admin surface where it SURVIVES. `docs/decisions/0025` publishes no route that creates a
+ * platform operator; `core.platform-operator.create` is deliberately absent from the permission
+ * catalog, and adding one is a decision rather than an extension. The rows are inserted by an
+ * operator running SQL that `platform/core/platform/tools/seed-platform-operator.ts` printed, so
+ * they never pass through `reserve` and cannot be caused by a request.
+ *
+ * Declared anyway, for the reason `PRINCIPAL_ROW_WRITES` is: the first writer must draw an
+ * accounted, already-counted cost rather than a number it picked.
+ */
+export const PLATFORM_OPERATOR_ROW_WRITES = 2;
+
+/**
+ * `platform_operator_action` (`0009`): 1 table row + 1 implicit primary-key index.
+ *
+ * ===========================================================================================
+ * THIS IS THE ONE COST IN THIS FILE THAT REQUEST TRAFFIC ACTUALLY SPENDS ON A **READ**.
+ * ===========================================================================================
+ *
+ * `platform-operator-v1` binding property P4 requires EVERY platform route to write an audit
+ * record, including both of its reads, because "an operator enumerating every Organization is
+ * exactly the reconnaissance step that precedes a targeted action". So a platform GET costs 2
+ * row-writes where a tenant GET costs none.
+ *
+ * IT IS SAFE FOR A REASON THAT DOES NOT GENERALISE, and `0013` is the test it has to pass:
+ * `0013`'s problem was that an UNAUTHENTICATED or merely authenticated caller could force
+ * unbounded denial audits. A record here is written only after the caller has been established as
+ * the holder of a `platform_operator` row, so the population that can force a write is bounded by
+ * the number of real operators — one or two — rather than by traffic.
+ *
+ * IF THAT CLASS EVER BECOMES REACHABLE BY A LARGER POPULATION, THE ARGUMENT FAILS AND P4 MUST BE
+ * BOUNDED THE WAY D2 BOUNDED SUCCESSFUL READS. Written here because the failure would be silent.
+ *
+ * WHEN A MIGRATION ADDS AN INDEX — the obvious candidate is `(actor_principal_id, occurred_at)`,
+ * for "what has this operator done" — THIS NUMBER MUST MOVE WITH IT. `0009` says the same at the
+ * schema.
+ */
+export const PLATFORM_OPERATOR_ACTION_ROW_WRITES = 2;
+
+/**
  * `principal_credential` (`0006`): 1 table row + 1 implicit primary-key index.
  *
  * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL:
@@ -190,8 +233,10 @@ export const PRINCIPAL_CREDENTIAL_ROW_WRITES = 2;
  *   Organization switch            1          1       3      OVER-CHARGED BY 2 (200%)
  *   session rotation               2          6       6      NOT BUILT
  *   membership change              1        1-2       2      NOT BUILT; + 5 in the tenant database
- *   Organization change            1        1-2       2      NOT BUILT; onboarding is 6
+ *   Organization change            1        1-2       2      NOT BUILT; onboarding is 10 — see below
  *   credential enrollment          1          2       2      OPERATOR-ONLY, out of band; see below
+ *   platform operator created      1          2       2      OPERATOR-ONLY, out of band; no route
+ *   platform operator action       1          2       2      EVERY platform request, including reads
  *
  * CREDENTIAL ENROLLMENT IS IN THIS TABLE AND NOT IN THIS BUDGET, and the distinction is worth
  * stating rather than inferring from a blank cell. `docs/decisions/0015` §D gave the platform a
@@ -234,11 +279,25 @@ export const PRINCIPAL_CREDENTIAL_ROW_WRITES = 2;
  * it explicitly; §C does not. It also spends from TWO ALLOCATIONS: 2 from `system` through this
  * port, 5 from `business` through the per-Organization coordinator.
  *
- * ORGANIZATION CREATION HAS NO AUDITABLE HOME YET, and that is worth knowing before it is built.
- * Onboarding is 6 row-writes here — `organization` 2 + `tenant_directory` 2 + the owner's
- * `organization_membership` 2 — and its audit record cannot go into the new Organization's
- * tenant audit log, because reaching that log needs a tenant store handle, which needs the
- * directory entry that the same operation is still creating. Another decision for that slice.
+ * ORGANIZATION CREATION COSTS **10**, NOT 6, AND BOTH HALVES OF THIS PARAGRAPH HAVE BEEN
+ * CORRECTED BY `docs/decisions/0024` AND `docs/decisions/0025`. THE ORIGINAL IS KEPT IN THE
+ * SENTENCE BELOW BECAUSE THE WAY IT WAS WRONG IS THE USEFUL PART.
+ *
+ * AS WRITTEN: "Onboarding is 6 row-writes here — `organization` 2 + `tenant_directory` 2 + the
+ * owner's `organization_membership` 2 — and its audit record cannot go into the new
+ * Organization's tenant audit log, because reaching that log needs a tenant store handle, which
+ * needs the directory entry that the same operation is still creating."
+ *
+ * THE ARITHMETIC ASSUMED THE ADMIN PRINCIPAL AND THEIR CREDENTIAL ALREADY EXISTED, which is
+ * exactly what is false when a new customer arrives. `0024`: add `principal` 2 +
+ * `principal_credential` 2 = **10**, plus the first inner unit and the audit record from a
+ * different allocation. The gap was precisely the two objects nobody counted.
+ *
+ * THE CIRCULARITY WAS AN ARTEFACT OF ORDERING AND NOT A PROPERTY OF THE PROBLEM. `0025` decision
+ * 5: WRITE `tenant_directory` FIRST and the store handle then resolves, so the tenant-side audit
+ * record can be written after all. The platform-side record has a home of its own — the
+ * platform-operator action log, `0009_platform_operator_action.sql` — and BOTH ARE REQUIRED. The
+ * order is: the operation's own writes, then the platform audit record, then the tenant record.
  */
 
 // =============================================================================================

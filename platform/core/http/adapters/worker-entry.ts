@@ -98,6 +98,8 @@ import { createD1CredentialStore } from '../../identity/adapters/d1/d1-credentia
 import { createInProcessControlPlaneWriteAdmission } from '../../identity/control-plane-admission.ts';
 import { createMembershipPrincipalAuthorizationSource } from '../../identity/principal-authorization-source.ts';
 import { createIdentityComposition } from '../../identity/composition.ts';
+import { createD1PlatformStore } from '../../platform/adapters/d1/d1-platform-store.ts';
+import { createPlatformComposition } from '../../platform/composition.ts';
 import { createTimerSleeper } from '../../identity/pre-auth-admission.ts';
 import type { PreAuthLimiter } from '../../identity/pre-auth-admission.ts';
 import { createInProcessPreAuthLimiter } from '../../identity/pre-auth-limiter.ts';
@@ -147,6 +149,31 @@ const TENANT_BINDING = 'DB_TENANT';
 /** At least 32 bytes, matching every other key floor in the platform. */
 const MIN_SECRET_BYTES = 32;
 
+/**
+ * ===========================================================================================
+ * THE HOSTS ON WHICH THE PLATFORM ROUTE CLASS IS SERVED. `docs/decisions/0022` as amended
+ * 2026-09-05, `docs/decisions/0025` decision 3.
+ * ===========================================================================================
+ *
+ * `wrangler.admin.jsonc` routes `admin.dudo.work` to the `dudo-admin` Worker, which shares
+ * `worker.ts` as its `main` with `dudo-core`. SAME `main` MEANS THE SAME ROUTE TABLE IS PRESENT IN
+ * BOTH, so without this list `/api/v1/platform/**` would also be mounted on `app.dudo.work` and
+ * `api.dudo.work`, where every tenant user already holds a session. It would still be refused
+ * there — authorization runs on the `platform_operator` row, never on the hostname — but it is an
+ * unnecessary surface, and `http/api.ts` answers 404 for it rather than 403.
+ *
+ * IT IS WRITTEN HERE, IN THE ADAPTER, RATHER THAN IN `platform/core/platform/**`. A hostname is
+ * deployment configuration; a domain module that knew one would be a domain module that had to
+ * change when the domain did. This file already holds `TENANT_BINDING` for the same reason.
+ *
+ * LOCAL DEVELOPMENT AND VERIFICATION SUPPLY THEIR OWN. `wrangler dev` serves `localhost`, which is
+ * NOT in this list, so every platform route answers 404 under `npm run dev` unless
+ * `CoreRuntimeOptions.adminHosts` is passed. THAT IS THE FAIL-CLOSED DIRECTION AND IT IS CHOSEN
+ * DELIBERATELY: adding `localhost` here would put a permanently-true host in the production
+ * deployment's list, and the value of this control is that the list is short and reviewed.
+ */
+const DEFAULT_ADMIN_HOSTS: readonly string[] = Object.freeze(['admin.dudo.work']);
+
 export type CoreRuntime = {
   readonly dependencies: ApiDependencies;
   readonly businesses: BusinessDirectory;
@@ -160,6 +187,16 @@ export type CoreRuntimeOptions = {
    * THERE IS NO DEFAULT AND THERE MUST NOT BE ONE. See `preAuthDependencies` below.
    */
   readonly preAuthLimiter?: PreAuthLimiter;
+  /**
+   * The hostnames on which the platform route class is served. Defaults to `DEFAULT_ADMIN_HOSTS`.
+   *
+   * SUPPLIED BY LOCAL DEVELOPMENT AND BY VERIFICATION, NOT BY PRODUCTION. `wrangler dev` serves
+   * `localhost`, which the default deliberately does not include, so the console's API is
+   * unreachable under `npm run dev` until this is passed. An empty array makes every platform
+   * route answer 404 — which is a legitimate thing to want, and is why an empty array is
+   * distinguishable from omitting the option.
+   */
+  readonly adminHosts?: readonly string[];
 };
 
 /**
@@ -288,6 +325,41 @@ export async function createCoreRuntime(
     // `evidence_recorder_absent` and is never silent. Reported alongside the limiter.
   });
 
+  // ===========================================================================================
+  // THE PLATFORM ROUTE CLASS. `docs/decisions/0025`.
+  // ===========================================================================================
+  //
+  // IT IS COMPOSED UNCONDITIONALLY, like the session routes and unlike `preAuth`. Its callers are
+  // AUTHENTICATED and its routes evaluate a permission, so `0014` §B's "a permissionless route
+  // only with a rate limiter" does not reach them and there is nothing to gate on.
+  //
+  // WHAT BOUNDS THEM TODAY IS THE PER-PRINCIPAL DAILY WRITE CEILING AND NOT A RATE LIMITER, and
+  // the contract is explicit that this must not be reported as rate limiting being done. Binding
+  // property P4 makes every platform request write an audit record, that record reserves from
+  // `admission`, and `PER_PRINCIPAL_DAILY_ROW_WRITES` is 600 — so 300 platform actions per
+  // operator per UTC day, after which every route answers `unavailable`. At one or two operators
+  // that holds. `0017`'s in-process limiter is per-isolate and would not bound this either; the
+  // durable limiter is still owed (contract PO-4).
+  //
+  // IT RECEIVES THE **CONTROL-PLANE** BINDING AND NOTHING ELSE. `createD1PlatformStore` takes one
+  // database and there is no argument through which `DB_TENANT` could reach it.
+  const platformStore = createD1PlatformStore(controlDatabase);
+  const platformRoutes = await createPlatformComposition({
+    store: platformStore,
+    admission,
+    authorizer: createAuthorizer(),
+    ids: createRandomIdGenerator(),
+    clock,
+    // THE SAME CREDENTIAL READER AND THE SAME RESOLUTION FLOOR the other two authenticated paths
+    // use. `resolvePrincipalId` is `0014` §C.5 steps 1 and 2 and stops there: it returns a
+    // principal identifier and NOT an `AuthenticatedPrincipal`, so no organization identifier
+    // crosses into a class whose binding property P1 is that it can reach no tenant.
+    readSessionId: identity.sessionRoutes.readSessionId,
+    authenticatePrincipal: (sessionId) => identity.sessions.resolvePrincipalId(sessionId),
+    cursorSigningKey: cursorKey,
+    adminHosts: options.adminHosts ?? DEFAULT_ADMIN_HOSTS,
+  });
+
   return {
     dependencies: {
       // ===================================================================================
@@ -327,6 +399,7 @@ export async function createCoreRuntime(
       // does not reach them and there is nothing to gate on. The picker writes nothing; selection
       // is bounded by the control-plane daily budget and refuses with `quota_exceeded`.
       sessionRoutes: identity.sessionRoutes,
+      platformRoutes,
       // NO `coordinationFailureReporter` and NO `auditFailureReporter`, and their absence
       // suppresses nothing: `announceAuditFailure` emits to a last-resort channel
       // unconditionally, before any supplied reporter, and that channel is not injectable

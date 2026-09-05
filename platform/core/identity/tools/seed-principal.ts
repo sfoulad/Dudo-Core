@@ -300,7 +300,7 @@ function randomBytes(count: number): CryptoBytes {
 }
 
 /**
- * Renders the two statements.
+ * Renders the statements.
  *
  * VALUES ARE INLINED RATHER THAN PARAMETERISED, because the output is SQL a human pastes into
  * `wrangler d1 execute`, which takes a statement and not a parameter list. Every value inlined is
@@ -308,12 +308,45 @@ function randomBytes(count: number): CryptoBytes {
  * `sqlQuote` doubles any apostrophe regardless, so a value that somehow contained one could not
  * terminate the string. NOTHING THE OPERATOR TYPED IS INLINED: the email address appears nowhere
  * in the output, because it appears nowhere in the schema.
+ *
+ * ===========================================================================================
+ * `includeOrganization: false` — THE MEMBERLESS MODE, ADDED FOR `docs/decisions/0025`.
+ * ===========================================================================================
+ *
+ * IT DEFAULTS TO `true`, SO EVERY EXISTING CALLER AND EVERY EXISTING TEST IS UNCHANGED. The
+ * five-row output is still what an ordinary run produces.
+ *
+ * WHY THE MODE EXISTS. A PLATFORM OPERATOR HOLDS ZERO MEMBERSHIP ROWS (`0024` invariant 1), and
+ * this tool's five-row output contains one. So the tool that creates every principal in Dudo
+ * could not create the one kind of principal `0025` needs, and `seed-platform-operator.ts` — which
+ * grants authority to an EXISTING principal and deliberately creates no credential — had no way
+ * to obtain a subject. Running the five-row form first and then granting authority produces
+ * exactly the state refused everywhere, and `0010_platform_operator_mutual_exclusion.sql`'s
+ * trigger refuses the grant outright.
+ *
+ * WHAT THE MEMBERLESS FORM PRODUCES: an account that CAN AUTHENTICATE AND CAN REACH NOTHING.
+ * `/auth/session/organizations` answers 200 with `[]`, every Organization it could name at
+ * `/auth/session/organization` answers the same 404 a non-member receives, its session's
+ * `active_organization_id` stays null for its whole life, and no tenant store can ever be
+ * resolved for it. That is not a broken account — it is precisely the shape a platform operator
+ * must have, and it is why the isolation is structural rather than a policy.
  */
-export function renderSeedSql(rows: SeedRows): string {
+export function renderSeedSql(
+  rows: SeedRows,
+  options: { readonly includeOrganization?: boolean } = {},
+): string {
+  const includeOrganization = options.includeOrganization ?? true;
   const created = sqlQuote(rows.createdAt);
+  const tenantStatements = includeOrganization
+    ? organizationStatements(rows, created)
+    : memberlessNotice();
   return [
-    '-- Dudo — bootstrap the first principal and its Organization.',
-    '-- FIVE statements, ONE database. Review before running.',
+    includeOrganization
+      ? '-- Dudo — bootstrap the first principal and its Organization.'
+      : '-- Dudo — bootstrap a MEMBERLESS principal. No Organization, no membership.',
+    includeOrganization
+      ? '-- FIVE statements, ONE database. Review before running.'
+      : '-- TWO statements, ONE database. Review before running.',
     '--',
     '-- Target: DB_CONTROL (dudo-control-plane). NOT DB_TENANT. Every table below is a',
     '-- control-plane table and none of them has a tenant_id column.',
@@ -342,6 +375,12 @@ export function renderSeedSql(rows: SeedRows): string {
     `  ${created}`,
     ');',
     '',
+    ...tenantStatements,
+  ].join('\n');
+}
+
+function organizationStatements(rows: SeedRows, created: string): readonly string[] {
+  return [
     '-- The tenant. This identifier becomes tenant_id on every row of the tenant database.',
     'INSERT INTO organization (organization_id, status, created_at)',
     `VALUES (${sqlQuote(rows.organizationId)}, 'active', ${created});`,
@@ -352,8 +391,12 @@ export function renderSeedSql(rows: SeedRows): string {
     "-- `role` CARRIES THE GRANT (docs/decisions/0019). 'owner' is the full Customer Directory",
     '-- Action set in MVP scope, mapped in platform/core/authorization/roles.ts. A closed beta',
     '-- with one seeded principal per Organization has nobody to be a read-only member yet.',
-    "-- A membership row with a NULL or unrecognised role grants NOTHING, so omitting this",
+    '-- A membership row with a NULL or unrecognised role grants NOTHING, so omitting this',
     '-- column produces an account that logs in and is refused every Action.',
+    '--',
+    '-- *** THIS ROW IS WHAT MAKES THE PRINCIPAL INELIGIBLE TO BE A PLATFORM OPERATOR. ***',
+    '-- docs/decisions/0024 invariant 1: a platform principal holds ZERO memberships. If this',
+    '-- account is meant to run the admin console, re-run with --no-organization instead.',
     '--',
     '-- THERE IS NO AUDITED WAY TO CHANGE IT AFTERWARDS. docs/decisions/0007 rule 9 requires',
     '-- permission changes to be audited and an operator editing this column by hand produces no',
@@ -369,10 +412,50 @@ export function renderSeedSql(rows: SeedRows): string {
     'INSERT INTO tenant_directory (organization_id, binding_name, state, created_at)',
     `VALUES (${sqlQuote(rows.organizationId)}, 'DB_TENANT', 'active', ${created});`,
     '',
-  ].join('\n');
+  ];
 }
 
-function sqlQuote(value: string): string {
+/**
+ * What replaces the three tenant statements in the memberless form.
+ *
+ * IT IS COMMENTARY AND NOT A STATEMENT, deliberately: the whole point of this mode is that three
+ * rows are ABSENT, and an absence that leaves no trace in the output is one a reviewer of the
+ * `.sql` file cannot see. Someone reading the file six months from now should be able to tell
+ * "the Organization was deliberately omitted" from "the tool was interrupted".
+ */
+function memberlessNotice(): readonly string[] {
+  return [
+    '-- =========================================================================================',
+    '-- NO organization, NO organization_membership AND NO tenant_directory ROW, DELIBERATELY.',
+    '-- =========================================================================================',
+    '--',
+    '-- docs/decisions/0024 invariant 1: A PLATFORM PRINCIPAL HOLDS ZERO MEMBERSHIP ROWS. Not a',
+    '-- scoped one, not a read-only one, not one just for the tenant being supported. The absence',
+    '-- of the row IS the isolation.',
+    '--',
+    '-- WHAT THIS ACCOUNT CAN DO AFTER THE TWO STATEMENTS ABOVE: log in, and nothing else.',
+    '--   * /auth/session/organizations answers 200 with an EMPTY array. That is correct, not an',
+    '--     error, and organization-selection-v1 requires both clients to render it as a',
+    '--     first-class explained state.',
+    '--   * every Organization it could name at /auth/session/organization answers the same 404 a',
+    '--     non-member receives.',
+    "--   * its session's active_organization_id stays null for its whole life, so no tenant store",
+    '--     can ever be resolved for it.',
+    '--',
+    '-- TO MAKE IT A PLATFORM OPERATOR, run seed-platform-operator.ts with the principal_id above.',
+    '-- TO MAKE IT AN ORDINARY USER INSTEAD, re-run this tool WITHOUT --no-organization. Do not',
+    '-- hand-write a membership row for a principal that has already been granted platform',
+    '-- authority: it is refused everywhere, and 0010\'s trigger refuses the INSERT.',
+    '',
+  ];
+}
+
+/**
+ * EXPORTED SO THE PLATFORM-OPERATOR SEED TOOL USES THIS ONE RATHER THAN ITS OWN.
+ * `platform/core/platform/tools/seed-platform-operator.ts` renders different statements against
+ * different tables, and a second copy of the quoting rule is a second place it can be got wrong.
+ */
+export function sqlQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
@@ -431,8 +514,13 @@ const BACKSPACE = String.fromCharCode(8);
  * SUPPRESSION IS IMPOSSIBLE, and that is announced rather than quietly skipped. An operator who
  * believes a password is hidden and is wrong has been given a false assurance, which is worse
  * than no assurance.
+ *
+ * EXPORTED SO `platform/core/platform/tools/seed-platform-operator.ts` USES THIS ONE. That tool
+ * needs exactly the same prompt, and a second implementation of raw-mode handling is a second
+ * place a terminal gets left in raw mode after a Ctrl-C. Importing this module does not open a
+ * prompt: `main` runs only when `argv[1]` names this file.
  */
-async function prompt(label: string, hidden: boolean): Promise<string> {
+export async function prompt(label: string, hidden: boolean): Promise<string> {
   const runtime = nodeProcess();
   if (runtime === undefined) {
     throw new Error('This tool runs under Node. There is no process object.');
@@ -539,8 +627,12 @@ async function main(): Promise<void> {
       'job.\n\n',
   );
 
+  // `--no-organization`, added for docs/decisions/0025. See `renderSeedSql`. It is OPT-IN and the
+  // default is the five-row form, so nothing that ran before this flag existed behaves differently.
+  const includeOrganization = !runtime.argv.includes('--no-organization');
+
   const rows = await buildSeedRows({ email, password, lookupKey, nowMs: Date.now() });
-  runtime.stdout.write(renderSeedSql(rows));
+  runtime.stdout.write(renderSeedSql(rows, { includeOrganization }));
 
   runtime.stderr.write(
     [
@@ -562,27 +654,49 @@ async function main(): Promise<void> {
       '',
       '===============================================================================',
       '',
-      'Five statements above; nothing has been executed.',
+      includeOrganization
+        ? 'Five statements above; nothing has been executed.'
+        : 'Two statements above; nothing has been executed. NO Organization, NO membership.',
       '',
       `  principal_id      ${rows.principalId}`,
-      `  organization_id   ${rows.organizationId}`,
+      ...(includeOrganization ? [`  organization_id   ${rows.organizationId}`] : []),
       '',
       'BEFORE YOU RUN THEM:',
       '  * Confirm the target is DB_CONTROL (dudo-control-plane), not DB_TENANT.',
       '  * Confirm control-plane migrations 0001 through 0007 have been applied to it.',
       '  * Keep the statement order. Later rows reference earlier ones.',
       '',
-      'AFTER YOU RUN THEM, WHAT THIS ACCOUNT CAN AND CANNOT DO:',
-      '  * It can log in, list its one Organization, select it, and resolve a tenant store.',
-      `  * It holds the '${SEEDED_ROLE}' role, which grants the Customer Directory permissions`,
-      '    in MVP scope (docs/decisions/0019). Permanent deletion is granted to no role.',
-      '  * IT WILL STILL BE REFUSED ON EVERY ACTION THAT NARROWS BY BUSINESS, because',
-      '    authorizedBusinessIds is empty. Computing it needs the tenant store, which is',
-      '    downstream of authorization in 0014 §C.5\'s order. 0019 closed the grants half of',
-      '    AZ5 and not this one. It is a decision, not a missing row you can add here.',
-      '  * No audit record exists for any of this. An operator running SQL by hand produces',
-      '    none; Organization creation has no auditable home yet; and changing the role later',
-      '    has no audited path either (0007 rule 9, recorded as open in 0019).',
+      ...(includeOrganization
+        ? [
+            'AFTER YOU RUN THEM, WHAT THIS ACCOUNT CAN AND CANNOT DO:',
+            '  * It can log in, list its one Organization, select it, and resolve a tenant store.',
+            `  * It holds the '${SEEDED_ROLE}' role, which grants the Customer Directory permissions`,
+            '    in MVP scope (docs/decisions/0019). Permanent deletion is granted to no role.',
+            '  * IT WILL STILL BE REFUSED ON EVERY ACTION THAT NARROWS BY BUSINESS, because',
+            '    authorizedBusinessIds is empty. Computing it needs the tenant store, which is',
+            "    downstream of authorization in 0014 §C.5's order. 0019 closed the grants half of",
+            '    AZ5 and not this one. It is a decision, not a missing row you can add here.',
+            '  * IT IS NOT ELIGIBLE TO BE A PLATFORM OPERATOR. The membership row above disqualifies',
+            '    it (docs/decisions/0024 invariant 1). For an operator account, re-run with',
+            '    --no-organization.',
+            '  * No audit record exists for any of this. An operator running SQL by hand produces',
+            '    none; Organization creation has no auditable home yet; and changing the role later',
+            '    has no audited path either (0007 rule 9, recorded as open in 0019).',
+          ]
+        : [
+            'AFTER YOU RUN THEM, WHAT THIS ACCOUNT CAN AND CANNOT DO:',
+            '  * It can LOG IN and reach NOTHING. That is the intended shape, not a broken account.',
+            '  * The Organization picker answers 200 with an empty array; every Organization it',
+            '    could name is refused with the same 404 a non-member receives; its session never',
+            '    selects an Organization and no tenant store can ever be resolved for it.',
+            '  * IT HOLDS NO PLATFORM AUTHORITY YET. A row in platform_operator is the authority',
+            '    (docs/decisions/0025 decision 1), and this tool does not write one. Run',
+            '    seed-platform-operator.ts next, with the principal_id above.',
+            '  * It IS eligible to become a platform operator, precisely because it has no',
+            '    membership row.',
+            '  * No audit record exists for any of this, and none can: the writer is a human',
+            '    running SQL and no code is in the path.',
+          ]),
       '',
       'HANDLING:',
       '  * The SQL contains the stored verifier and salt. They authenticate nobody on their own,',

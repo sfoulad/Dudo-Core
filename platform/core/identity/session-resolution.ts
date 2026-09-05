@@ -180,6 +180,37 @@ export type SessionResolver = {
   resolve(sessionId: string): Promise<Result<SessionResolution>>;
 
   /**
+   * §C.5 steps 1 and 2 ONLY: the principal behind a live session, and nothing else.
+   *
+   * ===========================================================================================
+   * ADDED FOR THE PLATFORM ROUTE CLASS (`docs/decisions/0025`), AND ITS RETURN TYPE IS THE POINT.
+   * ===========================================================================================
+   *
+   * A platform route is authenticated AT PRINCIPAL LEVEL and has NO TENANT. `resolve` above is
+   * the wrong tool for it three times over:
+   *
+   *   - it CONSTRUCTS AN `AuthenticatedPrincipal`, which carries an `organizationId` and is the
+   *     value `TenantStoreResolver` consumes. Handing one to the platform class would put a tenant
+   *     identifier inside a class whose binding property P1 is that it can reach none;
+   *   - it reads membership and calls the authorization source, which is work a platform route
+   *     needs none of; and
+   *   - for a principal that HAS selected an Organization it can answer `unavailable()` when that
+   *     Organization is suspended, which would make a platform request's outcome depend on the
+   *     state of a tenant it has nothing to do with — and would give a principal wrongly present
+   *     in both tables a THIRD observable answer, breaking the mutual exclusion's collapse.
+   *
+   * SO THIS RETURNS A STRING. There is no organization, no membership list, no grant set and no
+   * principal object in the return value, and therefore nothing for a caller to extract a tenant
+   * from. `liveSession` is reused rather than reimplemented, so the expiry rule, the suspended-
+   * principal rule and the single argument-free `unauthenticated()` collapse are identical to
+   * every other authenticated path — two authentication floors that were meant to be identical
+   * are two floors that will differ.
+   *
+   * IT PERFORMS NO WRITE, like everything else on this path (ruling 3).
+   */
+  resolvePrincipalId(sessionId: string): Promise<Result<string>>;
+
+  /**
    * The Organizations this principal may enter, for an Organization picker.
    *
    * Returns identifiers only, because the control plane holds no Organization name — see
@@ -427,6 +458,17 @@ export function createSessionResolver(
           onBehalfOfPrincipalId: null,
         }),
       });
+    },
+
+    async resolvePrincipalId(sessionId: string): Promise<Result<string>> {
+      // Steps 1 and 2, and then it STOPS. No membership read, no authorization source, no
+      // `AuthenticatedPrincipal`, no organization identifier — see the port's documentation for
+      // why each of those absences matters to the class that calls this.
+      const live = await liveSession(sessionId);
+      if (!live.ok) {
+        return err(live.error);
+      }
+      return ok(live.value.principalId);
     },
 
     async listEnterableOrganizations(sessionId: string): Promise<Result<readonly string[]>> {

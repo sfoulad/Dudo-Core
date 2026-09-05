@@ -1,0 +1,119 @@
+/**
+ * ===========================================================================================
+ * THE PLATFORM ROUTE CLASS, ASSEMBLED. `docs/decisions/0025` · contract `platform-operator-v1`.
+ * ===========================================================================================
+ *
+ * Every piece the class needs is a port with one implementation, and this file is the one place
+ * they are put together. It exists so that `http/adapters/worker-entry.ts` — the file that names
+ * Cloudflare types — does not also have to know the authority-resolution order, which secret keys
+ * which primitive, or which of the two routes has a handler.
+ *
+ * IT TAKES PORTS AND KEYS AND RETURNS PORTS. It names no binding, no `Env`, no D1 type and no
+ * Durable Object, so a verification harness composes exactly what production composes by passing
+ * a fake `PlatformOperatorStore`. That is the seam `qa-agent` needs in order to seed a principal
+ * into BOTH tables and drive the real dispatcher against it.
+ *
+ * ===========================================================================================
+ * WHAT IT REFUSES TO BUILD, AND WHY THE REFUSAL IS THE POINT
+ * ===========================================================================================
+ *
+ * `adminHosts` IS A REQUIRED ARGUMENT AND THERE IS NO DEFAULT. An empty list means every platform
+ * route answers 404, which is the fail-closed direction; a default would be this file choosing a
+ * deployment's hostnames, and a hostname chosen in Core is a hostname nobody reviews. See
+ * `isPlatformHost` for why the host binding is a SECOND layer and must never become the first.
+ *
+ * IT TAKES NO `TenantStoreResolver`, NO `TenantScopedStore` AND NO TENANT DATABASE BINDING —
+ * not as an optional argument, not as an unused one. `PlatformRouteDependencies` has no field
+ * for one either, so there is no value anywhere in this class from which a tenant store could be
+ * obtained. That is binding property P1, expressed as a type rather than as a rule.
+ *
+ * IT TAKES NO `SessionResolver`. Only a function from a session identifier to a principal
+ * identifier. `SessionResolver` also carries `selectOrganization`, `issueSession` and
+ * `revokeSession` — the ability to move, mint and destroy sessions — and none of that belongs in
+ * a class whose two operations are reads. Passing the narrow function is least privilege between
+ * two Core components, the same split `control-plane-store.ts` property 3 makes.
+ */
+
+import type { Clock } from '../kernel/clock.ts';
+import type { IdGenerator } from '../kernel/ids.ts';
+import type { Result } from '../kernel/result.ts';
+import type { CryptoBytes } from '../kernel/bytes.ts';
+import type { Authorizer } from '../authorization/authorizer.ts';
+import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
+import type { PlatformOperatorStore } from './platform-operator-store.ts';
+import type { PlatformRouteDependencies } from './platform-routes.ts';
+import { createPlatformAuthorityResolver } from './platform-authority.ts';
+import { createPlatformAuditRecorder } from './platform-audit.ts';
+import { createPlatformCursorCodec } from './platform-cursor.ts';
+import { createPlatformRouteHandlers } from './platform-route-handlers.ts';
+
+export type PlatformCompositionInput = {
+  readonly store: PlatformOperatorStore;
+  /**
+   * The SAME admission port the identity slice uses, drawing from the SAME `DayWriteBudget`.
+   *
+   * `0014` §C.7: the separate database is an isolation boundary, not additional quota. An audit
+   * record here consumes the same account-wide daily allowance as a session insert, so it must be
+   * accounted in the same ledger, in the same unit, on the same UTC day — or the budget has a
+   * hole in it the size of every platform request.
+   */
+  readonly admission: ControlPlaneWriteAdmission;
+  /**
+   * The SAME authorizer every Action uses. Not a platform-specific one.
+   *
+   * `authorize()` already takes the envelope as a parameter, which is the property that let
+   * `0023` give Core its own envelope and `0021` add a request class without touching the
+   * pipeline. A second authorization function for platform routes would be a second place the
+   * ceiling-and-floor rule is implemented and therefore a second place it can differ.
+   */
+  readonly authorizer: Authorizer;
+  readonly ids: IdGenerator;
+  readonly clock: Clock;
+  /** The credential reader the ordinary authenticated path and the session routes both use. */
+  readonly readSessionId: (headers: ReadonlyMap<string, string>) => Promise<Result<string | null>>;
+  /**
+   * A session identifier to a principal identifier, and nothing else. Implemented over
+   * `SessionResolver.resolvePrincipalId`, which is `0014` §C.5 steps 1 and 2 and stops there.
+   */
+  readonly authenticatePrincipal: (sessionId: string) => Promise<Result<string>>;
+  /**
+   * `CURSOR_SIGNING_KEY`. At least 32 bytes.
+   *
+   * SHARED WITH `pagination/cursor.ts` UNDER EXPLICIT DOMAIN SEPARATION — the two sign disjoint
+   * message spaces, and the argument is written out at `platform-cursor.ts`. The Team Lead may
+   * override it with a separate secret; it is a judgement call and is recorded as one.
+   */
+  readonly cursorSigningKey: CryptoBytes;
+  /** Required, no default. An empty list makes every platform route answer 404. */
+  readonly adminHosts: readonly string[];
+};
+
+export async function createPlatformComposition(
+  input: PlatformCompositionInput,
+): Promise<PlatformRouteDependencies> {
+  const cursors = await createPlatformCursorCodec(input.cursorSigningKey);
+
+  return {
+    handlers: createPlatformRouteHandlers({
+      store: input.store,
+      cursors,
+      clock: input.clock,
+    }),
+    readSessionId: input.readSessionId,
+    authenticatePrincipal: input.authenticatePrincipal,
+    // THE MUTUAL EXCLUSION LIVES INSIDE THIS. `createPlatformAuthorityResolver` reads
+    // `platform_operator` AND probes `organization_membership` on every call, and refuses a
+    // principal present in both with the same argument-free `forbidden()` an unknown principal
+    // receives. There is no way to compose the class without it, because there is no other
+    // producer of the `PlatformAuthority` value the dispatcher requires.
+    authority: createPlatformAuthorityResolver(input.store),
+    authorizer: input.authorizer,
+    audit: createPlatformAuditRecorder({
+      store: input.store,
+      admission: input.admission,
+      ids: input.ids,
+      clock: input.clock,
+    }),
+    adminHosts: Object.freeze([...input.adminHosts]),
+  };
+}

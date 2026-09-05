@@ -1,0 +1,155 @@
+-- Control-plane migration 0008 — the platform_operator table.
+-- docs/decisions/0025 decision 1, on docs/decisions/0024's two invariants.
+--
+-- Read `0001_principal.sql` first for the shared header of this directory.
+--
+-- IT BELONGS TO `DB_CONTROL`. `wrangler.jsonc` routes this directory there and does not recurse;
+-- a control-plane migration saved one directory too high is applied to the TENANT database,
+-- silently and successfully. Confirm which database this went to.
+--
+-- NOT APPLIED. There is no migration runner in this repository (CLOUDFLARE_STANDARD.md CF5) and
+-- no agent may run a migration against real data (.claude/rules/security.md §7).
+--
+-- ROLLBACK PATH (CLOUDFLARE_STANDARD.md §4 rule 10): DROP TABLE platform_operator. Its effect is
+-- that every platform route answers `forbidden` for every caller and the admin console stops
+-- working. It signs nobody out, destroys no membership and touches no tenant row — the platform
+-- simply has no operators again, which is the state before this migration. Safe at any time.
+-- FORWARD-ONLY and idempotent.
+--
+-- =============================================================================================
+-- A ROW IN THIS TABLE IS THE AUTHORITY. THAT IS THE WHOLE DESIGN.
+-- =============================================================================================
+--
+-- There is no `is_platform_admin` flag on `principal`, no membership row carrying platform
+-- authority, and no platform value in `MembershipRole`. `docs/decisions/0025` decision 1:
+--
+--   "A row in that table makes a principal a platform operator."
+--
+-- WHY A SEPARATE TABLE RATHER THAN A COLUMN OR A ROLE, and this is `0024`'s finding rather than a
+-- preference. `platform/core/authorization/scope.ts` ranks `platform` at 0, so
+-- `implies('platform', X)` is TRUE FOR EVERY X. Give a platform operator a membership row
+-- carrying a platform-tier role — the obvious way to make a console "just work" — and:
+--
+--   * it passes authorization for EVERY Action at EVERY scope, because platform implies
+--     everything; and
+--   * the storage boundary then POLITELY SCOPES IT INTO THAT ORGANIZATION AND SERVES THE ROWS.
+--
+-- Repeat per Organization and you have cross-tenant access assembled entirely out of legitimate
+-- parts. `whereWithTenant` still emits its predicate. The resolver still validates membership.
+-- Nothing is bypassed — THE MEMBERSHIP ROW *IS* THE BYPASS, and it looks exactly like every other
+-- membership row, which is why no review catches it.
+--
+-- THE ABSENCE OF THE ROW IS THE ISOLATION. Two tables are what make "appears in both" a question
+-- a machine can ask, and `0025` states the reason plainly: AN INVARIANT THAT DEPENDS ON NOBODY
+-- ADDING A ROW IS NOT AN INVARIANT.
+--
+-- =============================================================================================
+-- THE MUTUAL EXCLUSION IS NOT DECLARED HERE, AND CANNOT BE
+-- =============================================================================================
+--
+-- "A principal_id present in platform_operator MUST NOT appear in organization_membership, and
+-- the reverse." SQLite cannot express a constraint that spans two tables in a column definition,
+-- so it lives in three places, none of which is a comment:
+--
+--   1. `platform/core/platform/platform-authority.ts` — CHECKED AT AUTHORIZATION, on every
+--      platform request, and the contract is explicit that this is THE CONTROL. A principal in
+--      both tables is refused with the same argument-free `forbidden` an unknown principal gets.
+--   2. `platform/core/platform/platform-authority.ts::assertPrincipalMayBecomePlatformOperator`
+--      and `...MayBecomeOrganizationMember` — CHECKED ON WRITE, by any future code that inserts
+--      into either table.
+--   3. `0010_platform_operator_mutual_exclusion.sql` — two SQLite triggers, which are the only
+--      thing that reaches the OUT-OF-BAND bootstrap path, where the writer is a human running
+--      SQL and no TypeScript check can be in the way. Separated into its own migration on
+--      purpose: see that file.
+--
+-- The write checks are hygiene. THE AUTHORIZATION CHECK IS THE CONTROL, and an implementation
+-- that shipped only the write checks would have shipped none.
+--
+-- =============================================================================================
+-- WHO WRITES THE FIRST ROW
+-- =============================================================================================
+--
+-- AN OPERATOR, OUT OF BAND, RUNNING SQL — exactly as `identity/tools/seed-principal.ts` already
+-- works for credentials. THERE IS NO ROUTE THAT CREATES A PLATFORM OPERATOR: no
+-- `core.platform-operator.create` exists, it is deliberately absent from the permission catalog,
+-- and adding one is a decision rather than an extension. A route that grants platform authority
+-- would be the single most valuable target in the platform, reachable by exactly one class of
+-- caller, for a handful of uses in Dudo's whole life. THE FREQUENCY DOES NOT JUSTIFY THE SURFACE.
+--
+-- `platform/core/platform/tools/seed-platform-operator.ts` prints the statements. It deliberately
+-- does NOT print an `organization_membership` insert, and it is a different tool from
+-- `seed-principal.ts` for that single reason — see its header.
+--
+-- =============================================================================================
+-- WHAT THIS TABLE DELIBERATELY HAS NO COLUMN FOR
+-- =============================================================================================
+--
+--   * NO STATUS. A suspended operator is not a state this table models: an operator whose
+--     authority should end has its ROW DELETED, which is one statement and leaves nothing to be
+--     read as "suspended but still resolvable". `principal.status` already carries the platform-
+--     wide suspension, and `liveSession` refuses a suspended principal before any of this is
+--     reached — so a status here would be a second, weaker copy of a check that already runs.
+--
+--   * NO EXPIRY. Time-bounded platform authority is a real idea and it is not this slice's:
+--     enforcing it needs a clock on the read path and a story for what happens to a live session
+--     at the boundary. Deleting the row is the revocation mechanism today, and it takes effect on
+--     the operator's very next request because authority is re-read every time.
+--
+--   * NO ORGANIZATION. Not a scoped one, not a "just for the tenant being supported" one. That is
+--     `0024` invariant 1 written as a schema: an operator that named an Organization would be one
+--     membership row away from the trap this whole table exists to make impossible.
+--
+--   * NO GRANT, NO PERMISSION LIST. `platform_role` names a role and Core maps it to a FROZEN
+--     LIST OF LITERAL PERMISSION IDENTIFIERS in `platform/core/platform/platform-permissions.ts`,
+--     with no wildcard, no prefix and no derivation — exactly as `authorization/roles.ts` maps a
+--     MembershipRole, and as a SEPARATE mapping. The separation is the point: a single mapping
+--     with a platform branch is one edit away from being reachable from a membership row.
+--
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008).
+--   ALLOWANCES CONSUMED: d1-storage, d1-rows-read, d1-rows-written.
+--   STORAGE: one identifier, one short role word and a timestamp, plus a primary-key index entry
+--     that is a second copy of the identifier — roughly 130 bytes a row. The closed beta has ONE
+--     OR TWO ROWS. Not a measurable term against the 500 MB per-database ceiling.
+--   ROWS READ: one per platform request, by primary key.
+--   ROWS WRITTEN: 2 per operator created (1 row + primary key), spent by a human running SQL by
+--     hand. Nothing in the running Worker writes this table at all.
+--   AT THE LIMIT: nothing to degrade.
+--   COST: USD 0 / BD 0 per month.
+
+CREATE TABLE IF NOT EXISTS platform_operator (
+  -- THE PRIMARY KEY IS THE PRINCIPAL, so a principal cannot hold two platform roles. Two rows
+  -- would need a precedence rule, and a precedence rule between two grants of platform authority
+  -- is a place for the wider one to win by accident.
+  principal_id  TEXT NOT NULL PRIMARY KEY REFERENCES principal (principal_id),
+
+  -- 'platform-admin' | 'marketplace-moderator', mirroring permission-catalog.yaml's two
+  -- platform-scope seed roles.
+  --
+  -- THE CHECK STOPS *THIS* BUILD WRITING A VALUE OUTSIDE THE UNION. It is not what protects a
+  -- build older than its data: `platform-permissions.ts::toPlatformRole` collapses ANY
+  -- unrecognised stored value to null on read, and null DENIES EVERYTHING on the same path as an
+  -- absent row. That is the device `authorization/roles.ts` and `credential-verifier.ts` both
+  -- already use, and it is why a row written by a future migration this build does not understand
+  -- fails onto the safe path rather than onto an error path.
+  --
+  -- NOT NULL AND NO DEFAULT. A default would let an INSERT that forgot the column create an
+  -- operator at whatever role the schema happened to prefer, which is a privilege decision made
+  -- by a migration.
+  platform_role TEXT NOT NULL CHECK (platform_role IN ('platform-admin', 'marketplace-moderator')),
+
+  created_at    TEXT NOT NULL           -- RFC 3339, UTC
+);
+
+-- NO INDEX BEYOND THE PRIMARY KEY, and the omission is deliberate. The only query is the point
+-- lookup `WHERE principal_id = ?` on the platform request path. "Who are the platform operators"
+-- is a reasonable future administration question and it is a full scan of a two-row table, so it
+-- needs no index and — more to the point — THERE IS NO PORT METHOD THAT ASKS IT. An index that
+-- exists is an index a query gets written against, and an operator-enumeration method on the
+-- platform store would be the reconnaissance step before a targeted action.
+--
+-- CREATING AN OPERATOR IS AN AUDITED OPERATION IN PRINCIPLE (.claude/rules/security.md §6:
+-- permission changes) AND IS UNAUDITABLE IN PRACTICE, because the writer is a human running SQL
+-- and no code is in the path. That is the same gap `0018`, `0019`, `0020` and `0023` each
+-- recorded for operator SQL. It is NOT closed by the platform-operator action log in `0009`,
+-- which records what operators DO and cannot record how they came to exist. Stated rather than
+-- implied: the first row in this table is the one privileged change in Dudo with no trail at all.
