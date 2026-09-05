@@ -379,6 +379,11 @@ export async function createCoreRuntime(
   const platformStore = createD1PlatformStore(controlDatabase);
   const platformRoutes = await createPlatformComposition({
     confirmations,
+    // THE SAME GATE INSTANCE THE ACTION PIPELINE RECEIVES, and passing it here is what makes
+    // `confirmation-v1`'s "EVERY entry point" true rather than true of one class. Composed
+    // unconditionally, for the reason given at the pipeline's own wiring below: a deployment able
+    // to omit it is a deployment where confirmation is optional.
+    confirmationGate,
     store: platformStore,
     // A SEPARATE STORE OVER THE SAME BINDING. `template` is tenant-independent configuration and
     // shares nothing with the operator tables but the database it sits in.

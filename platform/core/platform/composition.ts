@@ -41,6 +41,7 @@ import type { CryptoBytes } from '../kernel/bytes.ts';
 import type { Authorizer } from '../authorization/authorizer.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
 import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
+import type { ConfirmationGate } from '../confirmation/confirmation-gate.ts';
 import type { PlatformOperatorStore } from './platform-operator-store.ts';
 import type { TemplateStore } from './template-store.ts';
 import type { PlatformRouteDependencies } from './platform-routes.ts';
@@ -111,6 +112,23 @@ export type PlatformCompositionInput = {
    * challenge route refuses everything critical rather than performing it unconfirmed.
    */
   readonly confirmations?: ConfirmationService;
+  /**
+   * The confirmation GATE, which is a different thing from the service above and both are needed.
+   *
+   *   `confirmations` ISSUES a challenge — the challenge route's dependency.
+   *   `confirmationGate` SPENDS one and re-authenticates — the dispatcher's dependency, on every
+   *   route whose permission is `critical`.
+   *
+   * A DEPLOYMENT COMPOSING ONE AND NOT THE OTHER IS COHERENT IN BOTH DIRECTIONS, and both
+   * directions fail closed: with the service and no gate, a critical route answers `unavailable`;
+   * with the gate and no service, no challenge can be obtained so no critical route can be
+   * satisfied. Neither produces an unconfirmed critical operation.
+   *
+   * THEY ARE NOT MERGED INTO ONE ARGUMENT even though production passes a gate built over that
+   * service, because merging them would let the dispatcher reach `issueChallenge` — and a
+   * component able to issue the token it also verifies is one refactor from issuing its own.
+   */
+  readonly confirmationGate?: ConfirmationGate;
 };
 
 export async function createPlatformComposition(
@@ -137,6 +155,10 @@ export async function createPlatformComposition(
     // producer of the `PlatformAuthority` value the dispatcher requires.
     authority: createPlatformAuthorityResolver(input.store),
     authorizer: input.authorizer,
+    // THE GATE IS PASSED THROUGH RATHER THAN BUILT HERE. Building it would need a
+    // `CredentialVerifier`, and this class would then hold the ability to verify a password —
+    // which is reach it has no other use for. The Action pipeline receives the same instance.
+    confirmations: input.confirmationGate,
     audit: createPlatformAuditRecorder({
       store: input.store,
       admission: input.admission,

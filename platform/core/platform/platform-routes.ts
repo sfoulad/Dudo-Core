@@ -112,7 +112,14 @@ import {
 import {
   confirmableOperations,
   confirmablePermissionFor,
+  requiresConfirmation,
 } from '../confirmation/critical-permissions.ts';
+import type { ConfirmationGate } from '../confirmation/confirmation-gate.ts';
+import {
+  CONFIRMATION_ID_FIELD,
+  REAUTH_DERIVED_VALUE_FIELD,
+  REAUTH_IDENTIFIER_FIELD,
+} from '../confirmation/confirmation-gate.ts';
 
 /**
  * The base path. `/api/v1/platform`.
@@ -382,6 +389,160 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
   }),
 ]);
 
+export class PlatformConfirmationCoverageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlatformConfirmationCoverageError';
+  }
+}
+
+/**
+ * ===========================================================================================
+ * WHICH PLATFORM ROUTES THE CONFIRMATION GATE APPLIES TO, DECIDED HERE AND CHECKED AT LOAD.
+ * `docs/decisions/0027` · `confirmation-v1` §whereItLIVES.
+ * ===========================================================================================
+ *
+ * The rule is the pipeline's rule: **derived from the permission, declarable nowhere else.** A
+ * route with a `fixed` permission the catalog calls `critical` is gated, and there is no field a
+ * route could set to escape it.
+ *
+ * ===========================================================================================
+ * THE ONE EXEMPTION IS `from-body`, AND IT IS A DEADLOCK RATHER THAN A CONVENIENCE
+ * ===========================================================================================
+ *
+ * The challenge route BORROWS the permission of the operation it is asked to confirm, so its
+ * resolved permission is `core.credential.reset` — which is critical. Gating on the resolved
+ * permission alone would therefore **require a confirmation in order to request one**, and the
+ * lock has no key: the binding covers the action id, `platform.confirmations.request` is not a
+ * confirmable operation, so no challenge for it can ever be issued. Every critical platform
+ * operation would become permanently unreachable, and it would look like a working gate.
+ *
+ * A BORROWED PERMISSION IS NOT THE ROUTE'S OWN EFFECT. The challenge route performs no critical
+ * operation; it authorizes against one so that it cannot become an oracle. So the exemption keys
+ * on the KIND — a structural property of how the permission was declared — and not on a route
+ * identifier, a flag, or a list of exceptions.
+ *
+ * ===========================================================================================
+ * FIVE PROPERTIES, EACH CLOSING A WAY THIS COULD FAIL SILENTLY
+ * ===========================================================================================
+ *
+ *   1. A GATED ROUTE MUST BE A CONFIRMABLE OPERATION. Otherwise it demands a confirmation that
+ *      nothing can issue — unreachable rather than unprotected, but unreachable in a way that
+ *      presents as a permissions bug at 2am. A build failure says which half is missing.
+ *
+ *   2. A GATED ROUTE MUST DECLARE THE THREE CONFIRMATION FIELDS. They arrive on the body, and
+ *      this class refuses undeclared fields BEFORE the gate runs — so a route that omitted them
+ *      would refuse every correctly confirmed request with `invalid_argument` at validation and
+ *      never reach the gate at all. `qa-agent` found exactly this obligation on the Action side,
+ *      where it is unstated and left to each author's memory; here it is a build failure.
+ *
+ *   3. A GATED ROUTE MAY DECLARE NO OBJECT FIELDS, and 4. NO QUERY PARAMETERS, and 5. NO PATH
+ *      PARAMETERS. *** THESE THREE ARE THE ESCALATION, NOT HOUSEKEEPING. *** The binding covers
+ *      the BODY parameters. Anything the route accepts from outside the body is outside the
+ *      binding, so a caller could obtain a confirmation for one target and spend it on another —
+ *      the human confirms `identifier=alice`, the request carries `?identifier=root`, and the
+ *      confirmation verifies. `splitObjectFields` lifts declared objects out before the body the
+ *      gate sees, which is the same hole wearing a different shape.
+ *
+ * WHY NOT SIMPLY INCLUDE THEM IN THE BINDING: because `canonicalizeParameters` defines the bound
+ * value as a flat map of strings, booleans and nulls, and the client computes the same map. Two
+ * definitions of "the parameters" is a binding that covers different things at the two ends,
+ * which is `splitConfirmedRequest`'s whole argument. Refusing the shape is the honest fix.
+ */
+export function isConfirmationGated(route: PlatformRoute): boolean {
+  return route.permission.kind === 'fixed' && requiresConfirmation(route.permission.permissionId);
+}
+
+/**
+ * Runs at module load, beside `assertCriticalSetIsCoherent` and for the same reason: a route table
+ * that had drifted would do it silently, and this drift presents as an irreversible operation that
+ * stopped asking.
+ *
+ * THE PARAMETER EXISTS SO THE THROW BRANCHES CAN BE REACHED FROM A TEST and defaults to the
+ * shipped table — `qa-agent` correctly will not edit `platform/core/**` to reach a branch.
+ */
+export function assertConfirmationCoverageIsCoherent(
+  routes: readonly PlatformRoute[] = ROUTES,
+  confirmable: readonly string[] = confirmableOperations(),
+): void {
+  let fromBodyRoutes = 0;
+  for (const route of routes) {
+    if (route.permission.kind === 'from-body') {
+      fromBodyRoutes += 1;
+      // A CHALLENGE ROUTE MAY NOT ALSO BE A CONFIRMED OPERATION. It is exempt from the gate, so
+      // listing it as confirmable would produce an operation that can be confirmed and is never
+      // checked — the exemption turned into a bypass.
+      if (confirmable.includes(route.id)) {
+        throw new PlatformConfirmationCoverageError(
+          `'${route.id}' resolves its permission from the body AND is a confirmable operation. ` +
+            'A route exempt from the gate must not be something a confirmation can be issued ' +
+            'for, or the exemption becomes a way to perform a critical operation unconfirmed.',
+        );
+      }
+      // ONE `from-body` ROUTE, AND A SECOND IS A DECISION RATHER THAN AN EDIT. The kind is the
+      // gate's only exemption, so a route table free to add more is a table where the exemption
+      // spreads by convenience. The discipline `0021` imposed on its class of two.
+      if (fromBodyRoutes > 1) {
+        throw new PlatformConfirmationCoverageError(
+          `More than one platform route resolves its permission from the body ('${route.id}' is ` +
+            'the second). That kind is the confirmation gate\'s only exemption and exists for the ' +
+            'challenge route, whose own effect is not critical. A second one needs its own ' +
+            'argument and a decision record, not a table entry.',
+        );
+      }
+      continue;
+    }
+    if (!isConfirmationGated(route)) {
+      continue;
+    }
+    if (!confirmable.includes(route.id)) {
+      throw new PlatformConfirmationCoverageError(
+        `'${route.id}' requires a confirmation and is not a confirmable operation, so no ` +
+          'challenge can ever be issued for it and the route is permanently unreachable. Add it ' +
+          'to CONFIRMABLE_PLATFORM_OPERATIONS in critical-permissions.ts, with a statement.',
+      );
+    }
+    for (const field of [
+      CONFIRMATION_ID_FIELD,
+      REAUTH_DERIVED_VALUE_FIELD,
+      REAUTH_IDENTIFIER_FIELD,
+    ]) {
+      if (!route.fields.includes(field)) {
+        throw new PlatformConfirmationCoverageError(
+          `'${route.id}' requires a confirmation and does not declare the body field '${field}'. ` +
+            'This class refuses undeclared fields before the gate runs, so every correctly ' +
+            'confirmed request would be refused at validation and the gate would never be ' +
+            'reached.',
+        );
+      }
+    }
+    if (route.objectFields.length > 0) {
+      throw new PlatformConfirmationCoverageError(
+        `'${route.id}' requires a confirmation and declares object fields ` +
+          `(${route.objectFields.join(', ')}). Object fields are lifted out before the body the ` +
+          'gate binds over, so they would be outside the confirmation — a human could confirm ' +
+          'one target and the request act on another.',
+      );
+    }
+    if (route.queryParameters.length > 0) {
+      throw new PlatformConfirmationCoverageError(
+        `'${route.id}' requires a confirmation and declares query parameters ` +
+          `(${route.queryParameters.join(', ')}). The binding covers the body only, so a query ` +
+          'parameter is an input the human never confirmed.',
+      );
+    }
+    if (route.path.includes('{')) {
+      throw new PlatformConfirmationCoverageError(
+        `'${route.id}' requires a confirmation and takes a path parameter ('${route.path}'). The ` +
+          'binding covers the body only, so the confirmed target and the acted-on target would ' +
+          'be different values.',
+      );
+    }
+  }
+}
+
+assertConfirmationCoverageIsCoherent();
+
 /**
  * Matches an ABSOLUTE path and method. Exact match only, no path parameters and no patterns.
  *
@@ -625,6 +786,22 @@ export type PlatformRouteDependencies = {
   readonly authority: PlatformAuthorityResolver;
   readonly authorizer: Authorizer;
   readonly audit: PlatformAuditRecorder;
+  /**
+   * The confirmation gate. THE SAME ONE THE ACTION PIPELINE USES, not a second implementation.
+   *
+   * ===========================================================================================
+   * OPTIONAL IN THE TYPE, AND **ABSENT MEANS REFUSED** RATHER THAN ABSENT MEANS OPEN.
+   * ===========================================================================================
+   *
+   * It is optional for the reason `pipeline.ts` gives — a required field would force every
+   * verification harness to compose a real gate to exercise a non-critical route — and it is
+   * checked at the one place it matters: a gated route with no composed gate answers
+   * `unavailable`. There is no `gate ?? allowEverything()` here, and a default would mean the top
+   * rung of the sensitivity ladder is optional per deployment.
+   *
+   * NON-CRITICAL ROUTES ARE UNAFFECTED whether this is composed or not. See `isConfirmationGated`.
+   */
+  readonly confirmations?: ConfirmationGate;
   /**
    * The hostnames on which this class is served. See `isPlatformHost`. Required, no default, and
    * an empty list means unreachable.
@@ -877,6 +1054,10 @@ export function readCursorParameter(query: ReadonlyMap<string, string>): Result<
  *      operator's role grants as the floor. A denial here IS audited, with `outcome: 'denied'` —
  *      the caller is a real operator and an operator probing routes it cannot use is exactly what
  *      the trail exists to show.
+ *   5b. THE CONFIRMATION GATE, for a route whose permission is `critical`. The same gate the
+ *      Action pipeline uses, because `confirmation-v1` says EVERY entry point and the pipeline is
+ *      one class of four. Absent means refused. See the step for why it is after authorization
+ *      and before the handler, and for what this class lacks that the pipeline has.
  *   6. RUN THE HANDLER.
  *   7. WRITE THE AUDIT RECORD, AND FAIL THE REQUEST IF IT CANNOT BE WRITTEN. P4 and `0013` D2:
  *      the audit event must not fail open, and inability to record the evidence is not a reason
@@ -1002,6 +1183,73 @@ export async function dispatchPlatformRoute(
     return recordThen(dependencies, authority.value, route, request, 'denied', NO_TARGET, () =>
       err(forbidden()),
     );
+  }
+
+  // ===========================================================================================
+  // ---- 5b. THE CONFIRMATION GATE. `docs/decisions/0027`, `0007` D15, `confirmation-v1`.
+  // ===========================================================================================
+  //
+  // THE CONTRACT SAYS **EVERY ENTRY POINT**, AND THE ACTION PIPELINE IS ONE OF FOUR CLASSES:
+  // *"EVERY entry point that resolves a permission of sensitivity `critical` requires a valid,
+  // unspent, correctly bound confirmation. No exceptions, no flag, no override."* This class holds
+  // `platform.credentials.reset`, which is the most dangerous operation in the platform, so a gate
+  // that lived only in the pipeline would be a gate the worst target does not pass through — and
+  // it would LOOK gated, because the mechanism exists and was reported built.
+  //
+  // THE POSITION IS THE PIPELINE'S POSITION, neighbour for neighbour:
+  //
+  //   AFTER AUTHORIZATION (step 5), so a caller lacking the permission receives the class's
+  //   uniform `forbidden` from authorization rather than a confirmation refusal — otherwise the
+  //   gate would tell an unauthorized caller that the permission was held.
+  //
+  //   AFTER VALIDATION (steps 1–2), because the confirmation fields arrive on the body and the
+  //   bound parameters are the validated ones.
+  //
+  //   BEFORE THE HANDLER (step 6), so an unconfirmed critical request never reaches the operation.
+  //
+  // *** THE PIPELINE'S THIRD NEIGHBOUR HAS NO COUNTERPART HERE, AND THE GAP IS REPORTED RATHER
+  // THAN PAPERED OVER. *** There it sits AFTER rate limiting, because spending is a write and a
+  // throttled caller must not force row-writes. THIS CLASS HAS NO RATE LIMITER — contract PO-4,
+  // still owed. What bounds it is `ControlPlaneWriteAdmission`: both the spend and the audit
+  // record reserve from the same per-principal daily ceiling, charged to a principal that already
+  // passed step 4. So an operator can burn its own budget on failed confirmations and then
+  // receive `unavailable` from every platform route, which is a self-inflicted denial rather than
+  // an unbounded one. It is not equivalent to a limiter and is not described as one.
+  //
+  // A REFUSAL IS AUDITED AS `denied`, with `NO_TARGET`. The caller is a real operator holding a
+  // real permission who failed to prove intent or presence on a critical operation — precisely
+  // what the trail exists to show. `NO_TARGET` because the parameters naming the target are the
+  // ones that failed to verify, and recording an unverified target would assert more than the
+  // code knows.
+  if (isConfirmationGated(route)) {
+    if (dependencies.confirmations === undefined) {
+      // ABSENT MEANS REFUSED. Same direction as the missing handler below and as the pipeline's
+      // uncomposed gate: a deployment that cannot verify a confirmation must not perform an
+      // irreversible operation.
+      return recordThen(dependencies, authority.value, route, request, 'failed', NO_TARGET, () =>
+        err(unavailable()),
+      );
+    }
+    const confirmed = await dependencies.confirmations.enforce({
+      principalId: authority.value.principalId,
+      // NEVER NULL HERE. Step 3 refuses a request with no credential, so by this line the class
+      // has a verified session — unlike the Action pipeline, whose envelope may carry none.
+      sessionId: sessionId.value,
+      // THE ROUTE ID IS THE BOUND OPERATION. `confirmableOperations()` is keyed by it, and
+      // `assertConfirmationCoverageIsCoherent` refuses at load if a gated route is not in that
+      // set — so the challenge and the submission cannot name different operations.
+      actionId: route.id,
+      permissionId,
+      // THE VALIDATED FLAT BODY. A gated route may declare no object fields, no query parameters
+      // and no path parameters (same assertion), so this IS the whole of the route's input — and
+      // the confirmation therefore covers everything the operation will act on.
+      body: parsedBody.value,
+    });
+    if (!confirmed.ok) {
+      return recordThen(dependencies, authority.value, route, request, 'denied', NO_TARGET, () =>
+        err(confirmed.error),
+      );
+    }
   }
 
   // ---- 6. The handler.
