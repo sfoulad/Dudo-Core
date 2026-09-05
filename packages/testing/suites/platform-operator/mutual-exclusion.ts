@@ -307,13 +307,20 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
     try {
       const before = world.control.statements.length;
 
-      // BOTH DIRECTIONS ANSWER `not_found`, AND THAT IS CORE'S CHOICE RATHER THAN THE CONTRACT'S.
-      // `platform-authority.ts` records that these used to answer `conflict()` and that it was an
-      // oracle: `conflict` for a principal holding a `platform_operator` row and `not_found` for
-      // one that does not exist would let a caller of a future membership-administration operation
-      // learn which principals are platform operators. The collapse is asserted here as the
-      // property it is — the two directions answer identically — rather than as a code this suite
-      // happens to expect.
+      // BOTH DIRECTIONS ANSWER THE ARGUMENT-FREE `not_found`. `platform-operator-v1`
+      // §`theWRITESIDEGUARDANSWERS_not_found_AND_NOT_conflict`, normative since 2026-09-05.
+      //
+      // *** `not_found` ON A WRITE GUARD LOOKS LIKE A BUG, AND THE REASON IS THE PART THAT HAS TO
+      // SURVIVE. *** The row is not missing — it is present — and every instinct says `conflict`.
+      // But `conflict` on "grant this principal platform authority" tells the caller the principal
+      // IS ALREADY AN OPERATOR, and the mirror guard tells a tenant administrator the same about
+      // any principal they can name. That is an ENUMERATION OF THE PLATFORM'S OPERATORS, available
+      // to whoever can attempt a membership write, and it is the single most useful fact this
+      // surface could leak.
+      //
+      // SO THE ASSERTION IS THE PROPERTY AND NOT ONLY THE TOKEN: the two directions answer
+      // identically. A future reviewer who "corrects" `not_found` back to `conflict` breaks the
+      // second assertion as well as the first, and the message points at the clause.
       const towardOperator = await assertNotAnOrganizationMember(world.store, PRN_TENANT_OWNER);
       const towardMembership = await assertNotAPlatformOperator(world.store, PRN_ADMIN);
       expectError(
@@ -402,6 +409,19 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
   // =========================================================================================
   // The four triggers of `0010`. Each is asserted to FIRE, and each is asserted to be the thing
   // that fired — the same statement succeeds in a world built without the migration.
+  //
+  // *** THESE ARE NOT THE D1 VERIFICATION AND MUST NOT BE QUOTED AS IT. *** The Team Lead ran all
+  // four directions against a REAL local D1 with `0008`–`0010` applied, with both negative controls
+  // passing, and that is the measurement of record for the database half. These run against
+  // `node:sqlite`, which is a different SQLite build.
+  //
+  // WHAT THEY ADD THAT THE D1 RUN COULD NOT: the layering. The D1 run shows the write is refused;
+  // it cannot show WHICH layer refused it, and `0025` requires the TypeScript check to be the
+  // control with the triggers as a second layer. A trigger firing in production means the
+  // application-layer check had a gap — so "refused" alone cannot tell a working system from a
+  // broken one leaning on its backstop. `Core's own write guards refuse before any INSERT is
+  // attempted` is the case that separates them, and it asserts over the recorded SQL rather than
+  // over the outcome.
   // =========================================================================================
 
   type TriggerCase = {

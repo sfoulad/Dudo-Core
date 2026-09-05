@@ -348,6 +348,11 @@ export function buildPlatformAuthorizationSuite(
   });
 
   suite.test('the broadest grant is reachable by no route, and whoami does not report it', async () => {
+    // `platform-operator-v1` §`thePERMISSIONSFIELDREPORTS_REACHABLE_NOT_HELD`, normative,
+    // 2026-09-05: `permissions` is the INTERSECTION of what the role grants and what a route in
+    // this class can reach — six for `platform-admin`, not the eight its role holds. The two
+    // omitted are named in the clause and are named again below, because "six" is a count and a
+    // count cannot say WHICH two went missing if the mapping ever drifts.
     const world = await make();
     try {
       // `core.principal.grant-platform-scope` is HELD by platform-admin and is deliberately not in
@@ -364,6 +369,11 @@ export function buildPlatformAuthorizationSuite(
         `${ISOLATION} and no platform route can evaluate it`,
         !reachable.includes('core.principal.grant-platform-scope'),
         reachable.join(','),
+      );
+      assertEqual(
+        'the omitted two are exactly the two the contract names',
+        held.filter((permissionId) => !reachable.includes(permissionId)).sort().join(','),
+        'core.marketplace.moderate,core.principal.grant-platform-scope',
       );
 
       const answer = expectOk(

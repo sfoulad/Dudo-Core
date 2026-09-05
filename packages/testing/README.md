@@ -57,6 +57,13 @@ A **primary run**, then **five negative-control runs**:
 | 2 | the audit record | every write silently succeeds and stores nothing |
 | 3 | the host binding | the application host is added to `adminHosts` |
 
+**Standing requirement, and it generalises beyond this suite: wherever an invariant is enforced at
+N points, the suite needs a control that removes all N — not N controls that each remove one.**
+Defence in depth and negative-control coverage pull in opposite directions. Every layer added makes
+the suite less able to detect that any single layer has died, and a control that removes one of two
+redundant checks prints green and means nothing — it will keep printing green after both checks
+rot, as long as they rot one at a time.
+
 **Controls 1 and 1b cannot be read on their own, and 1c is why.** The invariant is enforced at two
 independent points reading two different statements, so the platform routes still refuse a
 both-tables principal under either control alone — defence in depth working, and also the way a

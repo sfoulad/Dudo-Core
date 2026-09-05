@@ -152,7 +152,28 @@ export const PRN_ADMIN = 'prn_platform_admin01';
 export const PRN_MODERATOR = 'prn_marketplace_mod1';
 export const PRN_TENANT_OWNER = 'prn_tenant_owner0001';
 export const PRN_TENANT_MEMBER = 'prn_tenant_member001';
-/** Seeded into BOTH `platform_operator` and `organization_membership`. `0024`'s trap, made real. */
+/**
+ * Seeded into BOTH `platform_operator` and `organization_membership`.
+ *
+ * ===========================================================================================
+ * IT MODELS A **RESTORE**, WHICH IS THE ONE PATH THE TRIGGERS STRUCTURALLY CANNOT COVER.
+ * ===========================================================================================
+ *
+ * `0010`'s four triggers refuse this state on INSERT and UPDATE in both directions — verified by
+ * the Team Lead against a real local D1, and by the trigger cases in `mutual-exclusion.ts` against
+ * `node:sqlite`. So Dudo's own code cannot create it and neither can a hand-run statement.
+ *
+ * *** A RESTORE DOES NOT RE-RUN TRIGGERS. *** `0025` names three ways the state can exist anyway —
+ * "a hand-run SQL statement, a partially applied migration, or a restore from two backups taken at
+ * different moments" — and the triggers stop only the first. `security-agent` independently
+ * identified restore as the case where the AUTHORIZATION-SIDE check is THE control rather than a
+ * second one, and `0024` now records it.
+ *
+ * That is why this principal is seeded with the two INSERT triggers briefly dropped and then
+ * restored: it is not a way around an inconvenient constraint, it is the scenario that makes the
+ * runtime check matter, reproduced exactly. Every case that uses this principal is a case about a
+ * database that already holds the forbidden row.
+ */
 export const PRN_BOTH_TABLES = 'prn_in_both_tables01';
 /** Suspended at `principal.status`. */
 export const PRN_SUSPENDED_ADMIN = 'prn_suspended_admin1';
@@ -384,12 +405,11 @@ export type PlatformWorld = {
  *   PRN_SUSPENDED_ADMIN              platform_operator, and `principal.status = 'suspended'`.
  *   PRN_NOWHERE                      nothing at all.
  *
- * `PRN_BOTH_TABLES` IS SEEDED WITH THE TRIGGERS TEMPORARILY DROPPED, and that is the honest way
- * to build it: the triggers refuse the state, which is what they are for, and the authorization
- * check must still refuse it when it exists anyway — "a hand-run SQL statement, a partially
- * applied migration, or a restore from two backups taken at different moments" (`0025`). Dropping
- * and recreating the triggers around one INSERT models the restore case exactly, and it does not
- * weaken the trigger cases, which build their own world and assert the ABORT directly.
+ * `PRN_BOTH_TABLES` IS SEEDED WITH THE TWO INSERT TRIGGERS TEMPORARILY DROPPED, AND THAT MODELS A
+ * RESTORE. See the constant's own documentation above: a restore does not re-run triggers, it is
+ * the one path they structurally cannot cover, and it is therefore the case in which the
+ * authorization-side check is the ONLY control rather than a second one. It does not weaken the
+ * trigger cases, which build their own world and assert the ABORT directly.
  */
 function seedWorld(harness: SqliteHarness, withTriggers: boolean): void {
   seedOrganization(harness, ORG_ALPHA);

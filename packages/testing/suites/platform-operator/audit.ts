@@ -34,10 +34,12 @@
  * answering for every Organization — so if a denied non-operator wrote a record here, the
  * population able to force writes would be traffic-sized rather than operator-sized.
  *
- * `platform-audit.ts` flags this as an INTERPRETATION of P4 rather than a quotation of it, and
- * asks the Team Lead to have the contract state which side of the authority check the write sits
- * on. The cases below assert the implemented reading and say so; if the contract rules the other
- * way, the case that must change is named.
+ * THIS WAS AN OPEN INTERPRETATION AND IS NO LONGER ONE. `platform-audit.ts` correctly flagged that
+ * P4 does not say which side of the authority check the write sits on, and
+ * `platform-operator-v1` §`auditModel.whichSIDEOFTHEAUTHORITYCHECKTHEWRITESITSON` now rules it
+ * NORMATIVELY, 2026-09-05: *"THE AUDIT WRITE IS AFTER THE AUTHORITY CHECK. A CALLER WHO IS NOT AN
+ * ESTABLISHED PLATFORM OPERATOR WRITES NO RECORD."* The cases below cite that clause; they no
+ * longer assert an assumption.
  */
 
 import { ISOLATION, Suite, assertEqual, assertTrue, expectError, expectOk } from '../../harness/runner.ts';
@@ -126,10 +128,14 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
   });
 
   suite.test('a caller who is not an established operator writes NO record', async () => {
-    // THE IMPLEMENTED READING OF P4. See the header: `platform-audit.ts` flags it as an
-    // interpretation and asks the contract to state it. If the contract rules the other way, this
-    // is the case to change — and changing it means re-doing the free-tier argument, because the
-    // write population stops being operator-sized.
+    // `platform-operator-v1` §`auditModel.whichSIDEOFTHEAUTHORITYCHECKTHEWRITESITSON`, normative.
+    //
+    // IT ASSERTS THE ROW COUNT AND NOT THE RESPONSE CODE, deliberately. The refusal a non-operator
+    // receives is already covered by the authorization suite; what this case is about is whether
+    // the attempt COST A CONTROL-PLANE WRITE. A caller who can make Dudo write is `0013`'s "the
+    // control becoming the lever", and D1's write limit is ACCOUNT-WIDE — exhausting it stops D1
+    // answering for every Organization on the platform. The response code cannot see that; the
+    // table can.
     const world = await make();
     try {
       for (const route of ROUTES) {

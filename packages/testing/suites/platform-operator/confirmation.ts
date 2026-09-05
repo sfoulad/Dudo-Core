@@ -46,6 +46,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { Suite, assertEqual, assertTrue } from '../../harness/runner.ts';
+import { MEMBERSHIP_ROLES, grantsForRole } from '../../../../platform/core/authorization/roles.ts';
+import type { MembershipRole } from '../../../../platform/core/authorization/roles.ts';
+import { DeferredActionWiredError, createRouter } from '../../../../platform/core/http/router.ts';
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const CORE_DIRECTORY = `${REPOSITORY_ROOT}platform/core`;
@@ -101,6 +104,86 @@ export function buildConfirmationSuite(): Suite {
       'the scan really looked at Core',
       listFiles(CORE_DIRECTORY, '.ts').length > 20,
       'the file scan found almost nothing, so the emptiness above proves nothing',
+    );
+  });
+
+  suite.test('what protects the one critical operation today is absence, not a gate', async () => {
+    // ===========================================================================================
+    // THE STRONGEST THING THAT CAN ACTUALLY BE PERFORMED IN PLACE OF `0027`'s CONTROL.
+    // ===========================================================================================
+    //
+    // The Team Lead asked for the confirmation control to be PERFORMED rather than reasoned about.
+    // It cannot be, and asserting that twice does not make it more convincing. What CAN be
+    // measured is the thing the control would have been measuring: how much protection actually
+    // stands between a caller and `customers.customer.delete` today.
+    //
+    // THREE LAYERS ARE CLAIMED. Two exist and are measured here. The third is the one 0027 exists
+    // to build, and its absence is what makes the other two load-bearing rather than redundant.
+    //
+    // This matters because "granted to no role" and "gated by confirmation" protect against
+    // different things. A role mapping is one edit away from granting it; a confirmation gate
+    // would still stand after that edit. So the honest summary is not "delete is protected" — it
+    // is "delete is UNBUILT, and the day it is built, nothing is in front of it."
+
+    // LAYER 1: no role holds the permission. `0019`, and `0027` restates it — DeleteCustomer "has
+    // been granted to no role since the Customer Directory shipped".
+    for (const role of MEMBERSHIP_ROLES) {
+      const held = grantsForRole(role as MembershipRole).grants.map((grant) => grant.permissionId);
+      assertTrue(
+        `${role} does not hold customers.customer.delete`,
+        !held.includes('customers.customer.delete'),
+        `${role} holds it: ${held.join(',')}`,
+      );
+      assertTrue(
+        `${role} does not hold customers.customer.restore-deleted`,
+        !held.includes('customers.customer.restore-deleted'),
+        `${role} holds it: ${held.join(',')}`,
+      );
+    }
+    // The control: the roles DO hold other customers permissions, so the two absences above are
+    // facts about those two permissions rather than about an empty mapping.
+    assertTrue(
+      'the control: owner holds other customers permissions',
+      grantsForRole('owner').grants.some((grant) => grant.permissionId.startsWith('customers.')),
+      'the owner role granted nothing at all, so the assertions above are vacuous',
+    );
+
+    // LAYER 2: there is no Action to invoke, and the router REFUSES AT CONSTRUCTION if one is
+    // ever wired while the id is still on the deferred list. Driven, not described.
+    let raised: unknown = null;
+    try {
+      createRouter([
+        { kind: 'deferred', method: 'DELETE', path: '/customers/{customer_id}', actionId: 'customers.DeleteCustomer' },
+        {
+          kind: 'action',
+          method: 'POST',
+          path: '/customers/{customer_id}/delete',
+          // A stand-in with the deferred id. It is never invoked: `createRouter` throws first,
+          // which is the property being measured.
+          action: { id: 'customers.DeleteCustomer' } as never,
+          successStatus: 200,
+        },
+      ]);
+    } catch (cause) {
+      raised = cause;
+    }
+    assertTrue(
+      'wiring an executable DeleteCustomer stops the build',
+      raised instanceof DeferredActionWiredError,
+      `expected DeferredActionWiredError, got ${String(raised)}`,
+    );
+
+    // LAYER 3: THE CONFIRMATION GATE. It does not exist. `apps/customers/app.ts` says in prose
+    // that "holding customers.customer.delete is not sufficient to invoke DeleteCustomer — the
+    // confirmation gate is a separate requirement". THERE IS NO SUCH GATE IN THE REPOSITORY, so
+    // that sentence describes a control nobody has built, and the case above is the only thing
+    // standing where it says one stands.
+    const pipeline = readFileSync(`${CORE_DIRECTORY}/action/pipeline.ts`, 'utf8');
+    assertTrue(
+      'the Action pipeline has no confirmation step',
+      !pipeline.toLowerCase().includes('confirmation'),
+      'the pipeline mentions confirmation — if a gate now exists, this suite must be rewritten ' +
+        'and 0027\'s central negative control must finally be performed',
     );
   });
 

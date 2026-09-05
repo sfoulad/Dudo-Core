@@ -104,6 +104,7 @@ import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
+import type { CoreError } from '../kernel/errors.ts';
 import { internal, notFound, quotaExceeded, unauthenticated, unavailable } from '../kernel/errors.ts';
 import type { AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
 import { sealAuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
@@ -301,6 +302,63 @@ function isExpired(session: SessionRecord, nowMs: number): boolean {
   return session.expiresAt <= toRfc3339Utc(nowMs);
 }
 
+/**
+ * The refusal for a principal present in BOTH `platform_operator` and `organization_membership`.
+ *
+ * ===========================================================================================
+ * A NAMED INTERNAL MARKER. "An internal error type is not a wire code" — Team Lead ruling,
+ * 2026-09-05. THE WIRE CODE IT RENDERS TO IS A PROPERTY OF THE REQUEST CLASS, NOT OF THE RULE.
+ * ===========================================================================================
+ *
+ * `platform-operator-v1` states BOTH halves, in two different sections, and they name two
+ * different codes:
+ *
+ *   §`errors.forbidden`      — on a PLATFORM ROUTE, four causes including this one receive "the
+ *                              identical argument-free forbidden. The four are indistinguishable."
+ *   §`testRequirements`      — "denied on every platform route AND on every Action, WITH CODES
+ *                              IDENTICAL TO AN UNKNOWN PRINCIPAL."
+ *
+ * On the Action path an unknown principal receives `unauthenticated` — that is `liveSession`'s
+ * existing four-way collapse, which §`errors.unauthenticated` describes as "unchanged". So the
+ * contract asks for `forbidden` on one class and `unauthenticated` on the other, and BOTH are
+ * satisfied only by rendering per class:
+ *
+ *   PLATFORM ROUTES  `forbidden`      — applied by `platform/platform-authority.ts`, which
+ *                                       `resolvePrincipalId` defers to. It also equalises the
+ *                                       WORK across all four causes, which refusing here could
+ *                                       not: this function has issued two statements, and the
+ *                                       other three causes issue two more.
+ *   ACTION PATH      `unauthenticated` — applied below, joining the four conditions this function
+ *                                       already collapses.
+ *
+ * NEITHER CHOICE IS A GLOBALLY TIGHTER COLLAPSE, WHICH IS WHY THE CLASS DECIDES. Whichever code
+ * is used, it hides among that path's refusals and stands out from the other path's. What matters
+ * is that within each class the causes are indistinguishable from one another, and per-class
+ * rendering is the only arrangement that achieves that on both.
+ *
+ * SO WHAT DOES THE NAME BUY, given each value is an ordinary shared constant? One grep. This is
+ * the state that "means something is already wrong" — unreachable through Dudo's own code, so a
+ * principal that lands here arrived through direct database access, a partially applied migration,
+ * or a restore from two backups taken at different moments. When an alerting channel exists, THIS
+ * is the call site it hooks, and it is already named and already in one place.
+ *
+ * IT IS DELIBERATELY NOT A NEW `ErrorCode`. `kernel/errors.ts`'s taxonomy is closed and is
+ * contract surface (`packages/contracts/common/error-envelope.schema.json`) that this agent does
+ * not author; and a distinct code would be exactly the distinguishing signal both collapses exist
+ * to remove. The marker is internal in the only sense that matters — it names the branch, not the
+ * response.
+ *
+ * THE PLATFORM CLASS'S RENDERING IS NOT IN THIS FILE, AND IS DELIBERATELY NOT AN EXPORT HERE.
+ * `platform/platform-authority.ts` refuses the state itself, with `forbidden()`, from its OWN two
+ * reads — which is what equalises the work across all four platform causes as well as the value.
+ * An exported-but-uncalled sibling here would be a second definition nothing invokes, which is the
+ * shape `M-1` already flags elsewhere in this slice; a pointer costs nothing and cannot rot into
+ * dead code.
+ */
+function authorityConflictRefusal(): CoreError {
+  return unauthenticated();
+}
+
 export function createSessionResolver(
   dependencies: SessionResolverDependencies,
 ): SessionResolver {
@@ -413,11 +471,17 @@ export function createSessionResolver(
     // and `selectOrganization`. `resolvePrincipalId` deliberately does NOT — see
     // `liveSessionUnrefused` above, and see below for why that is not a gap.
     //
-    // `unauthenticated()` IS "THE SAME CODE AN UNKNOWN PRINCIPAL RECEIVES" FOR THIS PATH, which is
-    // what the contract requires. It joins the four conditions this function already collapses —
-    // no such session, expired, deleted principal, suspended principal — and it takes no
-    // arguments, so there is nothing here to tell apart. A caller cannot discover that it is in
-    // both tables, and therefore cannot use an Action to probe `platform_operator`.
+    // THE CODE IS THIS CLASS'S, NOT THE RULE'S — see `authorityConflictRefusal`. On the Action
+    // path an unknown principal receives `unauthenticated`, and `platform-operator-v1`
+    // §`testRequirements` requires this refusal to carry "codes identical to an unknown
+    // principal". The platform class renders the SAME marker as `forbidden`, because that is the
+    // value its own four-way collapse uses.
+    //
+    // THE CONSOLE LOOP THE TEAM LEAD IDENTIFIED IS ON THE PLATFORM SIDE AND IS CLOSED THERE:
+    // `admin-shell` maps 401 to "anonymous" and renders the sign-in form, which for a principal
+    // that will be refused again "builds a loop that cannot terminate". The admin console reaches
+    // Core ONLY through platform routes, and those answer `forbidden`, which `admin-shell` gives a
+    // screen of its own.
     //
     // IT COSTS NOTHING EXTRA. Both flags come from the `findPrincipal` statement that already ran;
     // see `d1-control-plane-store.ts`. This is not a new read.
@@ -429,7 +493,7 @@ export function createSessionResolver(
     // moments. Those are exactly the three cases `0025` names as the reason the authorization
     // check exists at all, and they are why this is not dead code.
     if (inBothTables) {
-      return err(unauthenticated());
+      return err(authorityConflictRefusal());
     }
 
     return ok({ session, principalId, principalType });
@@ -651,7 +715,7 @@ export function createSessionResolver(
       // refusal rather than a milder one. Same conjunction, same argument-free
       // `unauthenticated()`, same statement it was already read from. See `liveSession`.
       if (principal.isPlatformOperator && principal.holdsMembership) {
-        return err(unauthenticated());
+        return err(authorityConflictRefusal());
       }
 
       // The hint, validated before anything is reserved or written — same ordering argument as
