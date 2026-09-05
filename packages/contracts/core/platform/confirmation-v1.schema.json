@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:confirmation:1",
+  "title": "Confirmation — wire shapes, version 1",
+  "description": "The machine-readable half of confirmation-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema, so this file is normative and hand-checked, never machine-validated.",
+
+  "$defs": {
+
+    "actionId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+      "maxLength": 128,
+      "description": "The operation to be confirmed, e.g. 'customers.customer.delete' or 'platform.credentials.reset'. AN action_id NAMING A NON-CRITICAL OPERATION IS REFUSED WITH invalid_argument rather than granted a pointless token — a confirmation for something nothing consumes invites a client to attach one to everything."
+    },
+
+    "confirmationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22,64}$",
+      "description": "Opaque, server-generated, single-use. IT IS NOT THE BINDING and carries no authority by itself: the stored row is keyed by an HMAC over principal, session, action and parameters, so possession of this value authorises nothing unless every one of those matches at submission. A leaked confirmation_id is useless to anyone but the session that obtained it."
+    },
+
+    "requestConfirmationInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "parameters"],
+      "description": "ONE SHAPE FOR BOTH CHALLENGE ROUTES — the Action-class one and the platform-class one — because the mechanism is one and only the surrounding context differs. NOTE WHAT IS ABSENT: no principal_id and no session identifier. Both come from the authenticated context and neither may be supplied, for MULTITENANCY_STANDARD.md §3's reason applied to identity: an input that decides its own binding is not an input, it is a grant.",
+      "properties": {
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+          "description": "BCP 47 language tag, restricted to language and optional region. OPTIONAL; absent means 'en'. ADDED BY docs/decisions/0027, WHICH RULED AGAINST THIS CONTRACT'S OWN CF-4 RECOMMENDATION AND WAS RIGHT: localisation requires the client to CHOOSE a language, not to RENDER the text. Core owns the statement catalog and composes every word in the requested locale; the client still displays the result verbatim. CHOOSING A LOCALE IS NOT AUTHORING, so CF-2 is left exactly as it was rather than widened — which the rejected 'token plus parameters' design could not have claimed. AN UNSUPPORTED LOCALE FALLS BACK TO ENGLISH AND THE RESPONSE SAYS SO. THE LOCALE IS NOT PART OF THE BINDING: it changes nothing about what will happen, and binding it would refuse a confirmation from a user who switched language between the two steps — a refusal with no security content."
+        },
+        "parameters": {
+          "type": "object",
+          "description": "THE EXACT PARAMETERS THE CONFIRMED OPERATION WILL CARRY. They are part of the binding, so a confirmation obtained for one parameter set cannot be spent on another — that is the substitution attack this mechanism primarily exists to stop. The object is passed through to the target operation's own schema for validation: an invalid parameter set is refused HERE rather than at submission, so a human is never shown a statement about an operation that could not have run. Canonical serialisation for hashing is normative and owed to core-agent: sorted keys, no insignificant whitespace, UTF-8. TWO CLIENTS PRODUCING DIFFERENT BYTES FOR THE SAME PARAMETERS WOULD MAKE CONFIRMATIONS FAIL ON ONE PLATFORM AND NOT THE OTHER, which is the same class of cross-client hazard as the KDF normalisation split."
+        }
+      }
+    },
+
+    "confirmationChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmation_id", "statement", "statement_locale", "expires_at"],
+      "description": "Cache-Control: no-store.",
+      "properties": {
+        "confirmation_id": { "$ref": "#/$defs/confirmationId" },
+        "statement_locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+          "description": "THE LOCALE THE STATEMENT WAS ACTUALLY RENDERED IN, which is not always the one requested. REQUIRED, AND IT IS THE HALF OF docs/decisions/0027's FALLBACK RULE THAT DOES THE WORK: an unsupported locale falls back to English AND SAYS SO. A silent fallback would show a user text they cannot read while the client believed it had been localised — the CF-4 failure restored in a smaller and harder-to-notice form. A client whose requested locale is not echoed here SHOULD say plainly that the confirmation is shown in another language, rather than presenting it as if it were translated."
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "SERVER-AUTHORED. THE CLIENT RENDERS IT VERBATIM AND AUTHORS NONE OF IT. This is D15's AI clause generalised: the party being constrained does not author the statement of the constraint, and a client composing its own 'are you sure?' text could display one operation while submitting another. It states exactly what will happen, including the resolved target — composed AFTER authorization, so it can name a record the caller has already been authorized to read without becoming an existence oracle. IT CARRIES NO CREDENTIAL, NO SECRET AND NO IDENTIFIER THE CALLER DID NOT ALREADY HOLD. Core cannot verify the client displayed it (CF-2); enforcement is a client obligation asserted by qa-agent against both clients. English only, which CF-4 records as the largest unresolved question in this contract — 'states exactly what will happen' is not satisfied by text the human cannot read, and Dudo's market is Bahrain."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. Five minutes from issue — long enough to read a statement and type a password, short enough that an abandoned confirmation on an unlocked screen is not a standing authority. Anything measured in hours is a session upgrade wearing a nonce, which D15 forbids by name."
+        }
+      }
+    },
+
+    "confirmedRequestFields": {
+      "type": "object",
+      "description": "NOT A STANDALONE SHAPE. These two properties are MERGED INTO the request schema of every operation whose permission is `critical`, as REQUIRED fields. They are not a header and not a wrapper envelope: the parameters are part of the binding, so the confirmation and the parameters it authorises must arrive in one object validated by one schema. AN OPTIONAL CONFIRMATION FIELD WOULD BE A CONFIRMATION THAT CAN BE OMITTED, leaving the pipeline to refuse a request the schema called valid — two places deciding one thing.",
+      "required": ["confirmation_id", "reauth_derived_value"],
+      "properties": {
+        "confirmation_id": { "$ref": "#/$defs/confirmationId" },
+        "reauth_derived_value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "description": "32 bytes, base64url. PBKDF2-SHA256(NFC(password), salt = the CALLER'S OWN normalized_identifier, 600000 iterations, 32 bytes) — byte-identical to login, deliberately, so the client reuses its login code path and there is no second KDF for web and Apple to diverge on. The server verifies with credential-verifier.ts and ITS EQUAL-WORK PROPERTY MUST HOLD HERE TOO, or this route becomes a password oracle for anyone holding a session. THE SALT IS THE CALLER'S OWN IDENTIFIER, which the caller knows because it typed it at login — note that credential-reset-v1 faces the opposite problem for the value it WRITES, and see that contract's CR-5. AN AI PRINCIPAL CANNOT PRODUCE THIS FIELD, which is what makes D15's 'confirmation is collected by the platform from the human' a property of the mechanism rather than a rule someone must implement."
+        }
+      }
+    }
+  }
+}

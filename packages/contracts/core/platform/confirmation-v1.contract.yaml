@@ -1,0 +1,527 @@
+---
+# Confirmation — contract of record, version 1
+#
+# THE ELEVATION MECHANISM docs/decisions/0007 D15 REQUIRES FOR EVERY `critical` ACTION.
+#
+# It is written for THREE callers at once — core.credential.reset, customers.customer.delete, and
+# whatever is declared critical next — and deliberately not for the first of them. A mechanism
+# shaped around one caller is re-litigated by the second, which is the failure docs/decisions/0021
+# and 0025 each avoided by settling a CLASS rather than a case.
+#
+# The machine-readable half is confirmation-v1.schema.json. BOTH ARE NORMATIVE TOGETHER.
+#
+# Governed by: docs/decisions/0026 (Accepted) — the sensitivity ladder, and this slice ahead of
+#                onboarding and reset
+#              docs/decisions/0007 D15 (the four sensitivity classes) · D8 (no cached decisions)
+#                · D2 (an AI principal never holds more than the principal it acts for)
+#              docs/decisions/0015 §D (the client-side KDF this reuses) · §B (12-hour sessions)
+#              docs/decisions/0025 Decision 5 (what a control-plane record may contain)
+#              docs/decisions/0008 (the zero-cost ceiling this design is shaped by)
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: ALL NEW WORK. No confirmation, elevation, step-up or re-authentication mechanism
+# exists anywhere in the repository. `MfaFactor` is a registry entry with no table and no code.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05, recorded as docs/decisions/0027, with the CF-4 locale amendment applied."
+updated: "2026-09-05"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# whatConfirmationPROVES — THE FIRST QUESTION THE TEAM LEAD ASKED. It has two answers.
+# ---------------------------------------------------------------------------
+whatConfirmationPROVES:
+  theRANGE: >-
+    D15 SAYS "EXPLICIT CONFIRMATION" AND LISTS FOUR MECHANISMS — user confirmation, approval
+    workflow, MFA re-authentication, step-up authorization. THAT IS A RANGE, NOT A DESIGN, and
+    choosing inside it is this contract's job.
+  theDISTINCTIONTHATDECIDESIT:
+    ruling: >-
+      A CONFIRMATION MUST PROVE TWO INDEPENDENT THINGS, AND CONFLATING THEM IS THE DESIGN ERROR
+      EVERY WEAK IMPLEMENTATION MAKES:
+        (a) INTENT — the human meant to do THIS thing, to THIS target, having been shown what
+            would happen. Defends against a mis-click, a client bug, a confused UI, and an AI
+            agent acting on a reading of the user's wishes the user would not recognise.
+        (b) PRESENCE — the party acting is still the credential holder, not someone holding a
+            stolen session or an unattended laptop. Defends against session theft.
+      A "type DELETE to continue" box proves (a) AND NOT (b): anyone holding the session can type
+      it. A re-authentication prompt proves (b) AND NOT (a): it says who you are and nothing about
+      what you agreed to. MOST PRODUCTS SHIP ONE AND DESCRIBE IT AS BOTH.
+  theDECISION:
+    ruling: >-
+      BOTH, IN ONE MECHANISM WITH TWO HALVES: A SERVER-AUTHORED STATEMENT THE CLIENT MUST ECHO A
+      SERVER-ISSUED TOKEN FOR (intent), AND A RE-AUTHENTICATION (presence).
+    theTWOSTEPS: |
+      1. CHALLENGE.  The client asks for a confirmation naming the action and its exact target.
+                     Core authorizes it, resolves the target, and returns an opaque
+                     `confirmation_id`, a SERVER-AUTHORED `statement` of exactly what will happen,
+                     and an expiry.
+      2. CONFIRM.    The client submits the real operation carrying that `confirmation_id` and a
+                     freshly derived credential value. Core verifies the binding, verifies the
+                     credential, spends the token, and performs the operation.
+    whyREAUTHENTICATIONANDNOTMFA: >-
+      BECAUSE MFA DOES NOT EXIST AND CANNOT BE CONJURED BY A CONTRACT. `MfaFactor` is a
+      core-object-registry.yaml entry at status `proposed` with no table, no enrolment path and no
+      code. Specifying MFA here would specify a mechanism nobody can build, which is how a control
+      becomes a comment.
+      RE-AUTHENTICATION IS BUILDABLE TODAY WITH PIECES THAT ALREADY RUN: the client derives
+      PBKDF2-SHA256(NFC(password), salt = normalized_identifier, 600,000) exactly as it does at
+      login, and `credential-verifier.ts` checks it with its existing equal-work property. NOTHING
+      NEW IS NEEDED IN THE CREDENTIAL LAYER AT ALL.
+    theHONESTCEILINGONWHATTHISPROVES: >-
+      STATED PLAINLY BECAUSE IT WILL OTHERWISE BE OVERSTATED IN A RELEASE NOTE: RE-AUTHENTICATION
+      IS EXACTLY AS STRONG AS THE PASSWORD AND NO STRONGER. An attacker who has the password as
+      well as the session defeats half (b) completely. THIS IS A REAL LIMIT AND IT IS THE RIGHT
+      TRADE TODAY — it raises the bar from "holds a session cookie" to "holds the password", which
+      is the difference between an unattended laptop and a full compromise — but it is NOT
+      two-factor, must never be described as such, and MFA REMAINS THE UPGRADE PATH. This mechanism
+      is designed so that adding a factor is an additional check at step 2 rather than a redesign.
+    whyTHESTATEMENTISSERVERAUTHORED:
+      rule: "CORE WRITES THE STATEMENT. THE CLIENT RENDERS IT VERBATIM AND AUTHORS NONE OF IT."
+      why: >-
+        THIS IS D15's AI CLAUSE GENERALISED, AND THE GENERALISATION IS THE POINT. D15: "For an AI
+        principal, confirmation is collected by the platform from the human. A model asserting that
+        the user agreed is not a confirmation — THE MODEL IS THE PARTY BEING CONSTRAINED, AND
+        LETTING IT CERTIFY ITS OWN CONSTRAINT REMOVES THE CONSTRAINT."
+        THE SAME IS TRUE OF ANY CLIENT. A web app that composes its own "are you sure?" text is the
+        party being constrained, writing the description of the constraint. A compromised or merely
+        buggy client could display "archive this customer" and submit a permanent deletion, and the
+        user's confirmation would be real, informed, and about the wrong operation.
+        SO THE RULE IS NOT ABOUT AI. It is: THE PARTY BEING CONSTRAINED DOES NOT AUTHOR THE
+        STATEMENT OF THE CONSTRAINT. D15 states the special case; this contract states the rule.
+      theLIMITOFTHISTOO: >-
+        CORE CANNOT VERIFY THAT THE CLIENT DISPLAYED THE STATEMENT IT WAS GIVEN. A client that
+        fetched a challenge, showed its own text and echoed the token would pass every server-side
+        check. THAT IS UNCLOSEABLE FROM THE SERVER — it is the same class of limit
+        `credential-store.ts` records for NFC password normalisation ("Core cannot enforce this. It
+        is a client obligation, and that is stated rather than implied"). WHAT MAKES IT HOLD IN
+        PRACTICE: the statement is the only text either client is permitted to show, it is asserted
+        by qa-agent against both clients, and a client that substituted its own would be failing a
+        published contract rather than exercising latitude.
+
+# ---------------------------------------------------------------------------
+# whereItLIVES — THE SECOND QUESTION. It is neither a route class nor a per-Action concern.
+# ---------------------------------------------------------------------------
+whereItLIVES:
+  theQUESTIONASPUT: >-
+    docs/decisions/0021 and 0025 both found that "where does this live" answered CLASS rather than
+    BRANCH, and both were right. THE TEAM LEAD ASKED WHETHER THIS IS THE THIRD. IT IS NOT, AND THE
+    REASON IS WORTH MORE THAN THE ANSWER.
+  whyNOTAFIFTHROUTECLASS:
+    ruling: "NO NEW REQUEST CLASS. Four remains four."
+    why: >-
+      A ROUTE CLASS IS DEFINED BY WHAT CONTEXT ITS HANDLERS RECEIVE — a principal, a tenant, a
+      permission, or the absence of each. CONFIRMATION CHANGES NONE OF THOSE. Confirming a
+      `DeleteCustomer` needs exactly the context an Action needs, including a tenant; confirming a
+      `credential.reset` needs exactly the context a platform route needs, including the absence of
+      one. A class containing both would be a class with no consistent context, which is the one
+      thing a class is.
+      AND IT WOULD REINTRODUCE THE BRANCH 0021 REFUSED: "a tenant-optional branch inside the
+      pipeline... every future reviewer of every future Action would have to check which side of it
+      they land on."
+  whyNOTPERACTIONEITHER:
+    ruling: "AN ACTION MAY NOT DECLARE, CONFIGURE, OPT INTO OR OPT OUT OF CONFIRMATION."
+    why: >-
+      PER-ACTION IS HOW customers.customer.delete BECAME UNREACHABLE BY ACCIDENT RATHER THAN BY
+      DECISION. If confirmation is something an Action remembers to require, then the Action that
+      forgets is the dangerous one, and it will look exactly like the ones that did not. That is
+      0007 D1's own argument — "an entry point with no declared permission is unreachable, not
+      open" — applied one property over.
+  theDECISION:
+    ruling: >-
+      CONFIRMATION IS A PIPELINE CONCERN, DERIVED FROM THE PERMISSION'S `sensitivity` IN
+      permission-catalog.yaml, ENFORCED CENTRALLY, AND NOT DECLARABLE ANYWHERE ELSE.
+      EVERY entry point that resolves a permission of sensitivity `critical` requires a valid,
+      unspent, correctly bound confirmation. No exceptions, no flag, no override.
+    whyTHISISTHERIGHTSHAPE: >-
+      THE SENSITIVITY IS ALREADY DATA, ALREADY CENTRAL, AND ALREADY REVIEWED. §6 defines four
+      classes and the catalog assigns one to every permission, so the requirement is derivable from
+      something that exists rather than from a new field somebody must remember to set.
+      THE CONSEQUENCE IS THE PROPERTY WORTH HAVING: DECLARING A NEW PERMISSION `critical`
+      AUTOMATICALLY REQUIRES CONFIRMATION FOR IT, WITH NO CODE CHANGE AND NO CHANCE OF OMISSION.
+      Today the ladder's top rung is decorative — a permission is marked critical and nothing
+      happens. After this it is load-bearing, which is what docs/decisions/0026 accepted when it
+      refused to reclassify reset.
+    itISTHESAMEDEVICEAS_whereWithTenant: >-
+      NAMED BECAUSE THE ANALOGY IS EXACT. `sql-compiler.ts` emits the tenant predicate at ONE point
+      that is "not optional and takes no flag", and the file argues that "a rule is a thing people
+      follow until the day they do not." A confirmation requirement checked at one non-optional
+      point in the pipeline has the same property; a confirmation requirement each Action declares
+      is the rule people follow until the day they do not.
+  theTWOCHALLENGEROUTES:
+    ruling: >-
+      THE MECHANISM IS ONE. THE CHALLENGE ROUTE IS ONE PER EXISTING CLASS THAT CONTAINS A CRITICAL
+      OPERATION, BECAUSE THE CONTEXT DIFFERS EVEN THOUGH THE LOGIC DOES NOT. Two today: one Action,
+      one platform route. Both call the same Core confirmation service, which is where every rule
+      in this contract is enforced.
+    theACTIONCLASSCHALLENGEISITSELFANACTION: >-
+      AND THAT IS WHAT KEEPS IT FROM BEING AN ORACLE. It declares THE SAME PERMISSION AS THE
+      OPERATION IT CONFIRMS and runs the identical authorization pipeline, including the
+      not_found/forbidden collapse. SO A CALLER CANNOT OBTAIN A CHALLENGE FOR SOMETHING IT COULD
+      NOT PERFORM, and cannot learn from a challenge whether a record exists — the refusal is the
+      one it would have received anyway.
+      WITHOUT THIS PROPERTY THE CHALLENGE ENDPOINT WOULD BE A UNIVERSAL EXISTENCE ORACLE OVER EVERY
+      CRITICAL TARGET IN THE PLATFORM, reachable by anyone with any session, which would be a
+      strictly worse hole than the one confirmation closes.
+    noNEWPERMISSIONSAREDECLARED: >-
+      permission-catalog.yaml GAINS NOTHING FROM THIS CONTRACT, and that is deliberate. A
+      `core.confirmation.request` permission held by everyone, checked on every call and deniable
+      to nobody, is the ceremony organization-selection-v1 refused to invent and
+      platform-operator-v1 refused again for whoami. The challenge borrows the permission of the
+      thing it confirms.
+
+# ---------------------------------------------------------------------------
+# theBinding — the single most important property in this contract
+# ---------------------------------------------------------------------------
+theBinding:
+  ruling: >-
+    A CONFIRMATION IS BOUND TO EXACTLY ONE OPERATION, ON EXACTLY ONE TARGET, WITH EXACTLY ONE SET
+    OF PARAMETERS, FOR EXACTLY ONE PRINCIPAL, ON EXACTLY ONE SESSION.
+  theBOUNDVALUE: >-
+    HMAC-SHA-256 over the canonical concatenation of: principal_id · session_id · action_id ·
+    the canonical serialisation of the operation's parameters. Keyed by a Worker secret. THE STORED
+    ROW HOLDS THAT HASH AND NOTHING ELSE THAT COULD IDENTIFY ANYTHING.
+  whyAHASHANDNOTTHEIDENTIFIERSTHEMSELVES:
+    theSTORAGEARGUMENT: >-
+      THE CONFIRMATION RECORD LIVES IN THE CONTROL PLANE, WHICH MUST HOLD NO TENANT BUSINESS DATA.
+      A row recording "principal P may delete customer C" would put a tenant's customer identifier
+      in the one database that spans every Organization — the disclosure
+      control-plane/0001_principal.sql refused a whole column to prevent, and exactly what
+      docs/decisions/0025 Decision 5 forbids of the operator log: "an operator log that accumulates
+      customer data is a second copy of the tenant database with weaker access rules."
+      A HASH CARRIES THE BINDING AND CARRIES NO IDENTIFIER. It is not invertible without the Worker
+      secret, and the secret is not in the database.
+    theBETTERARGUMENT: >-
+      SUBSTITUTION FAILS BY CONSTRUCTION RATHER THAN BY COMPARISON. Verification RECOMPUTES the
+      hash from the incoming request and looks it up. A caller who confirms "delete customer X" and
+      submits "delete customer Y" produces a different hash, WHICH SIMPLY DOES NOT FIND A ROW —
+      there is no comparison step to get wrong, no field to forget, and no code path where the
+      check is skipped because the values "looked right".
+      THIS IS THE SAME CLASS OF ATTACK VAL-OWN CLAUSE 4 CLOSES for targetEntity substitution, and
+      it is the attack a confirmation mechanism exists to stop. A design that stored the target and
+      compared it would be one forgotten `if` away from confirming everything.
+  whySESSIONANDNOTONLYPRINCIPAL: >-
+    A CONFIRMATION OBTAINED IN ONE SESSION MUST NOT BE SPENDABLE IN ANOTHER. Otherwise a principal
+    logged in on two devices — or an attacker holding a second, stolen session for the same
+    principal — could ride a confirmation the legitimate user produced. Binding to the session
+    makes the confirmation die with it, including at revocation.
+  whyPARAMETERSANDNOTONLYTHETARGET: >-
+    BECAUSE THE STATEMENT PROMISED THE PARAMETERS TOO. "Reset the credential of principal P" and
+    "reset the credential of principal P and revoke nothing" are different operations if a
+    parameter ever controls that. Binding the whole parameter set means the statement the human
+    read is the operation that runs — WHICH IS THE ENTIRE POINT OF D15's "states exactly what will
+    happen."
+
+# ---------------------------------------------------------------------------
+# lifecycle
+# ---------------------------------------------------------------------------
+lifecycle:
+  singleUse:
+    ruling: "SPENT ON FIRST USE, ATOMICALLY, WHETHER OR NOT THE OPERATION THEN SUCCEEDS."
+    whyEVENONFAILURE: >-
+      A CONFIRMATION THAT SURVIVED A FAILED OPERATION WOULD BE RETRYABLE, and an attacker who could
+      cause a failure could then reuse it. It also makes the audit trail honest: one confirmation,
+      one attempt, whatever the outcome.
+      THE COST IS REAL AND IS ACCEPTED: a genuine transient failure — a `unavailable` from the
+      store — forces the human to confirm again. That is the correct direction for a `critical`
+      operation, and the alternative is a token whose lifetime depends on how often things break.
+    theATOMICITYREQUIREMENT: >-
+      MARKING SPENT AND READING UNSPENT MUST BE ONE OPERATION, or two concurrent requests both see
+      "unspent" and both proceed. A conditional update that reports rows-affected is sufficient;
+      a read-then-write is not, and this is the one place in this contract where a plausible
+      implementation is wrong in a way testing rarely catches.
+  expiry:
+    ruling: "FIVE MINUTES. Short-lived, per D15."
+    why: >-
+      LONG ENOUGH TO READ A STATEMENT AND TYPE A PASSWORD, SHORT ENOUGH THAT AN ABANDONED
+      CONFIRMATION ON AN UNLOCKED SCREEN IS NOT A STANDING AUTHORITY. It is a UI-scale duration
+      because the mechanism is a UI-scale interaction; anything measured in hours is a session
+      upgrade wearing a nonce.
+  noSESSIONWIDEELEVATION:
+    ruling: >-
+      THERE IS NO ELEVATED SESSION, NO "SUDO MODE", NO WINDOW DURING WHICH FURTHER CRITICAL
+      OPERATIONS SKIP CONFIRMATION, AND NONE MAY BE ADDED.
+    why: >-
+      D15 FORBIDS IT BY NAME: "Elevation is per operation, never per session. An elevation that
+      opens a window during which anything may be done is a session upgrade, and THE AUDIT TRAIL
+      THEN CANNOT SAY WHAT THE PRINCIPAL ACTUALLY CONFIRMED."
+      THE SECOND HALF IS THE STRONGER ARGUMENT AND IS THE ONE TO CITE WHEN THIS IS REVISITED, AND
+      IT WILL BE: a five-minute window "for convenience" during a bulk operation destroys the
+      property that every critical action has a confirmation naming it. The audit record would then
+      say a human confirmed something, and could not say what.
+    theUSABILITYCOSTSTATEDHONESTLY: >-
+      AN OPERATOR DELETING TEN CUSTOMERS CONFIRMS TEN TIMES, WITH TEN PASSWORD ENTRIES. THAT IS
+      DELIBERATE FRICTION ON AN IRREVERSIBLE ACTION and it is the correct answer for `critical`. If
+      bulk critical operations ever become a real requirement, THE ANSWER IS A BULK OPERATION THAT
+      IS ITSELF ONE CONFIRMED ACTION with one statement naming all ten targets — not a window.
+
+# ---------------------------------------------------------------------------
+# theAIPrincipalCase — D15's clause, and what this mechanism does to it
+# ---------------------------------------------------------------------------
+theAIPrincipalCase:
+  ruling: >-
+    AN AI PRINCIPAL CANNOT CONFIRM. NOT "MUST NOT" — CANNOT.
+  why: >-
+    STEP 2 REQUIRES A FRESHLY DERIVED CREDENTIAL VALUE, AND AN AI AGENT DOES NOT HOLD THE HUMAN'S
+    PASSWORD. So D15's requirement — "for an AI principal, confirmation is collected by the
+    platform from the human" — STOPS BEING A RULE SOMEONE MUST IMPLEMENT AND BECOMES A PROPERTY OF
+    THE MECHANISM. There is no code path by which a model can produce the second half.
+  itISTHESTRONGESTFORMAVAILABLE: >-
+    AND IT IS WORTH NOTICING THAT IT FELL OUT OF CHOOSING RE-AUTHENTICATION FOR AN UNRELATED
+    REASON. A typed-token-only design would have let an AI principal echo the token perfectly and
+    satisfy the mechanism while satisfying none of D15's intent.
+  theCONSEQUENCEFORPRODUCTDESIGN: >-
+    AN AI AGENT CAN NEVER COMPLETE A `critical` OPERATION ON ITS OWN, AND THE HUMAN MUST BE PRESENT
+    AT THE MOMENT IT HAPPENS. That is a real product constraint, it is the correct one for
+    irreversible actions, and MCP_STANDARD.md should record it when the AI surface is built —
+    AI_STANDARD.md's "AI never directly changes databases" has a companion here: AI never completes
+    a critical action.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  # =======================================================================================
+  - id: platform.confirmations.request
+    title: "Request a confirmation — platform route class"
+    method: POST
+    path: "/api/v1/platform/confirmations"
+    surface: platform
+    provenance: "NEW WORK."
+    description: "Obtain a confirmation challenge for a critical operation in the platform route class. Today: credential reset."
+    permission: "THE SAME PERMISSION AS THE OPERATION NAMED IN THE REQUEST, resolved from action_id. Not a permission of its own."
+    scope: platform
+    request: { schemaRef: "urn:dudo:schema:confirmation:1#/$defs/requestConfirmationInput" }
+    response: { schemaRef: "urn:dudo:schema:confirmation:1#/$defs/confirmationChallenge" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    notes: >-
+      IT RUNS THE FULL AUTHORIZATION OF THE TARGET OPERATION, including its not_found/forbidden
+      collapse. A caller who could not perform the operation cannot obtain a challenge for it, and
+      receives the identical refusal.
+      AN action_id NAMING AN OPERATION THAT IS NOT `critical` IS REFUSED WITH invalid_argument, not
+      granted a pointless challenge. A confirmation for a non-critical action would be a token
+      nothing consumes, and issuing one invites a client to attach it to everything.
+
+  # =======================================================================================
+  - id: core.confirmations.request
+    title: "Request a confirmation — Action class"
+    method: POST
+    path: "/api/v1/confirmations"
+    surface: public
+    provenance: "NEW WORK."
+    description: "Obtain a confirmation challenge for a critical Action inside the caller's tenant. Today: customers.customer.delete."
+    permission: "THE SAME PERMISSION AS THE ACTION NAMED IN THE REQUEST. It IS an Action and is invoked through the ordinary pipeline."
+    scope: "The scope the named Action declares."
+    request: { schemaRef: "urn:dudo:schema:confirmation:1#/$defs/requestConfirmationInput" }
+    response: { schemaRef: "urn:dudo:schema:confirmation:1#/$defs/confirmationChallenge" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, organization_not_selected, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    notes: >-
+      BEING AN ORDINARY ACTION IS WHAT MAKES IT SAFE. It resolves a tenant, narrows to the
+      authorized business set, and answers not_found for a record in another tenant exactly as
+      GetCustomer does — so it creates no new disclosure path and needs no new isolation argument.
+      THE STATEMENT MAY NAME THE TARGET, because by the time it is composed the caller has been
+      authorized to read it. A statement naming a record the caller could not read would be the
+      oracle this route otherwise avoids, and composing the statement AFTER authorization is what
+      prevents it.
+
+# ---------------------------------------------------------------------------
+# theConfirmedRequest — how the second step is carried, on every critical route
+# ---------------------------------------------------------------------------
+theConfirmedRequest:
+  carriage: >-
+    TWO FIELDS ON THE OPERATION'S OWN REQUEST BODY: `confirmation_id` and `reauth_derived_value`.
+    NOT A HEADER, and not a wrapper envelope.
+  whyNOTAHEADER: >-
+    THE PARAMETERS ARE PART OF THE BINDING, so the confirmation and the parameters it authorises
+    must arrive together, validated by the same schema, in the same object. A header would put half
+    the security-relevant input outside the shape that `additionalProperties: false` protects — and
+    every input-validation rule Core has lives on the body.
+  everyCRITICALOPERATIONSSCHEMAGAINSBOTHFIELDS: >-
+    AND THEY ARE `required`, NOT OPTIONAL. An optional confirmation field is a confirmation that can
+    be omitted, and the pipeline would then be refusing a request the schema said was valid — two
+    places deciding one thing.
+  theKDFPARAMETERSAREUNCHANGED: >-
+    IDENTICAL TO LOGIN, DELIBERATELY: PBKDF2-SHA256(NFC(password), salt = normalized_identifier,
+    600,000 iterations, 32 bytes), base64url, 43 characters. THE CLIENT REUSES ITS LOGIN CODE PATH
+    EXACTLY — no second KDF, no second parameter set, no second place for web and Apple to diverge.
+    THE SERVER REUSES `credential-verifier.ts` AND ITS EQUAL-WORK PROPERTY, so a wrong password on
+    a confirmation costs the same work as a right one and this route is not a password oracle.
+  theSALTPROBLEMDOESNOTARISEHERE: >-
+    WORTH STATING, BECAUSE IT DOES ARISE IN credential-reset-v1. The KDF salt is the normalised
+    identifier of the principal being authenticated — and here that is THE CALLER'S OWN, which the
+    caller obviously knows because it typed it at login. Contrast CR-5, where the console must
+    derive for a DIFFERENT principal whose normalised identifier it does not know and cannot be
+    told. Confirmation is unaffected by that problem.
+
+# ---------------------------------------------------------------------------
+# storage
+# ---------------------------------------------------------------------------
+storage:
+  where: "A `confirmation` table in the CONTROL PLANE. It is principal-scoped and holds no tenant data."
+  columns: >-
+    binding_hash (primary key) · principal_id · expires_at · spent_at. NO action_id, NO target
+    identifier, NO parameters, NO statement text. See theBinding for why the binding is a hash, and
+    note that this table cannot be read to discover WHAT anyone confirmed — only that they did.
+  whyNOTADURABLEOBJECT: >-
+    CONSIDERED. A DO gives natural atomicity for the spend, and docs/decisions/0013 already
+    established a SQLite-backed coordinator. REJECTED FOR NOW: the DO free allowance is a shared
+    100,000/day budget whose apportionment is an open question in
+    docs/operations/free-tier-register.md, and adding a second consumer to an unapportioned budget
+    is the kind of quiet commitment §6a exists to prevent. A conditional D1 UPDATE reporting
+    rows-affected gives the atomicity this needs without touching that budget.
+  retention: >-
+    EXPIRED ROWS ARE DELETED BY THE RETENTION JOB, not on the request path. A delete on the hot path
+    would be a write nobody accounted for, and `session-resolution.ts` ruling 3 already establishes
+    that nothing on the authentication path writes.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-written, d1-rows-read, d1-storage]
+  writes: >-
+    2 to issue (1 row + primary-key index) + 2 to spend (a conditional UPDATE, charged
+    conservatively) + 2 for each route's audit record. A CRITICAL OPERATION THEREFORE COSTS ABOUT 4
+    MORE CONTROL-PLANE ROW-WRITES THAN IT DID.
+  theCEILING: >-
+    Against the 3,000/day control-plane sub-ceiling that is roughly 750 confirmations a day
+    platform-wide. IT IS AFFORDABLE FOR A REASON THAT IS STRUCTURAL RATHER THAN LUCKY: a critical
+    operation requires a human to read a statement and type a password, so the volume is bounded by
+    human attention and not by traffic. THE SAME TEST 0013 CONTROL 5 APPLIES — is the population
+    that can force a write bounded by something other than the attacker? — and it passes.
+  theHAZARDNAMED: >-
+    THE CHALLENGE ROUTE IS A WRITE REACHABLE BY ANY AUTHENTICATED PRINCIPAL HOLDING A CRITICAL
+    PERMISSION, and an unbounded loop of challenge requests is 2 row-writes each against a shared
+    ceiling. RATE LIMITING IS THEREFORE REQUIRED ON BOTH CHALLENGE ROUTES, and the per-principal
+    daily ceiling bounds it in the meantime. This is 0013's shape again — the control becoming the
+    lever — and it is named rather than discovered.
+  storage: "Four short columns, rows live five minutes. Immeasurable."
+  cost: "USD 0 / BD 0 per month. One control-plane table, no new service, no new binding."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  theBinding:
+    - "SUBSTITUTION: confirm a delete of customer X, submit a delete of customer Y with that confirmation_id. Refused. THIS IS THE CENTRAL TEST OF THIS CONTRACT."
+    - "Confirm on session A, submit on session B for the same principal. Refused."
+    - "Confirm as principal P, submit as principal Q. Refused."
+    - "Confirm action A, submit action B. Refused."
+    - "Alter one parameter between challenge and submission. Refused."
+  lifecycle:
+    - "A confirmation is spent on first use and a second submission is refused."
+    - "A confirmation is spent even when the operation FAILS — force an unavailable from the store, then retry with the same confirmation_id. Refused."
+    - "CONCURRENCY: two simultaneous submissions with one confirmation_id. Exactly one succeeds. This is the case a read-then-write implementation passes in serial testing and fails in production."
+    - "An expired confirmation is refused. Assert at the boundary, not only well past it."
+  theReauthentication:
+    - "A correct confirmation_id with a WRONG derived value is refused, and costs the same work as a right one — credential-verifier.ts's equal-work property must hold on this path too."
+    - "An AI-agent principal cannot complete a critical operation, because it cannot produce a derived value. Assert as a positive test of D15's clause, not as an assumption."
+  theOracleProperties:
+    - "A caller lacking the target operation's permission receives the IDENTICAL refusal from the challenge route that it would receive from the operation itself."
+    - "A challenge for a customer in ANOTHER tenant returns not_found, indistinguishable from a customer that does not exist."
+    - "A challenge naming a NON-critical action is refused with invalid_argument."
+  theCentralNegativeControl: >-
+    REMOVE THE CONFIRMATION CHECK FROM THE PIPELINE AND EVERY CRITICAL-OPERATION TEST MUST GO RED.
+    The same negative control the Customer Directory contract requires of `whereWithTenant`, for the
+    same reason: if removing the check turns only some tests red, coverage is incomplete and the
+    suite is what is wrong, not the finding.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: CF-1
+    question: >-
+      RE-AUTHENTICATION IS EXACTLY AS STRONG AS THE PASSWORD. An attacker holding both the session
+      and the password defeats the presence half entirely.
+    recommendation: >-
+      Correct for today and it must not be described as two-factor in any release note or UI. MFA
+      is the upgrade path and this mechanism is shaped so that adding a factor is one more check at
+      step 2. Revisit when MfaFactor becomes more than a registry entry.
+    blocks: "Nothing. It is a stated ceiling on what this proves."
+  - id: CF-2
+    question: >-
+      CORE CANNOT VERIFY THE CLIENT DISPLAYED THE STATEMENT IT WAS GIVEN. A client could render its
+      own text and echo the token.
+    recommendation: >-
+      Uncloseable from the server, exactly as the NFC password rule is. Enforcement is a published
+      client obligation plus qa-agent asserting both clients render the server's text verbatim.
+      Recorded rather than engineered around.
+    blocks: "Nothing."
+  - id: CF-3
+    question: >-
+      Ten critical operations require ten confirmations and ten password entries. There is
+      deliberately no elevation window.
+    recommendation: >-
+      Correct under D15. If bulk critical operations become a real requirement, the answer is a
+      BULK OPERATION THAT IS ITSELF ONE CONFIRMED ACTION, with one statement naming all its
+      targets — never a window, which destroys the property that the audit trail can say what was
+      confirmed.
+    blocks: "Nothing today. It will be raised as a usability complaint and the answer is written here."
+  - id: CF-4
+    status: CLOSED
+    question: >-
+      The statement is server-authored plain text and Dudo has no localisation mechanism. A
+      customer using the Apple client in Arabic receives an English statement of an irreversible
+      action — so THE INTENT HALF IS SIMPLY ABSENT for that user. A confirmation nobody can read
+      proves nothing. Not cosmetic, and Dudo's market is Bahrain.
+    recommendationAsMade: >-
+      ~~A statement composed of a stable token plus structured parameters, letting the client
+      render an approved translation.~~ REJECTED BY THE TEAM LEAD, AND CORRECTLY: IT GIVES AWAY
+      WHAT THIS CONTRACT HAD JUST ESTABLISHED. This file noted in the same breath that it reopened
+      CF-2, and then recommended it anyway — undoing "the party being constrained does not author
+      the statement of the constraint" for every non-English user, one paragraph after stating it.
+    resolution: >-
+      CLOSED by docs/decisions/0027, 2026-09-05. THE DILEMMA WAS FALSE, AND THE ERROR WAS MOVING
+      THE WRONG THING TO THE CLIENT.
+      LOCALISATION REQUIRES THE CLIENT TO CHOOSE A LANGUAGE. IT DOES NOT REQUIRE THE CLIENT TO
+      RENDER THE TEXT. So the challenge request carries a `locale`, CORE OWNS THE STATEMENT CATALOG
+      AND RENDERS THE STATEMENT ITSELF IN THAT LOCALE, and the client displays it verbatim exactly
+      as before.
+      CHOOSING A LOCALE IS NOT AUTHORING. The statement stays server-authored in the only sense
+      that matters — CORE COMPOSED EVERY WORD — and the client's power grows by one enumerated
+      value rather than by a text field. CF-2 IS LEFT EXACTLY AS IT WAS RATHER THAN WIDENED, which
+      the rejected recommendation could not have said.
+    theBOUNDS:
+      - "AN UNSUPPORTED LOCALE FALLS BACK TO ENGLISH AND SAYS SO — the response reports the locale actually used. Silent fallback would show a user text they cannot read while the field claimed otherwise, which is the failure this closes, restored in a smaller form."
+      - >-
+        THE LOCALE IS DELIBERATELY NOT PART OF THE BINDING. It changes nothing about WHAT WILL
+        HAPPEN, and binding it would refuse a confirmation from a user who switched language between
+        challenge and submission — a refusal with no security content. theBinding covers principal,
+        session, action and parameters, and locale is none of those.
+      - >-
+        THIS LOCALISES ONE SURFACE, NOT DUDO. The confirmation statement is where being unreadable
+        is a SAFETY property rather than a usability one. It sets no precedent for a general
+        localisation mechanism and decides nothing about how the rest of the product is translated.
+    theRESIDUAL: >-
+      CORE MUST NOW MAINTAIN A TRANSLATED STATEMENT CATALOG, and a MISSING or WRONG translation of
+      an irreversible action is a safety defect rather than a copy defect. The English fallback is
+      the fail-safe, and it is honest — the user sees text they may not read, and the response says
+      which language it is. A MISTRANSLATION HAS NO SUCH BACKSTOP: it would be confidently wrong in
+      a language the reviewer may not speak. Translations of critical statements need the same
+      review as the operations they describe.
+  - id: CF-6
+    question: >-
+      CF-5's rate-limit requirement now applies to a SECOND consumer of a limiter that still does
+      not exist, which docs/decisions/0027 records as making the durable limiter load-bearing
+      rather than owed.
+    recommendation: >-
+      No action here; noted so it is not re-raised as a new finding. 0017's in-process limiter is
+      per-isolate and bounds nothing in a deployed Worker. At closed-beta scale the per-principal
+      daily write ceiling is the real bound. DO NOT REPORT RATE LIMITING AS DONE.
+    blocks: "Nothing at current scale. It is now a shared obligation rather than this contract's alone."
+  - id: CF-5
+    question: "Both challenge routes are writes reachable by any principal holding a critical permission, so an unbounded loop spends a shared ceiling."
+    recommendation: "Rate limiting is required, and 0017's in-process limiter does not bound it in a deployed Worker. The per-principal daily ceiling is the real bound at closed-beta scale. Do not report rate limiting as done."
+    blocks: "Nothing at current scale."

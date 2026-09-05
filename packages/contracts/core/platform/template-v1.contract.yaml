@@ -1,0 +1,380 @@
+---
+# Template — contract of record, version 1
+#
+# THE USER'S FIRST REQUESTED CAPABILITY: "super admin should be able to create business type."
+#
+# A Template IS a business type. docs/decisions/0025 decision 2 settles that it is not a new
+# concept: ARCHITECTURE.md §1 has recorded Template as the fifth extension type since Phase 0 —
+# "a pre-configured combination of Apps and settings for a business type: Salon, Dental Clinic,
+# Gym. Carries no code" — followed by "the user selects a business type, not a set of technical
+# modules." The five extension types are CLOSED and a sixth is a Constitution amendment, so
+# inventing a parallel name would fork the model to avoid reading the one that exists.
+#
+# The machine-readable half is template-v1.schema.json. BOTH ARE NORMATIVE TOGETHER.
+#
+# THIS IS AN OPERATION IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class and
+# its four binding properties, and this contract RESTATES NONE OF THEM. Read it first.
+#
+# Governed by: docs/decisions/0025 (Accepted) · platform-operator-v1 (the class)
+#              docs/architecture/standards/CORE_BOUNDARIES.md §2 and §6 — the boundary that
+#                decides what a Template may carry
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: ALL NEW WORK. There is no Template anywhere in the repository — no object, no table,
+# no permission before 2026-09-05, and no code.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05. Its only blocker was platform-operator-v1's acceptance."
+acceptedNote: >-
+  THE LEVEL LABELS ARE NOW LOAD-BEARING RATHER THAN COSMETIC, and docs/decisions/0025's Amendment
+  of 2026-09-05 is why. The `Workspace` rename is NOT being performed: `business_id` turned out to
+  be a published wire field in customer-directory-v1 that two clients have shipped against, and a
+  persisted audit value in move-customer-to-business.ts. So the customer wire keeps `business_id`,
+  the platform contracts stay in `Workspace` terms, and DISPLAY LABELS ARE WHAT THE USER ACTUALLY
+  ASKED FOR — their complaint was about words on a screen, and this is the mechanism that fixes
+  them without a breaking change to a shipped contract.
+updated: "2026-09-05"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# theBoundary — THE MOST IMPORTANT SECTION IN THIS FILE. Read before the operations.
+# ---------------------------------------------------------------------------
+theBoundary:
+  theRule: >-
+    A TEMPLATE MAY NAME Apps AND CARRY LABELS. IT MAY NEVER CONTAIN LOGIC.
+  whyARegistryOfBusinessTypesIsCoreAtAll:
+    theTest: >-
+      CORE_BOUNDARIES.md §2's four questions, answered, as §2 requires ("record the answers in the
+      task specification"):
+        1. WOULD EVERY App NEED IT, IN EVERY INDUSTRY? The REGISTRY, yes — a named, versioned,
+           tenant-independent catalogue of configurations is the same shape for a dental clinic, a
+           car workshop, a freight company and a SaaS startup. Its CONTENTS are industry-specific
+           and that is the distinction below.
+        2. IS IT INFRASTRUCTURE RATHER THAN A BUSINESS DECISION? Yes. Which Template an
+           Organization adopts is a business decision; that Templates exist and can be enumerated
+           is platform plumbing.
+        3. IS IT FREE OF BUSINESS SEMANTICS? Yes, AND THIS IS THE ANSWER THAT DOES THE WORK — see
+           theRowColumnDistinction.
+        4. WOULD PUTTING IT IN AN App MAKE THE App UNBUILDABLE? Yes. A Template is selected BEFORE
+           any App is installed; an App cannot own the thing that decides whether it is installed.
+      FOUR YESES. It belongs in Core.
+  theRowColumnDistinction:
+    ruling: >-
+      CORE_BOUNDARIES.md §6 RULE 1 — "no industry nouns" — GOVERNS TYPES, TABLES, COLUMNS,
+      FUNCTIONS AND ROUTES. IT DOES NOT GOVERN ROWS.
+      A ROW READING "Dental Clinic" IS DATA. A `dental_clinic` COLUMN IS A DEFECT.
+    whyThisIsNotAQuibble: >-
+      IT IS THE ENTIRE REASON THIS CAPABILITY CAN EXIST IN CORE AT ALL. Without the distinction,
+      "Core must know about dental clinics" is an obvious §2.3 violation and the feature is
+      unbuildable. With it, Core knows only that a Template is a named record with labels, and the
+      word "Dental Clinic" is a value an operator typed — which Core no more understands than it
+      understands a customer's name.
+    theCHECKABLEFORM: >-
+      Mechanical, and it is a review obligation on every change to the Template implementation: NO
+      IDENTIFIER IN platform/core/** MAY NAME A BUSINESS TYPE. No `SCHOOL_LABELS` constant, no
+      `isClinic()`, no `switch (template.name)`, no seeded row that code branches on. The moment
+      Core reads a Template's NAME to decide behaviour, the row has become a column.
+  whatATemplateMayNOTCarry:
+    - "NO WORKFLOW. Not a state machine, not an approval chain, not a sequence of steps."
+    - "NO VALIDATION RULE. Not a required field, not a format, not a constraint on any entity."
+    - "NO PRICING, TAX OR DISCOUNTING RULE. CORE_BOUNDARIES.md §5 puts these in an App, per industry and per country."
+    - "NO CODE, NO EXPRESSION, NO SCRIPT, NO CONDITION, AND NO TEMPLATING SYNTAX IN ANY FIELD. A label containing an expression is code that arrived through a string column."
+    - "NO PERMISSION SET, AND NO ROLE DEFINITION. See theRoleVocabularyLine."
+    theCONSEQUENCEOFBREAKINGTHIS: >-
+      IT IS PERMANENT, WHICH IS WHY THE LIST IS A PROHIBITION AND NOT A GUIDELINE.
+      CORE_BOUNDARIES.md §1: "anything specific placed in Core becomes a permanent constraint on
+      future applications... The cost of wrongly including something is a constraint on every
+      future business type, and it is effectively permanent." A Template that carried a workflow
+      would put one industry's process in the layer every other industry shares.
+  theRoleVocabularyLine:
+    ruling: >-
+      IN THIS VERSION A TEMPLATE CARRIES DISPLAY LABELS FOR STRUCTURAL LEVELS AND NOTHING ABOUT
+      ROLES. No role names, no role labels, no permission sets.
+    why: >-
+      A role vocabulary is a bigger question than a level label and it is open as AZ11. The
+      analysis behind docs/decisions/0025 established that three of the user's four school roles —
+      principal, teacher, student — are ALREADY EXPRESSIBLE as tier plus existing structural scope,
+      so a role vocabulary buys labels and not capability; and that the fourth, PARENT, is not a
+      role at all but a DELEGATION EDGE BETWEEN TWO RECORDS (AZ10/CO6). Shipping role labels here
+      would look like it addressed the parent case and would not.
+    whatWouldGOWRONGIFITWERERUSHED: >-
+      A TEMPLATE CARRYING ROLE NAMES INVITES A TEMPLATE CARRYING ROLE PERMISSIONS, which is
+      per-tenant permission authoring arriving through a configuration table with none of D11's or
+      D16's four constraints applied. That is the wildcard problem in a new costume: 0007 rule 3
+      forbids wildcards because a role is exactly where one gets smuggled back in, and a Template
+      is the next such place.
+    itISADDITIVELATER: "A `role_labels` object is an additive change to this shape when AZ11 is decided. Nothing here forecloses it."
+  theAppsListIsDEFERRED:
+    ruling: >-
+      "WHICH Apps THIS TEMPLATE INSTALLS" IS NOT IN VERSION 1, per docs/decisions/0025's scope.
+    why: >-
+      THERE IS ONE App. A list-of-Apps field whose only possible value is ["customers"] is a field
+      with no decision in it, and it would have to be designed against an installation mechanism
+      that does not exist — core.app.install is a Phase 2 permission over an App runtime nobody has
+      built. Designing the field now means designing it against imagination.
+    itISADDITIVELATER: "An `apps` array is additive. The shape below leaves room for it and names no substitute."
+
+# ---------------------------------------------------------------------------
+# theObject — what a Template IS, in this version
+# ---------------------------------------------------------------------------
+theObject:
+  registryEntryRequired: >-
+    `Template` MUST BE ADDED TO core-object-registry.yaml, domain `marketplace`, tenancy
+    `tenant-independent`, appAccess `read-via-contract`, phase 1. THIS CONTRACT REQUIRES THAT
+    REGISTRY CHANGE AND DOES NOT ITSELF MAKE IT — CORE_BOUNDARIES.md §2 requires the inclusion test
+    to be recorded, and theBoundary above is that record.
+  tenancy: tenant-independent
+  whyTenantIndependent: >-
+    A Template is PLATFORM CONFIGURATION. It names no Organization, contains no Organization's
+    data, and is identical for every tenant. It carries no tenant_id column and may never gain one.
+    THIS IS WHY THIS CAPABILITY COULD BE BUILT BEFORE AZ3: creating and listing Templates touches
+    nothing behind whereWithTenant, so a platform operator performing it is not reading anyone's
+    business data even in principle.
+  fields:
+    template_id: "Opaque, generated, 22 characters of base64url. Never meaningful, never parsed."
+    name: >-
+      The business type as a human reads it — "School", "Dental Clinic", "Retail". FREE TEXT, and
+      free text is the decision: an enum here would be the industry-noun column theRowColumnDistinction
+      forbids, and would also mean adding a business type required a code deploy.
+    level_labels: >-
+      The display label for each structural level. THIS IS THE FIELD THE USER ASKED FOR WITHOUT
+      NAMING IT — it is what makes a school render "Campus" where a shop renders "Branch".
+    status: "`active` or `retired`. See lifecycle."
+  levelLabels:
+    theLevels: >-
+      Exactly three, matching the structural levels Dudo has: `organization`, `workspace`, `branch`.
+      NOT `team`, which is a first-class object with its own name and no per-type variation anyone
+      has asked for; NOT `own` or `resource`, which are authorization scopes and not places.
+    theShapeISCLOSED: >-
+      A FIXED SET OF THREE KEYS, additionalProperties FALSE. Not a free-form map. An open map would
+      let an operator invent a level that does not exist, and a client rendering an unknown key
+      would be rendering a structure Dudo does not have.
+    theyAreLABELSANDNOTHINGELSE: >-
+      A label changes what a human reads. IT CHANGES NO AUTHORIZATION, NO SCOPE, NO PREDICATE AND NO
+      ROUTE. `workspace` is the scope name in permission-catalog.yaml and in the scope ladder
+      whatever a Template calls it on screen, and an Action's declared scope is never read from a
+      Template. A LABEL THAT COULD ALTER A SCOPE WOULD BE CONFIGURATION DECIDING AUTHORIZATION,
+      which is the shape 0007 D1 forbids.
+    theWORKSPACENAMING: >-
+      `workspace` IS THE KEY BECAUSE THE INNER UNIT IS BEING RENAMED FROM `Business` TO `Workspace`
+      (core-object-registry.yaml namingRuling2026-09-05, adopted by docs/decisions/0025). THIS
+      CONTRACT IS WRITTEN IN THE POST-RENAME VOCABULARY DELIBERATELY — writing it in the old one
+      would mean shipping a contract that has to be broken immediately, and the rename lands before
+      this is built. If the rename is deferred, THIS FILE IS WRONG AND MUST BE CHANGED, rather than
+      the two vocabularies being allowed to coexist.
+  lifecycle:
+    ruling: >-
+      A TEMPLATE IS CREATED `active` AND MAY BE RETIRED. THERE IS NO DELETE AND NO UPDATE IN
+      VERSION 1.
+    whyNoDelete: >-
+      An Organization will reference the Template it adopted. Deleting one turns that reference
+      into a dangling pointer, and the failure surfaces in the tenant's UI as a missing label
+      rather than anywhere an operator would look. Retirement hides it from new adoption and leaves
+      existing references intact — the same reasoning the Customer Directory applies to archive
+      versus delete.
+    whyNoUpdateYET: >-
+      STATED AS A LIMITATION RATHER THAN A DESIGN: an operator who mistypes "Dental Clnic" must
+      retire it and create another. Update is a real requirement and is deliberately not in version
+      1, because editing a label that Organizations are already rendering is a change with reach —
+      it silently alters what every adopting tenant sees — and it deserves its own thinking about
+      notification rather than arriving as a PATCH nobody discussed. Recorded as TM-1.
+    retirementISNOTINVERSION1EITHER: >-
+      AND THIS IS NAMED SO THE LIFECYCLE IS NOT READ AS COMPLETE. `status` exists in the shape with
+      both values, because adding a field to a published response later is worse than declaring it
+      now, but NO ROUTE SETS IT and every Template created by this contract is `active` forever. The
+      retire operation is TM-2.
+
+# ---------------------------------------------------------------------------
+# operations — three, all in the platform route class
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+
+  # =======================================================================================
+  - id: platform.templates.create
+    title: "Create a Template"
+    method: POST
+    path: "/templates"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Create a business type: a name and the display labels each structural level carries for
+      Organizations adopting it.
+    permission: core.template.create
+    scope: platform
+    request: { schemaRef: "urn:dudo:schema:template:1#/$defs/createTemplateInput" }
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, conflict, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    writes: >-
+      ONE ROW IN `template` (1 row + primary-key autoindex + one uniqueness index on the normalised
+      name = 3) PLUS the platform-operator audit record. Charged 4 conservatively, per 0014 §A.12 —
+      over-reserving delays a write, under-reserving is a platform outage.
+    conflict:
+      whenItIsReturned: "A Template with the same name, compared after Unicode NFKC normalisation and ASCII-only case folding, already exists."
+      whyNameUNIQUENESSISENFORCEDATALL: >-
+        TWO TEMPLATES CALLED "School" ARE INDISTINGUISHABLE TO THE OPERATOR CHOOSING ONE, and the
+        choice is permanent for every Organization that adopts the wrong one. This is the one
+        place a duplicate is worse than a gap.
+      theNORMALISATIONISDELIBERATEANDNARROW: >-
+        NFKC then ASCII-only case folding — THE SAME DEFINITION credential-store.ts::normalizeIdentifier
+        USES, restated in the schema rather than invented, so that "School" and "school" collide and
+        "Ｓchool" (full-width) does too. NOT full Unicode lowercasing, for credential-store.ts's own
+        reason: JavaScript and Swift disagree on real characters and a rule three implementations
+        must share cannot depend on which one runs it.
+        THE STORED NAME IS THE OPERATOR'S ORIGINAL. Normalisation decides COLLISION, never display.
+      itIsNOTANORACLE: >-
+        Templates are platform configuration visible to every operator through
+        platform.templates.list. A conflict discloses the existence of something the caller may
+        already enumerate, so there is nothing here for indistinguishability to protect — CONTRAST
+        every not_found ruling in this platform, which collapses cases precisely because the caller
+        may NOT enumerate what it is probing.
+    notes: >-
+      THE OPERATOR DOES NOT CHOOSE template_id. It is server-generated, like every other identifier
+      in Dudo. A client-chosen identifier would make Templates guessable and would put a naming
+      decision in an operator's hands on a permanent, referenced key.
+      NO IDEMPOTENCY KEY IN VERSION 1, and the gap is named rather than hidden: a retried create
+      after a network failure produces conflict rather than a duplicate, BECAUSE the name is unique.
+      That is a weaker guarantee than an idempotency key — the retry fails rather than succeeding
+      idempotently — and it is adequate here where the Customer Directory's CD-4 gap is not, because
+      the caller is one operator who can look at a list. Recorded as TM-3.
+
+  # =======================================================================================
+  - id: platform.templates.list
+    title: "List Templates"
+    method: GET
+    path: "/templates"
+    surface: platform
+    provenance: "NEW WORK."
+    description: "Enumerate Templates, so an operator can see what exists before creating another and before onboarding an Organization."
+    permission: core.template.list
+    scope: platform
+    request: "Query parameters `page_size` (1-100, default 25) and `cursor` only."
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/listTemplatesOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, unavailable]
+    maxRowWrites: 2
+    audit: required
+    notes: >-
+      maxRowWrites IS 2 ON A READ, and that is not an error: platform-operator-v1 P4 requires every
+      platform route to write an audit record, so a "read" route in this class always writes. §3.2
+      keeps `list` separate from `read` because enumeration is its own disclosure, and enumerating
+      the platform's configuration is exactly the reconnaissance a compromised operator performs
+      first.
+      NO not_found, EVER. Zero Templates returns 200 with data: [] — an empty collection is not a
+      missing one.
+
+  # =======================================================================================
+  - id: platform.templates.read
+    title: "Read a Template"
+    method: GET
+    path: "/templates/{template_id}"
+    surface: platform
+    provenance: "NEW WORK."
+    description: "One Template in full."
+    permission: core.template.read
+    scope: platform
+    request: "Path parameter `template_id` only. No body, no query parameters."
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, unavailable]
+    maxRowWrites: 2
+    audit: required
+    notes: >-
+      not_found IS AN HONEST not_found HERE, AND THAT IS UNUSUAL IN THIS CODEBASE. Everywhere else
+      Dudo collapses "does not exist" with "not yours" to close an existence oracle. Templates are
+      tenant-independent platform configuration and every caller who can reach this route may
+      already enumerate all of them, SO THERE IS NO POPULATION TO PROTECT AND NOTHING A DISTINCTION
+      COULD LEAK. Stated explicitly because a reviewer comparing this to customer-directory-v1 will
+      otherwise read it as an inconsistency, and because the reasoning — not the habit — is what
+      should be copied.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none
+  ruling: >-
+    NO OPERATION IN THIS CONTRACT TOUCHES TENANT DATA, NAMES AN ORGANIZATION, OR RESOLVES A TENANT
+    STORE. A Template is tenant-independent, the routes are in a class that cannot reach a tenant
+    (platform-operator-v1 P1), and no request or response shape in template-v1.schema.json contains
+    an organization_id in either direction.
+  soTHEISOLATIONTESTFORTHISCONTRACTISUNUSUAL: >-
+    THE STANDARD "tenant A must not read tenant B" TEST IS NOT APPLICABLE, because there is no
+    tenant on either side. qa-agent must report it as NOT APPLICABLE WITH THIS REASONING rather
+    than as passing — a green tenant-isolation result on a surface with no tenants is a test that
+    asserted nothing and would pass identically if the whole isolation model were removed.
+    WHAT REPLACES IT: assert that no route here can be made to return an organization_id, and that
+    the schema has no field capable of carrying one.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    A Template is a name and three short labels: under 500 bytes with its indexes. THE POPULATION
+    IS TINY AND BOUNDED BY HUMAN EFFORT — a business type is created by an operator typing, so the
+    realistic ceiling is tens of rows, not thousands. Immeasurable against 500 MB.
+  writes: "4 row-writes per create, 2 per read or list (the audit record). At operator volume, under 100 a day against the 3,000/day control-plane sub-ceiling."
+  atTheLimit: "Creates and reads are refused with quota_exceeded and Retry-After to the next 00:00 UTC. Nothing degrades for any tenant, because no tenant depends on this surface."
+  cost: "USD 0 / BD 0 per month. One control-plane table, no new service, no new binding."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  authorization:
+    - "A tenant principal holding `owner` receives forbidden on all three routes."
+    - "A principal with no platform_operator row receives forbidden."
+    - "A platform operator holding core.template.list but not core.template.create receives forbidden on create and 200 on list — the two permissions are genuinely separate and a role holding one must not get the other."
+  theBoundary:
+    - "NO IDENTIFIER IN platform/core/** NAMES A BUSINESS TYPE. One grep for the seeded Template names; it must find them only in test fixtures and in no source file."
+    - "A Template name containing an expression, a script tag or templating syntax is STORED AS TEXT and rendered as text by both clients. It is not evaluated anywhere."
+  shapes:
+    - "level_labels rejects an unknown key with invalid_argument — the closed set is enforced, not documented."
+    - "A create omitting level_labels entirely succeeds and yields the platform defaults; a create supplying a partial object succeeds and the unsupplied levels take defaults."
+    - "Two creates with names differing only by case, or by full-width versus ASCII characters, produce 201 then conflict."
+  audit:
+    - "All three routes write a platform-operator audit record, INCLUDING both reads."
+  crossClient: "Both clients render level labels from the Template and neither hardcodes 'Workspace' or 'Branch' in any user-facing string. A hardcoded label is the defect this whole field exists to prevent."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TM-1
+    question: "There is no update. An operator who mistypes a name must retire and recreate — and retirement is TM-2, so today they cannot even do that."
+    recommendation: "Add update in version 2, with explicit thinking about what changing a label does to Organizations already rendering it. Not a PATCH added quietly."
+    blocks: "Nothing. It is a usability limitation, stated."
+  - id: TM-2
+    question: "`status` exists in the shape with two values and no route sets it. Every Template is active forever."
+    recommendation: "The retire operation belongs with update in version 2. The field is declared now so adding the route later changes no published shape."
+    blocks: "Nothing today, and it becomes real the first time a Template is created in error."
+  - id: TM-3
+    question: "No Idempotency-Key on create. A retried create after a network failure returns conflict rather than succeeding idempotently."
+    recommendation: >-
+      Adequate here because the name is unique and the caller is an operator looking at a list.
+      NOT adequate for the Customer Directory, where CD-4 records the same gap as owed — the
+      difference is that a duplicate customer is silent and a duplicate Template is impossible.
+    blocks: "Nothing."
+  - id: TM-4
+    question: >-
+      Nothing consumes a Template yet. Organizations have no template_id, so creating one changes
+      what no user sees.
+    recommendation: >-
+      organization-onboarding-v1 adds the reference. UNTIL THEN THIS CAPABILITY IS COMPLETE AND
+      INERT, and it must be reported that way rather than as "business types now work" — the user
+      asked to create business types and will reasonably expect them to do something.
+    blocks: "Nothing. It is a reporting obligation, and it is the one most likely to be got wrong."
+  - id: TM-5
+    question: "Role vocabularies are deliberately absent (theRoleVocabularyLine), and AZ11 is undecided."
+    recommendation: "Additive when AZ11 lands. Do not add role labels here as a stopgap: it would look like it addressed the parent case (AZ10) and would not."
+    blocks: "Per-business-type role vocabularies, which the user has asked about and which are not in this slice."

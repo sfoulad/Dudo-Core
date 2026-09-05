@@ -63,6 +63,48 @@ status: proposed
 updated: "2026-09-05"
 documentsExistingImplementation: partial   # See PROVENANCE above. Per operation, below.
 #
+# =========================================================================================
+# TWO CORRECTIONS, 2026-09-05. BOTH FOUND BY web-agent WHILE IMPLEMENTING. READ BEFORE THE BODY.
+# =========================================================================================
+#
+# 1. `the422Rule` ASSERTED SOMETHING FALSE ABOUT THE DEPLOYED PLATFORM, and a client shipped a
+#    workaround for it. failed_precondition is argument-free with a constant message, so the
+#    Customer Directory's state-machine refusals and "no Organization selected" are identical on
+#    the wire. THE FIX IS A DISTINCT `organization_not_selected` CODE, required of Core. See
+#    clientObligations.the422Rule.
+#
+# 2. THIS FILE STILL DESCRIBED SERVER-SIDE AUTO-SELECTION, WHICH docs/decisions/0021 STRUCK.
+#    web-agent built to the ADR and correctly left the prose alone as outside its ownership. The
+#    `autoSelection` block, its migration, its 'explicit'/'automatic' value and its cliff are all
+#    withdrawn; `clientObligations.theFlow` is rewritten and is authoritative.
+#
+# THE CONTRACT WAS WRONG AND THE IMPLEMENTATION WAS RIGHT, BOTH TIMES. Recorded that way round
+# deliberately: 0021 already notes that this contract was right and a Team Lead ruling wrong about
+# auto-selection, so the direction of authority here is not a rule, it is whoever measured.
+#
+# THE SWEEP IS DONE, 2026-09-05, and it was not the cosmetic pass it was billed as.
+#
+# freeTierImpact, qa and openQuestions are corrected. The `autoSelection` block itself remains
+# STRUCK AND VISIBLE — that is deliberate, per docs/decisions/0021, which keeps the withdrawn
+# ruling readable for its lesson.
+#
+# TWO THINGS THE SWEEP FOUND THAT "STALE PROSE" DOES NOT DESCRIBE:
+#
+#   1. SEVEN OF THE NINE `qa.autoSelection` ASSERTIONS TESTED FOR BEHAVIOUR 0021 STRUCK. Struck
+#      prose is inert; A STRUCK TEST IS NOT. Someone would have written them, they would have
+#      failed against a correct implementation, and the natural way to make a failing test pass is
+#      to build the thing it asserts. The stale ASSERTIONS were the hazard in this file, not the
+#      stale paragraphs — and calling the whole thing "prose" nearly let them through.
+#
+#   2. OS-6 IS WORSE THAN RECORDED, NOT MILDER. Its mitigation said a stranded-at-quota session was
+#      reachable only by a multi-membership principal, "which today is nobody" — and that rested
+#      entirely on auto-selection. With selection mandatory for everyone, EVERY PRINCIPAL CAN BE
+#      STRANDED. Raised as OS-11.
+#
+# THE GENERAL LESSON, worth carrying to the next withdrawn ruling: when a decision is struck, the
+# dangerous residue is not the paragraphs that describe it. It is the TESTS that assert it and the
+# RISK ASSESSMENTS that were softened by it.
+#
 #   EXISTS, TRANSCRIBED    SessionResolver.selectOrganization and listEnterableOrganizations,
 #                          their error collapse, and the validate-then-reserve ordering.
 #   NEW WORK               both HTTP routes; the wire shapes; the session-route class;
@@ -331,10 +373,43 @@ co1:
     another principal's behalf.
 
 # ---------------------------------------------------------------------------
-# autoSelection — THE TEAM LEAD'S RULING OF 2026-09-05, TRANSCRIBED, WITH ITS THREE BINDING
-# CONDITIONS AND THE THINGS IT COSTS. NEW WORK: nothing in Core does this today.
+# autoSelection — ############ SUPERSEDED AND WITHDRAWN. docs/decisions/0021. ############
+#
+# EVERYTHING IN THIS BLOCK DESCRIBES SERVER-SIDE AUTO-SELECTION, WHICH 0021 STRUCK. THE SERVER
+# NEVER SELECTS AN ORGANIZATION. A session is always created unselected, selection is always a
+# separate authenticated request, and there is no cardinality condition under which the server
+# chooses on the caller's behalf.
+#
+# THE BLOCK IS KEPT AND STRUCK RATHER THAN DELETED, because 0021 keeps the withdrawn ruling
+# visible for its lesson and this file is where the ruling was written down in full.
+#
+# WHAT 0021 CONCLUDED, IN ONE LINE: "A CARDINALITY CONDITION ON A FALLBACK IS STILL A FALLBACK."
+# The unimplementable condition was the tell — condition two required the session to RECORD that
+# the selection was automatic, and under the contract a client that skips the picker sends a
+# BYTE-IDENTICAL request to one that shows it. There was nothing to record because there was no
+# difference to record. That a condition could not be built is evidence the distinction it
+# protected did not exist.
+#
+# WHAT REPLACES IT, AND IT IS SMALLER: if exactly one Organization is returned, THE CLIENT may
+# select it without drawing a picker. That is a PRESENTATION CHOICE. The request is still made,
+# the hint is still validated, and the server still has no fallback.
+#
+# CONSEQUENCES THAT LAND ELSEWHERE IN THIS FILE, all struck with it:
+#   * theMigrationThisRequires — WITHDRAWN. No column, no migration. 0021 withdraws OS-8.
+#   * the 'explicit'/'automatic' stored value — WITHDRAWN. It does not exist, in the schema, in
+#     the operation notes below, or in the qa list.
+#   * the 6-versus-9 row-write split — WITHDRAWN. A full session is login 3 + select 3 + logout 3
+#     = 9, ALWAYS, because selection is mandatory and is always its own request. 0021 records that
+#     this figure was published five times in two days and that the last two republications were
+#     not measurement error at all — they were an undecided design being stated as arithmetic.
+#   * the cliff — DOES NOT EXIST. Gaining a second membership changes nothing server-side; the
+#     client simply starts drawing a picker.
+#
+# THE CLIENT FLOW IS UNCHANGED BY ALL OF THIS, which is the point: attempt the work, react to the
+# refusal, use the picker. That client was always correct and is still correct.
 # ---------------------------------------------------------------------------
 autoSelection:
+  status: SUPERSEDED-BY-0021-DO-NOT-IMPLEMENT
   ruling: >-
     WHEN A PRINCIPAL HAS EXACTLY ONE ACTIVE MEMBERSHIP, CORE SELECTS THAT ORGANIZATION WITHOUT
     THE CLIENT ASKING. Decided by the Team Lead on 2026-09-05, on the question core-agent put to
@@ -583,9 +658,9 @@ operations:
       no "already selected" short-circuit and none may be added: a read to decide whether to write
       would make the work differ by current state, and it would save nothing measurable on an
       operation this rare. A client should still avoid the redundant call.
-      A SUCCESSFUL CALL RECORDS THE SELECTION AS 'explicit', overwriting 'automatic' if the session
-      had been auto-selected at login. The value is stored and is on no wire in either direction.
-      See autoSelection.theMigrationThisRequires.
+      ~~A SUCCESSFUL CALL RECORDS THE SELECTION AS 'explicit', overwriting 'automatic'.~~ STRUCK
+      2026-09-05 (docs/decisions/0021). THERE IS NO SELECTION-MODE COLUMN, no migration, and no
+      such value — every selection is explicit because there is no other kind. OS-8 is withdrawn.
       SELECTING A DIFFERENT ORGANIZATION IS PERMITTED AND IS AN ORGANIZATION SWITCH. It overwrites
       the selection on the same session; the previous tenant context is simply gone from the next
       request onwards. There is no confirmation step, no second session, and no way to hold two
@@ -651,39 +726,87 @@ wire:
 # ---------------------------------------------------------------------------
 clientObligations:
   theFlow: >-
-    1. POST /auth/login/complete. On 200 the session exists. IT MAY OR MAY NOT ALREADY HAVE AN
-       ORGANIZATION, AND THE CLIENT CANNOT TELL — the login response is a fixed body with no field
-       that reports it, deliberately (login-v1). DO NOT BRANCH HERE.
-    2. MAKE THE ORDINARY REQUEST THE USER ASKED FOR. If it succeeds, the session was auto-selected
-       and there was never anything to choose.
-    3. ON 422 failed_precondition: GET /auth/session/organizations, present the choice, then
-       POST /auth/session/organization, then retry the original request ONCE.
-    THE CLIENT ATTEMPTS THE WORK AND REACTS TO 422; IT DOES NOT INSPECT THE SESSION FIRST. That is
-    the whole flow, it is the same code before and after auto-selection exists, and it is the same
-    code for a one-membership and a ten-membership principal. A client written this way never has
-    to know auto-selection happened.
-  whyTheClientMUSTNOTPREEMPTIVELYCALLTHEPICKER: >-
-    IT LOOKS TIDIER AND IT IS WRONG. Calling the picker after every login to "find out what to
-    select" adds three point reads to every cold start for the overwhelming majority of principals,
-    who have exactly one membership and were already selected before the client asked. It also
-    tempts the client into selecting explicitly what the server already selected — a redundant
-    call that costs the full 3 row-writes, because there is deliberately no already-selected
-    short-circuit. THE 422 IS THE SIGNAL. Waiting for it costs one failed request in the rare case
-    and nothing in the common one.
-  autoSelectionIsINVISIBLEANDMUSTSTAYSO: >-
-    A CLIENT MUST NOT INFER, RECORD, DISPLAY OR BRANCH ON WHETHER A SELECTION WAS AUTOMATIC. There
-    is no field for it in any shape in this contract and none may be added: the value exists in the
-    control plane as evidence for a future audit trail, not as an input to a user interface. A
-    client that inferred it from "I did not have to call the picker" has built a dependency on the
-    number of memberships a user happens to have.
-  the422Rule: >-
-    A 422 failed_precondition FROM ANY ROUTE MEANS "NO ORGANIZATION SELECTED" AND THE CORRECT
-    RESPONSE IS TO RETURN TO STEP 2 — NOT to log in again, NOT to show a credential error, and NOT
-    to retry the same request. session-principal-resolver.ts:73-84 states why the code is 422 and
-    not 401: "the credential is good; there is simply no tenant context, and the client's correct
-    next move is to call the Organization picker rather than to log in again. unauthenticated would
-    send it round a loop that cannot terminate." A CLIENT THAT TREATS 422 AS AN AUTHENTICATION
-    FAILURE BUILDS EXACTLY THAT LOOP.
+    CORRECTED 2026-09-05 for docs/decisions/0021 (no server-side auto-selection) and for the
+    the422Rule defect above. THIS IS THE AUTHORITATIVE FLOW; where earlier prose in this file
+    disagrees, this wins and that prose is struck.
+    1. POST /auth/login/complete. On 200 the session exists AND IS UNSELECTED. ALWAYS. A 200 from
+       login is not a usable session (login-v1), and there is no cardinality of memberships under
+       which the server has chosen for you.
+    2. GET /auth/session/organizations.
+    3. IF EXACTLY ONE ORGANIZATION IS RETURNED, THE CLIENT MAY SELECT IT WITHOUT DRAWING A PICKER.
+       That is a presentation choice and it is permitted. IT IS NOT A DEFAULT AND IT IS NOT A
+       SERVER BEHAVIOUR: the request is still made, the hint is still validated, and the server
+       still has no fallback. A client that skips step 4 is not logged in anywhere.
+    4. POST /auth/session/organization.
+    5. Make the request the user asked for.
+    6. ON 422 `organization_not_selected` AT ANY LATER POINT — which happens when membership is
+       revoked or suspended mid-session — RETURN TO STEP 2. On 422 `failed_precondition`, show the
+       operation's own error and DO NOT touch the session.
+  whyTheClientCALLSTHEPICKERUPFRONT: >-
+    REVERSED 2026-09-05, AND THE REVERSAL IS THE POINT. This section previously said that calling
+    the picker after login "looks tidier and is wrong", on the ground that most principals were
+    already auto-selected and the refusal was the cheaper signal. WITH AUTO-SELECTION WITHDRAWN
+    THAT ARGUMENT INVERTS COMPLETELY: no session is ever selected at login, so a client that waits
+    for a refusal before calling the picker guarantees itself one wasted failing request on every
+    single cold start, for every principal, forever. The picker is now the second call, not the
+    fallback. The refusal path in step 6 remains, because membership can be revoked mid-session.
+  thereIsNOTHINGTOINFERABOUTHOWASELECTIONWASMADE: >-
+    REPLACES the withdrawn autoSelectionIsINVISIBLEANDMUSTSTAYSO. Every selection is explicit,
+    because there is no other kind. No field records how it was made, in any shape, in either
+    direction, and none may be added — there is no distinction left for one to carry.
+  the422Rule:
+    THE_RULE_AS_ORIGINALLY_WRITTEN_WAS_FALSE: >-
+      ~~"A 422 failed_precondition FROM ANY ROUTE MEANS 'NO ORGANIZATION SELECTED'."~~ STRUCK
+      2026-09-05, NOT DELETED, because a client shipped against it.
+      web-agent proved it false against the deployed platform. customer-directory-v1 uses
+      failed_precondition for its OWN state machine — archiving an already-archived customer, for
+      one — and kernel/errors.ts:137 builds it with NO ARGUMENTS AND A CONSTANT MESSAGE. The two
+      are BYTE-IDENTICAL ON THE WIRE: same status, same code, same message, no detail, nothing to
+      discriminate on. SO A CLIENT FOLLOWING THIS RULE LITERALLY DRAWS AN ORGANIZATION PICKER AT
+      SOMEONE WHO ARCHIVED AN ARCHIVED CUSTOMER.
+      web-agent shipped a discriminator that probes a route declaring no failed_precondition, and
+      CORRECTLY LABELLED IT A WORKAROUND. It is a workaround for this defect, it belongs to this
+      contract and not to that client, and it should be removed when the fix below lands.
+      THE ERROR IS INSTRUCTIVE AND IS WHY THIS IS STRUCK RATHER THAN REWRITTEN: the rule was
+      written while the Organization-not-selected refusal was the ONLY failed_precondition anyone
+      had seen, and it generalised from "every 422 I have observed" to "every 422 there can be".
+      The Customer Directory contract already declared the counterexample when this was authored.
+    THE_FIX_REQUIRED_OF_CORE: >-
+      CORE MUST DISTINGUISH THE TWO, AND A CLIENT-SIDE RULE CANNOT. THIS CONTRACT REQUIRES A
+      DISTINCT ERROR CODE, `organization_not_selected`, AT 422, EMITTED ONLY BY THE PRINCIPAL
+      RESOLVER AT api.ts STEP 1 — before routing, before any Action is reached.
+      WHY A CODE AND NOT A DETAIL TOKEN ON failed_precondition: adding a token would require
+      giving failedPrecondition() a parameter, and errors.ts's argument-free constructors are
+      argument-free ON PURPOSE — that is the device that stops a refusal carrying data. A separate
+      constructor keeps every existing one untouched.
+      IT DISCLOSES NOTHING. The caller is told a fact about ITS OWN session that it already knows
+      and can already discover by calling the picker. There is no other principal, no other tenant
+      and no record involved, so none of the indistinguishability rulings in this contract are
+      weakened by it — contrast not_found, which collapses three cases precisely because
+      distinguishing them WOULD disclose.
+      AND IT IS STRUCTURALLY UNFORGEABLE BY AN App: the constructor is reached only from the
+      pre-routing resolver, and an Action cannot call it, so no App can produce this code and send
+      a client to the picker.
+    THE_CORRECTED_CLIENT_RULE: >-
+      ON 422 `organization_not_selected` — AND ONLY ON THAT CODE — go to the picker, select, and
+      retry the original request ONCE. ON 422 `failed_precondition`, the request was well-formed
+      and authorized and the RESOURCE was in the wrong state: show the operation's own error and do
+      NOT touch the session. Never log in again on either; the credential is good in both cases.
+      session-principal-resolver.ts:73-84's reasoning for 422-not-401 stands unchanged: "the
+      credential is good; there is simply no tenant context... unauthenticated would send it round
+      a loop that cannot terminate." A CLIENT THAT TREATS EITHER CODE AS AN AUTHENTICATION FAILURE
+      BUILDS EXACTLY THAT LOOP.
+    UNTIL_THE_FIX_LANDS: >-
+      web-agent's probe is the only available discriminator and it stays. It is recorded as a
+      known workaround with a named removal trigger — the arrival of `organization_not_selected` —
+      rather than as client-local cleverness nobody will revisit. qa-agent should assert the
+      removal, not the workaround.
+    THE_REJECTED_ALTERNATIVE: >-
+      A `GET /auth/session` state route reporting whether an Organization is selected was
+      considered and REFUSED HERE. It would work, and it would be a THIRD occupant of a route class
+      docs/decisions/0021 deliberately fixed at two, added to avoid a one-line error code. If a
+      session-state route is ever wanted it needs 0021's own argument made afresh, not this
+      contract's convenience.
   the422CanHappenMIDSESSION: >-
     AND THIS IS THE CASE CLIENTS WILL GET WRONG. Membership is re-validated on EVERY request
     (session-resolution.ts ruling 2), so a membership revoked or suspended while the user is
@@ -794,14 +917,18 @@ freeTierImpact:
     indexes a column this statement sets, and §A.12 makes over-reserving the correct direction.
   theNUMBERTHISCONTRACTCHANGES:
     finding: >-
-      IT DEPENDS ON WHETHER THE SELECTION WAS AUTOMATIC, AND THAT SPLITS THE ANSWER IN TWO. The
-      Team Lead's estimate of 9 row-writes per cycle is correct for an EXPLICIT selection and is
-      pessimistic for the case every principal is in today.
-        AUTO-SELECTED (exactly one active membership): login 3 + selection 0 + revocation 3 = 6.
-          The identifier is written IN THE SESSION INSERT, so there is no second write and no
-          second reservation. THE 0018 ARITHMETIC IS UNCHANGED FOR THESE PRINCIPALS.
-        EXPLICITLY SELECTED (two or more memberships): login 3 + selection 3 + revocation 3 = 9.
-          Each mid-session Organization switch adds 3 more.
+      CORRECTED 2026-09-05. A FULL SESSION COSTS 9 ROW-WRITES — login 3 + selection 3 + logout 3 —
+      FOR EVERY PRINCIPAL, WITH NO BRANCH. Selection is mandatory and is always its own request, so
+      there is no cardinality under which it costs less. Each mid-session Organization switch adds 3.
+      ~~The 6-versus-9 split, which depended on whether the selection was automatic.~~ WITHDRAWN
+      with auto-selection (docs/decisions/0021).
+    theLESSONISWORTHMORETHANTHENUMBER: >-
+      0021 records that this figure was published FIVE TIMES IN TWO DAYS — 1,000, 500, 333,
+      6-or-9, 333 — and that only the first three corrections were measurement. THE LAST TWO WERE
+      THE SAME UNDECIDED DESIGN BEING PUBLISHED TWICE AS THOUGH IT WERE ARITHMETIC.
+      A NUMBER THAT DEPENDS ON AN UNDECIDED DESIGN IS NOT A NUMBER YET, and stating it as one
+      converts an open question into apparent fact. This entry was one of the two, which is why it
+      is corrected in place rather than quietly replaced.
     againstTheCeilings: >-
       CONTROL_PLANE_DAILY_ROW_WRITES is 3,000 and PER_PRINCIPAL_DAILY_ROW_WRITES is 600.
         At 6 per cycle: 500 full cycles a day platform-wide, 100 per principal — 0018's figures,
@@ -832,13 +959,16 @@ freeTierImpact:
     UNTIL THE UTC RESET. That is a materially worse failure than a refused logout (0018's case) or a
     delayed write, and it is stated rather than left to be discovered. The picker keeps working, so
     the user can see what they cannot enter. Recorded as OS-6.
-    AUTO-SELECTION NARROWS THIS AND DOES NOT CLOSE IT, WHICH IS WORTH STATING PRECISELY. A
-    single-membership principal never calls the writing route at all, so at the ceiling it is
-    refused at LOGIN — where the whole login is refused as one unit and nothing half-succeeds —
-    rather than stranded holding a valid session it cannot use. THE STRANDED STATE IS THEREFORE
-    REACHABLE ONLY BY A MULTI-MEMBERSHIP PRINCIPAL, which today is nobody. It becomes reachable the
-    day the first second membership is created, and it will not have been tested by then unless
-    qa-agent seeds one.
+    ~~Auto-selection narrows this: the stranded state is reachable only by a multi-membership
+    principal, which today is nobody.~~ STRUCK 2026-09-05 (docs/decisions/0021), AND THE CORRECTION
+    MAKES OS-6 STRICTLY WORSE RATHER THAN MILDER — which is the reason to sweep stale prose rather
+    than leave it looking harmless.
+    WITH SELECTION MANDATORY FOR EVERYONE, THE STRANDED STATE IS REACHABLE BY EVERY PRINCIPAL ON
+    THE PLATFORM, NOT BY NOBODY. A user whose login succeeds and whose selection is then refused at
+    the ceiling holds a valid session it cannot use, sees the picker keep working, and cannot enter
+    any Organization until the UTC reset. THE MITIGATION THIS PARAGRAPH CLAIMED — that such a user
+    would instead be cleanly refused at login — DEPENDED ENTIRELY ON A RULING THAT NO LONGER
+    EXISTS. OS-6 is raised accordingly.
 
 # ---------------------------------------------------------------------------
 # testObligations — qa-agent's
@@ -875,23 +1005,34 @@ testObligations:
     - "A revoked membership mid-session produces 422 on the next request, and the picker then omits that Organization."
     - "Selecting the same Organization twice succeeds both times."
     - "GET on the singular path and POST on the plural path are both 404, not 405."
-  autoSelection:
-    - "A principal with EXACTLY ONE active membership logs in and its first ordinary business request succeeds with no picker call and no selection call. This is the acceptance test for the deployed blocker."
-    - "That login writes 3 row-writes and NOT 6 — the identifier is in the INSERT. Assert the reservation count, not only the outcome."
-    - "A principal with TWO active memberships logs in and is NOT auto-selected: the next business request is 422, and neither membership was chosen by any tie-break."
-    - "A principal with ZERO active memberships logs in successfully and is not auto-selected; the picker returns data: []."
-    - "A principal whose single active membership names a SUSPENDED Organization logs in successfully, is not auto-selected, and receives 422 — the login is not failed and the suspended Organization is not selected."
-    - "A principal with one ACTIVE and one SUSPENDED membership IS auto-selected into the active one — 'exactly one ACTIVE' is the condition, not 'exactly one row'."
-    - "THE CLIFF: a principal that was auto-selected gains a second membership, and its next login is unselected. Assert the transition, because it is the failure that will otherwise be found in production."
-    - "The membership read happens AFTER credential verification, never before. A wrong password must not cause a membership lookup — that would reopen the equal-work property credential-verifier.ts exists to hold."
-    - "The stored selection-mode value is 'automatic' after an auto-selected login and 'explicit' after a selection call, and it appears in NO response body on any route."
+  noServerSideSelection:
+    swept: >-
+      REPLACES an `autoSelection` list of nine assertions, SEVEN OF WHICH TESTED FOR BEHAVIOUR
+      docs/decisions/0021 STRUCK. Struck prose is inert; A STRUCK TEST IS NOT — it would have been
+      written, would have failed against a correct implementation, and the natural way to make it
+      pass is to build the thing 0021 refused. THE STALE ASSERTIONS WERE THE DANGEROUS RESIDUE IN
+      THIS FILE, not the stale paragraphs.
+      TWO OF THE NINE SURVIVE ON THEIR OWN MERITS and are kept below.
+    - "A session created by login is ALWAYS unselected, whatever the principal's membership count. Assert for one, two and zero active memberships — the answer is identical, and that identity IS the property."
+    - "NO CODE PATH WRITES active_organization_id AT LOGIN. The negative control for the whole ruling: a login with exactly one active membership must produce a session with a null active organization."
+    - "A full session cycle costs 9 row-writes — login 3 + select 3 + logout 3 — for EVERY principal, with no cardinality-dependent branch. Assert the reservation counts, not only the outcomes."
+    - "A principal with ZERO active memberships logs in successfully; the picker returns data: [] and selection is impossible. Login does not fail."
+    - "A principal whose single active membership names a SUSPENDED Organization logs in successfully, and selecting that Organization returns 503 unavailable — reachable only by a member, so it discloses nothing to anyone who did not already know the Organization exists."
+    - "KEPT FROM THE OLD LIST, because it guards credential-verifier.ts and not auto-selection: no membership read happens before credential verification. A wrong password must not cause a membership lookup, or the equal-work property is reopened."
+    - "KEPT: the picker returns only ACTIVE memberships, so a suspended membership disappears from it rather than appearing and failing at selection."
   vacuousPasses: >-
     STATE ANY TEST THAT PASSES ONLY BECAUSE THE SEEDED PRINCIPAL BELONGS TO EXACTLY ONE
-    ORGANIZATION — AND WITH AUTO-SELECTION THAT IS NOW MOST OF THIS CONTRACT. The picker, the
-    switch path, the 422 flow, the cliff and the stranded-at-quota case are ALL unreachable for a
-    one-membership principal, which is every principal on the deployed platform. A SECOND SEEDED
-    ORGANIZATION AND A SECOND MEMBERSHIP ARE REQUIRED TO TEST THIS CONTRACT AT ALL, and a report
-    that does not say whether they existed has tested the auto-selection path only and must say so.
+    ORGANIZATION. REWRITTEN 2026-09-05: the previous version said this was "most of this contract"
+    BECAUSE OF AUTO-SELECTION, and with auto-selection withdrawn the scope of the problem shrinks
+    but does not vanish.
+    WHAT IS NOW REACHABLE FOR EVERY PRINCIPAL: the picker, selection, and the 422 flow. Every
+    principal calls all three on every cold start, so the main path is exercised by any test at all
+    — which is a real improvement over the position this section was written in.
+    WHAT STILL NEEDS A SECOND MEMBERSHIP: the Organization SWITCH path, a picker returning more
+    than one row, and the mid-session revocation case. 0021 records that principal B was given a
+    second membership during deployment for exactly this reason, so the seed exists.
+    A REPORT THAT DOES NOT SAY WHETHER A MULTI-MEMBERSHIP PRINCIPAL WAS USED HAS NOT TESTED THE
+    SWITCH PATH AND MUST SAY SO.
 
 # ---------------------------------------------------------------------------
 # versioning
@@ -909,7 +1050,7 @@ versioning:
     - "Specifying, or changing, the picker's ordering — API_STANDARD.md §6 counts pagination and sort semantics as breaking, which is why v1 specifies none."
     - "Reversing the validate-then-reserve order — a security regression that no version number makes acceptable."
   additive:
-    - "AUTO-SELECTION ITSELF, which changes no shape in either contract: no field is added to the login request or response, none to either route here, and the selection-mode column is on no wire. A correctly written client — attempt the work, react to 422 — needs no change at all. That is the property that made it safe to add after login-v1 was authored."
+    - "~~AUTO-SELECTION ITSELF, which changes no shape in either contract.~~ STRUCK 2026-09-05 — docs/decisions/0021 withdrew it, so there is nothing to classify. It is left visible because the entry was RIGHT ON ITS OWN TERMS: auto-selection genuinely changed no wire shape, and being additive is not the same as being correct. A change can be perfectly compatible and still be the wrong design."
     - "display_name beginning to carry values. The field is already contracted as nullable, so nothing changes shape the day Organization names exist."
     - "Real pagination on the picker: a new optional request field plus a new response field."
     - "A rate limit on either route (OS-1) — a new error code for a new condition."
@@ -951,14 +1092,43 @@ openQuestions:
     assumptionMade: "The pattern holds and the DEPLOYED Organization identifier must be checked against it before this contract is accepted. If it does not match, the row is re-seeded — the grammar is not relaxed to fit one hand-typed value."
     decides: "Team Lead, and it is a pre-acceptance check rather than a decision"
   OS-8:
-    question: "Auto-selection condition 2 — recording that a selection was automatic — needs a column the session table does not have. That is a control-plane migration, not a code change."
-    assumptionMade: "Specified as a requirement with its two values and its no-index constraint; the DDL and the column name are core-agent's. The contract does NOT make the column readable on the wire, so it can be added without any client change."
-    decides: "Team Lead approves the migration; core-agent writes it"
+    status: WITHDRAWN
+    question: "~~Auto-selection condition 2 needs a session column the table does not have.~~"
+    resolution: >-
+      WITHDRAWN 2026-09-05 by docs/decisions/0021. NO COLUMN, NO MIGRATION, NO 'explicit'/'automatic'
+      VALUE. 0021 records that this unimplementable condition WAS THE TELL: a client skipping the
+      picker sends a byte-identical request to one that shows it, so there was nothing to record
+      because there was no difference to record. THAT A CONDITION COULD NOT BE BUILT WAS EVIDENCE
+      THE DISTINCTION IT PROTECTED DID NOT EXIST.
   OS-9:
-    question: "Auto-selection makes a principal's login behaviour depend on membership data an administrator controls, and it lets a stolen credential reach tenant data in one request instead of two."
-    assumptionMade: "Accepted, as the Team Lead ruled. The second residual is thin — an attacker could simply call selection, and the picker would name the target. The first is a real support burden and is why the cliff is written into the contract rather than left in a changelog."
-    decides: "Team Lead has decided; recorded so the residual is visible"
+    status: WITHDRAWN
+    question: "~~Auto-selection makes login behaviour depend on administrator-controlled data, and lets a stolen credential reach tenant data in one request instead of two.~~"
+    resolution: >-
+      WITHDRAWN with auto-selection. BOTH RESIDUALS ARE GONE RATHER THAN ACCEPTED: login behaviour
+      no longer varies with membership count, and a stolen credential now always needs two requests.
+      The second was correctly assessed as thin at the time — an attacker could call selection and
+      the picker would name the target — and it is worth noting that WITHDRAWING THE FEATURE CLOSED
+      IT AS A SIDE EFFECT rather than because anyone was solving it.
   OS-10:
-    question: "With auto-selection, every principal on the deployed platform bypasses the picker, the 422 flow, the switch path and the stranded-at-quota case. None of it will be exercised by any test that uses the current seed."
-    assumptionMade: "A second seeded Organization and a second membership are stated as a prerequisite for testing this contract at all, and a report that lacks them must declare the coverage it did not have."
-    decides: "qa-agent executes; Team Lead provides the seed"
+    status: SUPERSEDED
+    question: "~~With auto-selection, every principal bypasses the picker, the 422 flow and the switch path, so the current seed exercises none of it.~~"
+    resolution: >-
+      SUPERSEDED 2026-09-05. The picker, selection and the 422 flow are now on EVERY principal's
+      cold start, so the main path is exercised by any test at all. WHAT STILL NEEDS A SECOND
+      MEMBERSHIP is narrower: the Organization SWITCH path, a multi-row picker, and mid-session
+      revocation. 0021 records that principal B was given a second membership during deployment for
+      exactly this reason, so the seed already exists. See qa.vacuousPasses.
+  OS-11:
+    status: OPEN, AND RAISED BY THIS SWEEP
+    question: >-
+      OS-6's stranded-at-quota case is WORSE than this file recorded, and the sweep is what
+      revealed it. The mitigating paragraph — that a stranded session is reachable only by a
+      multi-membership principal, "which today is nobody" — rested entirely on auto-selection. With
+      selection mandatory for everyone, EVERY PRINCIPAL CAN BE STRANDED: login succeeds, selection
+      is refused at the ceiling, and the user holds a valid session that can enter nothing until
+      00:00 UTC.
+    assumptionMade: >-
+      OS-6 stands and its severity is raised. The per-principal ceiling of 600 row-writes contains
+      a single principal at 66 full sessions a day, so this is not reachable by ordinary use at
+      closed-beta scale — but it is no longer bounded to a population of zero.
+    decides: "Team Lead. It strengthens the case for OS-1's rate limit rather than being separate from it."

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:template:1",
+  "title": "Template — wire shapes, version 1",
+  "description": "The machine-readable half of template-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema — no implementation, no package.json, no node_modules — so this file is normative and hand-checked, never machine-validated.",
+
+  "$defs": {
+
+    "templateId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "Opaque, server-generated, 22 characters of base64url as generated. Never chosen by a caller and never parsed by one."
+    },
+
+    "templateName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "The business type as a human reads it: 'School', 'Dental Clinic', 'Retail'. FREE TEXT ON PURPOSE — an enum here would be the industry-noun column CORE_BOUNDARIES.md §6 rule 1 forbids, and would mean adding a business type required a code deploy. UNIQUENESS is compared after NFKC normalisation and ASCII-only case folding (the credential-store.ts::normalizeIdentifier definition, restated here because that file is TypeScript and this is JSON); the STORED and RETURNED value is always the operator's original. Leading and trailing whitespace is rejected rather than trimmed, for the reason isSubmittableIdentifier rejects rather than trims: three implementations in three languages trim different Unicode sets, and refusing removes a disagreement instead of arbitrating it.",
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$"
+    },
+
+    "levelLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "description": "What a human reads in place of a structural level's internal name. IT IS A LABEL AND NOTHING ELSE: it changes no authorization, no scope, no predicate and no route. 'workspace' remains the scope identifier in permission-catalog.yaml and in the scope ladder whatever this says on screen. A label that could alter a scope would be configuration deciding authorization.",
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$"
+    },
+
+    "levelLabels": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A CLOSED SET OF EXACTLY THREE KEYS, one per structural level Dudo has. Not a free-form map: an open map would let an operator invent a level that does not exist, and a client rendering an unknown key would be drawing a structure the platform does not have. `team` is absent deliberately — it is a first-class object with its own name and no per-type variation anyone has asked for. `own` and `resource` are absent because they are authorization scopes, not places. Every key is OPTIONAL and an absent one takes the platform default below.",
+      "properties": {
+        "organization": {
+          "allOf": [{ "$ref": "#/$defs/levelLabel" }],
+          "default": "Organization",
+          "description": "A school group renders 'Group', a clinic 'Practice', a company 'Company'. This is the half of the naming collision that is solved by a label rather than by a rename: the user's word for the tenant is 'business', and serving it here costs no schema change to the most embedded identifier in the platform."
+        },
+        "workspace": {
+          "allOf": [{ "$ref": "#/$defs/levelLabel" }],
+          "default": "Workspace",
+          "description": "A school renders 'Campus', a shop 'Branch', a clinic 'Site'. THE KEY IS `workspace` BECAUSE THE INNER UNIT IS BEING RENAMED FROM `Business` (core-object-registry.yaml namingRuling2026-09-05, adopted by docs/decisions/0025). If that rename is deferred, THIS SCHEMA IS WRONG AND MUST CHANGE — the two vocabularies must not be allowed to coexist."
+        },
+        "branch": {
+          "allOf": [{ "$ref": "#/$defs/levelLabel" }],
+          "default": "Branch",
+          "description": "The level below a Workspace. Unchanged by the rename, and the reason `Branch` was unavailable as the new name for the inner unit: it already names a level below it."
+        }
+      }
+    },
+
+    "templateStatus": {
+      "type": "string",
+      "enum": ["active", "retired"],
+      "description": "DECLARED WITH BOTH VALUES AND NO ROUTE SETS IT. Every Template created by version 1 is `active` forever; retirement is TM-2. The field exists now because adding a field to an already-published response is worse than declaring one that is currently constant."
+    },
+
+    "createTemplateInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "NOTE WHAT CANNOT BE SENT: no template_id (server-generated), no status (always active), no apps list (deferred — there is one App, so the field would have one possible value and would have to be designed against an installation mechanism that does not exist), and no role labels (deferred to AZ11 — shipping them would look like it addressed the parent case, AZ10, and would not).",
+      "properties": {
+        "name": { "$ref": "#/$defs/templateName" },
+        "level_labels": { "$ref": "#/$defs/levelLabels" }
+      }
+    },
+
+    "templateOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_id", "name", "level_labels", "status", "created_at"],
+      "description": "level_labels is ALWAYS FULLY POPULATED in a response, with defaults filled in for any key the operator omitted. The client therefore never implements the default table, which is what stops the web and Apple clients drifting into two different ideas of what an unlabelled level is called.",
+      "properties": {
+        "template_id": { "$ref": "#/$defs/templateId" },
+        "name": { "$ref": "#/$defs/templateName" },
+        "level_labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["organization", "workspace", "branch"],
+          "properties": {
+            "organization": { "$ref": "#/$defs/levelLabel" },
+            "workspace": { "$ref": "#/$defs/levelLabel" },
+            "branch": { "$ref": "#/$defs/levelLabel" }
+          }
+        },
+        "status": { "$ref": "#/$defs/templateStatus" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "listTemplatesOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/templateOutput" }
+        },
+        "next_cursor": {
+          "type": ["string", "null"],
+          "maxLength": 512,
+          "description": "Opaque. Never constructed or parsed by a client. Null means no further page."
+        }
+      }
+    }
+  }
+}

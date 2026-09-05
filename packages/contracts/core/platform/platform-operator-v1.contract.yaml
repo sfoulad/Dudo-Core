@@ -1,0 +1,616 @@
+---
+# Platform operator — contract of record, version 1
+#
+# THE FOURTH REQUEST CLASS. This contract defines how a platform principal authenticates, how it
+# is authorized, and what a platform route may and may not do. The three contracts that follow —
+# template-v1, organization-onboarding-v1, credential-reset-v1 — are all operations IN this class
+# and none of them restates its rules.
+#
+# The machine-readable half is platform-operator-v1.schema.json. BOTH ARE NORMATIVE TOGETHER.
+#
+# Governed by: docs/decisions/0025 (Accepted) — platform authority, Templates, this route class
+#              docs/decisions/0024 — the two invariants 0025 builds on
+#              docs/decisions/0023 — Core declares its own permission envelope
+#              docs/decisions/0021 — the session route class, and the precedent for adding one
+#              docs/decisions/0014 §C — the control plane · §A — the write budget
+#              docs/decisions/0022 — admin.dudo.work and its separate host-only session
+#              docs/decisions/0007 — the logical permission model and its ten binding rules
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# =========================================================================================
+# PROVENANCE: ALL OF IT IS NEW WORK. NOTHING HERE DOCUMENTS AN EXISTING IMPLEMENTATION.
+# =========================================================================================
+#
+# There is no platform_operator table, no platform envelope, no platform route class and no
+# platform Action anywhere in the repository. Contrast login-v1, which transcribed code that
+# already ran, and organization-selection-v1, which was mixed. THIS FILE IS A SPECIFICATION IN
+# THE FULL SENSE and every rule in it is a rule someone must build rather than one they must
+# document.
+#
+# That matters for how it should be read: where login-v1 said "where this contract and Core
+# disagree, Core wins", the opposite holds here. There is nothing to lose an argument to.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05, on the strength of docs/decisions/0025 carrying every decision this contract was waiting on."
+acceptedNote: >-
+  ACCEPTANCE IS THE TEAM LEAD'S AND NOT THIS AGENT'S. architecture-agent authors and holds no
+  approval authority; the status is recorded here because the Team Lead accepted it, not because
+  the author judged it ready. `.claude/rules/security.md` §8 — an agent may not claim, imply or
+  assume approval — and `packages/contracts/README.md`: the agent that implements a contract must
+  not be the one who approves it, and the agent that AUTHORS one must not either.
+  WHAT ACCEPTANCE COVERS: the request class, the authority model, the mutual-exclusion invariant,
+  the audit model and the two routes. IT DOES NOT ACCEPT THE THREE CONTRACTS THAT INHERIT THIS
+  CLASS — template-v1 is unblocked, and organization-onboarding-v1 and credential-reset-v1 remain
+  `proposed` with real blockers of their own (ON-5/CR-5, ON-6/CR-1).
+updated: "2026-09-05"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# theClass — READ FIRST. Every other platform contract inherits this and restates none of it.
+# ---------------------------------------------------------------------------
+theClass:
+  definition: >-
+    A PLATFORM ROUTE AUTHENTICATES A PRINCIPAL, EVALUATES A PERMISSION AGAINST A CORE-OWNED
+    PLATFORM ENVELOPE, AND NEVER OBTAINS A TENANT STORE.
+  thefourClasses: |
+    CLASS               PRINCIPAL          TENANT      PERMISSION   REGISTRY
+    pre-auth (0014 §B)  none               none        none         closed set of 5
+    session  (0021)     session only       none        none         closed set of 2
+    Action              full, tenant-bound REQUIRED    yes          App or Core router
+    PLATFORM (0025)     principal-level    none        YES          Core-owned literal
+  whyItIsNotAnActionWithTheTenantMadeOptional: >-
+    docs/decisions/0021's sentence, and it is the whole argument: "THE INVARIANT THAT AN ACTION
+    ALWAYS HAS A TENANT IS WORTH MORE THAN THE CODE IT SAVES." A tenant-optional branch inside the
+    pipeline would force every future reviewer of every future Action to work out which side of it
+    they had landed on. The cost of a separate class is paid once, by the people building it. The
+    cost of the branch is paid forever, by everyone reading past it.
+  whyItIsNotASessionRoute: >-
+    A session route EVALUATES NO PERMISSION, and its safety argument (organization-selection-v1,
+    permissionModel) is that neither of its two operations "can do anything the session holder
+    could not already do". A PLATFORM OPERATION FAILS THAT TEST BY DESIGN — creating an
+    Organization or resetting a credential is precisely a thing the session holder could not
+    otherwise do. So the session class's justification for having no permission does not transfer,
+    and this class must have one.
+
+  # -------------------------------------------------------------------------
+  # The four binding properties. 0025 states them; this is what they mean in a route table.
+  # -------------------------------------------------------------------------
+  bindingProperties:
+
+    P1_noTenantStoreIsReachable:
+      requirement: >-
+        NOTHING IN THIS CLASS CAN REACH A TENANT — structurally, not by convention. A platform
+        route handler receives a platform context and nothing else: no TenantStoreResolver, no
+        TenantScopedStore, no ActionContext, no organization identifier, no D1 binding.
+      why: >-
+        THIS IS tenancy/tenant-context.ts's OWN DEVICE APPLIED ONE CLASS OVER. That file's
+        strongest sentence is "WITHHOLDING THE VALUE IS STRONGER THAN REQUIRING ITS USE", and the
+        reason an Action handler cannot write a tenant predicate correctly, incorrectly, or at all
+        is that it holds no value to write one with. A platform handler must be in the same
+        position with respect to the whole tenant database.
+      theNegativeControl: >-
+        One grep, and qa-agent owes it: no module under the platform route class imports
+        TenantStoreResolver, TenantScopedStore, createD1TenantStore or TENANT_COLUMN. The same
+        cheap check control-plane-store.ts already specifies for ActionContext.
+      andTheHONESTLIMIT: >-
+        THIS CLASS TOUCHES THE CONTROL PLANE, WHICH IS THE ONE COMPONENT WHOSE PURPOSE IS TO HOLD
+        TENANT IDENTITY. So "no tenant data" is exact and "no tenant identifier" is not: onboarding
+        necessarily produces an organization_id and credential reset necessarily names a principal.
+        The line is that a platform route may create, name and enumerate tenants and may NEVER READ
+        A ROW BEHIND whereWithTenant. Stated plainly because the weaker property is the one that is
+        true, and claiming the stronger one would be the overclaim AZ7 records as a defect class.
+
+    P2_validationBelongsToTheClass:
+      requirement: >-
+        THE CLASS VALIDATES INPUT. NOT ITS ROUTES, INDIVIDUALLY. Reject a body that is not a JSON
+        object; reject every undeclared field with invalid_argument; reject every query parameter
+        not declared by the route; bound the body size. A route that forgets is not a route with a
+        gap — it must be unable to forget.
+      why: >-
+        docs/decisions/0021's finding, and it applies here with more force than it did there. A
+        session route matched in the early block inherits NOTHING: Core's JSON parsing, its
+        unknown-field rejection and its repeated-parameter refusal all live in the Action path
+        BELOW it, and parsePreAuthBody is reached only through dispatchPreAuthRequest. THIS CLASS
+        ACCEPTS IDENTIFIERS THAT NAME TENANTS AND PRINCIPALS. It must not be the class without
+        validation, and 0021's version of that sentence — "the one route in Dudo that accepts a
+        tenant identifier would be the one route with none" — is now true of four routes rather
+        than one.
+
+    P3_theEnvelopeIsCoresAndNoAppMayHoldIt:
+      requirement: >-
+        A CORE-OWNED PLATFORM PERMISSION ENVELOPE, following docs/decisions/0023's precedent
+        exactly. It is a frozen literal listing the six platform permissions and nothing else. NO
+        App MAY DECLARE A PLATFORM PERMISSION — app-manifest.schema.json already enforces this
+        structurally through $defs/appRequestableScope, and that enforcement must not be relaxed
+        to accommodate anything in this class.
+      why: >-
+        0023 rejected letting the Customer Directory declare core.business.read on the ground that
+        "an App's manifest would gate a Core capability". The same argument at platform scope is
+        not merely untidy, it is an escalation: an App that could declare a platform permission
+        could request it at install, and a tenant administrator clicking through a consent screen
+        would be granting authority over every OTHER tenant on the platform.
+      andTHEENVELOPEISACEILINGNOTAGRANT: >-
+        Restated because 0023's reviewers needed it: authorize() resolves against the envelope as
+        the CEILING and the principal's grant as the FLOOR. Declaring these six here grants them to
+        nobody. The floor is platform_operator, below.
+
+    P4_everyPlatformRouteWritesAnAuditRecord:
+      requirement: >-
+        EVERY OPERATION IN THIS CLASS WRITES AN AUDIT RECORD. Not the sensitive ones, not the
+        writes — every one, including core.template.list. There is no unaudited platform route and
+        none may be added.
+      why: >-
+        FOUR SEPARATE RECORDS NOW SAY "NO AUDITED PATH" — 0018, 0019, 0020 and 0023 each recorded
+        that an operator applying SQL by hand produces no audit record, and 0007 rule 9 requires
+        privilege changes to be audited. Operator actions are where deferring stops being
+        defensible: these are the actions taken BY the platform, ON other people's accounts, and
+        the party best placed to notice an abuse is the customer, who currently cannot see any of
+        it.
+      whyEVENTHEREADS: >-
+        AND THIS IS THE PART THAT LOOKS EXCESSIVE AND IS NOT. §3.2 keeps `list` separate from
+        `read` because "enumeration is its own disclosure". An operator enumerating every
+        Organization on the platform is exactly the reconnaissance step that precedes a targeted
+        action, and it is the cheapest thing to do and the easiest to deny afterwards. A read log
+        for four routes at operator volume is a handful of rows a day; the same argument does NOT
+        generalise to tenant Actions, where D2 deliberately leaves successful reads unaudited
+        because the volume is six orders of magnitude larger.
+      whereTheRecordGoes: "See auditModel below — it is the hardest unsolved part of this contract."
+
+# ---------------------------------------------------------------------------
+# authorityModel — where a platform principal's authority lives. docs/decisions/0025 decision 1.
+# ---------------------------------------------------------------------------
+authorityModel:
+  theTable: >-
+    platform_operator(principal_id, platform_role, created_at), in the CONTROL-PLANE database.
+    A ROW IN THAT TABLE IS THE AUTHORITY. There is no flag on principal, no membership row, and no
+    platform value in MembershipRole.
+  platformRoleIsAClosedUnion: >-
+    'platform-admin' | 'marketplace-moderator', mirroring permission-catalog.yaml's two
+    platform-scope seed roles. Core maps each to a FROZEN LIST OF LITERAL PERMISSION IDENTIFIERS,
+    exactly as authorization/roles.ts maps a MembershipRole, with the same prohibitions: no
+    wildcard, no prefix, no startsWith, no derivation of a permission id from anything but a
+    literal. An unrecognised stored value collapses to null and DENIES EVERYTHING, on the same path
+    as an absent row — the device roles.ts and credential-verifier.ts both already use, so that a
+    row written by a future migration this build does not understand fails onto the safe path.
+  itIsASEPARATEMAPPINGFROMroles_ts: >-
+    NOT AN EXTENSION OF IT, AND THE SEPARATION IS THE POINT. MembershipRole must never gain a
+    platform-tier value (0024), so the two mappings cannot share a union, a table or a function. A
+    single mapping with a platform branch is one edit away from being reachable from a membership
+    row, which is the escalation 0025 decision 1 exists to make structurally impossible.
+
+  theMutualExclusionInvariant:
+    rule: >-
+      A principal_id PRESENT IN platform_operator MUST NOT APPEAR IN organization_membership, AND
+      THE REVERSE. Checked on write AND at authorization.
+    itFAILSCLOSED: >-
+      A PRINCIPAL APPEARING IN BOTH IS REFUSED EVERYWHERE — not resolved in favour of either, not
+      treated as a platform operator, not treated as a tenant member. Both its platform routes and
+      its Actions deny. NO ERROR DISTINGUISHES THIS STATE from ordinary denial, because a caller
+      able to detect it could use it to probe the other table.
+    why: >-
+      0024's invariant is that a platform principal holds zero memberships, and 0025 states the
+      reason two tables were chosen over a column: AN INVARIANT THAT DEPENDS ON NOBODY ADDING A ROW
+      IS NOT AN INVARIANT. Two tables make "appears in both" a question a machine can ask. This
+      clause is that question, asked.
+    whyBOTHONWRITEANDATAUTHORIZATION: >-
+      ON WRITE stops the state being created by Dudo's own code. AT AUTHORIZATION stops it being
+      exploited if it is created anyway — by a hand-run SQL statement, a partially applied
+      migration, or a restore from two backups taken at different moments. The write check is
+      hygiene; THE AUTHORIZATION CHECK IS THE CONTROL, and an implementation that ships only the
+      first has shipped none.
+    theTESTFORIT: >-
+      Mechanical, and owed by qa-agent: seed one principal into both tables, then assert that every
+      platform route AND every Action denies it, with the same codes an unknown principal receives.
+  theBootstrapProblem:
+    theQuestion: "Who writes the first platform_operator row, when no platform operator exists to authorize it?"
+    ruling: >-
+      OUT OF BAND, BY AN OPERATOR RUNNING SQL, EXACTLY AS tools/seed-principal.ts ALREADY WORKS FOR
+      CREDENTIALS. THIS CONTRACT PUBLISHES NO ROUTE THAT CREATES A PLATFORM OPERATOR. There is no
+      core.platform-operator.create, it is deliberately absent from the catalog, and adding one is
+      a decision rather than an extension.
+    why: >-
+      A route that grants platform authority is the single most valuable target in the platform, it
+      would be reachable by exactly one class of caller, and its only legitimate use is a handful of
+      times in Dudo's life. THE FREQUENCY DOES NOT JUSTIFY THE SURFACE. This is the same reasoning
+      credential-store.ts applies to enrolment — "the running Worker has no code path that writes a
+      credential at all... the strongest form of 'registration is not built in this slice'
+      available" — and it is the one place in this whole surface where that property SURVIVES,
+      because credential-reset-v1 destroys it for principal_credential and cannot for this table.
+
+# ---------------------------------------------------------------------------
+# authentication — how an operator gets a session, and what 0022 already gives us
+# ---------------------------------------------------------------------------
+authentication:
+  mechanism: >-
+    UNCHANGED FROM EVERY OTHER PRINCIPAL. An operator logs in through login-v1's existing
+    pre-authentication entry points, with a credential in principal_credential, and receives an
+    ordinary session. THIS CONTRACT INTRODUCES NO SECOND LOGIN PATH, NO SECOND CREDENTIAL FORMAT
+    AND NO SECOND SESSION SHAPE, and it must not: a parallel authentication path for the most
+    privileged principals is a second implementation of the hardest code in the platform.
+  theSESSIONISUNSELECTEDANDSTAYSTHATWAY: >-
+    AND THIS IS THE STRUCTURAL GUARANTEE, NOT A CONSEQUENCE. An operator has no membership row, so
+    selectOrganization refuses every Organization it could name with the same 404 a non-member
+    receives, and its session's active_organization_id stays null for its whole life. NO TENANT
+    STORE CAN EVER BE RESOLVED FOR IT. That is why an operator cannot read tenant data even if
+    every other control in this contract failed at once, and it is why this surface could be
+    specified before AZ3 rather than after it.
+  theOrganizationPickerRETURNSEMPTY: >-
+    An operator calling /auth/session/organizations receives 200 with data: [] —
+    organization-selection-v1 already rules that an empty collection is not a missing one. The
+    admin console must not treat that as an error; it is the correct and expected answer, and it is
+    also a useful negative control that qa-agent should assert.
+  hostBinding:
+    theInheritedProperty: >-
+      docs/decisions/0022 gives admin.dudo.work a SEPARATE, HOST-ONLY COOKIE SESSION. An operator's
+      session credential is therefore not replayable against app.dudo.work, and a tenant user's is
+      not replayable here. THIS IS AN ALREADY-DECIDED PROPERTY THIS CONTRACT RELIES ON RATHER THAN
+      ONE IT INVENTS, and it is a second independent barrier: even a principal wrongly present in
+      both tables would need two separate credentials in two separate cookie jars.
+    theAMENDMENTOF2026_09_05_ANDWHATITREQUIRESOFTHISCLASS:
+      whatChanged: >-
+        0022 was amended while this contract was being written: ADMIN IS NOW A SECOND WORKER,
+        `dudo-admin`, forced by a hard Cloudflare limit — "only one collection of static assets can
+        be configured in each Worker" — and it serves ITS OWN API ON ITS OWN ORIGIN with the same
+        `main`, the same D1 bindings and the same secrets as `app.dudo.work`.
+      theCONSEQUENCETHISCONTRACTMUSTANSWER: >-
+        SAME `main` MEANS THE SAME ROUTE TABLE IS PRESENT IN BOTH WORKERS. Without a further rule,
+        /api/v1/platform/** would be mounted and reachable on app.dudo.work as well — where every
+        tenant user already has a session. It would still be REFUSED, because authorization runs on
+        the platform_operator row and not on the hostname, so this is not a hole. BUT IT IS AN
+        UNNECESSARY SURFACE, and one that exists purely as a side effect of a deployment decision
+        taken for an unrelated reason.
+      requirement: >-
+        THE PLATFORM ROUTE BLOCK IS MOUNTED ONLY ON THE ADMIN HOST. A request to
+        /api/v1/platform/** arriving on app.dudo.work or api.dudo.work answers 404 — NOT 403, and
+        not "forbidden", because answering 403 would confirm the route exists on a host where it
+        should not appear to. This is the same choice organization-selection-v1 makes when it
+        requires GET on the singular path to be 404 rather than 405.
+      itIsDEFENCEINDEPTHANDISLABELLEDASSUCH: >-
+        THE AUTHORIZATION CHECK IS THE CONTROL; THE HOST BINDING IS A SECOND LAYER, and it must
+        never become the first. An implementation that bound the host and skipped the
+        platform_operator check would be relying on routing for authorization, which is exactly the
+        "UI hiding is presentation, never security" error moved down a layer. Both, or the host
+        binding is worse than useless because it invites the omission.
+  ratelimiting:
+    requirement: >-
+      EVERY ROUTE IN THIS CLASS IS RATE LIMITED PER PRINCIPAL. Not per IP, not per isolate.
+    why: >-
+      OS-1 records that no session route is rate limited and that it is owed "before any
+      non-operator user". THIS CLASS INVERTS THAT DEADLINE: its callers ARE the operators, its
+      writes are the most consequential in the platform, and credential-reset in particular is a
+      lockout weapon if it can be called in a loop. A limiter here is not deferrable to the same
+      horizon.
+    theHONESTGAP: >-
+      docs/decisions/0017's limiter is IN-PROCESS AND PER-ISOLATE, so it does not bound anything in
+      a deployed Worker, and the durable limiter is still owed. STATED RATHER THAN ASSUMED: at
+      closed-beta scale — one or two operators — the per-principal daily write ceiling is the real
+      bound and it holds. This must not be read as "rate limiting is done".
+
+# ---------------------------------------------------------------------------
+# auditModel — the hardest unsolved part, and it is unsolved in a specific way
+# ---------------------------------------------------------------------------
+auditModel:
+  theProblem: >-
+    AN OPERATOR ACTION SPANS TENANTS BY NATURE AND audit_event IS TENANT-SCOPED. There is no
+    tenant-scoped handle on a platform route (P1), so the ordinary audit path is unreachable — and
+    for onboarding it is worse than unreachable, because the tenant whose log would receive the
+    record is the one the operation is still creating.
+  ruling: >-
+    TWO HOMES, AND BOTH ARE REQUIRED. A platform operation writes:
+      1. A PLATFORM-OPERATOR ACTION RECORD in the control plane. Actor principal, platform role,
+         action id, target organization_id or principal_id, outcome, timestamp, correlation id.
+      2. A TENANT-SIDE RECORD in the affected Organization's own audit_event, WHERE ONE EXISTS AND
+         IS REACHABLE.
+  whyBOTHANDNOTEITHERALONE:
+    tenantOnlyIsInsufficient: >-
+      The platform would then have no record of what its own operators did, and the operations that
+      most need a trail — enumerate every Organization, reset an admin's credential — are exactly
+      the ones a compromised operator would want unlogged. An enumeration has no single affected
+      tenant to log into at all.
+    platformOnlyIsInsufficient: >-
+      AND THIS IS THE HALF MOST LIKELY TO BE DROPPED FOR CONVENIENCE. A platform operator resetting
+      a tenant admin's credential IS A TAKEOVER OF THAT ACCOUNT BY DESIGN. THE CUSTOMER MUST BE ABLE
+      TO SEE THAT IT HAPPENED. A trail only the platform can read is a trail kept by the party being
+      audited, which is not an audit.
+  theTENSIONWITHmigration0003_ANDWHYITISNOTACONTRADICTION: >-
+    control-plane/0003_organization_membership.sql refused "an append-only log that spans every
+    tenant" in the control plane, and that refusal is right and stands. THIS IS A DIFFERENT OBJECT.
+    0003 was refusing a log of tenant BUSINESS events — a place where one Organization's records
+    would sit beside another's. The platform-operator log holds ONLY: who acted, what they did,
+    which Organization or principal they named, and when. NO BUSINESS DATA OF ANY KIND, no customer,
+    no field value, no name. The constraint is what makes it a different object, so the constraint
+    is normative and not descriptive: A COLUMN CARRYING TENANT BUSINESS DATA MAY NEVER BE ADDED TO
+    THIS TABLE.
+  theORDERINGANDPARTIALFAILURE:
+    ruling: >-
+      THE OPERATION'S OWN WRITES FIRST, THEN THE PLATFORM AUDIT RECORD, THEN THE TENANT RECORD. THE
+      OPERATION IS NOT REPORTED SUCCESSFUL UNTIL THE PLATFORM AUDIT RECORD IS WRITTEN.
+    theTWODATABASEPROBLEM: >-
+      STATED PLAINLY BECAUSE IT CANNOT BE SOLVED, ONLY CHOSEN: control-plane writes and tenant
+      writes are two databases, so there is no batch that commits both. The device
+      TenantScopedStore.write uses to make a mutation and its audit row one unit is unavailable
+      here. Something can therefore always fail between the two.
+    soWHATHAPPENS: >-
+      A FAILED PLATFORM AUDIT WRITE FAILS THE OPERATION AND IS REPORTED AS unavailable — D2's rule
+      that "the audit event must not fail open" applies, and inability to record the evidence is not
+      a reason to proceed without it. A FAILED TENANT-SIDE WRITE DOES NOT ROLL BACK THE OPERATION —
+      it cannot, the control-plane rows are committed — and is surfaced internally as a
+      reconciliation obligation. THAT ASYMMETRY IS A REAL WEAKNESS AND IT IS NAMED: the customer's
+      copy of the trail is the one that can go missing, and it is the one they most need.
+    theORDERINGFIXESTHECIRCULARITY: >-
+      identity/control-plane-admission.ts records onboarding's audit record as having no home
+      because "reaching that log needs a tenant store handle, which needs the directory entry that
+      the same operation is still creating". WRITING tenant_directory FIRST BREAKS THE CIRCLE — the
+      handle then resolves and the tenant record can be written. The circularity was an artefact of
+      ordering and not a property of the problem.
+  itIsNOTYETADECISIONRECORD: >-
+    THE PLATFORM-OPERATOR ACTION LOG IS A NEW CONTROL-PLANE OBJECT AND NEEDS A TEAM LEAD RECORD
+    BEFORE IT IS BUILT — it is not something a contract may introduce by implication, which is the
+    same standing organization-selection-v1 gave the session route class. This contract specifies
+    what it must contain and what it must never contain; it does not accept it.
+
+# ---------------------------------------------------------------------------
+# theBootstrapExceptionToD11 — a real tension with 0007, named rather than worked around
+# ---------------------------------------------------------------------------
+theBootstrapExceptionToD11:
+  theTension: >-
+    docs/decisions/0007 D11 CONDITION 1 IS THE RULE THAT MAKES THE WHOLE PERMISSION MODEL
+    NON-ESCALATING: "the granting principal holds the permission it is granting, at a scope that
+    contains the scope of the grant. YOU CANNOT GRANT WHAT YOU DO NOT HAVE."
+    ONBOARDING VIOLATES IT ON ITS FACE. A platform operator creates an Organization's first
+    membership at role `owner`, and `owner` carries seven customers.* permissions plus
+    core.business.read — NONE OF WHICH THE OPERATOR HOLDS, and none of which it could hold, because
+    it has no membership anywhere and MembershipRole may never carry platform authority.
+  ruling: >-
+    THIS IS A BOUNDED BOOTSTRAP EXCEPTION AND IT IS DECLARED AS ONE. D11 governs DELEGATION BETWEEN
+    TENANT PRINCIPALS — one member granting another, which is where the classic RBAC escalation
+    lives. Onboarding is not delegation: THERE IS NO PRINCIPAL IN THE ORGANIZATION YET TO DELEGATE
+    FROM, and the operator is not passing on its own authority but establishing the tenant's first.
+  itsFOURBOUNDS: >-
+    NARROW, AND EVERY BOUND IS CHECKABLE, BECAUSE AN UNBOUNDED EXCEPTION TO D11 IS A HOLE IN THE
+    PERMISSION MODEL WEARING THE WORD "BOOTSTRAP":
+      1. IT APPLIES ONLY AT ORGANIZATION CREATION, in the same operation that creates the
+         Organization. Never to an Organization that already exists.
+      2. IT CREATES EXACTLY ONE MEMBERSHIP, at exactly one role, `owner`. Not a chosen role, not a
+         list of memberships, not a role named in the request.
+      3. IT IS UNAVAILABLE ONCE THE ORGANIZATION HAS ANY MEMBERSHIP ROW. From that point, adding
+         members is ordinary tenant administration under D11 unchanged, performed by that
+         Organization's own owner.
+      4. NO OTHER PLATFORM OPERATION MAY GRANT A TENANT PERMISSION, EVER. credential-reset changes
+         a credential and grants nothing; template operations touch no tenant.
+  whyITISSAFEDESPITED11: >-
+    THE TEST THAT MATTERS IS WHETHER THE EXCEPTION LETS ANYONE REACH DATA THEY COULD NOT OTHERWISE
+    REACH, AND IT DOES NOT. The operator creates an owner and is not that owner: it holds no
+    credential for the new principal beyond the one it generates and shows once, it has no
+    membership in the new Organization, and its own session can never select it. IT CAN CREATE A
+    TENANT IT CANNOT ENTER. What it CAN do is hand the credential to the wrong person — which is a
+    real risk, is exactly what the audit trail exists to record, and is not an escalation in the
+    permission model.
+  thisMUSTBEINTHEDECISIONRECORD: >-
+    An exception to an accepted decision's central rule belongs in a record, not only in a
+    contract. 0025 does not currently name it. REQUESTED OF THE TEAM LEAD as an amendment to 0025
+    or as its own record, before onboarding is implemented.
+
+# ---------------------------------------------------------------------------
+# routes — the class's own two operations. The other three contracts add four more.
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+routeTable:
+  ruling: >-
+    A CORE-OWNED FROZEN LITERAL, with no registration function and no manifest channel, exactly as
+    the pre-auth registry and 0023's Core route block are. An App that could serve a path under
+    /api/v1/platform could present itself as the admin console.
+  reservation: >-
+    `platform` MUST BE ADDED TO reservedApiPathSegments IN core-object-registry.yaml, owner core,
+    so assertNoReservedPathCollision refuses any App route table that could resolve onto it. THIS
+    IS A REGISTRY CHANGE THIS CONTRACT REQUIRES AND DOES NOT ITSELF MAKE.
+  membershipInThisClassIsSIX: >-
+    Across all four platform contracts: organizations.list, templates.list, templates.read,
+    templates.create, organizations.create, credentials.reset. A SEVENTH NEEDS ITS OWN ARGUMENT,
+    the same discipline 0021 imposed on its class of two and 0023 on its block of two. The
+    discipline is what keeps "it is a platform route so it needs no tenant" from becoming a way to
+    write an Action without a tenant check.
+
+operations:
+
+  # =======================================================================================
+  - id: platform.organizations.list
+    title: "List Organizations"
+    method: GET
+    path: "/organizations"
+    surface: platform
+    provenance: "NEW WORK. No implementation exists."
+    description: >-
+      Enumerate the Organizations on the platform — identifiers and status, from the control
+      plane's organization table. This is the console's home screen and the only way an operator
+      discovers what exists.
+    permission: core.organization.list
+    scope: platform
+    request: >-
+      Query parameters `page_size` (1-100, default 25) and `cursor` only. Every other parameter is
+      refused with invalid_argument by the class (P2), not by this route.
+    response: { schemaRef: "urn:dudo:schema:platform-operator:1#/$defs/listOrganizationsOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, unavailable]
+    maxRowWrites: 0
+    audit: required
+    reads: "One bounded page of `organization`. No tenant read of any kind."
+    notes: >-
+      IT RETURNS IDENTIFIERS AND STATUS AND NO NAMES, because control-plane/0002_organization.sql
+      declined a name column and the organization-structure slice still owns it. THE CONSOLE'S HOME
+      SCREEN IS THEREFORE A LIST OF 22-CHARACTER OPAQUE IDENTIFIERS, which is not a usable
+      administrative interface. STATED AS A PRODUCT DEPENDENCY RATHER THAN LEFT TO BE DISCOVERED
+      DURING UI WORK — it is the same gap that makes the Organization picker unshippable (0021),
+      and the same fix closes both.
+      IT RETURNS NO COUNTS, NO CUSTOMER TOTALS, NO ACTIVITY AND NO USAGE. Every one of those is a
+      tenant read behind whereWithTenant, and a "how many customers does this Organization have"
+      column is how a console acquires cross-tenant reach one convenient number at a time.
+      THE AUDIT RECORD IS REQUIRED EVEN THOUGH THIS IS A READ. See P4.
+
+  # =======================================================================================
+  - id: platform.session.whoami
+    title: "The operator's own platform context"
+    method: GET
+    path: "/whoami"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Return the calling operator's own principal id, platform role and effective permission list,
+      so the console can render only the actions this operator may take.
+    permission: core.organization.list
+    scope: platform
+    request: "No body, no query parameters, no path parameters."
+    response: { schemaRef: "urn:dudo:schema:platform-operator:1#/$defs/whoamiOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, unavailable]
+    maxRowWrites: 0
+    audit: required
+    theSHAREDPERMISSIONISDELIBERATE:
+      ruling: >-
+        IT DECLARES core.organization.list RATHER THAN A PERMISSION OF ITS OWN, and no
+        core.platform.whoami is added to the catalog.
+      why: >-
+        A permission every platform operator necessarily holds, checked on every call and
+        deniable to nobody, is not an authorization decision — it is ceremony that makes the
+        catalog less meaningful. organization-selection-v1 made exactly this argument against
+        inventing core.session.select, and it applies unchanged. Declaring an existing permission
+        keeps 0007 D1 satisfied honestly: this route IS unreachable without a real grant.
+      theCOSTOFTHISCHOICE: >-
+        A future marketplace-moderator holding core.marketplace.moderate but NOT
+        core.organization.list could not call whoami and so could not render its own console. That
+        is a real limitation, it is invisible today because platform-admin is the only role anyone
+        holds, and IT IS THE POINT AT WHICH THIS RULING SHOULD BE REVISITED rather than patched by
+        granting the moderator an Organization-enumeration permission it has no business holding.
+    notes: >-
+      IT RETURNS THE CALLER'S OWN CONTEXT AND HAS NO FIELD NAMING ANOTHER PRINCIPAL. The safety
+      argument is in the signature, the same device co1 relies on in organization-selection-v1:
+      there is no parameter through which another operator could be named, so this cannot become a
+      way to enumerate the platform's operators.
+      UI HIDING IS PRESENTATION, NEVER SECURITY (0007 D8). This route exists so the console can
+      avoid drawing buttons that would fail; every permission it reports is enforced again by Core
+      on the call itself, and a console that hid nothing would be ugly and equally safe.
+
+# ---------------------------------------------------------------------------
+# errors
+# ---------------------------------------------------------------------------
+errors:
+  forbidden: >-
+    A principal with no platform_operator row, an unrecognised platform_role, a role lacking the
+    permission, OR A PRINCIPAL PRESENT IN BOTH TABLES, all receive the identical argument-free
+    forbidden. The four are indistinguishable, and the fourth is why: a caller able to detect the
+    mutual-exclusion refusal could use these routes to probe organization_membership.
+  unauthenticated: "No session, unreadable, expired, revoked, or a deleted or suspended principal. liveSession's existing collapse, unchanged."
+  noNEWCODESANDONEEXCEPTION: >-
+    This contract introduces no error code except the `organization_not_selected` that
+    organization-selection-v1 now requires of Core, and that one is not this contract's. Platform
+    routes never emit it: they need no Organization, so the condition cannot arise.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — .claude/rules/architecture.md §6a, docs/decisions/0008
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read, d1-rows-written, d1-storage]
+  storage: >-
+    platform_operator is two identifiers and a timestamp with a primary-key index — roughly 130
+    bytes a row, and the closed beta has one or two rows. It is not a measurable term against the
+    500 MB ceiling.
+  writes: >-
+    THE AUDIT RECORD IS THE ONLY WRITE ON EITHER ROUTE HERE, and P4 makes it unavoidable. Two
+    row-writes per platform-operator action record (1 row + primary key), drawn from the `system`
+    allocation through ControlPlaneWriteAdmission, consistent with control-plane-admission.ts's
+    existing treatment. At operator volume — tens of actions a day — this is under 100 row-writes
+    against a 3,000/day control-plane sub-ceiling.
+  theCHECKTHATMATTERS: >-
+    P4 MAKES EVERY READ A WRITE, WHICH IS EXACTLY THE SHAPE docs/decisions/0013 HAD TO BOUND. IT IS
+    SAFE HERE FOR A REASON THAT DOES NOT GENERALISE: 0013's problem was that an UNAUTHENTICATED or
+    merely authenticated caller could force unbounded denial audits, 100,000 of which halt D1 for
+    every Organization. THIS CLASS IS REACHABLE ONLY BY A PRINCIPAL WITH A ROW IN
+    platform_operator, so the population that can force a write is bounded by the number of real
+    operators — one or two — not by traffic. It is the same test 0013 control 5 applies and it
+    passes for the same reason.
+    IF THIS CLASS EVER BECOMES REACHABLE BY A LARGER POPULATION, THIS ARGUMENT FAILS AND P4 MUST BE
+    BOUNDED LIKE D2 WAS. Written down because the failure would be silent.
+  cost: "USD 0 / BD 0 per month. New control-plane tables, no new service, no new binding."
+
+# ---------------------------------------------------------------------------
+# testRequirements — qa-agent
+# ---------------------------------------------------------------------------
+testRequirements:
+  tenantIsolation:
+    - "A platform operator's session can never resolve a tenant store: assert active_organization_id stays null across login, the picker and an attempted selection."
+    - "An operator naming a real Organization at /auth/session/organization receives the same 404 a non-member receives — the anti-oracle holds for operators too."
+    - "NEGATIVE CONTROL, and it is the important one: no module in the platform route class imports TenantStoreResolver, TenantScopedStore, createD1TenantStore or TENANT_COLUMN. One grep, asserted."
+  authorization:
+    - "A principal with no platform_operator row receives forbidden on every route in this class."
+    - "A principal with an UNRECOGNISED platform_role receives forbidden, not an error — the unknown value denies rather than throwing."
+    - "MUTUAL EXCLUSION: a principal seeded into BOTH platform_operator and organization_membership is denied on every platform route AND on every Action, with codes identical to an unknown principal."
+    - "A tenant principal holding role `owner` receives forbidden on every route in this class."
+  classProperties:
+    - "An undeclared field in any platform request body is refused with invalid_argument — asserted per route, because P2 is a class property that a route could accidentally bypass."
+    - "An undeclared query parameter is refused. Including on the two routes that declare none."
+    - "A body that is not a JSON object is refused."
+  audit:
+    - "EVERY route in this class writes a platform-operator action record, INCLUDING both reads. Assert per route rather than in aggregate."
+    - "A failed platform audit write fails the operation with unavailable and the operation's effect is not reported as successful."
+  theTESTTHATCANNOTBEWRITTENYET: >-
+    THE TENANT-SIDE AUDIT RECORD, because no platform operation in THIS contract has an affected
+    Organization to write one into. It becomes testable with organization-onboarding-v1 and
+    credential-reset-v1, and qa-agent should report it as NOT APPLICABLE here rather than as
+    passing.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: PO-1
+    status: CLOSED
+    question: "The platform-operator action log is a new control-plane object and has no decision record."
+    resolution: >-
+      CLOSED by docs/decisions/0025 DECISION 5, 2026-09-05. The log is recorded as a new
+      control-plane object, distinct from the tenant audit trail, and the record adds a constraint
+      in the lineage of 0013 and 0023 that this contract had stated less sharply: IT RECORDS THE
+      OPERATION AND ITS TARGET IDENTIFIERS, NEVER THE CONTENTS OF WHAT WAS TOUCHED, because "an
+      operator log that accumulates customer data is a second copy of the tenant database with
+      weaker access rules." That sentence is the better form of auditModel's constraint and is the
+      one to build against.
+      P4 is now implementable, and so is every route in this class.
+  - id: PO-2
+    status: CLOSED
+    question: >-
+      The bootstrap exception to 0007 D11 is not named in docs/decisions/0025. An exception to the
+      rule that makes the permission model non-escalating should not live only in a contract.
+    resolution: >-
+      CLOSED by docs/decisions/0025 DECISION 4, 2026-09-05, WITH ALL FOUR BOUNDS RECORDED VERBATIM.
+      The ruling stands as written here: D11 governs delegation between tenant principals, and
+      onboarding is not delegation because there is no principal in the Organization yet to
+      delegate from.
+      BOUND 2 IS THE ONE TO WATCH IN REVIEW — exactly one membership, at exactly one role, not
+      chosen and not named in the request. It is the bound that keeps this from becoming "the
+      operator may grant anything during creation", and it is the one a later convenience would
+      erode first: a `role` field on the onboarding request would look like a small addition and
+      would convert a bounded exception into a general grant mechanism.
+      organization-onboarding-v1 carries all four as executable test requirements.
+  - id: PO-3
+    question: >-
+      The console's home screen lists opaque identifiers because Organizations have no name. The
+      same gap makes the Organization picker unshippable (0021).
+    recommendation: "The organization-structure slice. One fix closes both; neither is worth solving locally."
+    blocks: "A usable admin console, not the contract."
+  - id: PO-4
+    question: >-
+      Rate limiting for this class rests on 0017's in-process limiter, which is per-isolate and
+      bounds nothing in a deployed Worker. The durable limiter is still owed.
+    recommendation: >-
+      At one or two operators the per-principal daily write ceiling is the real bound and holds.
+      Do not report rate limiting as done. Revisit before a third operator exists.
+    blocks: "Nothing at closed-beta scale. It is a stated weakness, not a blocker."
+  - id: PO-5
+    question: >-
+      whoami declares core.organization.list rather than its own permission, so a future
+      marketplace-moderator could not render a console.
+    recommendation: "Revisit when a second platform role is actually held. Do not fix it by granting the moderator Organization enumeration."
+    blocks: "Nothing today."

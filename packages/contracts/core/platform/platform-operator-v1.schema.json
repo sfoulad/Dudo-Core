@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:platform-operator:1",
+  "title": "Platform operator — wire shapes, version 1",
+  "description": "The machine-readable half of platform-operator-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema: there is no implementation, no package.json and no node_modules, so this file is normative and hand-checked, never machine-validated. No report may describe it as validated.",
+
+  "$defs": {
+
+    "organizationId": {
+      "description": "An opaque, non-sequential, unguessable identifier. 128 bits of base64url as generated (kernel/ids.ts), 22 characters; the bound is wider than the generator so a longer historical value is not rejected. It is NEVER parsed, decoded or interpreted by a client.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+
+    "principalId": {
+      "description": "Same shape and same rules as organizationId. A separate definition rather than a $ref to it, deliberately: the two are different KINDS of identifier that happen to share a grammar, and one $def would let a future widening of one silently widen the other.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+
+    "organizationStatus": {
+      "description": "As stored in the control plane's organization table. A closed set; an unrecognised stored value is never rendered to a client, because Core validates on read and treats an unknown value as unavailable rather than passing it through.",
+      "type": "string",
+      "enum": ["active", "suspended"]
+    },
+
+    "platformRole": {
+      "description": "The closed union stored in platform_operator.platform_role, mirroring permission-catalog.yaml's two platform-scope seed roles. An unrecognised stored value denies everything and never reaches a response.",
+      "type": "string",
+      "enum": ["platform-admin", "marketplace-moderator"]
+    },
+
+    "permissionId": {
+      "description": "A registered permission identifier. The pattern is permission-catalog.yaml's namePattern, restated rather than $ref-ed because that file is YAML and this is JSON — a divergence between them is a defect qa-agent should catch, and the catalog is the authority.",
+      "type": "string",
+      "pattern": "^(core|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+    },
+
+    "cursor": {
+      "description": "An opaque, tenant-bound pagination cursor. Never constructed, parsed or modified by a client. Null means there is no further page.",
+      "type": ["string", "null"],
+      "maxLength": 512
+    },
+
+    "organizationSummary": {
+      "description": "One row of the platform's Organization list. NOTE WHAT IS ABSENT AND WHY: there is no name, because control-plane/0002_organization.sql declined a name column and the organization-structure slice owns it; and there is NO COUNT OF ANYTHING — no customers, no members, no activity, no usage. Every one of those would be a read behind whereWithTenant, and a console acquires cross-tenant reach one convenient number at a time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id", "status", "created_at"],
+      "properties": {
+        "organization_id": { "$ref": "#/$defs/organizationId" },
+        "status": { "$ref": "#/$defs/organizationStatus" },
+        "created_at": {
+          "description": "RFC 3339, UTC, second precision.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "display_name": {
+          "description": "ALWAYS null today. Present in the shape so that adding names later is additive for both clients rather than a new field appearing in a published response. A client renders organization_id verbatim when this is null and must not substitute a placeholder of its own.",
+          "type": ["string", "null"],
+          "maxLength": 200
+        }
+      }
+    },
+
+    "listOrganizationsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/organizationSummary" }
+        },
+        "next_cursor": { "$ref": "#/$defs/cursor" }
+      }
+    },
+
+    "whoamiOutput": {
+      "description": "The calling operator's own context. IT HAS NO FIELD NAMING ANOTHER PRINCIPAL, and none may be added: the safety argument for this route is in its signature, not in a check.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "platform_role", "permissions"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" },
+        "platform_role": { "$ref": "#/$defs/platformRole" },
+        "permissions": {
+          "description": "The effective permission list, for rendering only. UI HIDING IS PRESENTATION, NEVER SECURITY (0007 D8): every permission here is enforced again by Core on the call itself, and a console that ignored this list entirely would be ugly and exactly as safe.",
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/permissionId" }
+        }
+      }
+    }
+  }
+}

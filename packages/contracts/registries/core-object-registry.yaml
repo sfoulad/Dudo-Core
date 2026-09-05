@@ -11,9 +11,17 @@
 #
 # STATUS OF THIS FILE
 # Every entry is status "proposed", which means NOT YET BUILT — it does not mean optional
-# or unapproved. No code and no schema exist. These are the objects entailed by Core's
-# declared responsibilities (CORE_BOUNDARIES.md §3) and the App lifecycle (APP_STANDARD.md
-# §9), recorded so Phase 1 builds against a reviewed set. No entry here is a data model.
+# or unapproved. These are the objects entailed by Core's declared responsibilities
+# (CORE_BOUNDARIES.md §3) and the App lifecycle (APP_STANDARD.md §9), recorded so Phase 1
+# builds against a reviewed set. No entry here is a data model.
+#
+# "No code and no schema exist" was true when this file was written and IS NO LONGER TRUE.
+# As of 2026-09-05, Principal, Organization, OrganizationMembership, Session, AuthCredential,
+# Business, AuditEvent and TenantDirectoryEntry all have reviewed schemas under
+# platform/core/migrations/**, and several have running code. The `status: proposed` values
+# below have not been individually re-verified against that code and should not be read as
+# current build state. Correcting them is a separate pass; the tenancy correction recorded
+# under spec was made now because the classification was WRONG rather than merely stale.
 #
 # The tenancy model is DECIDED: docs/decisions/0006-tenancy-model.md is Accepted (user,
 # 2026-09-01) — one shared production D1 database with mandatory indirection, for the
@@ -21,7 +29,7 @@
 # tenant_id on every row and every query, and isolation is enforced entirely in code.
 
 registryVersion: 1
-updated: "2026-09-01"
+updated: "2026-09-05"
 
 # ---------------------------------------------------------------------------
 # spec
@@ -31,6 +39,28 @@ spec:
   tenancyValues:
     tenant-scoped: "Belongs to exactly one tenant (Organization). Every access carries tenant scope."
     tenant-independent: "Platform-owned. Contains no tenant business data. Stored separately from tenant data."
+    control-plane: >-
+      Names a tenant but is not stored inside one. It lives in the control-plane database
+      (docs/decisions/0014 §C), carries NO tenant_id column, and is read BEFORE any
+      Organization is known. This value was added 2026-09-05 because the two existing values
+      could not describe these objects and the registry therefore described them wrongly —
+      see the correction note below.
+  tenancyCorrection2026-09-05: >-
+    FOUR ENTRIES BELOW WERE MARKED tenant-scoped AND WERE WRONG. Principal, Organization,
+    OrganizationMembership and Session are all control-plane objects under docs/decisions/0014
+    §C, Accepted. `platform/core/migrations/control-plane/0001_principal.sql` states the rule
+    for the whole directory — "NO TABLE IN THIS DIRECTORY HAS A tenant_id COLUMN, AND NONE MAY
+    GAIN ONE" — and `0003_organization_membership.sql` names this file specifically: "THAT
+    ENTRY IS WRONG, and it is wrong in a way that cannot be patched by adding a column... The
+    registry is architecture-agent's file. The correction is reported, not made here." This is
+    that correction, made.
+    WHY IT WAS WRONG IS THE PART WORTH KEEPING: the classification was circular. A
+    tenant-scoped read requires a tenant-scoped store handle; a handle requires an
+    Organization; and these four objects are precisely what is read to DISCOVER the
+    Organization. An entry that cannot be read without the answer it produces is not a
+    tenancy classification, it is a deadlock written as one.
+    IT CHANGES NO CODE. `platform/core/**` already implements the corrected classification;
+    only this file disagreed with it.
   appAccessValues:
     none: "Apps cannot reach it at all."
     read-via-contract: "Readable through a published Core contract, subject to permission."
@@ -87,19 +117,40 @@ objects:
 
   - name: OrganizationMembership
     domain: identity
-    tenancy: tenant-scoped
+    tenancy: control-plane
     appAccess: read-via-contract
     status: proposed
     phase: 1
-    description: "Binds a User to an Organization, with status and profile within that tenant."
+    description: "Binds a User to an Organization, with status and the role that Organization grants them."
+    notes: >-
+      CORRECTED 2026-09-05 from tenant-scoped. The question it answers at login — "which
+      Organizations may this principal enter" — SPANS TENANTS BY CONSTRUCTION, so no single
+      tenant scope can answer it. Built as `control-plane/0003_organization_membership.sql`.
+      IT CARRIES THE GRANT (docs/decisions/0019): a `role` column, a closed union, mapped to a
+      frozen permission list in Core. The role is per-Organization BECAUSE it sits here rather
+      than on Principal — a principal belonging to several Organizations must not carry
+      authority across them. It carries NO business assignment: for an organization-scope
+      principal the authorized Business set is read from the TENANT database after the store
+      resolves (docs/decisions/0020).
+      A PROFILE STILL DOES NOT LIVE HERE. The registry's original claim that the per-tenant view
+      of a user hangs off membership stands as intent, but no profile column exists and adding
+      one is organization-structure work with its own contract.
 
   - name: Session
     domain: identity
-    tenancy: tenant-scoped
+    tenancy: control-plane
     appAccess: none
     status: proposed
     phase: 1
-    description: "An authenticated session bound to one principal and one active tenant."
+    description: "An authenticated session bound to one principal, with an OPTIONAL active tenant."
+    notes: >-
+      CORRECTED 2026-09-05 from tenant-scoped, which was circular: a session is read to
+      discover the tenant. docs/decisions/0014 §C.1 makes it PRINCIPAL-scoped;
+      `control-plane/0004_session.sql` is the schema.
+      `activeOrganizationId` IS NULLABLE AND THAT IS THE DESIGN. A session begins with no
+      Organization selected and there is deliberately no "first membership wins" fallback,
+      because a silent default is an ambient tenant. Selection is a separate authenticated
+      request in its own route class (docs/decisions/0021).
 
   - name: AuthCredential
     domain: identity
@@ -128,13 +179,24 @@ objects:
   # --- organization structure -------------------------------------------------
   - name: Organization
     domain: organization
-    tenancy: tenant-scoped
+    tenancy: control-plane
     appAccess: read-via-contract
     status: proposed
     phase: 1
     description: "The tenant. The isolation boundary. Owns the data and holds the subscription."
-    notes: "Tenant = Organization is a recommendation pending Team Lead confirmation (MULTITENANCY_STANDARD.md MT1)."
+    notes: >-
+      CORRECTED 2026-09-05 from tenant-scoped. The Organization record IS the tenant boundary
+      and therefore cannot sit inside one; `control-plane/0002_organization.sql` holds it, with
+      an identifier and a status and deliberately nothing else — no name, no country, no plan.
+      Tenant = Organization is still a recommendation pending Team Lead confirmation
+      (MULTITENANCY_STANDARD.md MT1).
+      THE MISSING NAME IS A LIVE PRODUCT CONSEQUENCE, not a schema detail: an Organization
+      picker can list 22-character opaque identifiers and nothing a human can choose between.
 
+  # RENAME PROPOSED 2026-09-05: Business -> Workspace. The entry keeps its current name until
+  # the Team Lead records the decision, because renaming it here before the record exists would
+  # be the object registry deciding a breaking contract change on its own authority. The full
+  # ruling and its cost are in the `namingRuling2026-09-05` block at the foot of this file.
   - name: Business
     domain: organization
     tenancy: tenant-scoped
@@ -142,6 +204,15 @@ objects:
     status: proposed
     phase: 1
     description: "A Business/Workspace inside an Organization. An authorization scope, not an isolation boundary."
+    notes: >-
+      THE NAME IS WRONG AND THE USER FOUND IT, NOT THE TEAM. "Business" is Dudo's word for a unit
+      INSIDE a tenant, and it is every customer's word for the tenant itself — so a form reading
+      "which of your Businesses is this customer filed under" appears to ask which COMPANY the
+      customer belongs to when it means which branch. The collision is not confined to UI copy:
+      it is in `core.business.read`, `authorizedBusinessIds`, `businessScope`, `customer.business_id`
+      and the `business` table, which is to say in the public API a third-party App author will
+      read. See namingRuling2026-09-05. THE OBJECT AND ITS SEMANTICS DO NOT CHANGE — it remains
+      an authorization scope and never an isolation boundary.
 
   - name: Branch
     domain: organization
@@ -150,6 +221,13 @@ objects:
     status: proposed
     phase: 1
     description: "A Branch/Location inside a Business. Optional in use, never optional in the model."
+    notes: >-
+      UNCHANGED BY THE 2026-09-05 NAMING RULING, AND ITS EXISTENCE IS WHY THAT RULING DID NOT
+      SIMPLY RENAME Business TO Branch. `Branch` is ALREADY TAKEN and already means a level below
+      the one being renamed. Renaming Business to Branch would have collapsed two declared levels
+      into one and silently deleted a level of the model to fix a word. Nothing is built here yet
+      — no table, no code, only three catalogued permissions — so the level is cheap to keep and
+      would be expensive to reintroduce.
 
   - name: Team
     domain: organization
@@ -170,11 +248,22 @@ objects:
   # --- principals and authorization -------------------------------------------
   - name: Principal
     domain: authorization
-    tenancy: tenant-scoped
+    tenancy: control-plane
     appAccess: read-via-contract
     status: proposed
     phase: 1
     description: "The uniform subject of authorization: user, team, service-account, ai-agent, or iot-device."
+    notes: >-
+      CORRECTED 2026-09-05 from tenant-scoped. `control-plane/0001_principal.sql` is
+      platform-wide by construction — an identifier, a type and a status, with no tenant_id, no
+      credential material, no email address and no list of Organizations, each omission
+      recorded there as security design rather than as scope.
+      A PRINCIPAL MAY HOLD ZERO MEMBERSHIPS, and that state is reachable today: it
+      authenticates (credentials hang off `principal_credential`, which is also tenant-free) and
+      can then obtain no tenant store, so every business Action answers `failed_precondition`.
+      That is the structural reason a platform operator cannot read tenant data — see
+      openQuestions CO4, which is about the authority such a principal would need and does not
+      have anywhere to hold.
 
   - name: ServiceAccount
     domain: authorization
@@ -452,6 +541,74 @@ objects:
       code path. Discovery is filtered per principal, because a tool list is a description
       of the system.
 
+  - name: Template
+    domain: marketplace
+    tenancy: tenant-independent
+    appAccess: read-via-contract
+    status: proposed
+    phase: 1
+    requiredBy: "docs/decisions/0025 decision 2 (Accepted). Contract: packages/contracts/core/platform/template-v1."
+    description: >-
+      A business type. A name and the display labels each structural level carries for
+      Organizations adopting it. ARCHITECTURE.md §1's fifth extension type, arriving in phase 1
+      rather than phase 6 — a scheduling change, not a new concept.
+    notes: >-
+      THE INCLUSION TEST IS RECORDED IN template-v1.contract.yaml theBoundary, as
+      CORE_BOUNDARIES.md §2 requires. Four yeses; the one that does the work is §2.3, and it turns
+      on a distinction: RULE 6.1 GOVERNS TYPES, TABLES, COLUMNS, FUNCTIONS AND ROUTES, NOT ROWS. A
+      row reading "Dental Clinic" is data; a `dental_clinic` column is a defect.
+      A TEMPLATE MAY NAME Apps AND CARRY LABELS. IT MAY NEVER CONTAIN LOGIC — no workflow, no
+      validation rule, no pricing rule, no expression in any field. The moment it carries one,
+      business-specific behaviour is inside Core permanently and cannot be removed.
+      IT CARRIES NO ROLE VOCABULARY IN VERSION 1 (permission-catalog.yaml AZ11), and no Apps list
+      while there is one App. Both are additive later.
+
+  - name: PlatformOperator
+    domain: authorization
+    tenancy: control-plane
+    appAccess: none
+    status: proposed
+    phase: 1
+    requiredBy: "docs/decisions/0025 decision 1 (Accepted). Closes CO4 and AZ9."
+    description: >-
+      Binds a principal to a platform role. ITS EXISTENCE IS THE AUTHORITY — there is no flag on
+      Principal, no membership row, and no platform value in MembershipRole.
+    notes: >-
+      A SEPARATE TABLE RATHER THAN A COLUMN, AND THE REASON IS AN INVARIANT: 0024 requires a
+      platform principal to hold ZERO membership rows, and AN INVARIANT THAT DEPENDS ON NOBODY
+      ADDING A ROW IS NOT AN INVARIANT. Two tables make "appears in both" a question a machine can
+      ask, checked on write AND at authorization, FAILING CLOSED — a principal in both is refused
+      everywhere, never resolved in favour of either.
+      NO ROUTE CREATES ONE. Bootstrapping is an out-of-band operator action, and there is
+      deliberately no core.platform-operator.create in permission-catalog.yaml. This table keeps
+      the property credential-reset-v1 gives up for principal_credential: no request, authenticated
+      or not, can create or change a row here.
+      THE MUTUAL EXCLUSION IS WHY A PLATFORM OPERATOR CANNOT READ TENANT DATA. No membership means
+      no Organization selection, which means no tenant store, which means no row behind
+      whereWithTenant. Break-glass access remains AZ3 and is not decided by 0025.
+
+  - name: PlatformOperatorAuditRecord
+    domain: authorization
+    tenancy: control-plane
+    appAccess: none
+    status: proposed
+    phase: 1
+    requiredBy: "platform-operator-v1 P4 and auditModel. NEEDS ITS OWN DECISION RECORD — PO-1 — before it is built."
+    description: >-
+      An append-only record of one platform-operator action: actor, platform role, action id,
+      target organization_id or principal_id, outcome, timestamp, correlation id.
+    notes: >-
+      IT IS NOT THE LOG control-plane/0003_organization_membership.sql REFUSED, AND THE CONSTRAINT
+      IS WHAT MAKES IT A DIFFERENT OBJECT: that refusal was of an append-only log of tenant BUSINESS
+      events spanning every tenant. This holds only who acted, what they did, which Organization or
+      principal they named, and when. NO BUSINESS DATA OF ANY KIND — no customer, no field value,
+      no name, and NO CREDENTIAL. A COLUMN CARRYING TENANT BUSINESS DATA MAY NEVER BE ADDED HERE,
+      and that sentence is normative rather than descriptive.
+      IT IS THE PLATFORM'S HALF OF A TWO-HOME AUDIT MODEL. The other half is a record in the
+      affected Organization's own tenant-scoped audit_event, because a trail only the platform can
+      read is a trail kept by the party being audited. Both are required; see platform-operator-v1
+      auditModel for the ordering and the partial-failure behaviour.
+
   - name: Developer
     domain: developer
     tenancy: tenant-independent
@@ -518,6 +675,18 @@ reservedApiPathSegments:
     owner: core
     status: proposed
     description: "The namespace under which every non-reserved App is served. Permanently reserved."
+  - segment: platform
+    owner: core
+    status: proposed
+    description: >-
+      ADDED 2026-09-05, REQUIRED BY platform-operator-v1. The fourth request class — platform
+      routes — is served here. Reserving the segment makes assertNoReservedPathCollision refuse any
+      App route table that could resolve onto it, which matters more here than for any other
+      segment: AN App THAT COULD SERVE A PATH UNDER /api/v1/platform COULD PRESENT ITSELF AS THE
+      ADMIN CONSOLE and harvest an operator's actions.
+      The route block is additionally mounted ONLY on the admin host, and a request to
+      /api/v1/platform/** on app.dudo.work or api.dudo.work answers 404 rather than 403 — but that
+      host binding is defence in depth and this reservation is the structural control.
   - segment: auth
     owner: core
     status: proposed
@@ -562,6 +731,59 @@ reservedApiPathSegments:
     status: proposed
 
 # ---------------------------------------------------------------------------
+# namingRuling2026-09-05 — the inner unit is renamed. architecture-agent's ruling, made on
+# the Team Lead's explicit delegation. IT IS A BREAKING CHANGE TO A PROPOSED CONTRACT and
+# therefore needs a decision record before it is applied; nothing below is applied yet.
+# ---------------------------------------------------------------------------
+namingRuling2026-09-05:
+  ruling: >-
+    THE TENANT STAYS `Organization`. THE INNER UNIT BECOMES `Workspace`. `Branch` IS UNCHANGED.
+    AND NO USER-FACING STRING IS EVER THE INTERNAL NAME — every level carries a display label
+    that a business type may set, so a school shows "Campus", a shop "Branch", a clinic "Site",
+    and a software company "Team". The rename is for developers and the public API; the label is
+    for users. EITHER HALF ALONE IS INSUFFICIENT: a label alone leaves `business_id` in the API a
+    third-party App author reads, and a rename alone leaves a school looking at the word
+    "Workspace".
+  whyWorkspaceAndNotBranchOrLocationOrSite: >-
+    `Branch` COLLIDES — it is already a declared level BELOW this one, and taking the name would
+    collapse two levels into one to fix a word. `Location` and `Site` BOTH IMPLY PREMISES, and
+    Dudo's stated market is startups and SMEs including software companies that have none; a
+    name that is wrong for a fifth of the market is not neutral. `Workspace` is ALREADY THE
+    RECORDED ALTERNATIVE in this file — the description has read "A Business/Workspace inside an
+    Organization" since it was written — so this selects between two names Dudo already uses
+    rather than inventing a third. It is free of industry nouns, which CORE_BOUNDARIES.md §6 rule
+    1 requires of any identifier in Core, and it reads correctly for a campus, a clinic site, a
+    retail branch and a team with no premises.
+  whyTheTenantIsNotRenamed: >-
+    The user's own phrasing — "business admin, business managers, business staff" — uses
+    "business" for the TENANT, which is the other half of the collision. It is not fixed by
+    renaming Organization. `organizationId`, `organization_membership`, the `organization` table
+    and the `organization` SCOPE are the most deeply embedded identifiers in the platform, and
+    "Organization" is the settled industry term for a tenant. The user's word is served by the
+    tenant's own display label — "School Group", "Practice", "Company" — at no schema cost.
+  surfaceAffected: >-
+    packages/contracts/core/organization/business-read-v1 (both files and its README) ·
+    packages/contracts/apps/customers (business_id throughout) · permission-catalog.yaml
+    (core.business.read, core.business.create, core.business.update, and the six customers.*
+    permissions declaring `business` scope) · the `business` scope VALUE in the scope ladder ·
+    platform/core (authorizedBusinessIds, businessScope, authorizeSuppliedBusiness,
+    business-directory.ts, business-read.ts, the business table and customer.business_id) ·
+    platform/web · Dudo-Apple. NOT `Branch`, and NOT the Organization.
+  whyNow: >-
+    THIS IS THE CHEAPEST IT WILL EVER BE, AND THE WINDOW IS SHORT. No contract in this directory
+    is Accepted, the Customer Directory slice has not passed step 7, and there are two
+    Organizations on the platform. Every one of those facts stops being true soon. A public API
+    name is the canonical example of a decision that is trivial before customers and permanent
+    after them.
+  sequencing: >-
+    NOT FIRST, AND NOT LAST. It must land BEFORE onboarding and business types, because both
+    write the inner unit and would otherwise be built on the old name and renamed twice. It must
+    land AFTER the current slice reaches step 7 — accepted or abandoned — because platform/web is
+    being edited against the old name right now and a rename mid-slice destroys in-flight work
+    for no gain. It does NOT depend on business types: ship it with default labels and let types
+    supply per-type labels additively.
+
+# ---------------------------------------------------------------------------
 # openQuestions
 # ---------------------------------------------------------------------------
 openQuestions:
@@ -581,3 +803,132 @@ openQuestions:
     question: "SearchIndexEntry assumes a search engine. None is approved."
     recommendation: "Blocked pending an ADR. Whatever is chosen, the index is tenant-partitioned."
     blocks: "Phase 1 search"
+
+  # -------------------------------------------------------------------------
+  # CO4-CO6 recorded 2026-09-05, from the super-admin / business-type request. RECORDED,
+  # NOT RESOLVED — architecture-agent proposes and the Team Lead records (docs/decisions/README.md).
+  # -------------------------------------------------------------------------
+  - id: CO4
+    question: >-
+      A PLATFORM OPERATOR HAS AN IDENTITY AND NO AUTHORITY, AND THERE IS NOWHERE TO PUT THE
+      AUTHORITY. The identity is not the gap: `Principal` is control-plane and a principal with
+      zero memberships already exists, authenticates, and reaches nothing. The gap is that
+      EVERY GRANT IN DUDO IS REACHED THROUGH A MEMBERSHIP ROW — docs/decisions/0019 puts the
+      role there, `grantsForRole` is called only from the membership-backed source, and a
+      principal with no membership therefore holds no permission by any path at all. There is no
+      platform-tier carrier, no object here that could be one, and `MembershipRole` is a closed
+      union of two organization-scope values.
+      THE DANGEROUS FIX IS THE OBVIOUS ONE. Giving the operator a membership row with a wide
+      role works immediately and is a cross-tenant breach assembled entirely out of legitimate
+      parts: `authorization/scope.ts` ranks `platform` above every other scope, so a
+      platform-tier grant on a membership row would satisfy every Action at every scope, and the
+      storage boundary would scope it to that Organization without complaint. Repeat per
+      Organization and the isolation guarantee is gone with no rule broken and no code changed.
+    recommendation: >-
+      A SEPARATE CONTROL-PLANE OBJECT holding platform authority, never a value of
+      MembershipRole and never a column on a row an Organization can cause to be written. Two
+      invariants belong with it and are both checkable: a principal holding platform authority
+      has ZERO membership rows, and `MembershipRole` never gains a platform-tier value —
+      `assertRoleMappingIsCoherent` already rejects any grant outside `organization` scope and
+      is the natural place for the second. Reaching tenant BUSINESS data stays closed and is
+      AZ3 break-glass, which is a different decision and must not be solved by this one.
+      Needs its own decision record; not invented here.
+    blocks: "Any platform-operator capability, including the business-type registry (CO5)."
+  - id: CO5
+    question: >-
+      "BUSINESS TYPE" ALREADY EXISTS IN THE ARCHITECTURE UNDER ANOTHER NAME AND IN A LATER
+      PHASE. ARCHITECTURE.md §1 records **Template** as the fifth extension type — "a
+      pre-configured combination of Apps and settings for a business type: Salon, Dental Clinic,
+      Gym. Carries no code" — with "the user selects a business type, not a set of technical
+      modules" as the promise it keeps. It is scheduled for Phase 6 and has no standard, no
+      object here, and no permission in permission-catalog.yaml. So a platform-authored business
+      type is not a new concept; it is Template arriving early, and §1 also records that the five
+      extension types are closed and a sixth is a Constitution amendment.
+      THE CORE BOUNDARY QUESTION IS SHARPER THAN IT LOOKS. A REGISTRY of named configurations
+      passes CORE_BOUNDARIES.md §2 — it is the same shape for a clinic and a freight company,
+      and rule 6.1's "no industry nouns" governs types, tables, columns, functions and routes,
+      NOT the rows a customer or operator writes into them. A row named "Dental Clinic" is data;
+      a `dental_clinic` column is a defect. THE BOUNDARY IS BEHAVIOUR: the moment a business type
+      carries a workflow, a validation rule, a pricing rule or anything else executable, it stops
+      being data and puts business-specific behaviour inside Core, permanently.
+    recommendation: >-
+      Decide whether the business-type registry IS Template pulled forward from Phase 6 or a
+      distinct object, and say which — two names for one concept is how a fork starts. If it is
+      built, constrain it to data: it may NAME Apps and CARRY labels, and it may never contain
+      logic. Whether it also carries a role vocabulary is permission-catalog.yaml AZ11, not this
+      entry. Tenant-independent either way, and it touches no Organization's rows, which is why
+      it is the one platform-operator capability buildable without AZ3.
+    blocks: "Nothing today. It is the first capability requested of a platform operator, and CO4 blocks that."
+  - id: CO6
+    question: >-
+      A RELATIONSHIP BETWEEN TWO RECORDS IS NOT A ROLE AND HAS NO OBJECT HERE. The case is a
+      parent and a student: the parent needs full authority over ONE student's records and none
+      over any other's. That is not a tier — a parent is not a weaker teacher — and it is not
+      expressible by anything in this registry. `Role` and `RoleAssignment` grant a permission at
+      a SCOPE; they cannot say "these records, because of who this person is to that person."
+      AND `own` SCOPE IS NOT THE ANSWER, WHICH IS THE PART MOST LIKELY TO BE GOT WRONG.
+      AUTHORIZATION_STANDARD.md VAL-OWN resolves `own` through an `ownershipField` ON THE TARGET
+      ENTITY ITSELF, whose value is the acting principal. A student's record carries the
+      STUDENT's identifier; the parent is a different principal, one hop away, and clause 4
+      states that an ownershipField on any other entity "contributes nothing, at all, ever."
+      Making `own` traverse a link would reopen precisely the substitution gap VALIDATOR-AZ7 was
+      written to close (CWE-863).
+    recommendation: >-
+      Model it as an explicit delegation edge — a first-class object binding one principal to
+      another (or to a record) with a bounded permission set — rather than as a scope value or a
+      role. TWO CONSTRAINTS ARE ALREADY BINDING ON WHATEVER IS BUILT: the edge is TENANT DATA and
+      belongs in the tenant database behind the storage boundary, never in the control plane,
+      because a platform-wide map of who is related to whom is the same class of target as the
+      user directory `control-plane/0001_principal.sql` refused; and docs/decisions/0007 D11
+      applies unchanged, so a delegation can never carry more than the delegating principal holds.
+      Needs its own decision record. Do not approximate it with a role in the meantime — an
+      approximation here grants a parent access to every student.
+    blocks: "Any business type whose participants include non-staff related to one another — the school case."
+  - id: CO7
+    question: >-
+      NOTHING CAN CREATE AN ORGANIZATION, AND ONBOARDING HAS NO AUDITABLE HOME. There is no
+      CreateOrganization and no CreateBusiness anywhere in Core, the Apps or the contracts. Every
+      Organization on the live system exists because an operator ran SQL by hand. So the honest
+      answer to "how does a new customer start using Dudo" is that a human edits the database.
+      ONBOARDING IS SIX OBJECTS, NOT ONE: organization, principal, principal_credential,
+      organization_membership, tenant_directory, and at least one inner unit in the TENANT
+      database. Five of the six are control-plane writes and the sixth is not, so the operation
+      spans two databases and CANNOT BE ATOMIC — the batching device that makes a mutation and
+      its audit row one unit does not cross a database boundary.
+      THE AUDIT PROBLEM IS THE HARD PART AND IT IS CIRCULAR AS RECORDED. `identity/
+      control-plane-admission.ts` states it: the audit record cannot go into the new
+      Organization's tenant audit log, because reaching that log needs a tenant store handle,
+      which needs the tenant_directory entry the same operation is still creating. Ordering the
+      directory write first breaks the circle, but leaves a window in which an Organization
+      exists with no record of who created it — and `0007` rule 9 requires privilege changes to
+      be audited, while security.md §6 names tenant membership changes specifically.
+      AND THERE IS A SECOND, DEEPER GAP: an operator action spans tenants by nature, so a purely
+      tenant-side trail gives the PLATFORM no record of what its own operators did. `control-plane/
+      0003_organization_membership.sql` deliberately refused an append-only log spanning every
+      tenant in the control plane, and that refusal was about tenant BUSINESS events. Whether a
+      platform-OPERATOR action log is the same object or a different one is undecided.
+    recommendation: >-
+      Order the writes so the tenant directory exists before the audit write, and write the
+      operator's audit record to BOTH homes: the affected Organization's tenant log, so the
+      customer can see who acted on their account, and a platform-operator action log in the
+      control plane holding only operator actions — actor, action, target Organization,
+      timestamp, correlation id, and NO tenant business data of any kind. That constraint is
+      what distinguishes it from the log 0003 refused. Decide the partial-failure behaviour
+      explicitly and fail closed: an onboarding whose audit write fails is reported failed, not
+      completed quietly.
+      CORRECT THE COST WHILE RECORDING IT — see costCorrection2026-09-05 below.
+    blocks: "Self-service and operator-driven customer acquisition. It is the capability that decides whether Dudo can take a customer at all."
+  costCorrection2026-09-05: >-
+    ONBOARDING IS NOT 6 ROW-WRITES. `identity/control-plane-admission.ts` records "onboarding is
+    6", counting organization 2 + tenant_directory 2 + organization_membership 2. THAT FIGURE
+    ASSUMES THE ADMIN PRINCIPAL AND THEIR CREDENTIAL ALREADY EXIST, which is exactly what is NOT
+    true when a new customer arrives. A first-time onboarding is organization 2 + principal 2 +
+    principal_credential 2 + organization_membership 2 + tenant_directory 2 = 10 control-plane
+    row-writes, plus the first inner unit (2) and the audit record (5) in the TENANT database,
+    drawn from a different allocation.
+    IT IS STILL COMFORTABLY AFFORDABLE and the correction is not an objection: 10 against the
+    3,000/day control-plane sub-ceiling is 300 onboardings a day platform-wide, and against the
+    600/day per-principal ceiling it is 60 per operator per day. The correction is recorded
+    because docs/decisions/0021 records what happens when a number that depends on an unsettled
+    design is published as though it were arithmetic — this one was published as 6 and is 10, and
+    the difference is precisely the two objects nobody was counting.

@@ -1,0 +1,556 @@
+---
+# Organization onboarding — contract of record, version 1
+#
+# HOW DUDO ACQUIRES A CUSTOMER. Today the answer is that an operator edits the database by hand:
+# every Organization on the live system exists because the Team Lead ran SQL. There is no
+# CreateOrganization and no CreateBusiness anywhere in Core, the Apps or the contracts.
+#
+# The machine-readable half is organization-onboarding-v1.schema.json. BOTH ARE NORMATIVE TOGETHER.
+#
+# THIS IS AN OPERATION IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class, its
+# four binding properties, its audit model and the bootstrap exception to 0007 D11. This contract
+# RESTATES NONE OF THEM and cannot be reviewed without it.
+#
+# Governed by: docs/decisions/0025 (Accepted) · platform-operator-v1 (the class)
+#              docs/decisions/0014 §A (the write budget) and §C (the control plane)
+#              docs/decisions/0015 §D (the credential format — and the property this breaks)
+#              docs/decisions/0006 (one shared tenant database, mandatory resolver indirection)
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: ALL NEW WORK, AND MORE OF IT THAN ANY OTHER CONTRACT IN THIS DIRECTORY. Six objects,
+# two databases, one operation, and nothing in the repository writes five of the six today.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05. ON-5 and ON-6 closed by docs/decisions/0026; the class accepted with platform-operator-v1."
+acceptedNote:
+  onboardingDOESNOTUSETHECONFIRMATIONMECHANISM:
+    ruling: >-
+      STATED BECAUSE THE INSTRUCTION TO WIRE IT UP NAMED BOTH THIS CONTRACT AND credential-reset-v1,
+      AND IT IS CORRECT FOR ONLY ONE OF THEM. THIS OPERATION TAKES NO confirmation_id AND NO
+      reauth_derived_value, and it must not.
+    why: >-
+      confirmation-v1 makes the requirement DERIVE FROM THE PERMISSION'S SENSITIVITY: `critical`
+      requires confirmation, and nothing else does. docs/decisions/0026 RECLASSIFIED
+      core.organization.create TO `sensitive`, precisely so this route would be reachable without
+      one. Adding a confirmation here anyway would re-impose the requirement 0026 removed, one
+      record later, by hand.
+      AND IT WOULD DAMAGE THE THING 0026 WAS PROTECTING. The ladder's meaning rests on the classes
+      differing: if a `sensitive` operation carries a confirmation, the distinction between
+      `sensitive` and `critical` collapses into a preference, and the next reclassification argument
+      has nothing to appeal to. THE LADDER KEEPS ITS MEANING ONLY IF SOMETHING STAYS AT THE TOP —
+      and equally, only if the rungs below it are genuinely lighter.
+      `sensitive` STILL REQUIRES AN AUDIT EVENT (§6). This contract mandates two.
+    theCONSEQUENCEACCEPTEDWITHIT: >-
+      AN OPERATOR CAN CREATE A CUSTOMER ORGANIZATION WITH ONE REQUEST AND NO SECOND FACTOR. That is
+      the deliberate outcome of 0026 and it is defensible — onboarding creates an empty tenant,
+      destroys nothing, and its worst outcome is litter plus a wasted credential. Contrast
+      credential-reset-v1, which takes over an account someone is using and keeps its confirmation.
+  theTwoVocabularies:
+    ruling: >-
+      `first_workspace_name` AND `workspace_id` IN THIS CONTRACT WRITE TO AND READ FROM THE
+      `business` TABLE, AND THE COLUMN IS `business_id`. That is not an inconsistency to fix during
+      implementation; it is docs/decisions/0025's Amendment of 2026-09-05, accepted deliberately.
+    why: >-
+      THE RENAME IS NOT BEING PERFORMED AND MY OWN SEQUENCING RULING WAS WRONG ABOUT WHY IT COULD
+      BE. This contract's earlier `sequencing` note said the rename should land first and that it
+      was "the cheapest it will ever be", on the ground that no contract in this directory is
+      Accepted. THAT MISSED TWO THINGS the Team Lead's grep found: `business_id` is a PUBLISHED WIRE
+      FIELD in customer-directory-v1 that two clients have already shipped against — proposed status
+      did not make it unshipped — and it is a PERSISTED AUDIT VALUE in
+      move-customer-to-business.ts's changedFieldNames. Renaming it is a breaking contract change
+      plus an audit-history rewrite, not a cleanup, and §1 requires the first to go through its own
+      record rather than being smuggled in as tidying during another feature's build.
+    soTHERULEFORIMPLEMENTERS: >-
+      NEW PLATFORM SURFACE SAYS `Workspace`. THE CUSTOMER WIRE AND THE DATABASE SAY `business_id`.
+      Do not "correct" either toward the other. The hole stops getting deeper and is not filled in
+      today; the closing trigger is recorded in 0025 — the rename is owed before a second App ships
+      a contract using the word.
+updated: "2026-09-05"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# theOperation — one Action, six objects, two databases
+# ---------------------------------------------------------------------------
+theOperation:
+  whatItCreates: |
+    OBJECT                     DATABASE        ROW-WRITES   NOTE
+    organization               control plane   2            identifier + status
+    principal                  control plane   2            the first admin, type `user`
+    principal_credential       control plane   2            generated, shown ONCE
+    organization_membership    control plane   2            role `owner` — the bootstrap exception
+    tenant_directory           control plane   2            WRITTEN FIRST. See theOrdering.
+    ------------------------------------------------------- 10 control-plane row-writes
+    workspace                  TENANT          2            the first inner unit
+    audit_event (tenant side)  TENANT          5            1 row + PK + 3 explicit indexes
+    platform-operator audit    control plane   2            platform-operator-v1 P4
+  theCOSTCORRECTIONTHISCONTRACTCARRIES:
+    finding: >-
+      identity/control-plane-admission.ts RECORDS "onboarding is 6" AND THAT CONSTANT IS WRONG. It
+      counts organization 2 + tenant_directory 2 + organization_membership 2 — WHICH ASSUMES THE
+      ADMIN PRINCIPAL AND THEIR CREDENTIAL ALREADY EXIST, exactly what is not true when a new
+      customer arrives. The true figure is 10, plus 2 in the control plane for the platform audit
+      record.
+    requirement: >-
+      THE CONSTANT MUST BE CORRECTED IN CODE IN THE SAME CHANGE THAT BUILDS THIS. A budget whose
+      declared cost is 40% below its real cost is not a budget; and 0014 §A.12 makes
+      under-reserving the dangerous direction — "the failure mode of over-reserving is a delayed
+      write, and of under-reserving is a platform outage."
+    whyITISRECORDEDRATHERTHANFIXEDQUIETLY: >-
+      docs/decisions/0021 records what happens when a number resting on an unsettled design is
+      published as arithmetic: the session figure moved 1,000 -> 500 -> 333 -> 6-or-9 -> 333, and
+      its lesson was that "a number that depends on an undecided design is not a number yet". This
+      one was not an undecided design — IT WAS A MISCOUNT, of the two objects nobody thought to
+      count, and it is a different failure worth distinguishing from that one.
+    itISSTILLAFFORDABLE: >-
+      AND THE CORRECTION IS NOT AN OBJECTION. 10 against the 3,000/day control-plane sub-ceiling is
+      300 onboardings a day platform-wide; against the 600/day per-principal ceiling it is 60 per
+      operator per day. Dudo will not onboard 300 customers in a day this year.
+
+  whyITISONEOPERATIONANDNOTSIX:
+    ruling: "ONE ROUTE, ONE PERMISSION, ONE AUDIT RECORD, ONE ALL-OR-NOTHING OUTCOME AS FAR AS ONE IS ACHIEVABLE."
+    why: >-
+      SIX ROUTES WOULD MAKE PARTIAL ONBOARDING THE NORMAL CASE. An Organization with no admin, an
+      admin with no credential, or a membership pointing at a directory entry that was never
+      written are all states no code in Dudo handles and no operator would notice — and the
+      isolation model depends on some of them never existing: a tenant_directory row without an
+      organization row is an Organization identifier that resolves to a store nobody may enter.
+      0007 D1 also requires every Action to declare exactly one permission, and six routes would
+      mean six permissions for one business event, five of which exist only to be called in
+      sequence by the sixth.
+    theHONESTLIMIT: "It cannot be atomic. See theOrdering."
+
+# ---------------------------------------------------------------------------
+# theOrdering — two databases, no transaction, and a specific choice about what breaks
+# ---------------------------------------------------------------------------
+theOrdering:
+  theSequence: |
+    1. VALIDATE EVERYTHING, INCLUDING THE TEMPLATE REFERENCE. Before any capacity is reserved.
+    2. RESERVE control-plane capacity for 12 row-writes (10 + the platform audit record).
+    3. WRITE tenant_directory FIRST.
+    4. WRITE organization, principal, principal_credential, organization_membership.
+    5. WRITE the platform-operator audit record. THE OPERATION IS NOT SUCCESSFUL UNTIL THIS LANDS.
+    6. RESOLVE the tenant store — now possible, because step 3 created the directory entry.
+    7. WRITE the first workspace, and the tenant-side audit record.
+    8. RETURN 201 with the generated credential, shown once.
+  whyTHEDIRECTORYENTRYISFIRST:
+    theCIRCULARITYITBREAKS: >-
+      identity/control-plane-admission.ts records onboarding's audit record as having no home:
+      "its audit record cannot go into the new Organization's tenant audit log, because reaching
+      that log needs a tenant store handle, which needs the directory entry that the same operation
+      is still creating."
+      THE CIRCULARITY IS AN ARTEFACT OF ORDERING AND NOT A PROPERTY OF THE PROBLEM. Write the
+      directory entry first and the handle resolves; everything downstream becomes ordinary.
+    whyITISSAFETOWRITEFIRST: >-
+      A tenant_directory row for an Organization that does not yet exist is UNREACHABLE, not
+      dangerous. Reaching a tenant store requires a principal with a validated membership in that
+      Organization, and at step 3 there is no principal, no membership and no organization row. The
+      window is unenterable by construction rather than by timing.
+    theRESIDUALRISKSTATEDPLAINLY: >-
+      IF THE OPERATION FAILS BETWEEN STEP 3 AND STEP 4, AN ORPHAN DIRECTORY ROW SURVIVES. It maps
+      an organization_id to a binding for an Organization that will never exist. It is inert — see
+      above — but it is litter in a table nothing cleans, and it is the price of breaking the
+      circularity in this direction. Recorded as ON-1, with the reconciliation obligation.
+  theTWODATABASEPROBLEM:
+    statedRatherThanSolved: >-
+      CONTROL-PLANE WRITES AND TENANT WRITES ARE TWO DATABASES AND THERE IS NO BATCH THAT COMMITS
+      BOTH. The device TenantScopedStore.write uses to make a mutation and its audit row one unit
+      is unavailable across a database boundary. Something can always fail between step 5 and
+      step 7.
+    theCHOICE: >-
+      STEPS 1-5 ARE THE OPERATION. Once the platform audit record is written, the Organization
+      EXISTS and the operation is reported successful even if step 7 fails. A FAILURE AT STEP 7
+      LEAVES AN ORGANIZATION WITH NO WORKSPACE AND NO TENANT-SIDE AUDIT RECORD, returns 201 with a
+      `warnings` array naming what did not complete, and raises a reconciliation obligation
+      internally.
+    whyNOT201_ONLY_ON_FULL_SUCCESS: >-
+      BECAUSE THE CREDENTIAL IS IN THE RESPONSE AND CANNOT BE REISSUED. Failing the request after
+      step 4 would mean the operator never sees a credential that HAS BEEN WRITTEN and cannot be
+      recovered — 0015 §D: "printed ONCE and cannot be recovered afterwards, because nothing stores
+      it." The customer would exist, be unenterable, and require a credential reset to rescue. A
+      201-with-warnings is the outcome that keeps the irreversible artifact in the operator's hands.
+    whyAFAILEDPLATFORMAUDITWRITEISDIFFERENT: >-
+      IT FAILS THE WHOLE OPERATION, with unavailable, and this asymmetry is deliberate. D2's rule
+      is that "the audit event must not fail open": inability to record the evidence is not a
+      reason to proceed without it. Step 5 sits BEFORE the credential is returned precisely so that
+      this refusal is still possible — an ordering chosen for the audit rule rather than for
+      convenience.
+    theWEAKNESSNAMED: >-
+      THE CUSTOMER'S COPY OF THE TRAIL IS THE ONE THAT CAN GO MISSING, and it is the one they most
+      need. A step-7 failure loses the tenant-side record of who created their Organization while
+      the platform keeps its own. STATED RATHER THAN ENGINEERED AWAY, because the alternative —
+      failing the operation — costs an unrecoverable credential, and between two bad outcomes the
+      recoverable one is right. Recorded as ON-2.
+
+# ---------------------------------------------------------------------------
+# theCredential — where 0015's strongest property is deliberately destroyed
+# ---------------------------------------------------------------------------
+theCredential:
+  whatIsBEINGGIVENUP:
+    theProperty: >-
+      credential-store.ts: "no createCredential and no updateCredential. Enrollment is an OPERATOR
+      ACTION performed out of band, so THE RUNNING WORKER HAS NO CODE PATH THAT WRITES A CREDENTIAL
+      AT ALL — which means no request, authenticated or not, can create or change one. That is the
+      strongest form of 'registration is not built in this slice' available."
+    theCONSEQUENCE: >-
+      AFTER THIS CONTRACT, DUDO'S ACCOUNT-CREATION SURFACE STOPS BEING "NOTHING" AND BECOMES
+      "WHATEVER AUTHORIZES THIS ROUTE." Every control then rests on the authorization check rather
+      than on the absence of the code path, which is a strictly weaker guarantee. IT IS ADOPTED
+      KNOWINGLY, because a platform that cannot create a customer is not a platform, and the
+      alternative — an operator running SQL forever — has no audit trail at all and is therefore
+      worse on the axis that matters most here.
+    whatSURVIVES: >-
+      THE SAME PROPERTY STILL HOLDS FOR platform_operator, and platform-operator-v1 keeps it: there
+      is no route that creates a platform operator, and bootstrapping one stays an out-of-band SQL
+      action. The most privileged table in the platform retains the guarantee this one gives up.
+  theValueIsGENERATEDANDNEVERSUPPLIED:
+    ruling: >-
+      THE OPERATOR DOES NOT CHOOSE THE PASSWORD AND CANNOT SUPPLY ONE. The request has NO password
+      field, no credential field, and no derived-value field. Core generates it.
+    why: >-
+      docs/decisions/0017's honest basis, and it applies with full force here: "RATE LIMITING IS
+      NOT WHAT PROTECTS THESE ACCOUNTS — PASSWORD ENTROPY IS", so "seeded credentials must be
+      machine-generated and the decision expires the moment any password is human-chosen." An
+      operator-chosen password for a customer's first admin is exactly the human-chosen password
+      that expires 0017.
+    theGENERATEDVALUE: >-
+      At least 128 bits of entropy from a cryptographic source, rendered in an unambiguous alphabet
+      — base32-style, no visually confusable characters — because a human will read it aloud or
+      retype it from a screen exactly once.
+  theDERIVATIONHAPPENSONTHESERVERHERE_ANDTHATISADEPARTURE:
+    theNormalRule: >-
+      0015 §D puts the KDF ON THE CLIENT: the browser runs 600,000 PBKDF2 iterations and the server
+      hashes the result at 10,000, because the Workers 10 ms CPU budget cannot fit a properly tuned
+      KDF. THE SERVER NEVER SEES A PASSWORD.
+    theDEPARTURE: >-
+      AT ONBOARDING THERE IS NO CLIENT TO DERIVE. The password is generated server-side and the new
+      user is not present. So Core must itself compute kdf_output = PBKDF2(password, salt =
+      normalized_identifier, 600,000) in order to store verifier = PBKDF2(kdf_output, salt, 10,000)
+      — AND 600,000 ITERATIONS MEASURED AT ~72 ms, WHICH IS SEVEN TIMES THE 10 ms CPU BUDGET 0015
+      §D names.
+    theRULING: >-
+      THIS IS A REAL CONSTRAINT AND IT IS NOT WAVED AWAY. Three options, and the choice is the
+      Team Lead's because it touches deployment:
+        A. Accept the CPU cost on this one route. Onboarding happens tens of times, not thousands,
+           and Workers CPU limits are per-invocation rather than a hard kill at 10 ms on the paid
+           tier — BUT 0008 forbids the paid tier, so this needs verification against the FREE
+           limit before it is chosen. DO NOT ASSUME IT.
+        B. Keep the derivation in the admin console (a browser, with no CPU limit) and have the
+           operator's client send kdf_output, exactly as a logging-in client does. The server's
+           role is then unchanged from 0015 §D and no new server-side KDF exists. THE COST: the
+           generated password exists in the operator's browser, which is true anyway because the
+           operator must read it.
+        C. A Durable Object or a queue consumer with a different CPU profile. Adds a service and a
+           §6a free-tier check for a once-a-week operation.
+      RECOMMENDED: B. It changes nothing about 0015 §D, it needs no new service, and it keeps the
+      rule that Core never derives — the console is a client like any other. ITS ONE COST IS THAT
+      THE ADMIN CONSOLE MUST IMPLEMENT THE KDF BYTE-IDENTICALLY, which is a third implementation of
+      the shared test vectors qa-agent already owes for web and Apple.
+    ifBISCHOSEN_THEREQUESTGAINSAFIELD: >-
+      `derived_value` — 32 bytes, base64url, 43 characters — and the shape in the schema carries it
+      as OPTIONAL-PENDING-THIS-DECISION rather than being written twice. THE GENERATED PASSWORD
+      ITSELF IS STILL NEVER SENT TO THE SERVER under B; the console generates it, derives from it,
+      sends the derived value, and displays the password.
+  theRESPONSESHOWSITEXACTLYONCE:
+    ruling: >-
+      THE GENERATED PASSWORD IS IN THE 201 RESPONSE BODY AND NOWHERE ELSE, EVER. Not in a second
+      call, not in a log, not in the audit record, not in an email, not retrievable by any route in
+      any contract.
+    whyITCANNOTBESHOWNAGAIN: >-
+      NOT A POLICY — ARITHMETIC. principal_credential holds identifier_hash, principal_id,
+      algorithm, iterations, salt and verifier. THERE IS NO PASSWORD COLUMN AND NO REVERSIBLE FORM
+      OF ONE, and there must never be. A "show me this customer's password" feature is not withheld
+      from an operator, it is impossible, and any design that made it possible would have replaced
+      the credential scheme rather than extended it.
+    theOPERATIONALCONSEQUENCE: >-
+      AN OPERATOR WHO CLOSES THE BROWSER TAB HAS LOST IT, and the only remedy is credential-reset-v1.
+      That is the correct behaviour and it must be stated in the console's UI at the moment the
+      value is shown — not in documentation nobody reads at the moment they need it.
+    loggingProhibition: >-
+      NO LOG LINE, METRIC, TRACE ATTRIBUTE, ERROR MESSAGE, ANALYTICS EVENT, CRASH REPORT OR
+      BREADCRUMB MAY CARRY THE GENERATED VALUE, IN CORE OR IN THE CONSOLE. The response body is its
+      only carrier and the response is Cache-Control: no-store.
+
+# ---------------------------------------------------------------------------
+# theBootstrapExceptionApplies — see platform-operator-v1 for the full argument
+# ---------------------------------------------------------------------------
+theBootstrapExceptionApplies:
+  summary: >-
+    THIS IS THE OPERATION THAT INVOKES IT. The operator creates a membership at role `owner`,
+    granting seven customers.* permissions plus core.business.read, NONE OF WHICH IT HOLDS —
+    which 0007 D11 condition 1 forbids on its face.
+  theBOUNDSRESTATEDBECAUSETHEYAREENFORCEDHERE:
+    - "ONLY at Organization creation, in this operation. There is no other route that creates a membership."
+    - "EXACTLY ONE membership, at EXACTLY role `owner`. The request has NO role field and cannot name one."
+    - "UNAVAILABLE once the Organization has any membership row — which for this operation is automatic, since it also creates the Organization."
+    - "IT GRANTS NO PLATFORM AUTHORITY. The created principal gets a membership row and NO platform_operator row, so the mutual-exclusion invariant holds by construction."
+  theTESTFORIT: >-
+    Mechanical: assert the created principal is refused on every platform route, and that the
+    creating operator is refused on every Customer Directory Action in the Organization it just
+    created. THE OPERATOR CREATES A TENANT IT CANNOT ENTER, and that is the property that makes the
+    exception safe rather than convenient.
+  itNEEDSARECORD: "PO-2. An exception to the rule that makes the permission model non-escalating should not live only in a contract."
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+  - id: platform.organizations.create
+    title: "Onboard an Organization"
+    method: POST
+    path: "/organizations"
+    surface: platform
+    provenance: "NEW WORK. Five of the six objects are written by nothing in the repository today."
+    description: >-
+      Create an Organization with its first admin principal, that principal's generated credential,
+      an owner membership, a tenant-directory entry and a first Workspace.
+    permission: core.organization.create
+    scope: platform
+    sensitivity: critical
+    request: { schemaRef: "urn:dudo:schema:organization-onboarding:1#/$defs/onboardOrganizationInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-onboarding:1#/$defs/onboardOrganizationOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, conflict, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 12
+    audit: required
+    theCONFIRMATIONOBLIGATION:
+      finding: >-
+        core.organization.create IS DECLARED `critical`, AND §6 CLASSES REQUIRE PERMISSION + AUDIT +
+        EXPLICIT CONFIRMATION FOR A CRITICAL ACTION. 0007 D15: "elevation is per operation, never
+        per session... a confirmation is single-use, short-lived, and states exactly what will
+        happen."
+      theHONESTSTATE: >-
+        THAT MECHANISM DOES NOT EXIST. permission-catalog.yaml already records the same gap for
+        customers.customer.delete — "that mechanism does not exist, so the Action this permission
+        guards is unreachable even once granted, which is the correct fail-closed state."
+      theRULINGREQUESTED: >-
+        APPLYING THE SAME FAIL-CLOSED RULE HERE WOULD MAKE ONBOARDING UNREACHABLE AND THE WHOLE
+        SLICE POINTLESS. Two ways out, and it is the Team Lead's to choose:
+          A. RECLASSIFY to `sensitive`. Defensible — onboarding CREATES rather than destroys, and
+             §6's critical examples are "move money, delete data irreversibly, rotate credentials".
+             Creating an empty Organization is none of those. THE HONEST COUNTER: it does create a
+             credential, which is adjacent to "rotate credentials", and reclassifying to make a
+             route reachable is how a sensitivity ladder becomes decoration.
+          B. BUILD THE CONFIRMATION MECHANISM, which is owed anyway for DeleteCustomer and is a
+             slice of its own.
+        RECOMMENDED: A, with the reclassification RECORDED AS A DECISION rather than made in this
+        file, and with credential-reset-v1 staying `critical` — because that one IS account
+        takeover, and the ladder keeps its meaning only if something stays at the top.
+      thisCONTRACTDOESNOTCHOOSE: "The permission is declared `critical` in the catalog today. Until this is ruled on, the route is unreachable, and that is the correct fail-closed state rather than a defect."
+    conflict: "Returned when the admin identifier already has a credential — one identifier, one principal, platform-wide. See theIdentifierCollision."
+    notFound: "Returned when `template_id` names no Template. It is an honest not_found for template-v1's stated reason: Templates are platform configuration every operator may already enumerate."
+    notes: >-
+      NO organization_id, principal_id OR workspace_id MAY BE SUPPLIED. All three are
+      server-generated. A caller-chosen tenant identifier is the one input that would let an
+      operator collide a new Organization with an existing one's identifier space.
+      NO ROLE FIELD, NO PERMISSION FIELD, NO MEMBERSHIP LIST. See theBootstrapExceptionApplies.
+      NO IDEMPOTENCY KEY, AND HERE THE GAP IS SERIOUS. A retried create after a network failure
+      does NOT produce a duplicate Organization only because the admin identifier is unique — the
+      retry returns conflict. But the OPERATOR HAS THEN LOST THE CREDENTIAL from the first attempt,
+      whose response they never received, and the remedy is a credential reset. Recorded as ON-3
+      and it is the strongest argument in this contract for Idempotency-Key arriving sooner than
+      CD-4 suggests.
+
+# ---------------------------------------------------------------------------
+# theIdentifierCollision
+# ---------------------------------------------------------------------------
+theIdentifierCollision:
+  ruling: >-
+    ONE IDENTIFIER, ONE PRINCIPAL, PLATFORM-WIDE. principal_credential's primary key is
+    HMAC-SHA-256(IDENTITY_LOOKUP_KEY, normalized_identifier), so an identifier already enrolled
+    anywhere collides and the operation returns conflict.
+  theCONSEQUENCEFORREALPEOPLE: >-
+    A PERSON CANNOT BE THE ADMIN OF TWO ORGANIZATIONS WITH THE SAME EMAIL ADDRESS THROUGH THIS
+    ROUTE. That is a genuine product limitation and it will be hit — a consultant running two
+    client businesses is an ordinary case. THE MODEL ALREADY SUPPORTS THE UNDERLYING SHAPE: a
+    principal may hold several memberships, which is why the Organization picker exists. What is
+    missing is a route that adds an EXISTING principal to a NEW Organization, and this contract
+    deliberately does not add one.
+  whyNOT: >-
+    IT IS A DIFFERENT AND MORE DANGEROUS OPERATION. "Add this existing person to this new
+    Organization" takes a principal identifier or an email address as INPUT, which makes it a
+    PLATFORM-WIDE ACCOUNT-EXISTENCE ORACLE unless it is designed with the same care login-v1 gave
+    the login path — and it would let an operator attach an unrelated person's account to a tenant
+    they do not belong to. Recorded as ON-4.
+  theCONFLICTISNOTANORACLE: >-
+    CHECKED RATHER THAN ASSUMED, BECAUSE IT LOOKS LIKE ONE. Returning conflict tells the caller
+    that some principal somewhere uses that identifier. IT IS ACCEPTABLE HERE AND WOULD NOT BE ON A
+    PUBLIC ROUTE: the caller is a platform operator with core.organization.create, a permission
+    whose holder can already enumerate every Organization and reset any credential. There is no
+    disclosure to a party that could not obtain it more directly. THE SAME RESPONSE ON A
+    SELF-SERVICE SIGNUP ROUTE WOULD BE AN ACCOUNT-EXISTENCE ORACLE OPEN TO THE INTERNET, and 0025
+    records that no such route exists — if one is ever built, IT MUST NOT COPY THIS BEHAVIOUR.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: created-by-this-operation
+  ruling: >-
+    THIS IS THE ONLY OPERATION IN DUDO THAT BRINGS A TENANT INTO EXISTENCE, and it is therefore the
+    only one that legitimately holds an organization_id it was not given by an authenticated
+    context. THE VALUE IS GENERATED, NEVER SUPPLIED — which is what keeps
+    MULTITENANCY_STANDARD.md §3 intact: the rule is that tenant identity is never taken from a
+    caller, and a server-generated identifier is not taken from anyone.
+  theWORKSPACEWRITEISTENANTSCOPED: >-
+    Step 7 writes through a resolved tenant handle, so the tenant predicate is applied by the
+    storage boundary from the handle exactly as it is for a Customer. THE OPERATION DOES NOT NAME A
+    TENANT IN A QUERY, in this or any other step. That is the property that keeps a platform route
+    from becoming the one place tenant_id is written by hand.
+  theOPERATORSTILLCANNOTENTER: >-
+    RESTATED BECAUSE IT IS THE WHOLE ISOLATION ARGUMENT: the operator receives a tenant store handle
+    transiently, inside this one operation, to write one Workspace and one audit row. It gains no
+    membership, its session's active_organization_id stays null, and it can never resolve that
+    handle again through any route. THE HANDLE'S LIFETIME IS THE OPERATION, and the implementation
+    must not stash it, cache it, or return anything derived from it beyond the identifiers in the
+    declared response.
+  theSHARPESTRISKINTHISCONTRACT: >-
+    NAMED SO A REVIEWER LOOKS FOR IT: THIS IS THE ONLY PLACE IN THE PLATFORM ROUTE CLASS WHERE A
+    TENANT STORE IS RESOLVED AT ALL, and platform-operator-v1 P1 says nothing in the class can
+    reach one. THE TWO ARE RECONCILED BY SCOPE AND NOT BY EXCEPTION: the handle is obtained by the
+    onboarding service after step 6, is passed to nothing else, and is never on any platform route
+    handler's context. AN IMPLEMENTATION THAT PUT A RESOLVER ON THE PLATFORM CONTEXT TO SERVE THIS
+    ONE OPERATION WOULD DEFEAT P1 FOR THE WHOLE CLASS, and that is the review point.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-written, d1-rows-read, d1-storage]
+  writes: >-
+    12 control-plane row-writes (10 + 2 audit) from the `system` allocation, plus 7 tenant
+    row-writes (workspace 2 + audit_event 5) from the `business` allocation. TWO ALLOCATIONS, one
+    operation — the same split control-plane-admission.ts records for a membership change.
+  ceilings: >-
+    300 onboardings/day platform-wide against the 3,000/day control-plane sub-ceiling; 60/day per
+    operator against the 600/day per-principal ceiling. Neither binds at any plausible near-term
+    volume.
+  atTheLimit: "quota_exceeded with Retry-After to the next 00:00 UTC, derived from the fixed boundary and never from observed usage. No tenant's service degrades — no existing tenant depends on this route."
+  cost: "USD 0 / BD 0 per month. No new service; new tables in already-allocated databases."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  tenantIsolation:
+    - "THE CENTRAL ONE: after onboarding Organization B, the operator that created it is refused on every Customer Directory Action in B, and its session's active_organization_id is still null."
+    - "The created admin principal can log in, select ONLY its own Organization, and is refused on every platform route."
+    - "The created admin cannot see Organization A's customers, and A's owner cannot see B's — the ordinary two-tenant assertion, run against an Organization created by this route rather than by seed SQL."
+    - "The Workspace written at step 7 carries B's tenant_id and is invisible from A. Assert against a real engine, not a stub — 0020's correction records a stub that ignored `limit` and produced a false pass."
+  ordering:
+    - "VALIDATE-THEN-RESERVE: with the per-principal daily budget exhausted, a request naming an unknown template_id returns 404 and not 429. Reversed ordering is a defect even though both are refusals."
+    - "A forced failure between step 3 and step 4 leaves an orphan tenant_directory row that no principal can use to reach a store."
+    - "A forced failure of the platform audit write (step 5) fails the whole operation with unavailable, and no credential is returned."
+    - "A forced failure at step 7 returns 201 WITH a populated `warnings` array, and the credential is still present in the body."
+  theCredential:
+    - "The generated value appears in the 201 body and in NO log line, metric, trace attribute or audit record. Assert by grepping captured output, not by inspection."
+    - "No route in any contract returns the credential a second time."
+    - "The created admin can authenticate with the returned value on the first attempt, which is the only test that proves the derivation matched end to end."
+  bootstrapException:
+    ruling: >-
+      docs/decisions/0025 DECISION 4 RECORDS FOUR BOUNDS AND EACH ONE GETS ITS OWN ASSERTION. They
+      are listed against their bound number rather than as a flat list, because a bound with no
+      test is prose, and 0025 says in terms that "an unbounded exception to D11 is a hole in the
+      permission model wearing the word bootstrap." A test suite that covered three of four would
+      leave the hole at whichever one nobody wrote.
+    bound1_onlyAtOrganizationCreation:
+      - "There is NO route in any Dudo contract that creates a membership other than this one. Assert by enumerating the route tables, not by inspection — a second such route is how bound 1 stops being true."
+    bound2_exactlyOneMembershipAtExactlyOwner:
+      - "A body supplying `role`, `permissions`, `memberships` or any grant-shaped field is refused with invalid_argument. THE SCHEMA IS additionalProperties: false, so this asserts the schema is actually enforced rather than merely written."
+      - "Exactly ONE membership row exists after onboarding, and its role is `owner`. Assert the COUNT, not just the presence — 'at least one owner' would pass while a second membership was also created."
+      - "0025 NAMES THIS AS THE BOUND MOST LIKELY TO ERODE. qa-agent should treat a future `role` field on this request as a contract regression and fail it, not accommodate it."
+    bound3_unavailableOnceTheOrganizationHasAnyMembership:
+      - >-
+        THE BOUND WITH NO NATURAL TEST, AND THEREFORE THE ONE THAT NEEDS ONE MOST. For this
+        operation it holds trivially — the operation creates the Organization, so it never sees an
+        existing membership — WHICH IS EXACTLY WHY IT COULD BE LOST WITHOUT ANYONE NOTICING. The
+        assertion is structural rather than behavioural: NO CODE PATH REACHES THE MEMBERSHIP-WRITE
+        STEP WITH AN ORGANIZATION IDENTIFIER THAT CAME FROM ANYWHERE BUT THE GENERATOR IN THIS SAME
+        OPERATION.
+      - "Concretely: the request schema has no organization_id field, and a body supplying one is refused. That is the only way an existing Organization could be named, and closing it closes the bound."
+      - "If a future change ever lets this operation accept an existing organization_id — to 'add an admin to an existing tenant', which is a reasonable-sounding ask and is ON-4 — BOUND 3 IS BROKEN AND DECISION 4 NO LONGER APPLIES. That change needs a new record, not a new field."
+    bound4_noOtherPlatformOperationGrantsATenantPermission:
+      - "credential-reset-v1 creates and modifies NO membership row. Assert the membership table is unchanged across a reset."
+      - "template-v1's three routes touch no tenant table at all."
+      - "Across the whole platform route class, exactly ONE operation writes to organization_membership. Assert by enumeration, because this bound is a property of the class and not of any single route."
+    theTESTTHATPROVESITISSAFE:
+      - >-
+        THE OPERATOR CREATES A TENANT IT CANNOT ENTER, and this is the assertion that carries the
+        whole exception: after onboarding, the CREATING OPERATOR is refused on every Customer
+        Directory Action in the Organization it just created, its session's
+        active_organization_id is still null, and selectOrganization on the new Organization
+        returns the same 404 a non-member receives.
+      - "And the converse: the CREATED ADMIN is refused on every platform route and has no platform_operator row, so the mutual-exclusion invariant holds by construction rather than by check."
+  audit:
+    - "Both audit records are written, and the tenant-side one is readable by the new Organization's owner — the customer must be able to see who created their account."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: ON-1
+    question: "A failure between steps 3 and 4 leaves an orphan tenant_directory row. It is inert but nothing cleans it up."
+    recommendation: "Accept for the closed beta and record the reconciliation obligation. A periodic job that deletes directory rows with no matching organization row is a system operation and belongs with retention, not here."
+    blocks: "Nothing."
+  - id: ON-2
+    question: "A step-7 failure loses the TENANT'S copy of the audit trail while the platform keeps its own — the customer loses the record they most need."
+    recommendation: "Surface it as a reconciliation obligation and re-drive the tenant-side write. Do not fail the operation: that costs an unrecoverable credential."
+    blocks: "Nothing, and it is the weakest point in the audit model."
+  - id: ON-3
+    question: >-
+      No Idempotency-Key. A retried create returns conflict rather than a duplicate — but the
+      operator has lost the credential from the attempt whose response never arrived, and the
+      remedy is a credential reset.
+    recommendation: "The strongest argument in any Dudo contract for Idempotency-Key. It should arrive with or before this route, not after it as CD-4 currently schedules."
+    blocks: "Nothing mechanically. It is a real operational hazard on the least repeatable operation in the platform."
+  - id: ON-4
+    question: "There is no way to add an EXISTING principal to a NEW Organization, so one person cannot administer two Organizations with one email address."
+    recommendation: >-
+      A separate contract. It takes an identifier as INPUT and is therefore a platform-wide
+      account-existence oracle unless designed with login-v1's care. Do not bolt it onto this
+      route.
+    blocks: "A real and ordinary customer case — a consultant with two client businesses."
+  - id: ON-5
+    status: CLOSED
+    question: "The server-side KDF conflicts with the 10 ms Workers CPU budget. Three options; B (derive in the admin console) recommended."
+    resolution: >-
+      CLOSED by docs/decisions/0026, 2026-09-05, AS OPTION B. The console generates a
+      high-entropy password from a CSPRNG — 24 bytes, base64url, ~192 bits, matching
+      tools/seed-principal.ts — runs the same client-side KDF in the operator's browser, and sends
+      only the derived value. `derived_value` is therefore REQUIRED on this request, not optional,
+      and the schema must be tightened accordingly.
+      THE PROPERTY 0015 §D PROTECTS IS PRESERVED EXACTLY: the server never sees a password. Only
+      WHICH browser derives has changed, and an operator's browser has no 10 ms CPU limit.
+      IT WORKS HERE BECAUSE THE OPERATOR TYPED THE IDENTIFIER — `admin_identifier` is in this
+      request, so the KDF salt is available. IT DOES NOT WORK FOR credential-reset-v1, where the
+      console holds only a principal_id and neither it nor the server can recover the salt. See
+      that contract's CR-5; the same decision needed a different request shape there.
+    theCOSTdocs0026RECORDSANDTHISCONTRACTSHOULDCARRY: >-
+      THE OPERATOR SEES THE NEW ADMIN'S PASSWORD. Unavoidable for any operator-created account, and
+      it is the trust model tools/seed-principal.ts already has — but 0026 is the first place it is
+      written down as a property rather than assumed.
+      AND WITH NO SELF-SERVICE PASSWORD CHANGE, IT IS PERMANENT: the person who receives this
+      credential cannot replace it with one only they know, so EVERY TENANT ADMIN'S CREDENTIAL IS
+      KNOWN TO WHOEVER ONBOARDED THEM, FOREVER, TODAY. A change-password flow needs no email
+      provider — the principal already holds a session — and should be built before any
+      non-operator user exists.
+  - id: ON-6
+    status: CLOSED
+    question: "core.organization.create is `critical`, which §6 says requires explicit confirmation, and that mechanism does not exist."
+    resolution: >-
+      CLOSED by docs/decisions/0026 DECISION 1, 2026-09-05: RECLASSIFIED TO `sensitive`, in a
+      record rather than by a silent catalog edit. Onboarding creates an empty tenant — nothing is
+      destroyed, no money moves, and the credential it creates is THE TENANT'S FIRST, so there is
+      no prior state to take over. That is 0025 Decision 4's establishment-versus-delegation
+      argument reaching the same answer from the other direction.
+      core.credential.reset STAYS `critical`, because it replaces a credential a principal is
+      already using, which is account takeover with a legitimate front door.
+      REQUIRED OF THE CATALOG: permission-catalog.yaml still declares core.organization.create
+      `critical` and must be updated to `sensitive`, citing 0026. Until it is, this route is
+      unreachable — which remains the correct fail-closed state.
+      SENSITIVE STILL REQUIRES AN AUDIT RECORD (§6), and this contract already mandates two.

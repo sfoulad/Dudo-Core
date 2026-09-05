@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-onboarding:1",
+  "title": "Organization onboarding — wire shapes, version 1",
+  "description": "The machine-readable half of organization-onboarding-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema, so this file is normative and hand-checked, never machine-validated.",
+
+  "$defs": {
+
+    "identifier": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 254,
+      "pattern": "^[!-?A-~]*@[!-?A-~]*$",
+      "description": "The first admin's login identifier — an email address. THE CONSTRAINTS ARE credential-store.ts::isSubmittableIdentifier's, RESTATED RATHER THAN INVENTED: printable ASCII only, no whitespace, no control characters, nothing above U+007E, and at least one '@'. The pattern above encodes 'printable ASCII excluding space and @, around exactly one @'. AN INTERNATIONALISED ADDRESS CANNOT BE ENROLLED, which is a real limitation credential-store.ts already records: relaxing it needs a decision record and shared test vectors for every implementation, in that order. Normalisation for storage is NFKC then ASCII-only case folding — NOT toLowerCase(), which differs between JavaScript and Swift for real characters."
+    },
+
+    "templateId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "The business type this Organization adopts. See template-v1."
+    },
+
+    "workspaceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$",
+      "description": "The first Workspace's name. WHAT THE USER SEES IN PLACE OF THE WORD 'Workspace' COMES FROM THE TEMPLATE's level_labels — a school is prompted for a Campus name, a shop for a Branch name. This field is the VALUE; the Template supplies the LABEL."
+    },
+
+    "derivedValue": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "description": "32 bytes, base64url. REQUIRED SINCE docs/decisions/0026 CLOSED ON-5 AS OPTION B, 2026-09-05: the admin console generates a high-entropy password from a CSPRNG (24 bytes, base64url, ~192 bits, matching tools/seed-principal.ts), derives kdf_output = PBKDF2-SHA256(NFC(password), salt = normalize(admin_identifier), 600000, 32 bytes) exactly as a logging-in client does, and sends ONLY this. THE PASSWORD ITSELF NEVER REACHES THE SERVER, so 0015 §D's central property is preserved exactly — what changed is only WHICH browser derives, and an operator's browser has no 10 ms CPU limit. THE SALT IS AVAILABLE HERE BECAUSE THE OPERATOR TYPED admin_identifier IN THIS SAME REQUEST; credential-reset-v1 has no such luck and needed a different request shape for the same decision (CR-5). The console's KDF must be byte-identical to the web and Apple clients' — a third implementation of the shared test vectors qa-agent already owes."
+    },
+
+    "onboardOrganizationInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_identifier", "template_id", "first_workspace_name", "derived_value"],
+      "description": "NOTE WHAT CANNOT BE SENT, because each absence is a decision: NO organization_id, principal_id or workspace_id — all server-generated, and a caller-chosen tenant identifier is the one input that could collide a new Organization with an existing one's identifier space. NO password — 0017's basis is that entropy protects these accounts, so an operator-chosen password expires that decision. NO role — the bootstrap exception creates exactly one membership at exactly `owner`, and a role field would widen an exception to 0007 D11 into a general grant mechanism. NO permission list, NO membership array, NO apps list.",
+      "properties": {
+        "admin_identifier": { "$ref": "#/$defs/identifier" },
+        "template_id": { "$ref": "#/$defs/templateId" },
+        "first_workspace_name": { "$ref": "#/$defs/workspaceName" },
+        "derived_value": { "$ref": "#/$defs/derivedValue" }
+      }
+    },
+
+    "onboardingWarning": {
+      "type": "string",
+      "enum": ["first_workspace_not_created", "tenant_audit_record_not_written"],
+      "description": "A CLOSED SET OF STABLE TOKENS, never free text. These report the two things that can fail AFTER the Organization irrevocably exists — the step-7 failures. A closed set means a console can render each one specifically and qa-agent can assert them; free text would be a message nobody could branch on and everybody would log."
+    },
+
+    "onboardOrganizationOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id", "admin_principal_id", "workspace_id", "initial_password", "warnings"],
+      "description": "THE ONLY RESPONSE IN ANY DUDO CONTRACT THAT CARRIES A CREDENTIAL. It is Cache-Control: no-store, it is shown exactly once, and no route in any contract returns it again — principal_credential holds no password column and no reversible form of one, so this is arithmetic rather than policy.",
+      "properties": {
+        "organization_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "Server-generated. The tenant identifier — which makes this the one response body in Dudo that legitimately contains one, because this operation created it rather than reading it from an authenticated context."
+        },
+        "admin_principal_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$"
+        },
+        "workspace_id": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "NULL WHEN warnings CONTAINS first_workspace_not_created. The Organization exists and has no Workspace; an operator must create one before the customer can use the product, and that route does not exist yet."
+        },
+        "initial_password": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 64,
+          "description": "THE GENERATED PASSWORD, IN PLAINTEXT, SHOWN EXACTLY ONCE. At least 128 bits of entropy from a cryptographic source, rendered in an alphabet with no visually confusable characters because a human will read it aloud or retype it from a screen. IT IS NOT STORED, NOT LOGGED, NOT IN THE AUDIT RECORD, AND NOT RECOVERABLE. An operator who closes the tab has lost it and the only remedy is credential-reset-v1 — which the console MUST say at the moment it displays this value, not in documentation read at some other time. Under ON-5 option B the console already holds this value and the server echoes nothing; under option A the server generated it and this is its only appearance."
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/onboardingWarning" },
+          "description": "EMPTY ON A COMPLETE SUCCESS. A 201 WITH WARNINGS IS NOT A FAILURE AND NOT A FULL SUCCESS: the Organization, the admin and the credential exist, and something after them did not. The response is still 201 because the credential is irreplaceable and must reach the operator — failing the request would leave a customer that exists, cannot be entered, and needs a credential reset to rescue. A console MUST render a non-empty warnings array prominently; treating it as an ordinary success is the defect this field exists to prevent."
+        }
+      }
+    }
+  }
+}
