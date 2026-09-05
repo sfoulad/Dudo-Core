@@ -523,10 +523,22 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       // race fail closed rather than fail open.
       return executeBatch(database, [
         {
-          sql: 'INSERT INTO organization (organization_id, status, created_at) VALUES (?, ?, ?)',
+          // `template_id` IS ON THIS INSERT AS OF `0013`. It is the reference `0012_template.sql`
+          // said onboarding would add and that onboarding shipped without — the column did not
+          // exist, so the value was validated and discarded, and Templates stayed inert while
+          // being reported as connected.
+          //
+          // THE FOREIGN KEY MEANS THIS STATEMENT CAN NOW FAIL ON A TEMPLATE THAT VANISHED between
+          // the service's validating read and this write. That aborts the whole batch and answers
+          // `unavailable` — nothing is half-created, and the window needs no lock because no route
+          // deletes a Template (`TM-2`).
+          sql:
+            'INSERT INTO organization (organization_id, status, template_id, created_at) ' +
+            'VALUES (?, ?, ?, ?)',
           parameters: [
             rows.organization.organizationId,
             rows.organization.status,
+            rows.organization.templateId,
             rows.membership.createdAt,
           ],
         },

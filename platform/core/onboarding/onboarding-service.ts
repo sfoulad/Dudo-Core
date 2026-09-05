@@ -281,7 +281,21 @@ export function createOnboardingService(
 
       const written = await dependencies.controlPlane.createOrganizationWithFirstAdmin(
         {
-          organization: { organizationId, status: 'active' },
+          // THE TEMPLATE IS PERSISTED, AS OF `0013_organization_template.sql`. Until that migration
+          // there was no column, so this value was read at step 1 to produce an honest `not_found`
+          // and then discarded — which left `template-v1`'s `TM-4` unmet while `0012`'s comment
+          // said this operation was what would meet it. **An operator picked a business type and
+          // nothing anywhere recorded it.**
+          //
+          // IT IS `template.value.templateId` AND NOT `request.templateId`, deliberately: the value
+          // written is the one the catalogue confirmed exists, not the one the caller sent. They
+          // are equal today because `findById` is a point lookup on the primary key — and writing
+          // the validated value is what keeps them equal if that ever stops being true.
+          organization: {
+            organizationId,
+            status: 'active',
+            templateId: template.value.templateId,
+          },
           directory: {
             organizationId,
             bindingName: dependencies.tenantBindingName,

@@ -58,7 +58,7 @@ import { hasStatement } from './statements.ts';
  * Every permission `packages/contracts/registries/permission-catalog.yaml` marks
  * `sensitivity: critical`, transcribed at 2026-09-05.
  *
- * FIFTEEN. Most of them gate operations that do not exist yet, and they are listed anyway — the
+ * SIXTEEN. Most of them gate operations that do not exist yet, and they are listed anyway — the
  * point of deriving the requirement from the permission is that the gate is already standing when
  * the operation arrives, rather than being something its author must remember to add.
  *
@@ -81,6 +81,27 @@ const CRITICAL_PERMISSIONS: readonly string[] = Object.freeze([
   'core.mcp.configure-external',
   'core.organization.delete',
   'core.principal.grant-platform-scope',
+  // ===========================================================================================
+  // ADDED 2026-09-05. IT WAS MISSING, AND ITS ABSENCE FAILED **OPEN**.
+  // ===========================================================================================
+  //
+  // The catalog has marked this `critical` since it was written; this list froze fifteen of the
+  // sixteen. `requiresConfirmation('core.principal.revoke-platform-scope')` therefore returned
+  // `false`, and **both gates derive from that one function** — `pipeline.ts` for Actions and
+  // `isConfirmationGated` for platform routes. An operation declaring this permission would have
+  // been performed **with no confirmation, looking correct at every call site.**
+  //
+  // THE CATALOG STATES THE PROPERTY THAT WAS UNTRUE: *"CRITICAL, so confirmation applies — which
+  // means SESSION THEFT ALONE CANNOT REVOKE ANYONE."* Session theft alone would have revoked
+  // anyone, the moment a revoke route existed. `platform-operators-v1` is accepted and that route
+  // is next, and `0028`'s argument for publishing it rests on this bound: *"the mechanism already
+  // exists, so the bound is free."* **The bound was not free; it was absent.**
+  //
+  // THIS FILE PREDICTED THE DRIFT IN ITS OWN HEADER — *"a transcription can drift... `qa-agent`
+  // owes the other half: every permission the catalog marks critical appears in the set below, and
+  // nothing else does"* — and the comparison had never been written. **A named obligation with no
+  // owner and no test is a comment.** `qa-agent` is making it a suite case.
+  'core.principal.revoke-platform-scope',
   'core.service-account.manage',
   'core.subscription.change',
   'core.tenant.export',

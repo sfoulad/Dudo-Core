@@ -289,6 +289,19 @@ export type NewOrganizationMembership = OrganizationMembershipRecord & {
 export type NewOrganization = {
   readonly organizationId: string;
   readonly status: 'active' | 'suspended';
+  /**
+   * The Template this Organization adopts. `0013_organization_template.sql`.
+   *
+   * REQUIRED IN THE TYPE AND NULLABLE IN THE COLUMN, which is deliberate and is not the same
+   * thing. The column is nullable because every Organization created before `0013` has no Template
+   * and never will — nobody can say retroactively which business type they are. **The field is
+   * required here so that a future writer must decide**, rather than omitting it and producing a
+   * `null` nobody chose.
+   *
+   * ONBOARDING ALWAYS SUPPLIES ONE, because `template_id` is a required field on its request and
+   * is validated against the catalogue before any capacity is reserved.
+   */
+  readonly templateId: string | null;
 };
 
 export type NewPrincipal = {

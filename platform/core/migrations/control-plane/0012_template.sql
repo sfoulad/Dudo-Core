@@ -148,7 +148,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS template_by_normalized_name ON template (norma
 -- here would make one Organization's business type invisible to another and would turn a shared
 -- catalogue into per-tenant data — which is a different feature with a different contract.
 --
--- NO FOREIGN KEY FROM `organization` TO HERE YET. Nothing references a Template: Organizations have
--- no `template_id` column, so **creating one changes what no user sees.** `organization-onboarding-v1`
--- adds the reference. Until then this capability is COMPLETE AND INERT, and contract TM-4 requires
--- it to be reported that way rather than as "business types now work".
+-- THE REFERENCE FROM `organization` IS ADDED BY `0013_organization_template.sql`. Read that file
+-- for why it is a separate migration and what it constrains.
+--
+-- ---------------------------------------------------------------------------------------------
+-- WHAT THIS PARAGRAPH USED TO SAY, KEPT BECAUSE THE WAY IT WENT WRONG IS THE USEFUL PART:
+--
+--   "NO FOREIGN KEY FROM `organization` TO HERE YET... `organization-onboarding-v1` ADDS THE
+--   REFERENCE. Until then this capability is COMPLETE AND INERT, and contract TM-4 requires it to
+--   be reported that way rather than as 'business types now work'."
+--
+-- ONBOARDING LANDED (`6e00fbf`) AND DID NOT ADD IT. It validated `template_id` and wrote it
+-- nowhere, because there was no column — so this sentence became false in the most misleading
+-- direction available: **it told a reader the gap was closed by work that was already merged**,
+-- and it was cited that way to the user twice.
+--
+-- A CLAUSE NAMING A FUTURE CHANGE AS THE FIX CREATES AN OBLIGATION NOBODY IS ASSIGNED TO COLLECT.
+-- `workflow.md` §12's sweep is citation-driven and starts from a decision; nothing here was
+-- withdrawn, so there was no decision to sweep from. The only thing that caught it was comparing
+-- the claim against the schema — which happened by accident, while planning a different route.
+-- ---------------------------------------------------------------------------------------------
