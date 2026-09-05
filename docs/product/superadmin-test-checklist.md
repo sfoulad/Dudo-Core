@@ -152,13 +152,50 @@ These screens exist and say so rather than pretending. **Empty is honest here, n
 work escaping notice.**
 
 - [ ] **Templates** — `template-v1` accepted, not implemented
-- [ ] **Onboarding an Organization** — `organization-onboarding-v1` accepted, not implemented
-- [ ] **Credential reset** — `credential-reset-v1` accepted, not implemented
-- [ ] **Audit log view** — the writer exists; the screen does not
+- [x] **Onboarding an Organization** — built, Core and console
+- [x] **Credential reset** — `credential-reset-v1` built in Core (`1b12035`). **Confirmation-gated**,
+      so it is not reachable from the console until the confirmation flow lands
+- [x] **Audit log view** — both feeds built in Core and both screens built in the console
+- [x] **Organization detail and member resolve** · **Operators roster** · **Operator revoke**
+      (Core only, confirmation-gated, same dependency as reset)
+
+**Updated 2026-09-05.** The three lines above previously read *"accepted, not implemented"* and were
+true when written. **A checklist that under-states what exists sends a tester looking for a gap that
+closed** — the same failure as the blocker table above, in the other direction.
 
 ---
 
 ## Known gaps, stated before you find them
+
+### ⚠ READ THIS ONE BEFORE ACCEPTING: audit records are written and cannot be read by their owner
+
+**This is a property of what you are being asked to accept, not a gap in a later feature**, which is
+why it is first. Raised by `core-agent` against the slice it had just finished building.
+
+Every platform operation writes an audit record into the affected customer's own trail — the member
+resolve, both audit feed reads, onboarding, the credential reset. **`0028` leans on that: the
+argument that an operator's probing is *"visible to each victim"* is what made the residual
+acceptable.**
+
+**`core.audit.read` is catalogued, granted to tenant roles, and has NO ROUTE.** So today those
+records are **written and unreadable by the party they protect.** Nothing in this slice will tell a
+customer what the platform did to them.
+
+> **A user reading that permission changes and data exports leave an audit record would reasonably
+> assume they can see them. They cannot, not yet, and nothing in the product says so.**
+
+**The mechanism is sound and the visibility is not delivered.** This surface is **auditable rather
+than audited** — the evidence is captured and the party it protects cannot read it. `0028`'s
+amendment records the same thing in its own terms: *an unread audit record is detection that nobody
+performs.*
+
+**It is deliberately NOT fixed by widening the platform console.** The answer is a **tenant-side**
+audit read, which is the next feature. A platform-side convenience would put the customer's view of
+the platform's behaviour inside the platform's own console, which is the wrong place for it by
+construction.
+
+**Accepting this slice is not accepting that gap as permanent** — but it is accepting a slice that
+has it. Stated here so it is met before acceptance rather than after.
 
 **CLOSED — the Action half of "refused everywhere" is now enforced.** It was the review's blocking
 HIGH finding: `platform-operator-v1` requires a principal appearing in **both** tables to be refused
