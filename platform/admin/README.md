@@ -89,7 +89,25 @@ a credential reset.
 
 - 24 CSPRNG bytes, base64url, 32 characters, ~192 bits — matching `seed-principal.ts` exactly.
   The generator lives in its own module (`api/generate-password.ts`) **so the real function can be
-  tested under Node**; `onboarding-credential.ts` imports the Web Worker and cannot be.
+  imported by a shared suite**; `onboarding-credential.ts` imports the Web Worker and cannot be.
+
+  > **`api/generate-password.ts` carries the only explicit `.ts` import extension in `src/`, and
+  > it is load-bearing.** Splitting the module out was not sufficient: a **bare Node loader** — one
+  > without this project's `scripts/node-resolve-*.mjs` hooks — cannot resolve an extensionless
+  > relative import, so `packages/testing` could not import it and was generating passwords in a
+  > fixture instead. `0017` records that the pre-auth rate limiter "does not bind across isolates,
+  > so the entropy of this string is what is actually protecting the account" — **the generator is
+  > the control**, and it was the one leg of the credential path with no shared assertion.
+  >
+  > **The rest of the tree must stay extensionless.** `api/kdf-client.ts` and `api/kdf-worker.ts`
+  > are byte-identical copies of `platform/web`'s and are compared character for character;
+  > converting them would break the cross-client drift check to suit a test harness. The mixed
+  > style is forced, not careless. `allowImportingTsExtensions` is enabled for this one import —
+  > legal because `noEmit` is true, and permissive rather than mandatory.
+  >
+  > **What a bare loader can and cannot reach:** `kdf.ts` ✓ (imports nothing) ·
+  > `generate-password.ts` ✓ (explicit extension) · `kdf-client.ts`, `onboarding-credential.ts`,
+  > `platform.ts` ✗ — extensionless, and `kdf-client.ts` can never change.
 - The derivation is **`deriveLogin` — the same code path a person signing in uses.** It is called,
   not reimplemented: if onboarding derived differently from login, the account would be created and
   could never be signed into, and the failure would appear only when a real customer first tried.

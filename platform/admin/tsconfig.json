@@ -14,7 +14,17 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    "allowImportingTsExtensions": false,
+    // PERMISSIVE, NOT MANDATORY — extensionless imports still resolve, and all
+    // but one file uses them. It is enabled so that `src/api/generate-password.ts`
+    // can carry an explicit `.ts`, which is what lets a bare Node loader (with no
+    // resolve hook) import the real password generator instead of copying it into
+    // a fixture. See that file's header; the entropy it produces is the control
+    // ADR 0017 leans on, so it must be assertable from the shared suite.
+    //
+    // Legal here because `noEmit` is true. The rest of the tree must STAY
+    // extensionless: `api/kdf-client.ts` and `api/kdf-worker.ts` are byte-identical
+    // copies of `platform/web`'s and are compared character for character.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,

@@ -14,9 +14,40 @@
  * THIS FILE IMPORTS ONLY `./kdf`, which is browser-and-Node safe, so
  * `scripts/verify-platform.mjs` exercises THE REAL FUNCTION. For a value whose
  * only job is to be unguessable, "we tested a copy of it" is not verification.
+ *
+ * ===========================================================================
+ * THE `.ts` EXTENSION BELOW IS LOAD-BEARING. DO NOT REMOVE IT.
+ * ===========================================================================
+ *
+ * IT IS THE ONLY EXPLICIT EXTENSION IN `src/`, AND THAT ASYMMETRY IS DELIBERATE.
+ *
+ * Splitting this module out was not enough on its own. `qa-agent` found that a
+ * BARE NODE LOADER — one without this project's `scripts/node-resolve-*.mjs`
+ * hooks — cannot resolve an extensionless relative import: `ERR_MODULE_NOT_FOUND`.
+ * So `packages/testing`, which has no such hook, could not import this file and
+ * was generating its own password in a fixture instead. Every other leg of the
+ * credential path was asserted there; the generator was asserted only by this
+ * project's own script.
+ *
+ * THAT GAP MATTERED MORE THAN ORDINARY COVERAGE. `0017` records that the
+ * pre-authentication rate limiter "does not bind across isolates, so the entropy
+ * of this string is what is actually protecting the account." The generator IS
+ * the control.
+ *
+ * WHY THE REST OF THE TREE IS NOT CONVERTED TO MATCH, which is the obvious tidy:
+ * `kdf-client.ts` and `kdf-worker.ts` import `./kdf` extensionlessly and MUST
+ * REMAIN BYTE-IDENTICAL to `platform/web`'s copies — `verify-kdf.mjs` compares
+ * them character for character and fails on a one-character difference. Adding
+ * an extension there would break the cross-client drift check to fix a test
+ * harness, which is the wrong trade by a wide margin. The mixed style is forced,
+ * not careless.
+ *
+ * `allowImportingTsExtensions` is enabled in `tsconfig.json` for this one import.
+ * It is permitted because `noEmit` is true, it is permissive rather than
+ * mandatory — extensionless imports still resolve — and Vite handles both forms.
  */
 
-import { toBase64Url } from './kdf';
+import { toBase64Url } from './kdf.ts';
 
 /**
  * 24 bytes. 32 base64url characters, about 192 bits.
