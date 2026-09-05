@@ -202,6 +202,13 @@ slice finished):
   system. Everything an operator *does* is logged; **becoming one is not.**
 - **`0027`'s `CF-5` will share the per-principal ceiling** at 4 row-writes per challenge — about
   **150 challenges per operator per UTC day**, from the same 600 the console already spends from.
+- **⚠ Two fields are accepted, validated, and discarded.** Onboarding takes a **Workspace name** and
+  a **business type**, checks both, and stores neither — there is no column for either.
+  **The console does not prompt for the Workspace name** for that reason. **It does prompt for the
+  business type**, because `0025` already decided an Organization has one and the missing column is
+  a gap rather than a reservation — **a migration adding `organization.template_id` is being built
+  now.** Until it lands, picking "School" records nothing anywhere, and a Template is decorative.
+  **The Workspace name stays unstored** until the organization-structure slice designs it.
 - **⚠ The Arabic confirmation statements have not been read by anyone who speaks Arabic.** Core
   composes the statement a human reads before confirming an irreversible action, in `en` and `ar`.
   **`0027` records that a mistranslation of an irreversible action is a safety defect, not a copy
