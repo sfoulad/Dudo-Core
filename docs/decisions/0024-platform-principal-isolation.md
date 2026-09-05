@@ -83,6 +83,52 @@ per day against the 600 per-principal ceiling. Not a constraint in practice.
 on an unsettled design is published as arithmetic — that number moved five times in two days. This
 one was published as 6, is 10, **and the gap is precisely the two objects nobody counted.**
 
+## Amendment, 2026-09-05 — which invariant is actually carrying the weight
+
+**`security-agent` reviewed the shipped implementation against this record and found that it names
+the wrong invariant as the isolation.** This is a correction to the record, not only a bug report,
+because **this document is what every future proposal about platform access has to argue against.**
+
+> *"What actually prevents `0024`'s cross-tenant assembly today is **invariant 2, the role-union
+> disjointness assertion — not invariant 1.** `0024` presents invariant 1 as the isolation; in the
+> shipped code its security value is confined to the platform route class."*
+
+**What is true, by layer:**
+
+| | Invariant 1 — zero membership rows | Invariant 2 — `MembershipRole` carries no platform value |
+|---|---|---|
+| **Platform route class** | **Structural.** Enforced in `platform-authority.ts`, backed by `0010`'s four triggers | Structural |
+| **Action path** | **Not enforced.** `session-resolution.ts` has no knowledge of `platform_operator` | **Structural** — `assertPlatformPermissionModelIsCoherent` runs at module load and makes the value unrepresentable |
+
+**So the escalation this record was written to prevent is prevented — by invariant 2.** The trap in
+"The trap" above requires a membership row *carrying platform authority*; invariant 2 makes that
+unrepresentable, and it does so everywhere rather than in one route class.
+
+**The danger of the original framing is specific and worth naming:** a reader who believes invariant
+1 is the isolation might harden it further while treating invariant 2 as bookkeeping — or, worse,
+**relax invariant 2** on the reasoning that invariant 1 already covers it. **That would remove the
+control that is actually load-bearing and leave the one that is not.**
+
+**Invariant 1 is not thereby demoted.** It is what makes the platform route class *structurally*
+tenant-free, and it is the reason a platform principal cannot obtain a store handle at all. But its
+security value is **confined to that class**, and this record previously implied it was general.
+
+### The gap this exposes, recorded as owed
+
+`platform-operator-v1` states normatively: *"a principal appearing in both is refused everywhere…
+both its platform routes and its Actions deny."* **The Action half is not implemented** — a
+principal in both tables resolves to a full tenant-scoped principal. `qa-agent`'s test for it fails
+today.
+
+**It is not cross-tenant access.** The principal receives exactly the grants its own membership row
+carries, scoped by `whereWithTenant` to that one Organization. And reaching the state needs direct
+database access or a restore, because `0010`'s triggers refuse it in both directions on INSERT and
+UPDATE — **verified against a real D1, all four directions, with both negative controls passing.**
+
+**It is still owed, for a reason that does not depend on reachability: a normative rule in an
+accepted contract that the code does not implement is a defect whether or not anyone can reach it.**
+The contract is what the next implementer will trust.
+
 ## What this does NOT decide
 
 - **Where platform authority lives** (`CO4`/`AZ9`) — the open question this record works around
