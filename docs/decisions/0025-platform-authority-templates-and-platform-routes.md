@@ -257,6 +257,42 @@ property the next weakening argues from.** The bound that matters is not *"a res
 somewhere"* but *"it is reachable only from a closure serving an Organization created by the same
 operation."* **Any proposal that widens either half is widening `P1`, and should be made to say so.**
 
+### Amendment, 2026-09-05 — it is three handlers, and BOTH halves widened
+
+**This is the saying-so the paragraph above demanded, and it is late.** Raised by `core-agent`
+against its own work while building the third one, rather than found in review.
+
+**The wording above is now false in three separate ways:**
+
+| The clause | What is true |
+|---|---|
+| *"Exactly one handler's closure"* | **Three.** `onboarding/`, `directory/`, `credential/` |
+| *"resolve exactly one store"* | The credential reset resolves **one per Organization the target belongs to** — plural, and not known until the operation runs |
+| *"for an Organization that operation just created"* | True of onboarding only. The resolve serves **an Organization it was asked about**; the reset serves **every Organization a principal already belonged to** |
+
+**So the narrow half of the bound — the half that made the weakening acceptable — is gone.** The
+original argument rested on the resolver being reachable only for a tenant the same operation had
+just brought into existence, which is as close to no tenant access as a resolver can be. Neither of
+the later two has that property.
+
+**What still holds, and it is not nothing:** no platform route handler's *context* can reach a tenant
+store, `PlatformRouteDependencies` carries no resolver, and every one of the three is a **single
+bounded write** — a Workspace row, or one audit row — **reading no business data whatever.** The
+directory grep stays exception-free because all three live outside `platform/core/platform/**`.
+
+**The substance holds and the sentence did not, and those are different things.** Each widening was
+individually defensible and was written at the code when it happened. **What nobody did was return
+to this record** — so a reader arriving here would have found a guarantee three times stronger than
+the system provides, in the very document written to stop `P1` being quietly weakened.
+
+> **`P1` was weakened three times by agents who each recorded their own step honestly, and the
+> property still drifted — because recording it at the code is not recording it where the property
+> is defined.** The paragraph above asked proposals to *say so*; they said so somewhere else.
+
+**The next question is not whether a fourth is justified. It is whether `P1` still means anything**
+— and `core-agent` named that threshold itself rather than being asked to. **A fourth requires
+re-deriving the property from scratch, not another exception argued from these three.**
+
 ## What this does NOT decide
 
 - **Break-glass access to tenant data (AZ3).** Nothing here permits a platform operator to read a
