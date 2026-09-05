@@ -59,6 +59,8 @@ import {
   buildCeilingFloorSuite,
 } from './suites/platform-operator/audit-feed-inputs.ts';
 import { buildAuditAnchorSuite } from './suites/platform-operator/audit-anchor.ts';
+import { buildContractSatisfiabilitySuite } from './suites/contracts/satisfiability.ts';
+import { buildCredentialResetSuite } from './suites/platform-operator/credential-reset.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
 import { buildTemplatesSuite } from './suites/platform-operator/templates.ts';
 import { buildRegistryCoherenceSuite } from './suites/platform-operator/registry-coherence.ts';
@@ -146,11 +148,17 @@ async function main(): Promise<void> {
     buildBootstrapBoundsSuite(),
     buildOnboardingSuite(),
     buildTemplatesSuite(),
+    buildCredentialResetSuite(),
     buildAuditAnchorSuite(),
     buildAuditCursorScopeSuite(),
     buildAuditPrincipalOmissionSuite(),
     buildAuditInstantSuite(),
     buildCeilingFloorSuite(),
+    // The contract-set sweep. It builds no world and drives no route — it reads
+    // `packages/contracts/**` and asserts a property JSON Schema would enforce if anything here
+    // executed it. Runs in the primary set and in no negative control, for the same reason as the
+    // two below: there is no runtime port to break.
+    buildContractSatisfiabilitySuite(),
     // The two standing controls. Neither builds a world: one reads the contract registry and
     // compares it with Core's frozen transcriptions, the other greps `platform/core/**`. They run
     // in the primary set and in no negative control, because neither has a runtime port to break.
