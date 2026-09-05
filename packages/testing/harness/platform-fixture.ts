@@ -118,6 +118,7 @@ import {
 } from '../../../platform/core/identity/credential-verifier.ts';
 import type { ConfirmationService } from '../../../platform/core/confirmation/confirmation-service.ts';
 import { createInProcessRequestCoordinator } from '../../../platform/core/protection/in-process-coordinator.ts';
+import { createMemberResolutionService } from '../../../platform/core/directory/member-resolution.ts';
 import { deriveLoginCredential as adminDerive } from '../../../platform/admin/src/api/kdf.ts';
 import { normalizeTemplateName } from '../../../platform/core/platform/templates.ts';
 
@@ -231,6 +232,19 @@ export async function successfulCallFor(
   }
   if (routeId === 'platform.templates.create') {
     return { bodyText: templateCreateRequest(), pathParams: {} };
+  }
+  if (routeId === 'platform.organizations.read') {
+    return { bodyText: '', pathParams: { organization_id: ORG_ALPHA } };
+  }
+  if (routeId === 'platform.organizations.members.resolve') {
+    // THE IDENTIFIER OF A REAL MEMBER OF `ORG_ALPHA`, enrolled by `seedWorld`. A miss would also
+    // be a legitimate answer for this route — `0028` collapses all five refusal causes to one 404
+    // — but a case asserting SUCCESS needs the hit, and the hit is what proves the identifier
+    // hashing agrees with the credential path's.
+    return {
+      bodyText: JSON.stringify({ identifier: TENANT_OWNER_IDENTIFIER }),
+      pathParams: { organization_id: ORG_ALPHA },
+    };
   }
   if (routeId === 'platform.templates.read') {
     // THE ONLY ROUTE IN THE CLASS WITH A PATH PARAMETER. Omitting it does not answer
@@ -418,6 +432,16 @@ export const OPERATOR_PASSWORD = 'platform-fixture-operator-0001';
 /** A second enrolled principal, so the cross-principal attack on a confirmation is reachable. */
 export const MODERATOR_IDENTIFIER = 'marketplace.mod@example.invalid';
 export const MODERATOR_PASSWORD = 'platform-fixture-moderator-002';
+/**
+ * A TENANT member's login identifier, enrolled so `platform.organizations.members.resolve` has
+ * something to resolve.
+ *
+ * IT BELONGS TO `PRN_TENANT_OWNER`, WHO IS A MEMBER OF `ORG_ALPHA` AND NOT AN OPERATOR. That is
+ * the shape the route exists for: an operator is given an identifier by a human and needs the
+ * `principal_id` behind it in order to reset a credential.
+ */
+export const TENANT_OWNER_IDENTIFIER = 'alpha.owner@example.invalid';
+export const TENANT_OWNER_PASSWORD = 'platform-fixture-tenantowner01';
 
 export const TEMPLATE_SEEDED = 'tpl_seeded_00000001';
 export const TEMPLATE_SEEDED_NAME = 'Fixture Template One';
@@ -494,6 +518,23 @@ export function seedOrganization(harness: SqliteHarness, organizationId: string)
   harness.raw
     .prepare("INSERT INTO organization (organization_id, status, created_at) VALUES (?, 'active', ?)")
     .run(organizationId, FIXTURE_CREATED_AT);
+  // ===========================================================================================
+  // THE DIRECTORY ENTRY, SEEDED WITH THE ORGANIZATION AND NOT SEPARATELY.
+  // ===========================================================================================
+  //
+  // ADDED 2026-09-05, when `platform.organizations.members.resolve` landed and answered
+  // `unavailable` for every seeded Organization. THE FIXTURE WAS MODELLING A STATE PRODUCTION
+  // CANNOT REACH: `createOrganizationWithFirstAdmin` writes `organization` and `tenant_directory`
+  // in ONE BATCH, in one transaction, so an Organization without a directory row does not exist
+  // outside a fixture that forgot one.
+  //
+  // A case that had accepted the `unavailable` would have been testing the omission.
+  harness.raw
+    .prepare(
+      'INSERT INTO tenant_directory (organization_id, binding_name, state, created_at) ' +
+        "VALUES (?, ?, 'active', ?)",
+    )
+    .run(organizationId, TENANT_BINDING_NAME, FIXTURE_CREATED_AT);
 }
 
 export function seedMembership(
@@ -653,6 +694,30 @@ export type PlatformWorldOptions = {
   readonly wrapResolver?: (resolver: TenantStoreResolver) => TenantStoreResolver;
   /** Wraps the REAL Template store, for the routes that read it. */
   readonly wrapTemplates?: (templates: TemplateStore) => TemplateStore;
+  /**
+   * Wraps the REAL `ControlPlaneWriteAdmission`, which every write in this world reserves from.
+   *
+   * ===========================================================================================
+   * IT EXISTS BECAUSE THE CONTRACT'S STATED ORDERING TEST CANNOT BE RUN THE OBVIOUS WAY.
+   * ===========================================================================================
+   *
+   * `onboarding-service.ts` states as a tested property that *"with the per-principal daily budget
+   * exhausted, a request naming an unknown `template_id` must answer 404 and not 429"* — validate
+   * before reserve.
+   *
+   * **EXHAUSTING THE BUDGET DOES NOT TEST IT, AND WOULD FAIL A CORRECT IMPLEMENTATION.** Binding
+   * property P4 makes `dispatchPlatformRoute` write an audit record on EVERY route from the SAME
+   * per-principal ceiling, so a world with no budget left answers `unavailable` to everything —
+   * including the 404 the case is looking for. `core-agent` measured this and it is the reason the
+   * cost is split 10-and-2 rather than reserved as 12 in one place.
+   *
+   * So the seam is a wrapper that can refuse ONE reservation size. Deferring the onboarding-sized
+   * reservation leaves the audit recorder's untouched, which is the only way to ask "did it
+   * validate first" of an implementation that is allowed to audit either way.
+   */
+  readonly wrapAdmission?: (
+    admission: ControlPlaneWriteAdmission,
+  ) => ControlPlaneWriteAdmission;
 };
 
 export type PlatformCallOptions = {
@@ -832,6 +897,10 @@ export async function createPlatformWorld(
     for (const [principalId, identifier, password] of [
       [PRN_ADMIN, OPERATOR_IDENTIFIER, OPERATOR_PASSWORD],
       [PRN_MODERATOR, MODERATOR_IDENTIFIER, MODERATOR_PASSWORD],
+      // A TENANT MEMBER, not an operator. `platform.organizations.members.resolve` exists to turn
+      // this identifier into a principal id, and without an enrolled credential row there is
+      // nothing for it to find — every case would pass on the collapsed 404.
+      [PRN_TENANT_OWNER, TENANT_OWNER_IDENTIFIER, TENANT_OWNER_PASSWORD],
     ] as const) {
       const rows = await buildSeedRows({
         email: identifier,
@@ -872,7 +941,9 @@ export async function createPlatformWorld(
     ...DAILY_ALLOCATION,
     ...options.dailyCeilings,
   });
-  const admission = createInProcessControlPlaneWriteAdmission(budget);
+  const realAdmission = createInProcessControlPlaneWriteAdmission(budget);
+  const admission =
+    options.wrapAdmission === undefined ? realAdmission : options.wrapAdmission(realAdmission);
 
   const identityStore =
     options.wrapIdentityStore === undefined
@@ -975,10 +1046,31 @@ export async function createPlatformWorld(
     tenantBindingName: TENANT_BINDING_NAME,
   });
 
+  // ---- MEMBER RESOLUTION. `0028` decision 2 · `organization-detail-v1`.
+  //
+  // THE REAL SERVICE, over the same resolver and coordinator onboarding uses. It writes into the
+  // TENANT's own audit trail on every attempt — including a miss — so it needs the tenant side,
+  // and a fake would make `0028`'s "the attempt is recorded whatever the answer" untestable.
+  //
+  // IT SHARES THE IDENTIFIER HASHER WITH THE CREDENTIAL PATH, and that sharing is the point: the
+  // route resolves an identifier the operator was TYPED, hashed the same way login hashes it. Two
+  // hashers would agree until one was touched, and the divergence would present as an operator
+  // unable to find an account that exists.
+  const members = createMemberResolutionService({
+    store,
+    identifiers: identifierHasher,
+    resolver,
+    coordinator: createInProcessRequestCoordinator(budget),
+    auditSinkFor: (tenantStore: TenantScopedStore) => createStoreAuditSink(tenantStore, ids),
+    ids,
+    clock,
+  });
+
   const composed = await createPlatformComposition({
     store,
     templates,
     onboarding,
+    members,
     admission,
     confirmations,
     confirmationGate: options.composeGate === false ? undefined : gate,
@@ -1276,6 +1368,15 @@ export const EXPECTED_CONFLICT = {
 export const EXPECTED_NOT_FOUND = {
   code: 'not_found',
   message: 'The requested resource does not exist.',
+};
+
+/**
+ * `quota_exceeded` IS DECLARED BY THE ONBOARDING OPERATION, so it is answered honestly rather
+ * than collapsed to `unavailable` the way the Customer Directory Actions must.
+ */
+export const EXPECTED_QUOTA_EXCEEDED = {
+  code: 'quota_exceeded',
+  message: 'A quota for this organization has been reached.',
 };
 
 export function expectedInvalidArgument(

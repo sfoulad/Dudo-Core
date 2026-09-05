@@ -123,6 +123,8 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
           'platform.session.whoami': 'none — the target would be the caller, which every row already names',
           'platform.confirmations.request': 'principal — the challenge names the principal it is for',
           'platform.organizations.create': 'organization — the Organization it created, and nothing about what it contains',
+          'platform.organizations.read': 'organization — the Organization it was asked about, and no field of it',
+          'platform.organizations.members.resolve': 'principal — the person asked about, which is what makes the log answer "who has been asking about our staff"',
           'platform.templates.create': 'none — a Template is tenant-independent configuration and names neither an Organization nor a principal, so template_id is not one of the two kinds D5 permits',
           'platform.templates.list': 'none — an enumeration, as above',
           'platform.templates.read': 'none — the target would be a template_id, which D5 does not permit',

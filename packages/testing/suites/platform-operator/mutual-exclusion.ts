@@ -379,6 +379,15 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       async listOrganizations() {
         return ok([]);
       },
+      // ADDED 2026-09-05 when the port gained them. Neither is reached by this case — the
+      // membership write is refused at the receipt — and both answer the empty value so that a
+      // red here can only be the invariant this case names.
+      async findOrganizationDetail() {
+        return ok(null);
+      },
+      async resolveMemberByIdentifierHash() {
+        return ok(null);
+      },
       async recordAction() {
         return ok(undefined);
       },

@@ -101,6 +101,16 @@ function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
     async listOrganizations() {
       return ok([]);
     },
+    // ADDED 2026-09-05 when the port gained them. THIS DOUBLE EXISTS TO REACH ONE CAUSE — an
+    // unrecognised `platform_role` — and every other method answers the empty, uninteresting
+    // value so that a case using it can only be red for that cause. These two are reads the
+    // authorization path never reaches: authority resolution refuses first.
+    async findOrganizationDetail() {
+      return ok(null);
+    },
+    async resolveMemberByIdentifierHash() {
+      return ok(null);
+    },
     async recordAction() {
       return ok(undefined);
     },
@@ -420,37 +430,74 @@ export function buildPlatformAuthorizationSuite(
       // correctly outside it. What must never happen silently is a permission becoming unreachable
       // that a route DOES serve, or one becoming reachable with no route to serve it — and a map
       // from permission to reason catches both, because the reason names the route or its absence.
-      const permittedUnreachable: Readonly<Record<string, string>> = {
+      // *** THE FOUR ARE TWO DIFFERENT KINDS AND THE MAPS ARE SPLIT SO THAT THE DIFFERENCE IS
+      // STRUCTURAL RATHER THAN PROSE. *** From a test's side they look identical — held, not
+      // reachable — and a single list invites the wrong repair: when a route ships, the tempting
+      // edit is to delete a line, and deleting a line from PERMANENT is a silent hole where
+      // deleting one from PENDING is the intended outcome. The Team Lead named this risk exactly:
+      // *"distinguish two kinds or the case will be fixed by deleting an assertion."*
+
+      // KIND 1 — UNREACHABLE **PERMANENTLY, BY DESIGN**. No route is coming. A permission leaving
+      // this map means a route was built for something `0025` decided not to publish, and that is
+      // a decision record, not a table entry.
+      const permanentlyUnreachable: Readonly<Record<string, string>> = {
         'core.principal.grant-platform-scope':
           '0025 publishes NO route that creates platform authority, and platform-operator-v1 ' +
           'records why: "a route that grants platform authority is the single most valuable ' +
-          'target in the platform". Deliberately outside the envelope, so the ceiling refuses it ' +
-          'for every caller. IT ACQUIRING A ROUTE IS THE MOST DANGEROUS CHANGE THIS TABLE COULD SEE',
+          'target in the platform" and "the frequency does not justify the surface". Deliberately ' +
+          'outside the envelope, so the ceiling refuses it for every caller. IT ACQUIRING A ROUTE ' +
+          'IS THE MOST DANGEROUS CHANGE THIS TABLE COULD SEE',
         'core.marketplace.moderate':
           'there is no marketplace to moderate. AZ8 records that the platform-scope view of ' +
-          'published Apps moderation needs does not exist as a permission at all',
+          'published Apps that moderation needs does not exist as a permission at all, so this is ' +
+          'not waiting on a route — it is waiting on a permission nobody has designed',
+      };
+
+      // KIND 2 — UNREACHABLE **ONLY UNTIL ITS ROUTE IS BUILT**. Each names an accepted contract.
+      // A permission leaving this map is the expected outcome and needs no argument; one STAYING
+      // here after its route ships is the defect — a console that renders nothing.
+      const unreachableUntilItsRouteShips: Readonly<Record<string, string>> = {
         'core.platform-audit.read':
-          'ADDED 2026-09-05. `platform-audit-read-v1` is contracted and its route is not built, so ' +
-          'the permission is held and unreachable. This is the permission 0028 is about, and when ' +
-          'that route lands it must LEAVE this map — a permission that stays here after its route ' +
-          'ships is a console that renders nothing',
+          'ADDED 2026-09-05. `platform-audit-read-v1` is contracted, its route is not built. THIS ' +
+          'IS THE PERMISSION 0028 IS ABOUT — the operator-visibility decision rests on a feed ' +
+          'nothing serves yet',
         'core.principal.revoke-platform-scope':
           'ADDED 2026-09-05. `platform-operators-v1` is accepted and the revoke route is next. It ' +
-          'is CRITICAL, so when the route lands the confirmation gate applies to it automatically ' +
-          '— which is only true because the permission is in CRITICAL_PERMISSIONS, and it was not ' +
-          'until today. See suites/platform-operator/registry-coherence.ts',
+          'is CRITICAL, so when the route lands the confirmation gate applies automatically — ' +
+          'which is only true because the permission is in CRITICAL_PERMISSIONS, and it was NOT ' +
+          'until 2026-09-05. See suites/platform-operator/registry-coherence.ts, which is the ' +
+          'control that now stops that drift recurring',
       };
+
       const unreachable = held.filter((permissionId) => !reachable.includes(permissionId)).sort();
+      const accountedFor = { ...permanentlyUnreachable, ...unreachableUntilItsRouteShips };
       assertEqual(
-        'every held-but-unreachable permission is named here with why no route serves it',
-        unreachable.filter((permissionId) => !(permissionId in permittedUnreachable)).join(','),
+        'every held-but-unreachable permission is named, in the map that says WHY it is unreachable',
+        unreachable.filter((permissionId) => !(permissionId in accountedFor)).join(','),
         '',
       );
       assertEqual(
-        'and every permission named here is still unreachable — one becoming reachable is a ' +
-          'change to argue, because it means a route now serves it',
-        Object.keys(permittedUnreachable)
+        `${ISOLATION} every permanently-unreachable permission is STILL unreachable — one becoming ` +
+          'reachable means a route now grants platform authority or moderates a marketplace',
+        Object.keys(permanentlyUnreachable)
           .filter((permissionId) => !unreachable.includes(permissionId))
+          .join(','),
+        '',
+      );
+      assertEqual(
+        'and every pending one is still pending — when its route ships, DELETE ITS ENTRY, which ' +
+          'is the one edit here that needs no argument',
+        Object.keys(unreachableUntilItsRouteShips)
+          .filter((permissionId) => !unreachable.includes(permissionId))
+          .join(','),
+        '',
+      );
+      // The two maps are disjoint. A permission in both would make the assertions above
+      // contradict each other and the contradiction would resolve as a pass.
+      assertEqual(
+        'no permission is in both maps',
+        Object.keys(permanentlyUnreachable)
+          .filter((permissionId) => permissionId in unreachableUntilItsRouteShips)
           .join(','),
         '',
       );

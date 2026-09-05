@@ -81,15 +81,61 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
     }
   });
 
-  suite.test('the store exposes four named questions and no way to ask a fifth', async () => {
+  suite.test('the store asks only named questions, and every one is justified here', async () => {
+    // ===================================================================================
+    // `PlatformOperatorStore` IS "A FIXED LIST OF NAMED QUESTIONS" — no `select(spec)`, no table
+    // name, no predicate, no column list, no sort. The absence of a `listOperators` or a count
+    // method is stronger than a rule that no handler calls one.
+    // ===================================================================================
+    //
+    // THIS WAS A PINNED STRING READING "four named questions" AND IT WENT RED ON 2026-09-05 when
+    // the port gained two. The count is not the property — **a question that reaches more than
+    // the routes need is** — so the assertion is now a map from method to the reach it grants and
+    // the route that needs it. A method added without an entry fails; a method whose entry cannot
+    // be written is a method that should not exist.
     const world = await make();
     try {
-      // `PlatformOperatorStore` is "a FIXED LIST OF FOUR NAMED QUESTIONS", and the absence of a
-      // `listOperators` or a count method is stronger than a rule that no handler calls one.
+      const permittedQuestions: Readonly<Record<string, string>> = {
+        findOperator:
+          'one principal id in, a role or null out. The authority resolver. It cannot enumerate ' +
+          'operators, which is why there is no listOperators',
+        principalHasAnyMembership:
+          'one principal id in, a boolean out. The mutual-exclusion probe (0024). It returns no ' +
+          'Organization, so it cannot be used to discover which tenant a principal belongs to',
+        listOrganizations:
+          'a bounded, keyset-anchored page of Organizations. The enumeration this class exists ' +
+          'for. Limit is REQUIRED — there is no unlimited form',
+        recordAction: 'appends one row to the operator action log. The only write on the port',
+        findOrganizationDetail:
+          'ADDED 2026-09-05 for organization-detail-v1. One Organization id in; its Template ' +
+          'reference and a member COUNT out. It returns a count and never a member list, so it ' +
+          'cannot be used to enumerate the people in a tenant',
+        resolveMemberByIdentifierHash:
+          'ADDED 2026-09-05 for 0028 decision 2. An Organization id and an identifier HASH in, AT ' +
+          'MOST ONE member out. It takes a hash rather than an identifier, so it cannot be swept; ' +
+          'it answers one or none, so it is not a search; and the route that calls it is bound to ' +
+          'core.credential.reset, so a caller who may not reset may not resolve',
+      };
+      const actualQuestions = Object.keys(world.store).sort();
       assertEqual(
-        `${ISOLATION} the platform store's whole surface`,
-        Object.keys(world.store).sort().join(','),
-        'findOperator,listOrganizations,principalHasAnyMembership,recordAction',
+        `${ISOLATION} every question the platform store answers is justified here`,
+        actualQuestions.filter((method) => !(method in permittedQuestions)).join(','),
+        '',
+      );
+      assertEqual(
+        'and every question named here is still on the port',
+        Object.keys(permittedQuestions).filter((m) => !actualQuestions.includes(m)).join(','),
+        '',
+      );
+      // AND THE SHAPES THAT WOULD MAKE IT A QUERY INTERFACE ARE STILL ABSENT. This is the half a
+      // per-method map cannot express: what matters is not only which methods exist but that none
+      // of them is a general one.
+      assertEqual(
+        `${ISOLATION} no general query method exists on the platform store`,
+        actualQuestions
+          .filter((method) => /^(select|query|find|list|search|count)$/i.test(method))
+          .join(','),
+        '',
       );
     } finally {
       world.close();

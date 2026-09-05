@@ -45,6 +45,12 @@ export function withMutualExclusionProbeRemoved(store: PlatformOperatorStore): P
     },
     listOrganizations: (limit, after) => store.listOrganizations(limit, after),
     recordAction: (record, reservation) => store.recordAction(record, reservation),
+    // ADDED 2026-09-05, WHEN THE PORT GAINED THEM. Every method a control does NOT break must
+    // DELEGATE, not stub: a wrapper that answered `null` here would be breaking two things at
+    // once and the run could no longer attribute a red case to the probe.
+    findOrganizationDetail: (organizationId) => store.findOrganizationDetail(organizationId),
+    resolveMemberByIdentifierHash: (organizationId, identifierHash) =>
+      store.resolveMemberByIdentifierHash(organizationId, identifierHash),
   };
 }
 
@@ -154,5 +160,11 @@ export function withFailingActionLog(store: PlatformOperatorStore): PlatformOper
     async recordAction() {
       return { ok: false as const, error: { code: 'unavailable' as const, message: 'A dependency is unavailable.' } };
     },
+    // DELEGATED, for this control's own stated reason: it needs "a store whose `recordAction`
+    // refuses while EVERY READ STILL WORKS", or the request fails before it reaches the recorder
+    // and the case passes for the wrong reason. Both of these are reads.
+    findOrganizationDetail: (organizationId) => store.findOrganizationDetail(organizationId),
+    resolveMemberByIdentifierHash: (organizationId, identifierHash) =>
+      store.resolveMemberByIdentifierHash(organizationId, identifierHash),
   };
 }

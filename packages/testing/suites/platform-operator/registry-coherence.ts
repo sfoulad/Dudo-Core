@@ -120,24 +120,107 @@ function entryIds(lines: readonly string[]): readonly string[] {
 }
 
 /**
- * The catalog's critical permissions: every `  - id:` whose entry carries `    sensitivity:
- * critical` before the next entry begins.
+ * Every permission entry with the sensitivity the reader could parse for it, or `null`.
+ *
+ * ===========================================================================================
+ * *** IT RETURNS THE SENSITIVITY OF **EVERY** ENTRY, INCLUDING THE ONES IT COULD NOT READ, AND
+ * THAT IS THE WHOLE DEFENCE. ***
+ * ===========================================================================================
+ *
+ * `core-agent` retracted a one-line `awk` it had recommended for this comparison, on exactly the
+ * right grounds: it matched `sensitivity:` only in indented block form, so *"a permission written
+ * inline or at a different indent is silently skipped — producing a shorter list that compares
+ * green against a shorter Core set. Two lists agreeing because neither contains the missing
+ * entry."* It added: *"it gave the right answer today only because every `sensitivity:` in that
+ * file happens to be block-form at four spaces. That is a property of the file, not of the check."*
+ *
+ * **THE READER BELOW HAS THE SAME SHAPE AND WOULD HAVE THE SAME BUG.** The bidirectional
+ * comparison catches most of it — an entry this reader misses that Core DOES hold shows up in
+ * `missingFromCatalog` and turns the case red — but it does NOT catch the case that matters most:
+ * a permission the catalog marks critical, in a form this reader cannot see, **and** absent from
+ * Core. Both sides would then be missing it and would agree.
+ *
+ * SO THE FLOOR IS NOT "did we find some criticals". It is **"does every permission entry have a
+ * sensitivity this reader could parse"** — a question answerable without knowing what any entry's
+ * value should be. An entry whose sensitivity is written in an unreadable form has NO sensitivity
+ * here, and that is detectable. It closes the hole rather than narrowing it.
  */
-function criticalPermissionsInCatalog(source: string): readonly string[] {
-  const found: string[] = [];
+function sensitivityByPermission(source: string): ReadonlyMap<string, string | null> {
+  const found = new Map<string, string | null>();
   let current: string | null = null;
   for (const line of sectionLines(source, 'permissions')) {
     const entry = /^ {2}- id: (\S+)\s*$/.exec(line);
     if (entry !== null) {
       current = entry[1]!;
+      found.set(current, null);
       continue;
     }
-    if (current !== null && /^ {4}sensitivity: critical\s*$/.test(line)) {
-      found.push(current);
+    if (current === null) {
+      continue;
+    }
+    const sensitivity = /^ {4}sensitivity: (\S+)\s*$/.exec(line);
+    if (sensitivity !== null) {
+      found.set(current, sensitivity[1]!);
     }
   }
   return found;
 }
+
+/** The catalog's critical permissions, read through the map above. */
+function criticalPermissionsInCatalog(source: string): readonly string[] {
+  return [...sensitivityByPermission(source)]
+    .filter(([, sensitivity]) => sensitivity === 'critical')
+    .map(([permissionId]) => permissionId);
+}
+
+/**
+ * `operationId -> successStatus` across every platform contract that declares operations.
+ *
+ * SAME READER SHAPE, SAME FLOOR OBLIGATION. The caller asserts that every operation entry yielded
+ * a status before comparing anything, for the reason above: an operation whose `successStatus` is
+ * written in a form this cannot see would silently drop out of the comparison, and a route whose
+ * status had drifted would then be compared against nothing.
+ */
+function successStatusByOperation(source: string): ReadonlyMap<string, number | null> {
+  const found = new Map<string, number | null>();
+  let current: string | null = null;
+  for (const line of sectionLines(source, 'operations')) {
+    const entry = /^ {2}- id: (\S+)\s*$/.exec(line);
+    if (entry !== null) {
+      current = entry[1]!;
+      found.set(current, null);
+      continue;
+    }
+    if (current === null) {
+      continue;
+    }
+    const status = /^ {4}successStatus: (\d+)\s*$/.exec(line);
+    if (status !== null) {
+      found.set(current, Number(status[1]));
+    }
+  }
+  return found;
+}
+
+const PLATFORM_CONTRACT_DIRECTORY = `${REPOSITORY_ROOT}packages/contracts/core/platform/`;
+
+/**
+ * The contracts that declare platform-class operations.
+ *
+ * A CLOSED LIST, because a directory walk would silently start covering a contract nobody meant
+ * this case to bind — and because a contract file being ADDED without its operations reaching the
+ * route table is itself something a reviewer should decide rather than have absorbed.
+ */
+const OPERATION_CONTRACTS: readonly string[] = Object.freeze([
+  'platform-operator-v1.contract.yaml',
+  'template-v1.contract.yaml',
+  'confirmation-v1.contract.yaml',
+  'organization-onboarding-v1.contract.yaml',
+  // ADDED 2026-09-05 with `platform.organizations.read` and
+  // `platform.organizations.members.resolve`. The closed list went red on both, which is the
+  // list working: a route reached the table before this case knew which contract governed it.
+  'organization-detail-v1.contract.yaml',
+]);
 
 /**
  * The permission list of one `defaultRoles` entry.
@@ -233,6 +316,26 @@ export function buildRegistryCoherenceSuite(): Suite {
       'and it has a non-empty permission list',
       roleGrantsInCatalog(source, 'platform-admin').length > 0,
       'platform-admin parsed with no permissions, so the role comparison below would be vacuous',
+    );
+
+    // =====================================================================================
+    // *** THE FLOOR THAT ACTUALLY CLOSES THE HOLE. Read `sensitivityByPermission`'s header.
+    // =====================================================================================
+    //
+    // The bidirectional comparison below catches a permission this reader missed that Core HOLDS.
+    // It does NOT catch one the catalog marks critical in an unreadable form AND that Core is also
+    // missing — both sides would agree, and agree wrongly. **That is the exact failure
+    // `core-agent` retracted its own one-liner over**, and this reader had the same shape.
+    //
+    // So: every permission entry must yield a sensitivity. An entry whose sensitivity this reader
+    // cannot see has NO sensitivity here, which is detectable without knowing its value.
+    const unreadable = [...sensitivityByPermission(source)]
+      .filter(([, sensitivity]) => sensitivity === null)
+      .map(([permissionId]) => permissionId);
+    assertEqual(
+      `${ISOLATION} every permission entry has a sensitivity this reader could parse`,
+      unreadable.join(','),
+      '',
     );
   });
 
@@ -432,6 +535,79 @@ export function buildRegistryCoherenceSuite(): Suite {
       '',
     );
   });
+
+  suite.test(
+    "every route's successStatus equals the one ITS CONTRACT declares — compared against the " +
+      'contract, never against a claim about it',
+    () => {
+      // ===================================================================================
+      // *** THE CASE THAT WAS MISSING, AND THE DEFECT IT WOULD HAVE CAUGHT WAS REAL. ***
+      // ===================================================================================
+      //
+      // `platform-routes.ts` says every route "declares what its contract's `successStatus`" is.
+      // TWO ROUTES SHIPPED AS `200` WITH COMMENTS CLAIMING THE CONTRACT SAID SO, and the contract
+      // said 201. `core-agent`'s own words: *"a case comparing the route table to the contracts'
+      // declared values would have caught it."* One was found from the client side, by
+      // `admin-shell`, which is where a status mismatch surfaces — after it has already shipped.
+      //
+      // **THE COMPARISON IS AGAINST THE CONTRACT FILE, NOT AGAINST A LIST TYPED HERE.** A table of
+      // expected statuses in this file would be a third transcription, and the third transcription
+      // is the one that drifts unnoticed — it has no reader who would miss it.
+      const declared = new Map<string, number | null>();
+      for (const fileName of OPERATION_CONTRACTS) {
+        const contract = readFileSync(`${PLATFORM_CONTRACT_DIRECTORY}${fileName}`, 'utf8');
+        for (const [operationId, status] of successStatusByOperation(contract)) {
+          declared.set(operationId, status);
+        }
+      }
+
+      // ---- THE FLOOR FIRST, for the reason `sensitivityByOperation`'s neighbour records: an
+      // operation whose `successStatus` this reader could not see would drop silently out of the
+      // comparison, and the route would then be compared against nothing.
+      assertTrue(
+        'the contracts were read and declare operations',
+        declared.size >= 7,
+        `only ${String(declared.size)} operations were parsed from ${String(OPERATION_CONTRACTS.length)} ` +
+          'contracts; the reader is indentation-oriented and the layout has probably changed',
+      );
+      const unreadable = [...declared]
+        .filter(([, status]) => status === null)
+        .map(([operationId]) => operationId);
+      assertEqual(
+        `${ISOLATION} every contracted operation declares a successStatus this reader could parse`,
+        unreadable.join(','),
+        '',
+      );
+
+      // ---- EVERY SHIPPED ROUTE AGAINST ITS CONTRACT.
+      const mismatches: string[] = [];
+      const uncontracted: string[] = [];
+      for (const route of platformRoutes()) {
+        const expected = declared.get(route.id);
+        if (expected === undefined) {
+          uncontracted.push(route.id);
+          continue;
+        }
+        if (route.successStatus !== expected) {
+          mismatches.push(
+            `${route.id}: table says ${String(route.successStatus)}, contract says ${String(expected)}`,
+          );
+        }
+      }
+      assertEqual(
+        `${ISOLATION} no route's success status differs from its contract's`,
+        mismatches.join(' · '),
+        '',
+      );
+      // AND EVERY ROUTE IS CONTRACTED AT ALL. A route the contracts do not mention is one whose
+      // status could not have been compared, and it would have passed the loop above in silence.
+      assertEqual(
+        'and every shipped route appears in one of the platform contracts',
+        uncontracted.join(','),
+        '',
+      );
+    },
+  );
 
   suite.test('no statement in the catalog names an operation nothing can perform', () => {
     // THE CONVERSE, AND IT IS THE HALF THAT ROTS QUIETLY. A statement whose operation was renamed

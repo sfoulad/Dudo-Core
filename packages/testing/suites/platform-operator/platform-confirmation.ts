@@ -67,7 +67,21 @@ import {
   createSyntheticCriticalRoute,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld, PlatformWorld } from '../../harness/platform-fixture.ts';
-import { isConfirmationGated, platformRoutes } from '../../../../platform/core/platform/platform-routes.ts';
+import {
+  PlatformConfirmationCoverageError,
+  assertConfirmationCoverageIsCoherent,
+  isConfirmationGated,
+  platformRoutes,
+} from '../../../../platform/core/platform/platform-routes.ts';
+import type {
+  PlatformRoute,
+  PlatformRouteId,
+} from '../../../../platform/core/platform/platform-routes.ts';
+import {
+  borrowsCriticalPermissionWithoutPerforming,
+  confirmableOperations,
+  requiresConfirmation,
+} from '../../../../platform/core/confirmation/critical-permissions.ts';
 import { ok } from '../../../../platform/core/kernel/result.ts';
 import { deriveLoginCredential as adminDerive } from '../../../../platform/admin/src/api/kdf.ts';
 
@@ -370,26 +384,116 @@ export function buildPlatformConfirmationScopeSuite(
 ): Suite {
   const suite = new Suite("Confirmation — the platform gate's scope and composition (0027)");
 
-  suite.test('a critical platform route is gated by its PERMISSION, with no per-route opt-in', () => {
-    // The rule is the pipeline's rule, and the assertion is that it is derived rather than
-    // declared. There is no field a route could set to escape `isConfirmationGated`.
+  suite.test('a route declaring a critical permission is gated, or is listed as borrowing it', () => {
+    // =====================================================================================
+    // *** THIS CASE WAS RENAMED AND REWRITTEN ON 2026-09-05, AND THE REASON IS THE FINDING. ***
+    // =====================================================================================
+    //
+    // It read "gated by its PERMISSION, with no per-route opt-in", and it asserted
+    // `isConfirmationGated(ROUTE)` — which was `permission.kind === 'fixed' &&
+    // requiresConfirmation(permissionId)`.
+    //
+    // `isConfirmationGated` IS NOW `confirmableOperations().includes(route.id)` — keyed by ROUTE
+    // ID, not derived from the permission. **THE CASE KEPT PASSING**, because the synthetic route
+    // is in that list either way. A case can survive the mechanism it names being replaced, and
+    // this one did.
+    //
+    // WHY THE CHANGE IS SOUND, having read it rather than assumed either way. The naive derivation
+    // has no false positives but **fails OPEN in one direction and closed in another**:
+    // `platform.organizations.members.resolve` declares `core.credential.reset` in order to narrow
+    // who may call it (`0028` D2 — *"a principal who may not reset a credential may not resolve a
+    // principal"*) and performs no reset. Gating it would demand a confirmation for a READ, and
+    // worse would deadlock: you would need the principal id to request the confirmation that the
+    // route producing the principal id demands.
+    //
+    // SO THE SAFETY MOVED, AND THIS IS WHERE IT NOW LIVES: every route declaring a critical
+    // permission must be in EXACTLY ONE of two Core-owned lists, and
+    // `assertConfirmationCoverageIsCoherent` stops the build otherwise. That is the property to
+    // test, and it is what the rest of this case does.
+    const critical = platformRoutes().filter(
+      (route) => route.permission.kind === 'fixed' && requiresConfirmation(route.permission.permissionId),
+    );
     assertTrue(
-      `${ISOLATION} the synthetic route is gated because its permission is critical`,
-      isConfirmationGated(ROUTE),
-      'the route declaring core.credential.reset is not gated, so the derivation is broken',
+      'there are routes declaring a critical permission, so this case is not vacuous',
+      critical.length > 0,
+      'no shipped route declares a critical permission',
     );
 
-    // AND THE HONEST STATE OF THE SHIPPED TABLE, ASSERTED RATHER THAN ASSUMED. If a real gated
-    // route is ever added, this goes red — and the right repair is to point the suite above at it
-    // and delete the synthetic route, not to update the string.
+    const unaccounted = critical.filter(
+      (route) =>
+        !confirmableOperations().includes(route.id) &&
+        !borrowsCriticalPermissionWithoutPerforming(route.id),
+    );
     assertEqual(
-      'NO route in the shipped table is gated today, which is why the suite above is synthetic',
+      `${ISOLATION} every route declaring a critical permission is gated or listed as borrowing`,
+      unaccounted.map((route) => route.id).join(','),
+      '',
+    );
+
+    // NEITHER LIST MAY CLAIM THE SAME ROUTE. A route in both would be gated and exempt at once,
+    // and the contradiction would resolve as "exempt" — the direction that performs the operation.
+    const inBoth = critical.filter(
+      (route) =>
+        confirmableOperations().includes(route.id) &&
+        borrowsCriticalPermissionWithoutPerforming(route.id),
+    );
+    assertEqual(
+      `${ISOLATION} no route is both a confirmable operation and an exempt borrower`,
+      inBoth.map((route) => route.id).join(','),
+      '',
+    );
+
+    // AND THE EXEMPTION IS NOT EMPTY-BY-ACCIDENT. If nothing borrowed, the two-list model would be
+    // untested by the shipped table and a broken exemption would show up nowhere.
+    assertTrue(
+      'at least one shipped route borrows a critical permission without performing it',
+      critical.some((route) => borrowsCriticalPermissionWithoutPerforming(route.id)),
+      'no route exercises the exemption, so its correctness is asserted by nothing',
+    );
+
+    // THE HONEST STATE OF THE SHIPPED TABLE. No route in it is gated today — the exemption covers
+    // the only two that declare a critical permission — which is why the suite above is synthetic.
+    // If a real gated route lands, this goes red, and the repair is to point the suite at it and
+    // delete the synthetic route, not to update the string.
+    assertEqual(
+      'no shipped route is confirmation-gated today, which is why the suite above is synthetic',
       platformRoutes()
         .filter((route) => isConfirmationGated(route))
         .map((route) => route.id)
         .join(','),
       '',
     );
+  });
+
+  suite.test('a route declaring a critical permission and in NEITHER list stops the build', () => {
+    // THE NEGATIVE CONTROL FOR THE CASE ABOVE. Without it, "every route is in one of the two
+    // lists" is a statement about today's table and not about the guard — and the guard is the
+    // whole of the safety now that gating is keyed by route id rather than derived.
+    //
+    // `assertConfirmationCoverageIsCoherent` takes its inputs as parameters precisely so this can
+    // be reached from a test without editing `platform/core/**`.
+    const rogue = {
+      ...createSyntheticCriticalRoute(),
+      id: 'platform.rogue.reset' as PlatformRouteId,
+    } as PlatformRoute;
+
+    let thrown: unknown = null;
+    try {
+      // An empty confirmable list, so the rogue route is in neither.
+      assertConfirmationCoverageIsCoherent([rogue], []);
+    } catch (cause) {
+      thrown = cause;
+    }
+    assertTrue(
+      `${ISOLATION} the guard refuses a critical route that is in neither list`,
+      thrown instanceof PlatformConfirmationCoverageError,
+      `the build did NOT stop for a route declaring core.credential.reset and registered ` +
+        `nowhere: ${String(thrown)}`,
+    );
+
+    // AND THE POSITIVE CONTROL: the same route IS accepted when it is declared confirmable, so the
+    // throw above is about registration and not about the route being malformed.
+    assertConfirmationCoverageIsCoherent([rogue], [rogue.id]);
   });
 
   suite.test('a correctly confirmed request is SERVED — the control for every refusal', async () => {

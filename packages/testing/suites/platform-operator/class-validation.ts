@@ -110,6 +110,15 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         'organization-onboarding-v1, 0026 decisions 1 and 2. NOT confirmation-gated, and that ' +
         'is a decision: 0026 reclassified core.organization.create from critical to sensitive ' +
         'so onboarding stays reachable in one request',
+      'platform.organizations.read':
+        'organization-detail-v1, added 2026-09-05. The detail view behind the enumeration. It ' +
+        'declares core.organization.list rather than a new permission, so it discloses nothing a ' +
+        'caller who may already enumerate could not obtain',
+      'platform.organizations.members.resolve':
+        '0028 decision 2, added 2026-09-05. It declares core.credential.reset — a CRITICAL ' +
+        'permission — and is NOT gated, which is a decision and not an omission: it BORROWS the ' +
+        'permission to narrow who may call it and performs no reset. See critical-permissions.ts ' +
+        'BORROWS_WITHOUT_PERFORMING, and the cases in platform-confirmation.ts that bind it',
       'platform.templates.create': 'template-v1, 0025 decision 2. Its own permission, not shared',
       'platform.templates.list': 'template-v1. Enumeration is its own disclosure, so its own permission',
       'platform.templates.read': 'template-v1. THE ONLY ROUTE IN THE CLASS WITH A PATH PARAMETER',

@@ -44,6 +44,7 @@ import { ISOLATION, Suite, assertEqual, assertTrue, expectError, expectOk } from
 import {
   EXPECTED_CONFLICT,
   EXPECTED_NOT_FOUND,
+  EXPECTED_QUOTA_EXCEEDED,
   ORG_ALPHA,
   PRN_ADMIN,
   SESSION_ADMIN,
@@ -56,8 +57,9 @@ import {
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import { platformRoutes } from '../../../../platform/core/platform/platform-routes.ts';
 import { unguardedMembershipInserts } from './membership-write-guard.ts';
-import { err } from '../../../../platform/core/kernel/result.ts';
+import { err, ok } from '../../../../platform/core/kernel/result.ts';
 import { unavailable } from '../../../../platform/core/kernel/errors.ts';
+import { ONBOARDING_CONTROL_PLANE_ROW_WRITES } from '../../../../platform/core/onboarding/onboarding-service.ts';
 
 type OnboardingResponse = {
   readonly organization_id: string;
@@ -407,10 +409,7 @@ export function buildOnboardingSuite(make: MakePlatformWorld = createPlatformWor
     }
   });
 
-  suite.test('an unknown template_id is refused BEFORE any capacity is reserved', async () => {
-    // `onboarding-service.ts` states this as a tested property rather than a preference: *"with
-    // the per-principal daily budget exhausted, a request naming an unknown `template_id` must
-    // answer 404 and not 429. Reversed ordering is a defect even though both are refusals."*
+  suite.test('an unknown template_id is not_found — the plain case, with no budget pressure', async () => {
     const world = await make();
     try {
       const before = world.controlRows('organization').length;
@@ -431,6 +430,89 @@ export function buildOnboardingSuite(make: MakePlatformWorld = createPlatformWor
       world.close();
     }
   });
+
+  suite.test(
+    'VALIDATION HAPPENS BEFORE RESERVATION: an unknown template_id answers not_found even when ' +
+      'the onboarding reservation would be refused',
+    async () => {
+      // ===================================================================================
+      // THE ORDERING PROPERTY, AND THE OBVIOUS TEST FOR IT WOULD FAIL A CORRECT IMPLEMENTATION.
+      // ===================================================================================
+      //
+      // `onboarding-service.ts` states it as tested rather than preferred: *"with the
+      // per-principal daily budget exhausted, a request naming an unknown `template_id` must
+      // answer 404 and not 429. Reversed ordering is a defect even though both are refusals — it
+      // spends budget on a request that was never going to succeed, and it tells the operator the
+      // wrong thing about why."*
+      //
+      // **EXHAUSTING THE WHOLE BUDGET CANNOT TEST THAT.** P4 makes `dispatchPlatformRoute` write
+      // an audit record on every route from the SAME per-principal ceiling, so a world with no
+      // budget answers `unavailable` to everything — including the 404. `core-agent` measured
+      // exactly this, and it is why the cost is split 10-and-2 instead of reserved as 12 in one
+      // place. A case built the obvious way would report a correct implementation as broken.
+      //
+      // SO ONLY THE ONBOARDING-SIZED RESERVATION IS REFUSED. The audit recorder's 2 still
+      // succeeds, which is what lets the answer be a 404 rather than an `unavailable` about
+      // something else entirely.
+      const reserved: number[] = [];
+      const world = await make({
+        wrapAdmission: (inner) => ({
+          async reserve(request) {
+            reserved.push(request.estimatedRowWrites);
+            if (request.estimatedRowWrites === ONBOARDING_CONTROL_PLANE_ROW_WRITES) {
+              // ALL THREE FIELDS. `resumeAfterMs` was missing on the first version of this
+              // wrapper and `npm run typecheck` caught it — the gate working on the very code
+              // that was added to test something else. At runtime the omission would have been
+              // invisible: nothing on this path reads it, so the case would have gone green while
+              // the wrapper produced a shape the port does not have.
+              return ok({ kind: 'deferred' as const, resumeAfterMs: 0, retryAfterSeconds: 0 });
+            }
+            return inner.reserve(request);
+          },
+        }),
+      });
+      try {
+        // ---- THE POSITIVE CONTROL FIRST. The wrapper really does refuse the onboarding
+        // reservation, so the 404 below is the ordering and not the wrapper doing nothing.
+        expectError(
+          'a VALID request is refused with quota_exceeded under this wrapper',
+          await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: (await onboardingRequest()).bodyText,
+          }),
+          EXPECTED_QUOTA_EXCEEDED,
+        );
+        assertTrue(
+          'and the onboarding reservation was actually attempted',
+          reserved.includes(ONBOARDING_CONTROL_PLANE_ROW_WRITES),
+          `the sizes reserved were: ${reserved.join(',')}`,
+        );
+
+        // ---- THE CASE. Same wrapper, same refused reservation, unknown Template.
+        reserved.length = 0;
+        expectError(
+          `${ISOLATION} an unknown Template is 404, not the quota answer`,
+          await world.call('platform.organizations.create', {
+            sessionId: SESSION_ADMIN,
+            bodyText: (await onboardingRequest({ templateId: TEMPLATE_NOWHERE })).bodyText,
+          }),
+          EXPECTED_NOT_FOUND,
+        );
+
+        // ---- AND THE STRONGER FORM, which the error code alone does not give: the reservation
+        // was never ATTEMPTED. A implementation that reserved, failed, and then happened to
+        // return 404 would pass on the code and would still be spending budget on a request that
+        // was never going to succeed — which is the half of the contract's sentence about cost.
+        assertEqual(
+          `${ISOLATION} no onboarding-sized capacity was even requested for a doomed request`,
+          reserved.filter((size) => size === ONBOARDING_CONTROL_PLANE_ROW_WRITES).length,
+          0,
+        );
+      } finally {
+        world.close();
+      }
+    },
+  );
 
   suite.test('an identifier that already exists is a conflict, and nothing is overwritten', async () => {
     const world = await make();
