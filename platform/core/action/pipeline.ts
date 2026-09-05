@@ -143,6 +143,8 @@ import type {
   RequestCoordinator,
 } from '../protection/coordination.ts';
 import { deriveDenialGroupKey } from '../protection/coordination.ts';
+import type { ConfirmationGate } from '../confirmation/confirmation-gate.ts';
+import { requiresConfirmation } from '../confirmation/critical-permissions.ts';
 import type { Clock } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import { createStoreAuditSink } from '../audit/store-audit-sink.ts';
@@ -209,6 +211,24 @@ export type PipelineDependencies = {
   readonly coordinator: RequestCoordinator;
   /** ADDITIONAL destination for coordination notices. Additive only; see audit-failure.ts. */
   readonly coordinationFailureReporter?: CoordinationFailureReporter;
+  /**
+   * ===========================================================================================
+   * THE CONFIRMATION GATE. `docs/decisions/0027`. OPTIONAL HERE, AND ABSENT MEANS EVERY
+   * `critical` OPERATION IS REFUSED — not permitted, not skipped: refused.
+   * ===========================================================================================
+   *
+   * The same shape `preAuth` and `sessionRoutes` already use in `http/api.ts`, and for the same
+   * reason: a control that is optional to COMPOSE must fail closed when it is not, or a
+   * deployment that forgot to wire it is a deployment with no gate and no sign of one.
+   *
+   * IT IS NOT DEFAULTED TO A PERMISSIVE IMPLEMENTATION. There is deliberately no
+   * `gate = gate ?? allowEverything()`: a default here would mean the top rung of the sensitivity
+   * ladder silently stopped applying, which is `0026`'s whole point undone by an `??`.
+   *
+   * NON-CRITICAL OPERATIONS ARE UNAFFECTED whether this is composed or not — the gate is only
+   * consulted when the PERMISSION is critical, and `critical-permissions.ts` decides that.
+   */
+  readonly confirmations?: ConfirmationGate;
 };
 
 export type InvocationEnvelope = {
@@ -225,6 +245,33 @@ export type InvocationEnvelope = {
    * omits it throttles harder rather than disabling the level.
    */
   readonly sourceAddressHash?: string | null;
+  /**
+   * ===========================================================================================
+   * THE SESSION THIS REQUEST ARRIVED ON, FOR THE CONFIRMATION BINDING AND FOR NOTHING ELSE.
+   * `docs/decisions/0027` · `confirmation-v1` §theBinding.
+   * ===========================================================================================
+   *
+   * A confirmation is bound to the session so that one obtained on one device is not spendable on
+   * another — including by an attacker holding a second, stolen session for the same principal.
+   * Binding to the session makes the confirmation DIE WITH IT, including at revocation.
+   *
+   * *** IT IS ON THE ENVELOPE AND NOT ON `AuthenticatedPrincipal`, AND THAT IS THE POINT. ***
+   * `AuthenticatedPrincipal` flows into `ActionContext` and therefore into App handlers. **NO APP
+   * SHOULD EVER BE ABLE TO NAME A SESSION**, and putting it here means none structurally can,
+   * rather than none currently does. `InvocationEnvelope` is already the carrier for what the
+   * transport knows and the handler must not — it holds `sourceAddressHash` for exactly that
+   * reason — and `ActionContext` gains nothing from this field.
+   *
+   * NULL IS NOT AN EXEMPTION. A critical operation arriving without a session is REFUSED: the
+   * binding covers the session, so there is no binding to form. Folding a null into the hash as an
+   * empty string would put every sessionless caller in one binding namespace, where one caller's
+   * confirmation is another's — the "optional value in a security check" failure
+   * `control-plane-admission.ts` records for `WriteReservation`'s organization.
+   *
+   * NON-CRITICAL OPERATIONS NEVER READ IT, so the ordinary request path is unchanged and pays
+   * nothing for it.
+   */
+  readonly sessionId?: string | null;
 };
 
 const DENIAL_REASONS: ReadonlySet<string> = new Set<AuditDenialReason>([
@@ -554,6 +601,66 @@ export async function invokeAction(
       // Recording it is what lets an operator see a caller being held at the limit, which is
       // the shape a campaign has once these controls are working.
       return fail(rateLimited());
+    }
+
+    // ===========================================================================================
+    // ---- THE CONFIRMATION GATE. `docs/decisions/0027`, `0007` D15.
+    // ===========================================================================================
+    //
+    // ONE NON-OPTIONAL POINT, DERIVED FROM THE PERMISSION, DECLARABLE NOWHERE ELSE. An Action may
+    // not opt in, opt out, configure or override it — `confirmation-v1`: *"PER-ACTION IS HOW
+    // customers.customer.delete BECAME UNREACHABLE BY ACCIDENT RATHER THAN BY DECISION. If
+    // confirmation is something an Action remembers to require, then the Action that forgets is
+    // the dangerous one, and it will look exactly like the ones that did not."*
+    //
+    // THE POSITION IS CHOSEN AND EVERY NEIGHBOUR MATTERS:
+    //
+    //   AFTER STEP 3 (AUTHORIZE), so a caller lacking the permission receives `forbidden` from
+    //   authorization rather than a confirmation refusal. Otherwise the gate would change which
+    //   error two otherwise identical callers see, and would leak that the permission was held.
+    //
+    //   AFTER STEP 4 (VALIDATE), because the confirmation fields arrive on the body and the bound
+    //   parameters are the validated ones. Binding pre-validation input would bind bytes the
+    //   operation never uses.
+    //
+    //   AFTER STAGE 5 (RATE LIMIT), because SPENDING IS A WRITE. A throttled caller must not be
+    //   able to force confirmation row-writes — that is `0013`'s "the control becoming the lever"
+    //   applied to the gate itself.
+    //
+    //   BEFORE THE TENANT STORE IS RESOLVED ON THE SUCCESS PATH, so an unconfirmed critical
+    //   request never reaches the operation's own reads and writes.
+    //
+    //   *** BUT NOT "COSTS NO TENANT READ", AND THE WEAKER CLAIM IS THE TRUE ONE. *** `fail()`
+    //   may resolve the store to write a `0013` DENIAL SUMMARY, exactly as it may for `forbidden`,
+    //   `rate_limited` and every other refusal. That path is bounded — at most
+    //   `MAX_WRITES_PER_GROUP_WINDOW` per group per 15-minute window rather than once per attempt,
+    //   which is the whole of `0013` control 1 — so a caller cannot turn refused confirmations
+    //   into unbounded tenant writes. Stated precisely because the first version of this comment
+    //   claimed the stronger property and a structural test caught it.
+    //
+    // ABSENT MEANS REFUSED. A runtime that did not compose a gate answers `unavailable` for every
+    // critical operation rather than performing it — the same fail-closed shape `http/api.ts`
+    // gives an uncomposed `preAuth`, and the direction `0013` D2 requires of a control that
+    // cannot run.
+    if (requiresConfirmation(action.permission)) {
+      if (dependencies.confirmations === undefined) {
+        return fail(constrainToDeclaredErrors(action, unavailable()));
+      }
+      const confirmed = await dependencies.confirmations.enforce({
+        principalId: principal.principalId,
+        // `?? null` rather than a default: a transport that did not supply a session is a
+        // transport with no session, and the gate refuses it. See `InvocationEnvelope.sessionId`.
+        sessionId: envelope.sessionId ?? null,
+        actionId: action.id,
+        permissionId: action.permission,
+        // THE RAW BODY, because the confirmation fields and the parameters are one object and the
+        // gate splits them. `parsed.value` is the Action's own typed shape and has already dropped
+        // whatever it does not declare.
+        body: (rawInput ?? {}) as Readonly<Record<string, unknown>>,
+      });
+      if (!confirmed.ok) {
+        return fail(confirmed.error);
+      }
     }
 
     // ---- Step 2, deferred to here. Nothing above this line has touched storage.

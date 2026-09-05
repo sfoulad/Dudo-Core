@@ -194,6 +194,36 @@ export const PLATFORM_OPERATOR_ROW_WRITES = 2;
 export const PLATFORM_OPERATOR_ACTION_ROW_WRITES = 2;
 
 /**
+ * `confirmation` (`0011`): 1 table row + 1 implicit primary-key index.
+ *
+ * CHARGED TWICE PER CRITICAL OPERATION — once to issue and once to spend — so a critical operation
+ * costs ABOUT 4 MORE control-plane row-writes than it did, plus its route's audit record.
+ *
+ * THE SPEND IS AN UPDATE OF ONE ROW AND IS CHARGED THE SAME 2 AS THE INSERT. That is a deliberate
+ * over-charge of 1, on the same reasoning `SESSION_ROW_WRITES` uses for the Organization switch:
+ * the true cost is one row because the UPDATE touches no indexed column, and a separate
+ * `CONFIRMATION_SPEND_ROW_WRITES = 1` would be correct today and silently wrong the first time
+ * somebody indexes `expires_at` for the retention job. One constant cannot drift from the schema.
+ *
+ * ===========================================================================================
+ * THE CEILING, AND WHY IT HOLDS FOR A REASON THAT IS STRUCTURAL RATHER THAN LUCKY
+ * ===========================================================================================
+ *
+ * ~750 confirmations a day platform-wide against the 3,000/day control-plane sub-ceiling. A
+ * CRITICAL OPERATION REQUIRES A HUMAN TO READ A STATEMENT AND TYPE A PASSWORD, so the volume is
+ * bounded by human attention and not by traffic. `0013` control 5's test — is the population that
+ * can force a write bounded by something other than the attacker? — passes.
+ *
+ * *** AND THE HAZARD IS NAMED RATHER THAN DISCOVERED. *** The challenge route is a write reachable
+ * by any authenticated principal holding a critical permission, and an unbounded loop of challenge
+ * requests is 2 row-writes each against a shared ceiling. That is `0013`'s shape again — the
+ * control becoming the lever. RATE LIMITING IS REQUIRED ON BOTH CHALLENGE ROUTES AND DOES NOT
+ * EXIST; `0017`'s limiter is per-isolate and bounds nothing deployed. The per-principal daily
+ * ceiling is the real bound at closed-beta scale. DO NOT REPORT RATE LIMITING AS DONE.
+ */
+export const CONFIRMATION_ROW_WRITES = 2;
+
+/**
  * `principal_credential` (`0006`): 1 table row + 1 implicit primary-key index.
  *
  * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL:

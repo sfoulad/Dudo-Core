@@ -1,0 +1,162 @@
+-- Control-plane migration 0011 — the confirmation table.
+-- docs/decisions/0027 · contract `confirmation-v1`, §storage.
+--
+-- Read `0001_principal.sql` first for the shared header of this directory.
+--
+-- IT BELONGS TO `DB_CONTROL`. `wrangler.jsonc` routes this directory there and does not recurse;
+-- a control-plane migration saved one directory too high is applied to the TENANT database,
+-- silently and successfully. Confirm which database this went to.
+--
+-- NOT APPLIED. There is no migration runner in this repository (CLOUDFLARE_STANDARD.md CF5) and
+-- no agent may run a migration against real data (.claude/rules/security.md §7).
+--
+-- ROLLBACK PATH (CLOUDFLARE_STANDARD.md §4 rule 10): DROP TABLE confirmation. Its effect is that
+-- EVERY `critical` OPERATION STOPS WORKING — the pipeline refuses when a confirmation cannot be
+-- issued or verified, because `0013` D2's "the audit event must not fail open" applies with more
+-- force to the elevation gate itself. Dropping this table does not open a hole; it closes the top
+-- rung of the sensitivity ladder entirely. Safe, and total.
+-- FORWARD-ONLY and idempotent.
+--
+-- =============================================================================================
+-- WHAT THIS TABLE CAN AND CANNOT ANSWER, WHICH IS THE WHOLE OF ITS DESIGN
+-- =============================================================================================
+--
+-- IT CAN ANSWER "DID PRINCIPAL P CONFIRM SOMETHING, AND HAS IT BEEN SPENT".
+-- IT CANNOT ANSWER "WHAT DID THEY CONFIRM". There is no action id, no target identifier, no
+-- parameter, and no statement text in any column.
+--
+-- THAT IS NOT AN OMISSION, IT IS THE STORAGE ARGUMENT. `confirmation-v1`:
+--
+--   "THE CONFIRMATION RECORD LIVES IN THE CONTROL PLANE, WHICH MUST HOLD NO TENANT BUSINESS DATA.
+--    A row recording 'principal P may delete customer C' would put a tenant's customer identifier
+--    in the one database that spans every Organization."
+--
+-- A confirmation for `customers.customer.delete` names a CUSTOMER. Storing that target here would
+-- put one Organization's customer identifier in the database that spans every Organization —
+-- exactly what `0025` Decision 5 forbids of the operator log, and what
+-- `control-plane/0001_principal.sql` refused a whole column to prevent.
+--
+-- =============================================================================================
+-- THE PRIMARY KEY IS THE BINDING HASH, AND THAT IS THE SECURITY PROPERTY
+-- =============================================================================================
+--
+-- `binding_hash` is HMAC-SHA-256 over principal_id · session_id · action_id · the canonical
+-- serialisation of the operation's parameters, keyed by a Worker secret that is NOT in this
+-- database.
+--
+-- SUBSTITUTION FAILS BY CONSTRUCTION RATHER THAN BY COMPARISON. Verification RECOMPUTES the hash
+-- from the incoming request and looks it up. A caller who confirms "delete customer X" and submits
+-- "delete customer Y" produces a different hash, WHICH SIMPLY DOES NOT FIND A ROW. There is no
+-- comparison step to get wrong, no field to forget, and no code path where the check is skipped
+-- because the values "looked right".
+--
+-- A DESIGN THAT STORED THE TARGET AND COMPARED IT WOULD BE ONE FORGOTTEN `if` AWAY FROM CONFIRMING
+-- EVERYTHING. That is the difference between this schema and the obvious one.
+--
+-- =============================================================================================
+-- *** THE SPEND IS `UPDATE ... RETURNING`, AND A READ-THEN-WRITE IS WRONG HERE ***
+-- =============================================================================================
+--
+-- `confirmation-v1` §lifecycle: "MARKING SPENT AND READING UNSPENT MUST BE ONE OPERATION, or two
+-- concurrent requests both see 'unspent' and both proceed. A conditional update that reports
+-- rows-affected is sufficient; a read-then-write is not, and THIS IS THE ONE PLACE IN THIS
+-- CONTRACT WHERE A PLAUSIBLE IMPLEMENTATION IS WRONG IN A WAY TESTING RARELY CATCHES."
+--
+-- The adapter issues exactly this, as ONE statement:
+--
+--   UPDATE confirmation SET spent_at = ?
+--    WHERE binding_hash = ? AND spent_at IS NULL AND expires_at > ?
+--   RETURNING binding_hash;
+--
+-- ONE ROW BACK MEANS THIS REQUEST SPENT IT. ZERO ROWS MEANS IT WAS ALREADY SPENT, HAS EXPIRED, OR
+-- NEVER EXISTED — three causes and one answer, which is the collapse this path wants anyway: a
+-- caller learns that its confirmation is not usable and nothing about which of the three.
+--
+-- `RETURNING` IS USED RATHER THAN ROWS-AFFECTED FOR A CONCRETE REASON. Core's `D1PreparedStatement`
+-- exposes only `bind` and `all`, and `batch` returns `unknown[]` — there is no `meta.changes`
+-- anywhere behind the port. Widening a Cloudflare-shaped type to carry a row count would be a
+-- permanent cost against `.claude/rules/architecture.md` §6, and `RETURNING` gives the identical
+-- atomicity through the interface that already exists.
+--
+-- *** VERIFIED ON D1'S OWN ENGINE, 2026-09-05, BY THE TEAM LEAD. *** The exact statement shape
+-- above was run against a local D1 — Cloudflare's SQLite build, not `node:sqlite`: the first spend
+-- returned one row and the second returned an empty result. Independently measured on
+-- `node:sqlite`, where all four cases were exercised — first spend one row; second spend, unknown
+-- hash and expired row each zero. TWO ENGINES, ONE RESULT, which is the standard `0010` was held
+-- to before its caveat was retired.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008)
+-- =============================================================================================
+--
+--   ALLOWANCES CONSUMED: d1-rows-written, d1-rows-read, d1-storage.
+--   ROWS WRITTEN: 2 to issue (1 row + primary-key autoindex) + 2 to spend (a single-row UPDATE,
+--     charged conservatively at the same 2). With each route's audit record, a critical operation
+--     costs ABOUT 4 MORE control-plane row-writes than it did.
+--   THE CEILING: ~750 confirmations a day platform-wide against the 3,000/day control-plane
+--     sub-ceiling.
+--   WHY THAT IS AFFORDABLE, AND IT IS STRUCTURAL RATHER THAN LUCKY: a critical operation requires a
+--     human to READ A STATEMENT AND TYPE A PASSWORD, so the volume is bounded by human attention
+--     and not by traffic. `0013` control 5's test — is the population that can force a write
+--     bounded by something other than the attacker? — passes.
+--   *** THE HAZARD, NAMED RATHER THAN DISCOVERED: *** the challenge route is a WRITE reachable by
+--     any authenticated principal holding a critical permission, and an unbounded loop of challenge
+--     requests is 2 row-writes each against a shared ceiling. That is `0013`'s shape again — the
+--     control becoming the lever. RATE LIMITING IS REQUIRED ON BOTH CHALLENGE ROUTES AND DOES NOT
+--     EXIST: `0017`'s limiter is per-isolate and bounds nothing deployed. The per-principal daily
+--     ceiling is the real bound at closed-beta scale. DO NOT REPORT RATE LIMITING AS DONE.
+--   STORAGE: four short columns, rows live five minutes. Immeasurable.
+--   COST: USD 0 / BD 0 per month. One control-plane table, no new service, no new binding.
+
+CREATE TABLE IF NOT EXISTS confirmation (
+  -- HMAC-SHA-256 as base64url. THE BINDING IS THE KEY, so a lookup IS the verification: there is
+  -- no separate comparison step that could be skipped or written against the wrong field.
+  --
+  -- IT IS NOT REVERSIBLE INTO WHAT WAS CONFIRMED. The key is a Worker secret and is not in this
+  -- database, so an attacker holding a dump of this table learns that confirmations happened and
+  -- nothing whatsoever about what they were for.
+  binding_hash  TEXT NOT NULL PRIMARY KEY,
+
+  -- WHO. Server-derived from a verified session credential, never a request field.
+  --
+  -- IT IS HERE DESPITE ALSO BEING INSIDE THE HASH, and the redundancy is deliberate: it is what
+  -- lets the retention job and any future per-principal accounting work on this table without the
+  -- signing key. It is NOT read during verification — the lookup is by `binding_hash` alone, so
+  -- this column cannot become a second, weaker way to match a confirmation.
+  principal_id  TEXT NOT NULL REFERENCES principal (principal_id),
+
+  -- RFC 3339, UTC. Five minutes from issue.
+  --
+  -- CHECKED IN THE SPEND STATEMENT, not above it. An expiry compared in TypeScript after a read
+  -- would be a read-then-write, which is the shape §lifecycle names as wrong in a way testing
+  -- rarely catches.
+  expires_at    TEXT NOT NULL,
+
+  -- NULL until spent, then RFC 3339 UTC. `spent_at IS NULL` in the UPDATE's WHERE clause is what
+  -- makes the spend single-use and atomic in one statement.
+  --
+  -- SPENT ON FIRST USE WHETHER OR NOT THE OPERATION THEN SUCCEEDS. A confirmation that survived a
+  -- failed operation would be retryable, and an attacker able to cause a failure could reuse it.
+  -- The cost is real and accepted: a genuine transient failure forces the human to confirm again,
+  -- which is the correct direction for an irreversible action.
+  spent_at      TEXT
+);
+
+-- NO INDEX BEYOND THE PRIMARY KEY. The only query on the request path is the point lookup that the
+-- spend performs, served by the automatic index the PRIMARY KEY creates.
+--
+-- THE RETENTION JOB WILL WANT ONE ON `expires_at`, and it is deliberately not added yet: there IS
+-- no retention job in this repository, for any table, and an index that exists is a third
+-- row-write on every issue. Add it with the job, and raise the issue cost from 2 to 3 in
+-- `control-plane-admission.ts` in the same change.
+--
+-- *** RETENTION IS OWED AND IS NOT BUILT. *** §storage requires expired rows to be deleted by a
+-- retention job rather than on the request path, because "a delete on the hot path would be a
+-- write nobody accounted for". With no job, this table GROWS MONOTONICALLY at roughly one row per
+-- critical operation. At human-attention volume that is a few hundred rows a year and not a
+-- storage problem — but it is unbounded in principle, and it is the second table in this slice
+-- with no retention story (`platform_operator_action` is the first).
+--
+-- THERE IS NO WAY TO ENUMERATE A PRINCIPAL'S CONFIRMATIONS, AND THERE MUST NOT BE. A port method
+-- taking only `principal_id` would answer "how many critical operations is this person in the
+-- middle of", which is a behavioural signal about a named human that nothing in Dudo needs.

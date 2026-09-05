@@ -36,6 +36,7 @@
 
 import type { AnyActionDefinition } from '../action/action.ts';
 import { assertAuditPolicy, assertDeclaredPermission } from '../action/action.ts';
+import { assertActionSensitivityMatchesCatalog } from '../confirmation/critical-permissions.ts';
 import { isReservedPreAuthPath } from '../identity/pre-auth-registry.ts';
 import { ReservedPathCollisionError } from '../identity/pre-auth-registry.ts';
 
@@ -134,6 +135,22 @@ export function createRouter(routes: readonly Route[]): Router {
       // `action/action.ts`). It must stop the build here for the same reason the deferral guard
       // does — the alternative is a route a reviewer reads as working and a caller never reaches.
       assertDeclaredPermission(route.action);
+      // AND ONE MORE, ADDED WITH `docs/decisions/0027`: an Action whose declared `sensitivity`
+      // disagrees with its permission's classification in `permission-catalog.yaml` stops the
+      // build.
+      //
+      // THE PIPELINE DERIVES THE CONFIRMATION REQUIREMENT FROM THE PERMISSION AND NEVER FROM THIS
+      // FIELD, so the field is redundant — and redundancy that is never compared is redundancy
+      // that drifts. An Action declaring `sensitivity: 'write'` for `customers.customer.delete`
+      // would be describing itself falsely in its own documentation and to every future reviewer
+      // deciding how carefully to read it; one declaring `critical` for a permission the catalog
+      // does not, WOULD BELIEVE IT WAS GATED AND WOULD NOT BE. The second is the shape
+      // `qa-agent` found in `apps/customers/app.ts` — prose asserting a gate that did not exist.
+      assertActionSensitivityMatchesCatalog(
+        route.action.id,
+        route.action.permission,
+        route.action.sensitivity,
+      );
     }
     // ===========================================================================================
     // NO APPLICATION ROUTE MAY CLAIM A RESERVED PRE-AUTHENTICATION PATH. docs/decisions/0014 §B.
