@@ -186,6 +186,51 @@ console, which is the wrong place for it by construction.
 citing `0028` for the proposition that operator actions are visible to tenants would be quoting a
 control that has never worked. **An unread audit record is detection that nobody performs.**
 
+## Amendment, 2026-09-05 — a confirmation challenge records that permission was sought, and not for whom
+
+**Recorded because a reader auditing this trail will find challenges that name no principal, and the
+honest reading of that is a gap rather than a bug.** Decision 3's rule is *principal-level targets
+are disclosed only when the caller names the Organization.* This is the case where the caller
+**cannot** name it.
+
+`0014` added `target_organization_id` and made `organizationId` **required** on
+`PlatformActionTarget`'s principal variant. That is `architecture.md` §3a's shape rather than a
+convention: the omission stops being something to remember and becomes something that does not
+compile, and **the compiler found exactly two call sites, which is how we know there were exactly
+two.**
+
+**The second call site had no Organization to give.** The confirmation challenge route takes no
+Organization path parameter, and the operation it confirms **has not happened yet** — there is
+genuinely nothing to name at the moment the record is written.
+
+**It records `NO_TARGET`** — which is not a value invented here. `NO_TARGET` is `{kind: 'none'}`,
+the existing member of the union for an operation that names nothing, already carried by every
+`denied` and `failed` branch, and `platform-routes.ts` already gave this exact reason for refusals:
+**the parameters naming the target are the untrusted thing.** The ruling is that the challenge's
+**success** path is governed by the same principle as its refusal paths, which is the unobvious half
+— a successful operation normally *does* know what it acted on.
+
+The alternative was to satisfy the required field by reading an `organization_id` out of the
+request's `parameters`, and that inverts the field's entire purpose:
+
+> **A required field that exists to stop caller-supplied audit values, satisfied from a
+> caller-supplied value, is worse than no field — it makes the forgery look like compliance.**
+
+Concretely, it would let a caller **choose which Organization's audit feed its own challenge appears
+in** — writing into a trail belonging to a customer it has nothing to do with, and doing so through
+the mechanism built to make that impossible.
+
+**What is lost, stated plainly:** a challenge records **that a critical permission was sought**, and
+not **for whom**. The operation the challenge precedes records the principal in full, so the pair is
+complete; the challenge alone is not. **A trail read at the moment between a challenge and its
+operation will show intent without a subject.**
+
+**Why that is the right trade rather than a temporary one.** The subject of a challenge is not yet a
+fact — it is a caller's assertion about what it is about to do, and `0027`'s whole design is that a
+challenge is answered rather than trusted. **Recording an unverified subject as though it were an
+audited one would make the trail confidently wrong**, which is worse than a trail that is narrower
+than a reader hoped.
+
 ## What this does NOT decide
 
 - **The operators list**, and specifically whether a **revoke** route should exist where creation
