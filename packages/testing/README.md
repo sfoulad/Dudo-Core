@@ -47,15 +47,25 @@ control-plane database from all ten real migrations and composes the shipped
 `platform/composition.ts` over the shipped D1 adapter, so nothing about the class is
 simulated except the SQL engine.
 
-A **primary run**, then **three negative-control runs**:
+A **primary run**, then **five negative-control runs**:
 
 | # | Control | What it breaks |
 |---|---|---|
 | 1 | the mutual-exclusion probe | `principalHasAnyMembership` always answers `false` |
+| 1b | the Action-side mutual exclusion | `findPrincipal` reports `holdsMembership: false` |
+| 1c | **both halves at once** | both of the above |
 | 2 | the audit record | every write silently succeeds and stores nothing |
 | 3 | the host binding | the application host is added to `adminHosts` |
 
-**Control 3 is read differently from the other two.** `0025` requires that the host binding
+**Controls 1 and 1b cannot be read on their own, and 1c is why.** The invariant is enforced at two
+independent points reading two different statements, so the platform routes still refuse a
+both-tables principal under either control alone — defence in depth working, and also the way a
+negative control quietly stops controlling. Only 1c, with every enforcement point removed, can
+show that the "every platform route refuses" case tests the invariant rather than testing nothing.
+It turns all three isolation cases red; the cases that stay green under it are the `0010` trigger
+and schema cases, which correctly do not depend on a runtime check.
+
+**Control 3 is read differently again.** `0025` requires that the host binding
 be defence in depth and never the first layer, so the AUTHORIZATION suite is re-run under it
 and **must stay green** — an authorization suite that is indifferent to the hostname is the
 evidence that routing is not doing the authorizing.

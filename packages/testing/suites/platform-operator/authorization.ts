@@ -34,8 +34,8 @@ import { ISOLATION, Suite, assertEqual, assertTrue, expectError, expectOk } from
 import {
   EXPECTED_FORBIDDEN,
   EXPECTED_UNAUTHENTICATED,
+  PRN_BOTH_TABLES,
   SESSION_ADMIN,
-  SESSION_BOTH_TABLES,
   SESSION_EXPIRED,
   SESSION_MODERATOR,
   SESSION_NOWHERE,
@@ -168,7 +168,12 @@ export function buildPlatformAuthorizationSuite(
     try {
       const noOperatorRow = await world.call('platform.session.whoami', { sessionId: SESSION_STRANGER });
       const wrongRole = await world.call('platform.session.whoami', { sessionId: SESSION_MODERATOR });
-      const bothTables = await world.call('platform.session.whoami', { sessionId: SESSION_BOTH_TABLES });
+      // CAUSE 4 IS EVALUATED AT THE AUTHORITY RESOLVER, WHICH IS WHERE ALL FOUR ARE DECIDED.
+      // `platform-authority.ts` is the single producer of a `PlatformAuthority`, so a collapse
+      // asserted there is a collapse no route can undo — and it is the only layer at which cause 2
+      // can be reached at all, since the database `CHECK` forbids storing an unrecognised role.
+      // The route-level form of the same collapse is asserted in the mutual-exclusion suite.
+      const bothTables = await world.dependencies.authority.resolve(PRN_BOTH_TABLES);
       const unrecognisedRole = await createPlatformAuthorityResolver(
         storeWithUnrecognisedRole('prn_future_role001'),
       ).resolve('prn_future_role001');

@@ -322,13 +322,37 @@ export function createSessionResolver(
    * All three are facts about the caller's own credential, so the collapse costs nothing and
    * removes three branches that could otherwise drift apart.
    */
-  async function liveSession(
+  /**
+   * Steps 1 and 2 WITHOUT the mutual-exclusion refusal, returning the two flags instead.
+   *
+   * ===========================================================================================
+   * IT EXISTS BECAUSE THE REFUSAL'S *CODE* IS A PROPERTY OF THE REQUEST CLASS, NOT OF THE RULE.
+   * ===========================================================================================
+   *
+   * `platform-operator-v1` requires the four platform denial causes — no operator row, an
+   * unrecognised role, a role lacking the permission, and A PRINCIPAL IN BOTH TABLES — to be
+   * INDISTINGUISHABLE FROM ONE ANOTHER, and the value it names is `forbidden`. The Action path's
+   * "unknown principal" collapse is `unauthenticated`. **The same rule therefore has to answer
+   * with two different codes depending on who is asking**, or one of the two collapses breaks.
+   *
+   * `qa-agent` caught exactly that: an earlier version of this file refused inside `liveSession`,
+   * so a both-tables principal received `unauthenticated` on a platform route where the contract
+   * requires `forbidden` — which made the fourth cause distinguishable from the other three by
+   * status code alone, and re-opened the probe the collapse exists to close.
+   *
+   * SO THE FACT IS PRODUCED HERE AND THE REFUSAL IS APPLIED BY THE CALLER. There are exactly two
+   * callers, they are both immediately below, and neither can forget: `liveSession` refuses with
+   * the Action code, and `resolvePrincipalId` hands the principal to
+   * `platform/platform-authority.ts`, which refuses with the platform code and with equalised work.
+   */
+  async function liveSessionUnrefused(
     sessionId: string,
   ): Promise<
     Result<{
       session: SessionRecord;
       principalId: string;
       principalType: ControlPlanePrincipalType;
+      inBothTables: boolean;
     }>
   > {
     const found = await store.findSession(sessionId);
@@ -351,7 +375,64 @@ export function createSessionResolver(
       session,
       principalId: principal.principalId,
       principalType: principal.principalType,
+      // THE CONJUNCTION, COMPUTED ONCE. Writing it as either flag alone is the mistake to avoid:
+      // `isPlatformOperator` alone locks out every legitimate operator, `holdsMembership` alone
+      // refuses every ordinary user. Only the pair is the defect. Both come from the
+      // `findPrincipal` statement that already ran, so this costs no read.
+      inBothTables: principal.isPlatformOperator && principal.holdsMembership,
     });
+  }
+
+  async function liveSession(
+    sessionId: string,
+  ): Promise<
+    Result<{
+      session: SessionRecord;
+      principalId: string;
+      principalType: ControlPlanePrincipalType;
+    }>
+  > {
+    const live = await liveSessionUnrefused(sessionId);
+    if (!live.ok) {
+      return err(live.error);
+    }
+    const { session, principalId, principalType, inBothTables } = live.value;
+
+    // =========================================================================================
+    // THE MUTUAL EXCLUSION, ACTION SIDE. `docs/decisions/0025` decision 1 · `docs/decisions/0024`
+    // as amended 2026-09-05 · `platform-operator-v1`, `theMutualExclusionInvariant`.
+    // =========================================================================================
+    //
+    // "A PRINCIPAL APPEARING IN BOTH IS REFUSED EVERYWHERE — not resolved in favour of either, not
+    // treated as a platform operator, not treated as a tenant member. BOTH ITS PLATFORM ROUTES AND
+    // ITS ACTIONS DENY."
+    //
+    // The platform half is `platform/platform-authority.ts`, which refuses the same state with
+    // `forbidden` because that is ITS class's collapse. THIS IS THE ACTION HALF, and it covers
+    // every entry point that goes through `liveSession`: `resolve`, `listEnterableOrganizations`
+    // and `selectOrganization`. `resolvePrincipalId` deliberately does NOT — see
+    // `liveSessionUnrefused` above, and see below for why that is not a gap.
+    //
+    // `unauthenticated()` IS "THE SAME CODE AN UNKNOWN PRINCIPAL RECEIVES" FOR THIS PATH, which is
+    // what the contract requires. It joins the four conditions this function already collapses —
+    // no such session, expired, deleted principal, suspended principal — and it takes no
+    // arguments, so there is nothing here to tell apart. A caller cannot discover that it is in
+    // both tables, and therefore cannot use an Action to probe `platform_operator`.
+    //
+    // IT COSTS NOTHING EXTRA. Both flags come from the `findPrincipal` statement that already ran;
+    // see `d1-control-plane-store.ts`. This is not a new read.
+    //
+    // *** REACHING THIS BRANCH MEANS SOMETHING IS ALREADY WRONG. *** Dudo's own code cannot create
+    // the state — `0010`'s four triggers refuse it on INSERT and UPDATE in both directions,
+    // verified against a real D1 — so a principal that lands here arrived by direct database
+    // access, a partially applied migration, or a restore from two backups taken at different
+    // moments. Those are exactly the three cases `0025` names as the reason the authorization
+    // check exists at all, and they are why this is not dead code.
+    if (inBothTables) {
+      return err(unauthenticated());
+    }
+
+    return ok({ session, principalId, principalType });
   }
 
   /**
@@ -464,7 +545,27 @@ export function createSessionResolver(
       // Steps 1 and 2, and then it STOPS. No membership read, no authorization source, no
       // `AuthenticatedPrincipal`, no organization identifier — see the port's documentation for
       // why each of those absences matters to the class that calls this.
-      const live = await liveSession(sessionId);
+      //
+      // =====================================================================================
+      // IT USES `liveSessionUnrefused`, SO A BOTH-TABLES PRINCIPAL IS **NOT** REFUSED HERE. THAT
+      // IS DELIBERATE AND IT IS THE OPPOSITE OF A GAP.
+      // =====================================================================================
+      //
+      // The only caller is the platform route class, and `platform/platform-authority.ts` refuses
+      // that principal one step later with `forbidden` — the value `platform-operator-v1` names,
+      // identical to the other three platform denial causes, from the same two statements so the
+      // work is equal too.
+      //
+      // REFUSING HERE INSTEAD WOULD ANSWER `unauthenticated`, WHICH IS A DIFFERENT STATUS CODE
+      // FROM THE OTHER THREE CAUSES — and a caller that can tell "I am in both tables" from "I
+      // have no operator row" can use a platform route to probe `organization_membership`, which
+      // is precisely the probe the contract's four-way collapse exists to close. `qa-agent` caught
+      // that regression; this line is the fix.
+      //
+      // THE PRINCIPAL IS NEVER *ADMITTED* BY THIS FUNCTION. It returns an identifier, and an
+      // identifier grants nothing: every platform route resolves authority before it does anything
+      // else, and there is no path from here to a handler that skips it.
+      const live = await liveSessionUnrefused(sessionId);
       if (!live.ok) {
         return err(live.error);
       }
@@ -541,6 +642,15 @@ export function createSessionResolver(
       if (principal === null || principal.status !== 'active') {
         // The caller said it verified a credential for a principal the control plane does not
         // hold, or holds as suspended. Fail closed and disclose nothing.
+        return err(unauthenticated());
+      }
+      // THE MUTUAL EXCLUSION AT LOGIN. `issueSession` reads the principal directly rather than
+      // through `liveSession` — it has no session yet — so the check is repeated here rather than
+      // inherited. Without it a principal in both tables would be refused on every subsequent
+      // request and still receive a session cookie at login, which is the confusing half of a
+      // refusal rather than a milder one. Same conjunction, same argument-free
+      // `unauthenticated()`, same statement it was already read from. See `liveSession`.
+      if (principal.isPlatformOperator && principal.holdsMembership) {
         return err(unauthenticated());
       }
 

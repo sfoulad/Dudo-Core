@@ -135,7 +135,10 @@ theOrdering:
     5. WRITE the platform-operator audit record. THE OPERATION IS NOT SUCCESSFUL UNTIL THIS LANDS.
     6. RESOLVE the tenant store — now possible, because step 3 created the directory entry.
     7. WRITE the first workspace, and the tenant-side audit record.
-    8. RETURN 201 with the generated credential, shown once.
+    8. RETURN 201 — WITH NO CREDENTIAL IN IT. Corrected 2026-09-05: this read "with the generated
+       credential, shown once", which the server cannot do because it never held one. The console
+       generated the password before step 1, sent only the derived value, and still holds the only
+       copy. See theCONSOLESHOWSITEXACTLYONCE.
   whyTHEDIRECTORYENTRYISFIRST:
     theCIRCULARITYITBREAKS: >-
       identity/control-plane-admission.ts records onboarding's audit record as having no home:
@@ -166,12 +169,24 @@ theOrdering:
       LEAVES AN ORGANIZATION WITH NO WORKSPACE AND NO TENANT-SIDE AUDIT RECORD, returns 201 with a
       `warnings` array naming what did not complete, and raises a reconciliation obligation
       internally.
-    whyNOT201_ONLY_ON_FULL_SUCCESS: >-
-      BECAUSE THE CREDENTIAL IS IN THE RESPONSE AND CANNOT BE REISSUED. Failing the request after
-      step 4 would mean the operator never sees a credential that HAS BEEN WRITTEN and cannot be
-      recovered — 0015 §D: "printed ONCE and cannot be recovered afterwards, because nothing stores
-      it." The customer would exist, be unenterable, and require a credential reset to rescue. A
-      201-with-warnings is the outcome that keeps the irreversible artifact in the operator's hands.
+    whyNOT201_ONLY_ON_FULL_SUCCESS:
+      theARGUMENTASWRITTEN: >-
+        ~~"Because the credential is in the response and cannot be reissued. Failing the request
+        after step 4 would mean the operator never SEES a credential that has been written."~~
+        THAT PREMISE IS FALSE UNDER docs/decisions/0026 OPTION B, and it was the same partial update
+        as the schema: the console generates the password before step 1, so it holds it whatever the
+        server returns. NOTHING IS LOST BY A FAILED RESPONSE.
+      theCONCLUSIONSURVIVESONADIFFERENTARGUMENT: >-
+        AND IT IS WORTH SEPARATING, BECAUSE A CONCLUSION THAT OUTLIVES ITS REASONING IS USUALLY
+        WRONG AND THIS ONE IS NOT. What a failed response actually costs is not the value but the
+        KNOWLEDGE OF WHETHER IT WORKS. After step 4 the credential row is committed; if the request
+        then fails, the operator holds a password and cannot tell whether it was written, whether
+        the Organization exists, or whether retrying will collide. THE AMBIGUITY IS THE HARM, not
+        the loss.
+        SO 201-WITH-WARNINGS IS STILL RIGHT: it tells the operator exactly which parts completed,
+        which is precisely what a failure could not. And the retry hazard is unchanged and remains
+        ON-3 — a retried create returns conflict, and the operator must know whether to hand over
+        the password they already have or start again.
     whyAFAILEDPLATFORMAUDITWRITEISDIFFERENT: >-
       IT FAILS THE WHOLE OPERATION, with unavailable, and this asymmetry is deliberate. D2's rule
       is that "the audit event must not fail open": inability to record the evidence is not a
@@ -254,11 +269,18 @@ theCredential:
       as OPTIONAL-PENDING-THIS-DECISION rather than being written twice. THE GENERATED PASSWORD
       ITSELF IS STILL NEVER SENT TO THE SERVER under B; the console generates it, derives from it,
       sends the derived value, and displays the password.
-  theRESPONSESHOWSITEXACTLYONCE:
+  theCONSOLESHOWSITEXACTLYONCE:
     ruling: >-
-      THE GENERATED PASSWORD IS IN THE 201 RESPONSE BODY AND NOWHERE ELSE, EVER. Not in a second
-      call, not in a log, not in the audit record, not in an email, not retrievable by any route in
-      any contract.
+      ~~THE GENERATED PASSWORD IS IN THE 201 RESPONSE BODY.~~ CORRECTED 2026-09-05. IT IS IN NO
+      RESPONSE BODY, because the server never holds it: under docs/decisions/0026 option B the
+      console generates it, derives from it, and displays it, and only the derived value crosses the
+      wire. THE ROUND TRIP THIS SECTION SPECIFIED WAS NOT MERELY UNNECESSARY, IT WAS IMPOSSIBLE —
+      and the `required` list in the schema kept demanding it after the prose here had moved.
+      THE SECURITY PROPERTIES ARE UNCHANGED AND THEIR HOME HAS MOVED: shown exactly once, never
+      recoverable, never logged, never in the audit record, never retrievable by any route in any
+      contract. They are now client obligations, normative and asserted by qa-agent — see
+      credential-reset-v1's theClientObligation, which governs both routes because both use one
+      credential-write path.
     whyITCANNOTBESHOWNAGAIN: >-
       NOT A POLICY — ARITHMETIC. principal_credential holds identifier_hash, principal_id,
       algorithm, iterations, salt and verifier. THERE IS NO PASSWORD COLUMN AND NO REVERSIBLE FORM
@@ -448,9 +470,11 @@ testRequirements:
     - "A forced failure of the platform audit write (step 5) fails the whole operation with unavailable, and no credential is returned."
     - "A forced failure at step 7 returns 201 WITH a populated `warnings` array, and the credential is still present in the body."
   theCredential:
-    - "The generated value appears in the 201 body and in NO log line, metric, trace attribute or audit record. Assert by grepping captured output, not by inspection."
-    - "No route in any contract returns the credential a second time."
-    - "The created admin can authenticate with the returned value on the first attempt, which is the only test that proves the derivation matched end to end."
+    - "THE 201 BODY CONTAINS NO PASSWORD FIELD AT ALL. Corrected 2026-09-05: this previously asserted the opposite — 'the generated value appears in the 201 body' — which would have driven an implementer to build option A. Assert the response shape has no such field and that `additionalProperties: false` rejects one."
+    - "The plaintext password appears in NO server log, metric, trace attribute or audit record. Assert by grepping captured output rather than by inspection — and note the server never receives it, so a hit here means something upstream leaked it."
+    - "No route in any contract returns a credential."
+    - "THE CONSOLE HOLDS THE PASSWORD AND DOES NOT PERSIST IT: assert it is absent from localStorage, sessionStorage, IndexedDB and any analytics or breadcrumb payload after the screen is dismissed."
+    - "The created admin can authenticate with the console-generated value on the first attempt. THIS IS THE ONLY TEST THAT PROVES THE DERIVATION MATCHED END TO END — the console's KDF, the server's second hash, and the login path all agreeing — and it is the test that would have caught the CR-5 salt defect in credential reset."
   bootstrapException:
     ruling: >-
       docs/decisions/0025 DECISION 4 RECORDS FOUR BOUNDS AND EACH ONE GETS ITS OWN ASSERTION. They

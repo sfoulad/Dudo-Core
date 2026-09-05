@@ -113,11 +113,53 @@ export type PrincipalStatus = 'active' | 'suspended';
  * the system and it would exist for the convenience of a login screen.
  *
  * It also has no credential material: see the header.
+ *
+ * ===========================================================================================
+ * THE TWO MUTUAL-EXCLUSION FLAGS. `docs/decisions/0025` decision 1, `docs/decisions/0024`.
+ * ===========================================================================================
+ *
+ * `platform-operator-v1` states the rule normatively: a principal present in BOTH
+ * `platform_operator` AND `organization_membership` is *"refused everywhere — not resolved in
+ * favour of either, not treated as a platform operator, not treated as a tenant member. BOTH ITS
+ * PLATFORM ROUTES AND ITS ACTIONS DENY."*
+ *
+ * The platform half lives in `platform/platform-authority.ts`. THIS IS THE ACTION HALF, and it is
+ * here — on the principal record — rather than as a fifth port method for one reason: **the
+ * statement that reads this row already runs on every authenticated request**, so two correlated
+ * subqueries against two primary-key indexes cost NO ADDITIONAL ROUND TRIP and no additional
+ * statement. A separate method would have cost one of each, on the hottest path in the platform.
+ *
+ * BOTH FLAGS ARE REQUIRED, AND NEITHER ALONE IS THE CONDITION. Refusing on
+ * `isPlatformOperator` alone would lock out every legitimate platform operator — they must still
+ * authenticate, because `whoami` and the console depend on it. Refusing on `holdsMembership`
+ * alone would refuse every ordinary user in Dudo. **The defect is the CONJUNCTION**, which is
+ * exactly what makes it easy to write the check backwards, and why the two are carried as
+ * separate facts rather than pre-combined into one boolean by the adapter.
+ *
+ * THEY ARE REQUIRED FIELDS, NOT OPTIONAL ONES. An optional flag defaulting to `undefined` reads
+ * as `false`, which is the fail-OPEN direction: a store implementation that forgot them would
+ * silently admit exactly the principal this exists to refuse.
  */
 export type PrincipalRecord = {
   readonly principalId: string;
   readonly principalType: ControlPlanePrincipalType;
   readonly status: PrincipalStatus;
+  /** True when a `platform_operator` row exists for this principal, whatever role it carries. */
+  readonly isPlatformOperator: boolean;
+  /**
+   * True when ANY `organization_membership` row exists for this principal — active, suspended, or
+   * otherwise.
+   *
+   * ANY ROW COUNTS, and the breadth is deliberate. `0024`'s invariant is that a platform principal
+   * holds ZERO memberships: "not a scoped one, not a read-only one, not one just for the tenant
+   * being supported". Ignoring suspended rows would let a suspended membership be reactivated
+   * later and turn a compliant operator into a violating one with no code change anywhere.
+   *
+   * IT IS A COUNT COLLAPSED TO A BOOLEAN AND NEVER THE ROWS. `core-object-registry.yaml` CO1 —
+   * "a user's list of Organizations must never be visible to any of them" — is why this is not a
+   * list.
+   */
+  readonly holdsMembership: boolean;
 };
 
 export type OrganizationStatus = 'active' | 'suspended';

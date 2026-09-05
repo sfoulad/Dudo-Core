@@ -24,21 +24,22 @@
 --    triggers are a second layer over a check that already runs in TypeScript. Bundling them
 --    would make an engine that rejects a trigger a blocker for the whole surface.
 --
--- 2. WHAT HAS AND HAS NOT BEEN VERIFIED, STATED EXACTLY, BECAUSE THE TWO ARE EASY TO CONFLATE.
+-- 2. IT HAS BEEN VERIFIED AGAINST D1'S OWN ENGINE, AND THE CLAIM IS STATED EXACTLY.
 --
---    VERIFIED, BY RUNNING IT: this file applies, creates four triggers, and REFUSES all three
---    attack shapes — inserting a membership for an existing operator, inserting an operator for
---    an existing member, and UPDATEing a membership row onto an operator's principal. Measured
---    against `node:sqlite`, which is the engine `packages/testing/harness/sqlite-d1.ts` already
---    uses to test the storage boundary.
+--    VERIFIED BY THE TEAM LEAD, 2026-09-05, on a local D1: this file applies, creates four
+--    triggers, and refuses ALL FOUR directions — a membership inserted for an existing operator,
+--    an operator inserted for an existing member, a membership UPDATE repointed onto an operator,
+--    and a platform_operator UPDATE repointed onto a member. `rows_landed: 0` in every case.
 --
---    *** NOT VERIFIED AGAINST D1 ITSELF. *** `node:sqlite` is not Cloudflare's SQLite build. No
---    D1 database exists to run this against, and this agent holds READ-ONLY Cloudflare access and
---    may not execute SQL. `0007_membership_role.sql` is the standing example in this directory of
---    a migration whose behaviour was measured on a real engine and documented as such; this one
---    has been measured on a DIFFERENT real engine, which is better than an assumption and is not
---    the same claim. APPLY IT TO THE LOCAL SIMULATED D1 FIRST
---    (`npm run d1:migrate:control:local`) and report the result before it goes anywhere else.
+--    *** BOTH NEGATIVE CONTROLS PASSED, WHICH IS WHAT MAKES THE FOUR REFUSALS EVIDENCE. *** A
+--    principal with no platform row can still be given a membership, and a principal with no
+--    membership can still become an operator. Without those, four refusals are equally consistent
+--    with a trigger that refuses everything.
+--
+--    Independently measured against `node:sqlite` — the engine
+--    `packages/testing/harness/sqlite-d1.ts` uses — with the same outcome. Two engines, one
+--    result. `0007_membership_role.sql` is the standing example in this directory of a migration
+--    whose behaviour was measured rather than assumed; this file now meets the same standard.
 --
 -- =============================================================================================
 -- WHAT THESE TRIGGERS ARE FOR — AND IT IS PRECISELY THE PATH CODE CANNOT REACH

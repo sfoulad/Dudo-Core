@@ -73,6 +73,7 @@ import { dispatchPlatformRoute, platformRoutes } from '../../../platform/core/pl
 import type { PlatformAuditRecorder } from '../../../platform/core/platform/platform-audit.ts';
 
 import { createD1ControlPlaneStores } from '../../../platform/core/identity/adapters/d1/d1-control-plane-store.ts';
+import type { IdentityControlPlaneStore } from '../../../platform/core/identity/control-plane-store.ts';
 import { createSessionResolver } from '../../../platform/core/identity/session-resolution.ts';
 import type { SessionResolver } from '../../../platform/core/identity/session-resolution.ts';
 import { createMembershipPrincipalAuthorizationSource } from '../../../platform/core/identity/principal-authorization-source.ts';
@@ -329,6 +330,13 @@ export type PlatformWorldOptions = {
   readonly wrapStore?: (store: PlatformOperatorStore) => PlatformOperatorStore;
   /** Wraps the audit recorder the composition produced. See `broken-platform-controls.ts`. */
   readonly wrapAudit?: (recorder: PlatformAuditRecorder) => PlatformAuditRecorder;
+  /**
+   * Wraps the REAL identity control-plane store, which is where the ACTION-SIDE half of the mutual
+   * exclusion is read since `findPrincipal` began carrying `isPlatformOperator` and
+   * `holdsMembership`. A separate seam from `wrapStore` because it is a separate check reading a
+   * separate statement — see `withActionSideMutualExclusionRemoved`.
+   */
+  readonly wrapIdentityStore?: (store: IdentityControlPlaneStore) => IdentityControlPlaneStore;
   readonly adminHosts?: readonly string[];
   /** Overrides the daily ceilings so a suite can exhaust a budget in a handful of requests. */
   readonly dailyCeilings?: Partial<Record<'business' | 'system' | 'protection', number>>;
@@ -466,8 +474,13 @@ export async function createPlatformWorld(
   });
   const admission = createInProcessControlPlaneWriteAdmission(budget);
 
+  const identityStore =
+    options.wrapIdentityStore === undefined
+      ? controlPlaneStores.identity
+      : options.wrapIdentityStore(controlPlaneStores.identity);
+
   const sessions = createSessionResolver({
-    store: controlPlaneStores.identity,
+    store: identityStore,
     authorization: createMembershipPrincipalAuthorizationSource(),
     admission,
     ids,

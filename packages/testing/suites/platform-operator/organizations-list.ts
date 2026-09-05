@@ -27,6 +27,7 @@ import {
   ORG_ALPHA,
   ORG_BETA,
   ORG_GAMMA,
+  PRN_ADMIN,
   SESSION_ADMIN,
   createPlatformWorld,
   expectedInvalidArgument,
@@ -179,9 +180,15 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
         queryString: `page_size=1&cursor=${tampered}`,
       }), REJECTED_CURSOR);
 
-      // A cursor signed with a DIFFERENT key: what a forger without the secret can produce.
+      // A cursor signed with a DIFFERENT key: what a forger without the secret can produce. Every
+      // other field is CORRECT — the right anchor, the right operator, the right page size — so
+      // the only thing that can refuse it is the signature.
       const foreign = await createPlatformCursorCodec(new Uint8Array(32).fill(0x99));
-      const forged = await foreign.encode(ORG_ALPHA, 1, world.clock.nowMs());
+      const forged = await foreign.encode(
+        ORG_ALPHA,
+        { principalId: PRN_ADMIN, pageSize: 1 },
+        world.clock.nowMs(),
+      );
       expectError('a cursor signed with another key is refused', await world.call('platform.organizations.list', {
         sessionId: SESSION_ADMIN,
         queryString: `page_size=1&cursor=${forged}`,

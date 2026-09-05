@@ -22,6 +22,7 @@
  *   See `suites/platform-operator/confirmation.ts`.
  */
 
+import type { IdentityControlPlaneStore } from '../../../platform/core/identity/control-plane-store.ts';
 import type { PlatformAuditRecorder } from '../../../platform/core/platform/platform-audit.ts';
 import type { PlatformOperatorStore } from '../../../platform/core/platform/platform-operator-store.ts';
 import { ok } from '../../../platform/core/kernel/result.ts';
@@ -46,6 +47,47 @@ export function withMutualExclusionProbeRemoved(store: PlatformOperatorStore): P
     },
     listOrganizations: (limit, after) => store.listOrganizations(limit, after),
     recordAction: (record, reservation) => store.recordAction(record, reservation),
+  };
+}
+
+/**
+ * CONTROL 1b — THE MUTUAL EXCLUSION ON THE **ACTION** SIDE.
+ *
+ * ===========================================================================================
+ * WHY A SECOND CONTROL FOR ONE INVARIANT, AND IT IS NOT REDUNDANCY.
+ * ===========================================================================================
+ *
+ * The invariant is now enforced in TWO PLACES that read TWO DIFFERENT statements:
+ *
+ *   - `platform-authority.ts` calls `PlatformOperatorStore.principalHasAnyMembership`. Control 1
+ *     above removes that one.
+ *   - `session-resolution.ts::liveSession` reads `isPlatformOperator && holdsMembership` off the
+ *     `findPrincipal` row, which `d1-control-plane-store.ts` now computes as two correlated
+ *     `EXISTS` subqueries in the statement that was already running.
+ *
+ * *** CONTROL 1 DOES NOT REACH THE SECOND ONE. *** When the Action-side check landed, the number
+ * of cases control 1 could turn red DROPPED — because `liveSession` refuses a both-tables
+ * principal before the platform store's probe is ever consulted. That is defence in depth working,
+ * and it is also exactly how a negative control quietly stops controlling: the wrapper still runs,
+ * still looks like it is breaking something, and the suite stays green for a reason that has
+ * nothing to do with the case's claim.
+ *
+ * So this wrapper removes the OTHER half, and the run applies both separately.
+ */
+export function withActionSideMutualExclusionRemoved(
+  store: IdentityControlPlaneStore,
+): IdentityControlPlaneStore {
+  return {
+    ...store,
+    async findPrincipal(principalId) {
+      const found = await store.findPrincipal(principalId);
+      if (!found.ok || found.value === null) {
+        return found;
+      }
+      // The flag is reported as `false`, which is the shape the defect would take: the subquery
+      // still runs and its answer is dropped. Everything else about the row is untouched.
+      return ok({ ...found.value, holdsMembership: false });
+    },
   };
 }
 

@@ -110,12 +110,20 @@ function listOrganizations(dependencies: {
     }
 
     const nowMs = dependencies.clock.nowMs();
+    // THE CURSOR IS BOUND TO THE CALLING OPERATOR AND TO THE PAGE SIZE. The principal comes from
+    // `context.authority`, which `dispatchPlatformRoute` resolved from a verified session — never
+    // from the request, and never from the cursor itself.
+    const binding = {
+      principalId: context.authority.principalId,
+      pageSize: pageSize.value,
+    };
     let anchor: string | null = null;
     if (offered.value !== null) {
       // THE SIGNATURE IS VERIFIED BEFORE THE ANCHOR IS USED, and every failure — malformed,
-      // forged, expired, bound to a different page size — returns the one `rejectedCursor()`
-      // value. A caller cannot tell which, and there is no branch here that could tell it.
-      const decoded = await dependencies.cursors.decode(offered.value, pageSize.value, nowMs);
+      // forged, expired, bound to a different page size, or ISSUED TO A DIFFERENT OPERATOR —
+      // returns the one `rejectedCursor()` value. A caller cannot tell which, and there is no
+      // branch here that could tell it.
+      const decoded = await dependencies.cursors.decode(offered.value, binding, nowMs);
       if (!decoded.ok) {
         return err(decoded.error);
       }
@@ -151,7 +159,7 @@ function listOrganizations(dependencies: {
         })),
         next_cursor:
           hasMore && last !== undefined
-            ? await dependencies.cursors.encode(last.organizationId, pageSize.value, nowMs)
+            ? await dependencies.cursors.encode(last.organizationId, binding, nowMs)
             : null,
       },
       // AN ENUMERATION HAS NO SINGLE AFFECTED TARGET, and `'none'` records that as a positive

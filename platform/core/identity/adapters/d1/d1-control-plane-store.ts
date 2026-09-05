@@ -103,6 +103,24 @@ function requiredText(row: SqlRow, column: string): string | null {
 }
 
 /**
+ * Reads a SQL `EXISTS` result as a boolean, TRUE ONLY FOR AN EXACT 1.
+ *
+ * `Boolean(value)` would be wrong in the dangerous direction and the difference is not theoretical:
+ * every non-empty string is truthy in JavaScript, so a driver returning `'0'` as text would make
+ * `Boolean('0')` be `true` — which for `holds_membership` reads a compliant operator as violating
+ * (annoying) and for a future inverted use would read a violating one as compliant (a hole).
+ *
+ * ANYTHING THAT IS NOT 1 OR '1' IS `false`. `null`, `undefined`, an absent column and an
+ * unexpected type all collapse to `false`, which for these two flags is the SAFE direction only
+ * because the refusal is on their CONJUNCTION — see `PrincipalRecord`. If either flag is ever used
+ * alone, this default has to be re-examined.
+ */
+function flag(row: SqlRow, column: string): boolean {
+  const value = row[column];
+  return value === 1 || value === '1' || value === true;
+}
+
+/**
  * Stored enumerations are VALIDATED ON READ, and an unrecognised value is an error rather than a
  * coerced default.
  *
@@ -185,11 +203,33 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
     },
 
     async findPrincipal(principalId: string): Promise<Result<PrincipalRecord | null>> {
-      // Point lookup on the primary key of `principal`.
+      // =====================================================================================
+      // Point lookup on the primary key of `principal`, PLUS the two mutual-exclusion flags.
+      // `docs/decisions/0025` decision 1, `docs/decisions/0024` as amended 2026-09-05.
+      // =====================================================================================
+      //
+      // ONE STATEMENT, NOT THREE. Both flags are correlated `EXISTS` subqueries against primary-key
+      // indexes — `platform_operator(principal_id)` and `organization_membership(principal_id, …)`,
+      // whose leading column is `principal_id` for exactly this shape. This statement already ran
+      // on every authenticated request, so THE ACTION-SIDE MUTUAL-EXCLUSION CHECK COSTS NO
+      // ADDITIONAL ROUND TRIP AND NO ADDITIONAL STATEMENT. A separate port method would have cost
+      // one of each, on the hottest path in the platform, which is why it is not one.
+      //
+      // `EXISTS` RATHER THAN `COUNT(*)`: the engine stops at the first matching index entry, so a
+      // principal in fifty Organizations costs the same as one in a single Organization.
+      //
+      // IT REQUIRES CONTROL-PLANE MIGRATION 0008. A database without `platform_operator` makes
+      // this statement fail, `selectRows` returns `unavailable()`, and NOTHING AUTHENTICATES. That
+      // is the same coupling `0007_membership_role.sql` already created by adding `role` to the
+      // membership projection, and it is the correct direction: a build whose isolation check
+      // cannot run must refuse rather than proceed without it.
       const rows = await selectRows(
         database,
-        'SELECT principal_id, principal_type, status FROM principal WHERE principal_id = ? LIMIT 1',
-        [principalId],
+        'SELECT principal_id, principal_type, status, ' +
+          'EXISTS (SELECT 1 FROM platform_operator WHERE principal_id = ?) AS is_platform_operator, ' +
+          'EXISTS (SELECT 1 FROM organization_membership WHERE principal_id = ?) AS holds_membership ' +
+          'FROM principal WHERE principal_id = ? LIMIT 1',
+        [principalId, principalId, principalId],
       );
       if (!rows.ok) {
         return err(rows.error);
@@ -204,7 +244,17 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       if (id === null || principalType === null || status === null) {
         return err(internal());
       }
-      return ok({ principalId: id, principalType, status });
+      return ok({
+        principalId: id,
+        principalType,
+        status,
+        // `EXISTS` yields the integer 1 or 0. COMPARED AGAINST 1 RATHER THAN COERCED WITH
+        // `Boolean(...)`: every non-empty string is truthy, so a driver that returned '0' as text
+        // would make an operator-with-a-membership read as compliant — the fail-OPEN direction on
+        // the one flag whose whole purpose is to fail closed.
+        isPlatformOperator: flag(row, 'is_platform_operator'),
+        holdsMembership: flag(row, 'holds_membership'),
+      });
     },
 
     async findMembershipWithOrganization(

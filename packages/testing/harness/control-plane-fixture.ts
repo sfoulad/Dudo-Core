@@ -34,16 +34,39 @@ const MIGRATION_DIRECTORY = new URL(
 /**
  * The control-plane migrations this fixture applies, in order.
  *
- * `0003_organization_membership.sql` and `0004_session.sql` are deliberately absent: no AZ2
- * suite reads them, and applying a migration a suite does not need would hide a missing
- * dependency rather than reveal one.
+ * ===========================================================================================
+ * WIDENED 2026-09-05, AND THE REASON IS A REAL COUPLING RATHER THAN CONVENIENCE.
+ * ===========================================================================================
+ *
+ * This list used to omit `0003_organization_membership.sql` on the stated principle that "no AZ2
+ * suite reads them, and applying a migration a suite does not need would hide a missing dependency
+ * rather than reveal one". THAT PRINCIPLE STILL HOLDS; ITS PREMISE STOPPED BEING TRUE.
+ *
+ * `d1-control-plane-store.ts::findPrincipal` now reads `platform_operator` and
+ * `organization_membership` in the SAME statement that reads `principal`, as two correlated
+ * `EXISTS` subqueries — that is the Action-side mutual exclusion (`docs/decisions/0024` as amended
+ * 2026-09-05, `0025` decision 1), and it runs on EVERY authenticated request. `core-agent` records
+ * the consequence in that file in capitals: *"a database without `platform_operator` makes this
+ * statement fail, `selectRows` returns `unavailable()`, and NOTHING AUTHENTICATES."*
+ *
+ * So a control plane without `0003` and `0008` is not a narrower fixture, it is an INVALID one: no
+ * principal can authenticate in it. Five session-revocation cases went red on
+ * `issueSession` returning `unavailable` the moment that change landed, and they were right to.
+ * `0007_membership_role.sql` comes with `0003` because the membership projection selects `role`.
+ *
+ * THIS IS A FIXTURE CORRECTION AND NOT A TEST BEING WEAKENED. No assertion changed; the database
+ * the assertions run against now matches the schema Core requires. The five cases pass again
+ * because the fixture is right, not because the bar moved.
  */
 export const APPLIED_MIGRATIONS: readonly string[] = [
   '0001_principal.sql',
   '0002_organization.sql',
+  '0003_organization_membership.sql',
   '0004_session.sql',
   '0005_tenant_directory.sql',
   '0006_principal_credential.sql',
+  '0007_membership_role.sql',
+  '0008_platform_operator.sql',
 ];
 
 export function readMigration(fileName: string): string {

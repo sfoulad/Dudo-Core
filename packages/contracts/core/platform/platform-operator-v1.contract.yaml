@@ -191,6 +191,31 @@ authorityModel:
       treated as a platform operator, not treated as a tenant member. Both its platform routes and
       its Actions deny. NO ERROR DISTINGUISHES THIS STATE from ordinary denial, because a caller
       able to detect it could use it to probe the other table.
+    theWRITESIDEGUARDANSWERS_not_found_AND_NOT_conflict:
+      ruling: >-
+        NORMATIVE, ADDED 2026-09-05. `assertNotAPlatformOperator` and `assertNotAnOrganizationMember`
+        — the guards that refuse to CREATE the forbidden state — answer the argument-free
+        `not_found`. NOT `conflict`.
+      whyTheCodeIsRightAndThisProseFollowsIt: >-
+        `conflict` IS THE NATURAL READING OF A UNIQUENESS GUARD AND IT IS AN ORACLE HERE. A
+        `conflict` on "grant this principal platform authority" tells the caller that the principal
+        IS ALREADY A PLATFORM OPERATOR; the mirror guard tells a tenant administrator the same about
+        any principal they can name. THAT IS AN ENUMERATION OF THE PLATFORM'S OPERATORS, available
+        to whoever can attempt a membership write — the single most useful fact an attacker could
+        learn from this surface, and exactly what platform-operator-v1's own `errors.forbidden`
+        section already collapses at authorization time. `core-agent` changed the code and was
+        right; THIS FILE IS THE HALF THAT WAS WRONG.
+      whyItIsWRITTENDOWNRATHERTHANLEFTTOTHECODE: >-
+        BECAUSE THE NEXT READER WILL "FIX" IT BACK. `not_found` on a write guard looks like a bug —
+        the row is not missing, it is present, and every instinct says `conflict`. A reviewer who
+        does not know the oracle argument will read it as a sloppy error code and correct it, and
+        nothing will fail when they do. THE REASON IS THE PART THAT HAS TO SURVIVE, not the token.
+      andITISCONSISTENTWITHTHERESTOFDUDO: >-
+        The same collapse `credential-reset-v1` applies to an unknown principal, a principal with no
+        credential and a platform operator; the same collapse `organization-selection-v1` applies to
+        a non-member, a suspended member and a non-existent Organization. IN EVERY CASE THE RULE IS
+        THE SAME: where distinguishing the cases would tell the caller something about a population
+        it may not enumerate, they collapse to one argument-free answer.
     why: >-
       0024's invariant is that a platform principal holds zero memberships, and 0025 states the
       reason two tables were chosen over a column: AN INVARIANT THAT DEPENDS ON NOBODY ADDING A ROW
@@ -305,6 +330,44 @@ auditModel:
          action id, target organization_id or principal_id, outcome, timestamp, correlation id.
       2. A TENANT-SIDE RECORD in the affected Organization's own audit_event, WHERE ONE EXISTS AND
          IS REACHABLE.
+
+  whichSIDEOFTHEAUTHORITYCHECKTHEWRITESITSON:
+    ruling: >-
+      NORMATIVE, ADDED 2026-09-05, AND IT WAS AN OPEN QUESTION THAT `platform-audit.ts` CORRECTLY
+      FLAGGED AS AN INTERPRETATION RATHER THAN ASSUMING.
+      THE AUDIT WRITE IS AFTER THE AUTHORITY CHECK. A CALLER WHO IS NOT AN ESTABLISHED PLATFORM
+      OPERATOR WRITES NO RECORD. Only a principal with a valid platform_operator row — one that also
+      passes the mutual-exclusion check — reaches the point at which anything is written.
+    why: >-
+      THE OTHER READING LETS AN UNAUTHENTICATED CALLER FORCE A CONTROL-PLANE ROW-WRITE, and that is
+      docs/decisions/0013's finding verbatim: "the probe-detection control is itself an
+      amplification path... the control becoming the vulnerability". An audit mechanism that anyone
+      can make write is a way to spend the account-wide daily allowance, and D1's write limit is
+      ACCOUNT-WIDE — exhausting it stops D1 answering for every Organization on the platform.
+      IT ALSO CONTRADICTS THIS CONTRACT'S OWN FREE-TIER ARITHMETIC. freeTierImpact counts 2
+      row-writes per OPERATOR ACTION and argues the population is "bounded by the number of real
+      operators — one or two — not by traffic". Writing on failed attempts makes the population
+      unbounded and the argument false, which is the check freeTierImpact.theCHECKTHATMATTERS
+      already says must be re-run if this class becomes reachable by a larger population.
+    theCOSTACCEPTEDWITHIT: >-
+      FAILED AUTHORITY CHECKS LEAVE NO TRACE IN THE OPERATOR LOG. Someone probing the platform
+      surface — a tenant principal trying every route, a stolen session, a former operator whose row
+      was removed — writes nothing and is invisible in this log. THAT IS A REAL BLIND SPOT AND IT IS
+      CHOSEN RATHER THAN INHERITED.
+      IT IS ACCEPTABLE AT THIS SCALE because the alternative is an unauthenticated write, and
+      because the refusals themselves are not silent everywhere: an authenticated caller denied at
+      an ACTION still produces a `0013` denial summary, which is the bounded mechanism built for
+      exactly this problem.
+    ifITISEVERCLOSED: >-
+      THE ANSWER IS A RATE-LIMITED AGGREGATE COUNTER, NOT A ROW PER ATTEMPT. `0013` already solved
+      this shape once — an emission ladder with coarse grouping and a platform ceiling — and the
+      solution should be reused rather than rediscovered. A row per denied platform attempt would
+      recreate the exact defect `0013` was written to bound, in the one place where the caller
+      needs no permission to try.
+    theTESTFORIT: >-
+      Mechanical, and it is the assertion qa-agent was making on an assumption: a request to any
+      platform route from a principal with NO platform_operator row leaves the operator log
+      UNCHANGED. Assert the row count, not merely the response code.
   whyBOTHANDNOTEITHERALONE:
     tenantOnlyIsInsufficient: >-
       The platform would then have no record of what its own operators did, and the operations that
@@ -485,6 +548,34 @@ operations:
         is a real limitation, it is invisible today because platform-admin is the only role anyone
         holds, and IT IS THE POINT AT WHICH THIS RULING SHOULD BE REVISITED rather than patched by
         granting the moderator an Organization-enumeration permission it has no business holding.
+    thePERMISSIONSFIELDREPORTS_REACHABLE_NOT_HELD:
+      ruling: >-
+        NORMATIVE, ADDED 2026-09-05. `permissions` IS THE INTERSECTION OF WHAT THE PRINCIPAL'S
+        PLATFORM ROLE GRANTS AND WHAT A ROUTE IN THIS CLASS CAN ACTUALLY REACH. For `platform-admin`
+        today that is SIX, not the eight its role holds.
+      theTWOOMITTED: >-
+        `core.principal.grant-platform-scope` and `core.marketplace.moderate`. NEITHER HAS A ROUTE
+        AND BOTH ARE UNREACHABLE BY DESIGN RATHER THAN BY OVERSIGHT: this contract deliberately
+        publishes no route that creates a platform operator (theBootstrapProblem — "the frequency
+        does not justify the surface"), and marketplace moderation is Phase 6 with no surface at
+        all. AZ8 further records that moderation has no permission it may legitimately hold.
+      why: >-
+        REPORTING A PERMISSION NO ROUTE CAN REACH DESCRIBES A CAPABILITY THAT DOES NOT EXIST, and a
+        console rendering from this list would draw affordances for it — a "grant platform scope"
+        button whose only possible outcome is a 404. THE FIELD'S PURPOSE IS TO TELL THE CONSOLE WHAT
+        THE OPERATOR CAN DO, and a permission with no route is not something anyone can do.
+      itISTHECEILINGVERSUSFLOORDISTINCTION_ONELAYEROVER: >-
+        `worker.ts` records it for `CUSTOMERS_APP_PERMISSIONS` and `authorizer.ts` enforces it: THE
+        DECLARATION IS THE CEILING AND THE GRANT IS THE FLOOR, and access is the intersection.
+        `whoami` reports the intersection for the same reason authorization computes it — the union
+        would describe authority nobody has. THE ROLE'S EIGHT ARE A CEILING; THE CLASS'S ROUTES ARE
+        THE OTHER BOUND.
+      theCONSEQUENCEWHENAROUTEISADDED: >-
+        ADDING A ROUTE CHANGES THIS RESPONSE WITHOUT ANY ROLE CHANGING. The day a
+        platform-operator-creation route exists, `core.principal.grant-platform-scope` starts
+        appearing here for principals who already held it. THAT IS CORRECT AND IS WORTH STATING,
+        because it means the field tracks the SURFACE and not only the grant — a client must not
+        cache it across deployments or infer a role from it.
     notes: >-
       IT RETURNS THE CALLER'S OWN CONTEXT AND HAS NO FIELD NAMING ANOTHER PRINCIPAL. The safety
       argument is in the signature, the same device co1 relies on in organization-selection-v1:

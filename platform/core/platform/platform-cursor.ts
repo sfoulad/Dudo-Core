@@ -38,6 +38,33 @@
  * repeat rows silently.
  *
  * ===========================================================================================
+ * AND IT BINDS THE PRINCIPAL. `platform-operator-v1`'s corrected `$defs/cursor`:
+ * "IT MUST NOT BE TRANSFERABLE BETWEEN OPERATORS, or one operator could resume another's
+ * enumeration."
+ * ===========================================================================================
+ *
+ * THE HONEST SCOPE OF THIS, BECAUSE IT IS NARROWER THAN IT SOUNDS. Any caller who can present a
+ * cursor already holds `core.organization.list` and can page from the start, so a transferred
+ * cursor discloses nothing that caller could not obtain in one more request. THIS IS NOT AN
+ * ESCALATION AND IT IS NOT A CONFIDENTIALITY FIX.
+ *
+ * WHAT IT IS: a contract and an implementation agreeing. The rule is now normative in an accepted
+ * contract, the cost of honouring it is one field and one comparison, and a quiet disagreement
+ * between a published contract and the code is how `the422Rule` began — which shipped into a
+ * client. The property is also the one that would matter first if a narrower platform role ever
+ * held a filtered view of this collection.
+ *
+ * THE PRINCIPAL IS CARRIED AS A DIGEST, NEVER AS A VALUE — `pagination/cursor.ts`'s device and its
+ * reason: "A cursor is base64url and a client can decode it." An operator's own principal
+ * identifier is not a secret from that operator, but a cursor ends up in logs, in referrers and in
+ * bug reports, and a digest salted with the signing key compares equal for the same principal
+ * while revealing nothing to whoever finds it there.
+ *
+ * A MISMATCH RETURNS THE SAME `rejectedCursor()` AS EVERY OTHER FAILURE, so binding the principal
+ * adds no new distinguishable case — an operator presenting another's cursor cannot tell that from
+ * presenting an expired one.
+ *
+ * ===========================================================================================
  * IT SHARES `CURSOR_SIGNING_KEY`, AND THE DOMAIN SEPARATION IS EXPLICIT
  * ===========================================================================================
  *
@@ -62,19 +89,42 @@ const SIGNATURE_LENGTH = 43;
 /** The domain label. Its presence is what keeps this codec's messages disjoint from cursor.ts's. */
 const DOMAIN = 'dudo.platform.cursor.v1 ';
 
+/**
+ * What a cursor is bound to. All three are compared on presentation; none is ever USED to build
+ * the query, which is `pagination/cursor.ts` property 1 applied here — the anchor is a position,
+ * and the other two are equality checks.
+ *
+ * A RECORD RATHER THAN THREE POSITIONAL ARGUMENTS, so that adding a fourth binding later cannot
+ * silently reorder two `string` parameters at a call site. `encode(anchor, pageSize, principalId)`
+ * and `encode(anchor, principalId, pageSize)` would both compile.
+ */
+export type PlatformCursorBinding = {
+  /** The operator this cursor was issued to. Server-derived; carried as a digest, never a value. */
+  readonly principalId: string;
+  readonly pageSize: number;
+};
+
 export type PlatformCursorCodec = {
   /** The anchor is the LAST identifier of the page just returned. */
-  encode(anchorOrganizationId: string, pageSize: number, nowMs: number): Promise<string>;
+  encode(
+    anchorOrganizationId: string,
+    binding: PlatformCursorBinding,
+    nowMs: number,
+  ): Promise<string>;
   /**
    * Returns the anchor, or ONE rejection value.
    *
    * EVERY FAILURE RETURNS `rejectedCursor()`, which is a single constant expression with no
-   * parameters — malformed, forged, expired and bound-to-a-different-page-size are four causes
-   * and one answer. That is `pagination/cursor.ts`'s property 4, kept structural rather than
-   * remembered: there is no branch here that produces a different error and none that takes an
-   * argument, so the four cannot drift apart.
+   * parameters — malformed, forged, expired, bound to a different page size, and ISSUED TO A
+   * DIFFERENT OPERATOR are five causes and one answer. That is `pagination/cursor.ts`'s property 4,
+   * kept structural rather than remembered: there is no branch here that produces a different
+   * error and none that takes an argument, so the five cannot drift apart.
    */
-  decode(cursor: string, pageSize: number, nowMs: number): Promise<Result<string>>;
+  decode(
+    cursor: string,
+    binding: PlatformCursorBinding,
+    nowMs: number,
+  ): Promise<Result<string>>;
 };
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -137,12 +187,32 @@ export async function createPlatformCursorCodec(
     return new Uint8Array(signature);
   }
 
+  /**
+   * A short, salted digest. Comparable; not reversible into the value it stands for.
+   *
+   * The `'d '` prefix keeps digest messages disjoint from body signatures under the same key, so
+   * a digest can never be mistaken for — or substituted with — a signature. Twelve bytes is 96
+   * bits, far past what a comparison needs and short enough to keep the cursor well inside its
+   * 512-character ceiling. Both choices are `pagination/cursor.ts`'s, deliberately unchanged.
+   */
+  async function digest(value: string): Promise<string> {
+    const bytes = await mac(`d ${value}`);
+    return toBase64Url(bytes.slice(0, 12));
+  }
+
   return {
-    async encode(anchorOrganizationId: string, pageSize: number, nowMs: number): Promise<string> {
+    async encode(
+      anchorOrganizationId: string,
+      binding: PlatformCursorBinding,
+      nowMs: number,
+    ): Promise<string> {
       const body = JSON.stringify({
         v: CURSOR_VERSION,
         a: anchorOrganizationId,
-        p: pageSize,
+        p: binding.pageSize,
+        // THE OPERATOR, AS A DIGEST. See the header: comparable, and worthless to whoever finds
+        // this string in a log.
+        o: await digest(binding.principalId),
         i: nowMs,
       });
       const bodyEncoded = toBase64Url(encoder.encode(body));
@@ -153,7 +223,11 @@ export async function createPlatformCursorCodec(
       return `${signature}${bodyEncoded}`;
     },
 
-    async decode(cursor: string, pageSize: number, nowMs: number): Promise<Result<string>> {
+    async decode(
+      cursor: string,
+      binding: PlatformCursorBinding,
+      nowMs: number,
+    ): Promise<Result<string>> {
       // Every `return err(rejectedCursor())` below is the SAME value. Do not specialise one.
       if (cursor.length <= SIGNATURE_LENGTH || cursor.length > CURSOR_MAX_LENGTH) {
         return err(rejectedCursor());
@@ -189,7 +263,13 @@ export async function createPlatformCursorCodec(
       if (nowMs - body.i > CURSOR_MAX_AGE_MS || body.i > nowMs) {
         return err(rejectedCursor());
       }
-      if (body.p !== pageSize) {
+      if (body.p !== binding.pageSize) {
+        return err(rejectedCursor());
+      }
+      // ISSUED TO A DIFFERENT OPERATOR. COMPARED, never used: `binding.principalId` here is the
+      // AUTHENTICATED operator, and the cursor's contribution is a yes or a no. There is no code
+      // path that reads a principal out of a cursor, because none is in there to read.
+      if (body.o !== (await digest(binding.principalId))) {
         return err(rejectedCursor());
       }
       return ok(body.a);

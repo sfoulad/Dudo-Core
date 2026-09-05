@@ -183,6 +183,46 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
     },
   );
 
+  suite.test(
+    'a platform route refuses a both-tables principal with the code the contract names',
+    async () => {
+      // `platform-operator-v1`, `errors.forbidden`, lists FOUR causes that receive the identical
+      // argument-free `forbidden`, and the fourth is "A PRINCIPAL PRESENT IN BOTH TABLES". This
+      // case asserts that sentence.
+      //
+      // IT IS ISOLATED FROM THE CASE ABOVE ON PURPOSE, AND THE REASON IS A REGRESSION IT CAUGHT.
+      //
+      // When the Action-side mutual exclusion first landed it refused inside
+      // `session-resolution.ts::liveSession` — which the platform class also passes through for
+      // authentication — so a both-tables principal received `unauthenticated` on a platform
+      // route. THE PRINCIPAL WAS STILL REFUSED, so a suite asserting only "it is refused" would
+      // have stayed green; but the fourth cause had become distinguishable from the other three
+      // BY STATUS CODE ALONE, which re-opens the probe of `organization_membership` that the
+      // four-way collapse exists to close.
+      //
+      // `session-resolution.ts` now splits the fact from the refusal: `liveSession` refuses with
+      // the Action class's `unauthenticated`, and `resolvePrincipalId` passes the principal
+      // through to `platform-authority.ts`, which refuses with this class's `forbidden`. THE SAME
+      // RULE ANSWERS WITH TWO CODES BECAUSE THE CODE BELONGS TO THE REQUEST CLASS RATHER THAN TO
+      // THE RULE. Both halves are asserted — this case, and `the Action path refuses…` below.
+      //
+      // KEEP THE TWO CASES SEPARATE. Merging them back would restore exactly the blind spot that
+      // let the regression through.
+      const world = await make();
+      try {
+        for (const routeId of ROUTE_IDS) {
+          expectError(
+            `${routeId}: the contract's fourth forbidden cause`,
+            await world.call(routeId, { sessionId: SESSION_BOTH_TABLES }),
+            EXPECTED_FORBIDDEN,
+          );
+        }
+      } finally {
+        world.close();
+      }
+    },
+  );
+
   suite.test('a mutual-exclusion refusal writes NO platform-operator action record', async () => {
     const world = await make();
     try {
@@ -516,9 +556,21 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
           'session-resolution.ts resolved a principal present in BOTH platform_operator and ' +
             'organization_membership into a full AuthenticatedPrincipal, scoped to the tenant, ' +
             'carrying that membership role\'s grants. platform-operator-v1 requires that "every ' +
-            'platform route AND every Action" deny this principal; the platform half does and ' +
-            'the Action half does not. Actual: ' +
+            'platform route AND every Action" deny this principal. Actual: ' +
             show(both),
+        );
+
+        // AND THE ANSWER IS THE ACTION CLASS'S OWN COLLAPSE, not a fifth distinguishable one.
+        // `liveSession` already answers `unauthenticated` for a session that does not exist, one
+        // that expired, a deleted principal and a suspended principal; this joins those four
+        // rather than standing beside them. A caller cannot discover it is in both tables, so it
+        // cannot use an Action to probe `platform_operator`.
+        const unknownSession = await world.sessions.resolve('ses_exists_nowhere1');
+        assertTrue('both were refused', !both.ok && !unknownSession.ok, show(both));
+        assertEqual(
+          `${ISOLATION} it is byte-identical to an unknown session's refusal`,
+          show((both as { error: unknown }).error),
+          show((unknownSession as { error: unknown }).error),
         );
       } finally {
         world.close();

@@ -48,6 +48,7 @@ import { buildBootstrapBoundsSuite } from './suites/platform-operator/bootstrap-
 import { buildConfirmationSuite } from './suites/platform-operator/confirmation.ts';
 
 import {
+  withActionSideMutualExclusionRemoved,
   withAuditRecorderRemoved,
   withMutualExclusionProbeRemoved,
 } from './harness/broken-platform-controls.ts';
@@ -136,6 +137,49 @@ async function main(): Promise<void> {
       buildMutualExclusionSuite(probeRemoved),
       buildPlatformAuthorizationSuite(probeRemoved),
     ]),
+  );
+
+  // -----------------------------------------------------------------------------------------
+  // Negative control 1b: THE MUTUAL EXCLUSION ON THE ACTION SIDE.
+  //
+  // The invariant is enforced in two places reading two different statements, and control 1 above
+  // reaches only one of them. Since `session-resolution.ts::liveSession` began refusing a
+  // both-tables principal, it refuses BEFORE the platform store's probe is consulted — so control
+  // 1's reach shrank without anything about it looking different. This removes the other half:
+  // `findPrincipal` still runs both EXISTS subqueries and `holdsMembership` is dropped.
+  // -----------------------------------------------------------------------------------------
+  const actionSideRemoved: MakeWorld = (options) =>
+    createPlatformWorld({ ...options, wrapIdentityStore: withActionSideMutualExclusionRemoved });
+  classify(
+    'THE ACTION-SIDE MUTUAL EXCLUSION — findPrincipal reports holdsMembership: false',
+    await runAll([
+      buildMutualExclusionSuite(actionSideRemoved),
+      buildPlatformAuthorizationSuite(actionSideRemoved),
+    ]),
+  );
+
+  // -----------------------------------------------------------------------------------------
+  // Negative control 1c: BOTH HALVES AT ONCE — and this is the one that answers the question.
+  //
+  // Controls 1 and 1b each remove ONE of two independent checks, and the platform routes refuse a
+  // both-tables principal under either one alone. That is defence in depth working exactly as
+  // `0025` intends, and it has a consequence for how the two runs above must be read: NEITHER OF
+  // THEM CAN TURN THE "every platform route refuses" CASE RED, so neither on its own demonstrates
+  // that the case tests the invariant rather than testing nothing.
+  //
+  // This run removes both. If the case still stayed green here, it would not be testing the
+  // invariant at all — and that is a claim only a run with every enforcement point removed can
+  // settle. Stated rather than left to be inferred from two partial controls.
+  // -----------------------------------------------------------------------------------------
+  const bothHalvesRemoved: MakeWorld = (options) =>
+    createPlatformWorld({
+      ...options,
+      wrapStore: withMutualExclusionProbeRemoved,
+      wrapIdentityStore: withActionSideMutualExclusionRemoved,
+    });
+  classify(
+    'BOTH HALVES OF THE MUTUAL EXCLUSION — the platform probe AND the Action-side flag',
+    await runAll([buildMutualExclusionSuite(bothHalvesRemoved)]),
   );
 
   // -----------------------------------------------------------------------------------------

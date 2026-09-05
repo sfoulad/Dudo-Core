@@ -86,7 +86,7 @@
         "principal_id": { "$ref": "#/$defs/principalId" },
         "platform_role": { "$ref": "#/$defs/platformRole" },
         "permissions": {
-          "description": "The effective permission list, for rendering only. UI HIDING IS PRESENTATION, NEVER SECURITY (0007 D8): every permission here is enforced again by Core on the call itself, and a console that ignored this list entirely would be ugly and exactly as safe.",
+          "description": "THE REACHABLE PERMISSION SET, NOT THE HELD ONE — the intersection of what the platform role grants and what a route in this class can actually reach. For platform-admin today that is SIX, not the eight the role holds: core.principal.grant-platform-scope and core.marketplace.moderate are omitted because NO ROUTE EXISTS FOR EITHER, deliberately in the first case (no route creates a platform operator) and by phase in the second. Reporting them would describe a capability that does not exist and would have a console draw a button whose only outcome is a 404. It is the same ceiling-versus-floor intersection authorizer.ts computes, with the class's route table as the second bound. ADDING A ROUTE CHANGES THIS RESPONSE WITHOUT ANY ROLE CHANGING, so a client must not cache it across deployments or infer a role from it. UI HIDING IS PRESENTATION, NEVER SECURITY (0007 D8): every permission here is enforced again by Core on the call itself, and a console that ignored this list entirely would be ugly and exactly as safe.",
           "type": "array",
           "maxItems": 64,
           "uniqueItems": true,

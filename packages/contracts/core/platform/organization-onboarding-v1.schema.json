@@ -56,8 +56,9 @@
     "onboardOrganizationOutput": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organization_id", "admin_principal_id", "workspace_id", "initial_password", "warnings"],
-      "description": "THE ONLY RESPONSE IN ANY DUDO CONTRACT THAT CARRIES A CREDENTIAL. It is Cache-Control: no-store, it is shown exactly once, and no route in any contract returns it again — principal_credential holds no password column and no reversible form of one, so this is arithmetic rather than policy.",
+      "$comment": "REMOVED 2026-09-05: a plaintext `initial_password`, which was in `required`. There is no tombstone property for it, deliberately — a placeholder left in `properties` would be a PERMITTED OPTIONAL FIELD under additionalProperties:false, which is the same defect one size smaller. The removal is recorded here, in `description`, and in the contract's clientObligations.",
+      "required": ["organization_id", "admin_principal_id", "workspace_id", "warnings"],
+      "description": "NO CREDENTIAL APPEARS IN THIS RESPONSE, AND THAT IS THE POINT. CORRECTED 2026-09-05: this object previously required `initial_password`, a plaintext password, while the prose beside it said the server never sees one. Under docs/decisions/0026 option B THE CONSOLE GENERATES THE PASSWORD AND DERIVES FROM IT, so the server has no way to produce this field — an implementer satisfying the old `required` list would have had to build option A, which is the exact design 0015 §D and 0026 exist to prevent. THE CONSOLE ALREADY HOLDS THE ONLY COPY, so the value never needed the round trip. Cache-Control: no-store still applies: the identifiers here are not secret but they are not cacheable either.",
       "properties": {
         "organization_id": {
           "type": "string",
@@ -72,12 +73,6 @@
           "type": ["string", "null"],
           "pattern": "^[A-Za-z0-9_-]{8,64}$",
           "description": "NULL WHEN warnings CONTAINS first_workspace_not_created. The Organization exists and has no Workspace; an operator must create one before the customer can use the product, and that route does not exist yet."
-        },
-        "initial_password": {
-          "type": "string",
-          "minLength": 20,
-          "maxLength": 64,
-          "description": "THE GENERATED PASSWORD, IN PLAINTEXT, SHOWN EXACTLY ONCE. At least 128 bits of entropy from a cryptographic source, rendered in an alphabet with no visually confusable characters because a human will read it aloud or retype it from a screen. IT IS NOT STORED, NOT LOGGED, NOT IN THE AUDIT RECORD, AND NOT RECOVERABLE. An operator who closes the tab has lost it and the only remedy is credential-reset-v1 — which the console MUST say at the moment it displays this value, not in documentation read at some other time. Under ON-5 option B the console already holds this value and the server echoes nothing; under option A the server generated it and this is its only appearance."
         },
         "warnings": {
           "type": "array",
