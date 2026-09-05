@@ -40,6 +40,7 @@ import type { Result } from '../kernel/result.ts';
 import type { CryptoBytes } from '../kernel/bytes.ts';
 import type { Authorizer } from '../authorization/authorizer.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
+import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
 import type { PlatformOperatorStore } from './platform-operator-store.ts';
 import type { PlatformRouteDependencies } from './platform-routes.ts';
 import { createPlatformAuthorityResolver } from './platform-authority.ts';
@@ -86,6 +87,19 @@ export type PlatformCompositionInput = {
   readonly cursorSigningKey: CryptoBytes;
   /** Required, no default. An empty list makes every platform route answer 404. */
   readonly adminHosts: readonly string[];
+  /**
+   * The confirmation service, for `platform.confirmations.request`.
+   *
+   * OPTIONAL, AND ABSENT MEANS THE CHALLENGE ROUTE IS UNREACHABLE — the route stays registered and
+   * `dispatchPlatformRoute` answers `unavailable` for a route with no composed handler. Not open,
+   * not silently permissive.
+   *
+   * THE CONSEQUENCE IS WORTH STATING: with no challenge route, NO CONFIRMATION CAN BE OBTAINED,
+   * so every `critical` platform operation is unreachable. That is the correct direction — the
+   * gate refuses without a confirmation, and a deployment that composed the gate but not the
+   * challenge route refuses everything critical rather than performing it unconfirmed.
+   */
+  readonly confirmations?: ConfirmationService;
 };
 
 export async function createPlatformComposition(
@@ -98,6 +112,7 @@ export async function createPlatformComposition(
       store: input.store,
       cursors,
       clock: input.clock,
+      confirmations: input.confirmations,
     }),
     readSessionId: input.readSessionId,
     authenticatePrincipal: input.authenticatePrincipal,

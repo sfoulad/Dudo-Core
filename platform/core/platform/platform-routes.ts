@@ -97,7 +97,11 @@ import { err, ok } from '../kernel/result.ts';
 import { detail, forbidden, invalidArgument, unauthenticated, unavailable } from '../kernel/errors.ts';
 import type { Authorizer } from '../authorization/authorizer.ts';
 import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
-import { parsePreAuthBody } from '../identity/pre-auth-admission.ts';
+import {
+  parsePreAuthBody,
+  PRE_AUTH_MAX_BODY_BYTES,
+  PRE_AUTH_MAX_FIELD_LENGTH,
+} from '../identity/pre-auth-admission.ts';
 import type { PlatformAuthority, PlatformAuthorityResolver } from './platform-authority.ts';
 import type { PlatformAuditRecorder, PlatformActionTarget } from './platform-audit.ts';
 import { NO_TARGET } from './platform-audit.ts';
@@ -105,6 +109,10 @@ import {
   PLATFORM_ORGANIZATION_LIST_PERMISSION,
   PLATFORM_PERMISSION_ENVELOPE,
 } from './platform-permissions.ts';
+import {
+  confirmableOperations,
+  confirmablePermissionFor,
+} from '../confirmation/critical-permissions.ts';
 
 /**
  * The base path. `/api/v1/platform`.
@@ -136,7 +144,10 @@ export const PLATFORM_BASE_PATH = '/api/v1/platform';
  * `unauthenticated`, which is the fail-closed shape, but a route that does not exist cannot be
  * reached at all.
  */
-export type PlatformRouteId = 'platform.organizations.list' | 'platform.session.whoami';
+export type PlatformRouteId =
+  | 'platform.organizations.list'
+  | 'platform.session.whoami'
+  | 'platform.confirmations.request';
 
 export type PlatformRouteMethod = 'GET' | 'POST';
 
@@ -148,6 +159,51 @@ export type PlatformRouteMethod = 'GET' | 'POST';
  * per-route scope is a per-route opportunity to evaluate at the wrong level — which
  * `AUTHORIZATION_STANDARD.md` §4 calls "a silent privilege escalation".
  */
+/**
+ * How a route's permission is determined.
+ *
+ * ===========================================================================================
+ * A UNION RATHER THAN A REQUIRED `permission` WITH AN OPTIONAL `resolvePermission` BESIDE IT.
+ * ===========================================================================================
+ *
+ * The optional-sibling shape lets a route declare both — in which case a reviewer cannot tell
+ * which governs — or declare a fixed permission it never uses, which is a lie in the route table.
+ * **The union makes both unrepresentable**, and it makes the dynamic case loud at the one place
+ * anybody reads to find out what a route requires.
+ *
+ * `from-body` EXISTS FOR ONE ROUTE AND HAS A REAL TARGET. `confirmation-v1`: the challenge route
+ * declares *"THE SAME PERMISSION AS THE OPERATION NAMED IN THE REQUEST, resolved from action_id.
+ * Not a permission of its own."* That is what keeps it from being an oracle — a caller who could
+ * not perform the operation cannot obtain a challenge for it, and receives the identical refusal.
+ *
+ * *** THE EQUIVALENT EXTENSION TO THE **ACTION** CLASS IS DELIBERATELY NOT MADE. *** Team Lead
+ * ruling, 2026-09-05: `Action.permission` is read by `authorize()` and by every audit record, and
+ * making it dynamic is an extension to the most load-bearing shape in the product — **to serve a
+ * route that currently has nothing to point at.** `customers.customer.delete` is a deferred route
+ * and there is no second critical Action, so `core.confirmations.request` is DEFERRED UNTIL A
+ * CRITICAL ACTION EXISTS, because the change it requires is to the Action permission model and
+ * there is currently nothing to validate it against. That is the reason, and it is written here so
+ * the route is not built as a tidy-up.
+ */
+export type PlatformRoutePermission =
+  | { readonly kind: 'fixed'; readonly permissionId: string }
+  | {
+      readonly kind: 'from-body';
+      /**
+       * Returns a permission the CALLER'S OWN registry knows, or `undefined`.
+       *
+       * `undefined` is refused with `invalid_argument` — never with a permissive default and never
+       * by falling back to some other permission. A resolver that returned a permission the caller
+       * did not name would authorize one operation while the human confirmed another.
+       */
+      readonly resolve: (body: PreAuthBody) => string | undefined;
+    };
+
+/** For the two ordinary routes. A fixed, Core-owned literal. */
+function fixedPermission(permissionId: string): PlatformRoutePermission {
+  return { kind: 'fixed', permissionId };
+}
+
 export type PlatformRoute = {
   readonly id: PlatformRouteId;
   readonly method: PlatformRouteMethod;
@@ -158,7 +214,29 @@ export type PlatformRoute = {
    * `PLATFORM_PERMISSION_ENVELOPE`. Required, and there is no route without one — `0007` rule 4,
    * and it is what distinguishes this class from the session class.
    */
-  readonly permission: string;
+  readonly permission: PlatformRoutePermission;
+  /**
+   * The COMPLETE set of body field names whose value is a NESTED OBJECT.
+   *
+   * ===========================================================================================
+   * WHY THIS EXISTS, AND WHY `parsePreAuthBody` WAS NOT WIDENED INSTEAD.
+   * ===========================================================================================
+   *
+   * `confirmation-v1`'s challenge request carries `parameters`, which is an object. The class's
+   * validation floor is `parsePreAuthBody` — shared with the pre-authentication registry and the
+   * session route class **deliberately, so the three cannot drift** — and it refuses nesting
+   * outright.
+   *
+   * WIDENING IT WOULD SPEND THAT PROPERTY FOR ONE ROUTE IN ONE CLASS. So the extension lives here,
+   * inside the class that needs it, and **a route declaring no object fields takes the original
+   * path byte for byte** — the two routes that existed before this change are validated by exactly
+   * the code that validated them before.
+   *
+   * AN OBJECT FIELD IS STILL VALIDATED, and that is what keeps P2 true: a flat map of primitives,
+   * bounded in count and in length, with no nesting of its own. It is not waved through because it
+   * happens to be an object.
+   */
+  readonly objectFields: readonly string[];
   /**
    * The COMPLETE set of body field names this route accepts. Required, and may be empty.
    *
@@ -195,9 +273,10 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     id: 'platform.organizations.list' as const,
     method: 'GET' as const,
     path: `${PLATFORM_BASE_PATH}/organizations`,
-    permission: PLATFORM_ORGANIZATION_LIST_PERMISSION,
+    permission: fixedPermission(PLATFORM_ORGANIZATION_LIST_PERMISSION),
     // No body. A GET with a body is refused like any other undeclared input.
     fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
     // EXACTLY TWO. There is no `organization_id` filter, no `status` filter, no `q`, no `sort` and
     // no `include`. Each of those is a way to ask the control plane a question this route is not
     // supposed to answer, and `include=customers` is how a console acquires cross-tenant reach in
@@ -208,12 +287,53 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     id: 'platform.session.whoami' as const,
     method: 'GET' as const,
     path: `${PLATFORM_BASE_PATH}/whoami`,
-    permission: PLATFORM_ORGANIZATION_LIST_PERMISSION,
+    permission: fixedPermission(PLATFORM_ORGANIZATION_LIST_PERMISSION),
     fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
     // NONE, SO ANY QUERY STRING AT ALL IS REFUSED. In particular there is no `principal_id`: the
     // safety argument for this route is in its signature — "it returns the caller's own context
     // and has no field naming another principal" — and an accepted-but-ignored parameter would be
     // the first half of undoing it.
+    queryParameters: Object.freeze([]),
+  }),
+  Object.freeze({
+    id: 'platform.confirmations.request' as const,
+    method: 'POST' as const,
+    path: `${PLATFORM_BASE_PATH}/confirmations`,
+    // ===========================================================================================
+    // THE PERMISSION IS THE CONFIRMED OPERATION'S, AND THAT IS WHAT KEEPS THIS FROM BEING AN
+    // ORACLE. `confirmation-v1` §whereItLIVES.
+    // ===========================================================================================
+    //
+    // *"IT RUNS THE FULL AUTHORIZATION OF THE TARGET OPERATION... A caller who could not perform
+    // the operation cannot obtain a challenge for it, and receives the identical refusal."*
+    //
+    // WITHOUT THIS THE CHALLENGE ENDPOINT WOULD BE A UNIVERSAL EXISTENCE ORACLE OVER EVERY CRITICAL
+    // TARGET IN THE PLATFORM, reachable by anyone with any session — a strictly worse hole than the
+    // one confirmation closes.
+    //
+    // NO NEW PERMISSION IS DECLARED. `permission-catalog.yaml` gains nothing from this route: a
+    // `core.confirmation.request` held by everyone, checked on every call and deniable to nobody,
+    // is the ceremony `organization-selection-v1` refused to invent and `platform-operator-v1`
+    // refused again for `whoami`. THE CHALLENGE BORROWS THE PERMISSION OF THE THING IT CONFIRMS.
+    permission: {
+      kind: 'from-body' as const,
+      resolve: (body: PreAuthBody) => {
+        const actionId = body.action_id;
+        // A NON-STRING OR UNKNOWN OPERATION RESOLVES TO NOTHING, and the dispatcher refuses with
+        // `invalid_argument`. It does NOT fall back to a permission of its own — a fallback here
+        // would authorize a caller for an operation it did not name.
+        return typeof actionId === 'string' && confirmableOperations().includes(actionId)
+          ? confirmablePermissionFor(actionId)
+          : undefined;
+      },
+    },
+    // `action_id` and `locale` are flat; `parameters` is the object field this whole extension
+    // exists for. There is deliberately NO `principal_id` and NO `session_id`: both come from the
+    // authenticated context, and `requestConfirmationInput` states why — *"an input that decides
+    // its own binding is not an input, it is a grant."*
+    fields: Object.freeze(['action_id', 'locale']),
+    objectFields: Object.freeze(['parameters']),
     queryParameters: Object.freeze([]),
   }),
 ]);
@@ -308,6 +428,21 @@ export type PlatformRouteContext = {
   readonly routeId: PlatformRouteId;
   readonly authority: PlatformAuthority;
   readonly query: ReadonlyMap<string, string>;
+  /**
+   * The route's declared object fields, already validated as flat primitive maps. Empty for every
+   * route that declares none.
+   *
+   * A HANDLER CANNOT REACH AN UNDECLARED OBJECT, because only declared keys are lifted here.
+   */
+  readonly objects: Readonly<Record<string, PlatformObjectField>>;
+  /**
+   * The session this request arrived on. Server-derived from a verified credential.
+   *
+   * IT IS HERE FOR THE CONFIRMATION BINDING AND FOR NOTHING ELSE — a confirmation is bound to the
+   * session so that one obtained on one device is not spendable on another, and dies with the
+   * session at revocation. No handler may use it as an identifier for anything else, and none does.
+   */
+  readonly sessionId: string;
   readonly requestId: string;
   readonly correlationId: string;
 };
@@ -440,6 +575,103 @@ function parseQuery(
   return ok(parsed);
 }
 
+/** A validated object field: flat, primitive, bounded. Never nested. */
+export type PlatformObjectField = Readonly<Record<string, string | boolean | null>>;
+
+/** The most keys one declared object field may carry. `PRE_AUTH_MAX_FIELDS`'s twelve, matched. */
+export const PLATFORM_MAX_OBJECT_FIELD_KEYS = 12;
+
+/**
+ * Lifts the route's declared object fields out of the body and returns the flat remainder.
+ *
+ * ===========================================================================================
+ * THE EXTENSION IS CONFINED TO ROUTES THAT ASK FOR IT.
+ * ===========================================================================================
+ *
+ * A route declaring no object fields RETURNS THE ORIGINAL BODY TEXT UNTOUCHED, so
+ * `parsePreAuthBody` sees exactly the bytes it saw before this function existed. That is what lets
+ * the shared floor stay shared: the pre-authentication registry, the session route class and every
+ * platform route without an object field are all still validated by one implementation.
+ *
+ * AN OBJECT FIELD IS VALIDATED, NOT WAVED THROUGH — a flat map of primitives, bounded in count and
+ * in length, with no nesting of its own. P2 is that no platform route is the one route without
+ * validation, and a declared object that nobody checked would be exactly that route.
+ *
+ * NUMBERS ARE REFUSED HERE TOO, matching `canonicalizeParameters`. The reason there is that `1`,
+ * `1.0` and `1e0` are one JSON number and three byte strings, so a number in a binding hash fails
+ * across clients; refusing at both layers means a caller is told at the boundary rather than
+ * deeper in, and the two layers cannot disagree about what is acceptable.
+ */
+function splitObjectFields(
+  route: PlatformRoute,
+  bodyText: string,
+): Result<{ readonly flatBodyText: string; readonly objects: Readonly<Record<string, PlatformObjectField>> }> {
+  if (route.objectFields.length === 0) {
+    return ok({ flatBodyText: bodyText, objects: Object.freeze({}) });
+  }
+  if (bodyText.length === 0) {
+    return ok({ flatBodyText: bodyText, objects: Object.freeze({}) });
+  }
+  // The 4 KiB ceiling is applied to the WHOLE body before anything is parsed, so a route with an
+  // object field is not a way to send a larger request than any other route in the class.
+  if (new TextEncoder().encode(bodyText).length > PRE_AUTH_MAX_BODY_BYTES) {
+    return err(invalidArgument([detail('', 'body_too_large')]));
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return err(invalidArgument([detail('', 'must_be_valid_json')]));
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return err(invalidArgument([detail('', 'must_be_an_object')]));
+  }
+
+  const declared = new Set(route.objectFields);
+  const objects: Record<string, PlatformObjectField> = Object.create(null);
+  const flat: Record<string, unknown> = Object.create(null);
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!declared.has(key)) {
+      // Left for `parsePreAuthBody`, which refuses an undeclared name with `unknown_field` and is
+      // the single place that decision is made.
+      flat[key] = value;
+      continue;
+    }
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return err(invalidArgument([detail(key, 'must_be_an_object')]));
+    }
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > PLATFORM_MAX_OBJECT_FIELD_KEYS) {
+      return err(invalidArgument([detail(key, 'too_many_fields')]));
+    }
+    const contents: Record<string, string | boolean | null> = Object.create(null);
+    for (const [innerKey, innerValue] of entries) {
+      if (innerKey.length === 0 || innerKey.length > PRE_AUTH_MAX_FIELD_LENGTH) {
+        return err(invalidArgument([detail(`${key}.${innerKey}`, 'invalid_parameter_name')]));
+      }
+      if (innerValue === null || typeof innerValue === 'boolean') {
+        contents[innerKey] = innerValue;
+        continue;
+      }
+      if (typeof innerValue === 'string') {
+        if (innerValue.length > PRE_AUTH_MAX_FIELD_LENGTH) {
+          return err(invalidArgument([detail(`${key}.${innerKey}`, 'too_long')]));
+        }
+        contents[innerKey] = innerValue;
+        continue;
+      }
+      // A NUMBER, a nested object or an array. NO SECOND LEVEL OF NESTING — the whole reason this
+      // extension is narrow is that arbitrary nesting is what `parsePreAuthBody` refuses, and
+      // admitting it one level down would reintroduce it with an extra step.
+      return err(
+        invalidArgument([detail(`${key}.${innerKey}`, 'must_be_a_string_boolean_or_null')]),
+      );
+    }
+    objects[key] = Object.freeze(contents);
+  }
+  return ok({ flatBodyText: JSON.stringify(flat), objects: Object.freeze(objects) });
+}
+
 /**
  * Reads `page_size`: an integer between 1 and 100, defaulting to 25.
  *
@@ -554,9 +786,52 @@ export async function dispatchPlatformRoute(
   // makes: two validation floors that were meant to be identical are two floors that will differ.
   // 4 KiB, 12 fields, 512 characters, no nesting, no undeclared names — one implementation,
   // three request classes.
-  const parsedBody = parsePreAuthBody(request.bodyText, route.fields);
+  //
+  // A ROUTE THAT DECLARES OBJECT FIELDS TAKES A DIFFERENT PATH, AND THE ONE THAT DOES NOT IS
+  // UNCHANGED BYTE FOR BYTE. `splitObjectFields` lifts the declared objects out and hands the flat
+  // remainder to exactly the call above, so the two routes that existed before this change are
+  // validated by exactly the code that validated them before.
+  const split = splitObjectFields(route, request.bodyText);
+  if (!split.ok) {
+    return err(split.error);
+  }
+  const parsedBody = parsePreAuthBody(split.value.flatBodyText, route.fields);
   if (!parsedBody.ok) {
     return err(parsedBody.error);
+  }
+  const objects = split.value.objects;
+
+  // ---- 2b. A BODY-RESOLVED PERMISSION IS RESOLVED **HERE**, AS VALIDATION, NOT AT STEP 5.
+  //
+  // ===========================================================================================
+  // THE ORDER IS THE FIX FOR A DEFECT `qa-agent` FOUND, AND THE DEFECT IS WORTH KEEPING VISIBLE.
+  // ===========================================================================================
+  //
+  // The first version resolved the permission at step 5, beside `authorize()`, and refused an
+  // unresolvable `action_id` with `invalid_argument` THERE. That broke the class's four-cause
+  // collapse: a caller with no permission at all received `invalid_argument` from this route and
+  // `forbidden` from every other one, **so the challenge route answered differently from its
+  // siblings for the same caller** — which is the property `platform-operator-v1` §errors exists
+  // to hold.
+  //
+  // MOVING IT INTO VALIDATION FIXES IT AT BOTH ENDS. An unknown or missing `action_id` is a SHAPE
+  // error, refused before authentication like every other shape error in this class, uniformly
+  // for authenticated and anonymous callers alike — so it is no oracle. And by the time step 5
+  // runs, THE PERMISSION ALWAYS RESOLVES, so authorization produces the identical `forbidden` the
+  // other routes produce.
+  //
+  // THE CONTRACT'S OWN RULE IS HONOURED BY THIS ORDERING RATHER THAN DESPITE IT: *"AN action_id
+  // NAMING AN OPERATION THAT IS NOT `critical` IS REFUSED WITH invalid_argument, not granted a
+  // pointless challenge."* It is, and now it is refused as input rather than as authorization.
+  //
+  // The confirmable operation identifiers are published in the contract, so refusing before
+  // authentication discloses nothing a reader of `confirmation-v1` does not already have.
+  const permissionId =
+    route.permission.kind === 'fixed'
+      ? route.permission.permissionId
+      : route.permission.resolve(parsedBody.value);
+  if (permissionId === undefined) {
+    return err(invalidArgument([detail('action_id', 'not_a_confirmable_operation')]));
   }
 
   // ---- 3. The session credential, then the principal.
@@ -583,10 +858,14 @@ export async function dispatchPlatformRoute(
   // ---- 5. Authorization. The envelope is the CEILING, the operator's role grants are the FLOOR,
   // and neither substitutes for the other. Evaluated at `platform` scope, which is the only scope
   // any route in this class uses — it is not a per-route field, deliberately.
+  //
+  // `permissionId` WAS RESOLVED AT STEP 2b, AS VALIDATION. By this line it always has a value —
+  // for a fixed route it is the route's own literal, and for the challenge route it is the
+  // permission of the operation the caller named. See step 2b for why the resolution moved.
   const decision = dependencies.authorizer.authorize(
     authority.value.grants,
     PLATFORM_PERMISSION_ENVELOPE,
-    route.permission,
+    permissionId,
     'platform',
   );
   if (!decision.allowed) {
@@ -612,6 +891,8 @@ export async function dispatchPlatformRoute(
       routeId: route.id,
       authority: authority.value,
       query: query.value,
+      objects,
+      sessionId: sessionId.value,
       requestId: request.requestId,
       correlationId: request.correlationId,
     },

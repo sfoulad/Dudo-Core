@@ -99,6 +99,10 @@ import { createInProcessControlPlaneWriteAdmission } from '../../identity/contro
 import { createMembershipPrincipalAuthorizationSource } from '../../identity/principal-authorization-source.ts';
 import { createIdentityComposition } from '../../identity/composition.ts';
 import { createD1PlatformStore } from '../../platform/adapters/d1/d1-platform-store.ts';
+import { createD1ConfirmationStore } from '../../confirmation/adapters/d1/d1-confirmation-store.ts';
+import { createConfirmationBinder } from '../../confirmation/binding.ts';
+import { createConfirmationService } from '../../confirmation/confirmation-service.ts';
+import { createConfirmationGate } from '../../confirmation/confirmation-gate.ts';
 import { createPlatformComposition } from '../../platform/composition.ts';
 import { createTimerSleeper } from '../../identity/pre-auth-admission.ts';
 import type { PreAuthLimiter } from '../../identity/pre-auth-admission.ts';
@@ -343,8 +347,37 @@ export async function createCoreRuntime(
   //
   // IT RECEIVES THE **CONTROL-PLANE** BINDING AND NOTHING ELSE. `createD1PlatformStore` takes one
   // database and there is no argument through which `DB_TENANT` could reach it.
+  // ===========================================================================================
+  // THE CONFIRMATION MECHANISM. `docs/decisions/0027`, `0007` D15.
+  // ===========================================================================================
+  //
+  // IT IS COMPOSED FROM PIECES THAT ALREADY EXIST: the same control-plane binding, the same
+  // admission port, the same `CredentialVerifier` login uses — *"NOTHING NEW IS NEEDED IN THE
+  // CREDENTIAL LAYER AT ALL"* — and the same cursor secret, under a distinct domain label.
+  //
+  // COMPOSING IT IS WHAT MAKES EVERY `critical` OPERATION REACHABLE. Without it the pipeline gate
+  // refuses them all with `unavailable`, which is the correct direction and is not a degraded mode
+  // worth serving: a Worker that cannot verify a confirmation must not perform an irreversible
+  // action, and `0013` D2's "must not fail open" applies to the elevation gate more than to
+  // anything else.
+  const confirmations = createConfirmationService({
+    store: createD1ConfirmationStore(controlDatabase),
+    binder: await createConfirmationBinder(cursorKey),
+    admission,
+    ids: createRandomIdGenerator(),
+    clock,
+  });
+  const confirmationGate = createConfirmationGate({
+    service: confirmations,
+    // THE SAME VERIFIER LOGIN USES, and its EQUAL-WORK PROPERTY IS WHY. A second verifier here
+    // would be a second implementation of the hardest code in the platform, measured once and
+    // trusted twice.
+    verifier: identity.verifier,
+  });
+
   const platformStore = createD1PlatformStore(controlDatabase);
   const platformRoutes = await createPlatformComposition({
+    confirmations,
     store: platformStore,
     admission,
     authorizer: createAuthorizer(),
@@ -400,6 +433,11 @@ export async function createCoreRuntime(
       // is bounded by the control-plane daily budget and refuses with `quota_exceeded`.
       sessionRoutes: identity.sessionRoutes,
       platformRoutes,
+      // THE GATE IS COMPOSED UNCONDITIONALLY. It is not gated on a flag, an environment variable
+      // or a binding, because `0027` makes the requirement derive from the permission — and a
+      // deployment able to turn confirmation off is a deployment where the top rung of the
+      // sensitivity ladder is optional.
+      confirmations: confirmationGate,
       // NO `coordinationFailureReporter` and NO `auditFailureReporter`, and their absence
       // suppresses nothing: `announceAuditFailure` emits to a last-resort channel
       // unconditionally, before any supplied reporter, and that channel is not injectable

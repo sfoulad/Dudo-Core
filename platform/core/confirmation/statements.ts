@@ -89,6 +89,32 @@ const INTERPOLATABLE = /^[A-Za-z0-9_-]{1,64}$/;
 /** `confirmationChallenge.statement`'s `maxLength`. Enforced, not assumed. */
 export const MAX_STATEMENT_LENGTH = 500;
 
+/**
+ * What the operator-action log should name for a challenge on this operation.
+ *
+ * ===========================================================================================
+ * IT IS DECLARED, NOT DERIVED, AND THE AUDIT RECORD NAMES WHAT THE HUMAN WAS SHOWN.
+ * ===========================================================================================
+ *
+ * P4 requires every platform route to write a record, and a challenge record that named nothing
+ * would be weak evidence — "an operator requested a confirmation" without saying for what.
+ *
+ * THE TEMPTING SHORTCUT IS TO GUESS FROM PARAMETER NAMES — treat a `principal_id` key as a
+ * principal target, an `organization_id` key as an Organization. That is a convention masquerading
+ * as a rule: it works until an operation names its parameter something else, and then the audit
+ * row silently records nothing while looking correct.
+ *
+ * DECLARING IT HERE TIES THE RECORD TO THE STATEMENT. The audit row names the same identifier the
+ * statement showed the human, from the same declaration, already grammar-checked by the
+ * interpolation control. **What was recorded and what was read are the same value by
+ * construction.**
+ */
+type StatementAuditTarget = {
+  readonly kind: 'organization' | 'principal';
+  /** Must be one of `interpolates`; the coherence guard enforces it. */
+  readonly key: string;
+};
+
 type StatementTemplate = {
   /**
    * The COMPLETE set of parameter keys this statement interpolates, in the order the renderer
@@ -97,6 +123,8 @@ type StatementTemplate = {
   readonly interpolates: readonly string[];
   /** One entry per supported locale. A missing locale is a load-time error; see the guard. */
   readonly text: Readonly<Record<StatementLocale, string>>;
+  /** What the operator-action log names. `null` for an operation with no single target. */
+  readonly auditTarget: StatementAuditTarget | null;
 };
 
 /**
@@ -124,6 +152,12 @@ type StatementTemplate = {
 const CATALOG: Readonly<Record<string, StatementTemplate>> = Object.freeze({
   'customers.customer.delete': Object.freeze({
     interpolates: Object.freeze(['customer_id']),
+    // NULL, AND THE NULL IS THE POINT. A customer identifier is TENANT BUSINESS DATA, and `0025`
+    // Decision 5 forbids it in the operator log absolutely: "an operator log that accumulates
+    // customer data is a second copy of the tenant database with weaker access rules." This
+    // operation's trail belongs in its own Organization's `audit_event`, which is reachable
+    // because a `DeleteCustomer` has a tenant — unlike a platform route.
+    auditTarget: null,
     text: Object.freeze({
       en:
         'Permanently delete customer {0}. This starts a 30-day recovery window, after which the ' +
@@ -135,6 +169,10 @@ const CATALOG: Readonly<Record<string, StatementTemplate>> = Object.freeze({
   }),
   'platform.credentials.reset': Object.freeze({
     interpolates: Object.freeze(['principal_id']),
+    // A PRINCIPAL IDENTIFIER IS A CONTROL-PLANE IDENTIFIER, not tenant business data, and it is
+    // exactly what `0025` Decision 5 says the operator log is FOR: "which operator did what, to
+    // which Organization or principal, when."
+    auditTarget: Object.freeze({ kind: 'principal' as const, key: 'principal_id' }),
     text: Object.freeze({
       en:
         'Reset the credential of principal {0}. Their current password stops working immediately ' +
@@ -170,6 +208,34 @@ export function resolveStatementLocale(requested: string | undefined): Statement
 /** Does Core have a statement for this operation at all? See `renderStatement` for why it matters. */
 export function hasStatement(actionId: string): boolean {
   return Object.prototype.hasOwnProperty.call(CATALOG, actionId);
+}
+
+/**
+ * What the operator-action log should name for a challenge on this operation, resolved against the
+ * request's own parameters — or `null`.
+ *
+ * IT RETURNS `null` RATHER THAN GUESSING when the template declares no target, and a `null` here is
+ * a positive statement: this operation has no single control-plane target that the operator log may
+ * hold. `customers.customer.delete` is exactly that case, and its `null` is a tenant-isolation
+ * decision rather than an omission.
+ */
+export function statementAuditTarget(
+  actionId: string,
+  parameters: ConfirmationParameters,
+): { readonly kind: 'organization' | 'principal'; readonly id: string } | null {
+  if (!hasStatement(actionId)) {
+    return null;
+  }
+  const target = CATALOG[actionId].auditTarget;
+  if (target === null) {
+    return null;
+  }
+  const value = parameters[target.key];
+  // A non-string here cannot happen for a rendered statement — `renderStatement` refuses first —
+  // but this function is exported and a future caller could reach it another way. `null` is the
+  // safe answer: an audit row naming nothing is weaker evidence, and an audit row naming the
+  // string "undefined" is worse than weak.
+  return typeof value === 'string' ? { kind: target.kind, id: value } : null;
 }
 
 /**
@@ -269,6 +335,15 @@ export function assertStatementCatalogIsCoherent(
             'character ceiling before any interpolation.',
         );
       }
+    }
+    const target = template.auditTarget;
+    if (target !== null && !template.interpolates.includes(target.key)) {
+      throw new StatementCatalogIncoherentError(
+        `'${actionId}' declares an audit target on '${target.key}', which the statement does not ` +
+          'interpolate. THE AUDIT RECORD WOULD THEN NAME SOMETHING THE HUMAN WAS NEVER SHOWN, ' +
+          'which is the one property tying the two together — and the value would not have passed ' +
+          'the interpolation grammar check either, so it could carry arbitrary text into the log.',
+      );
     }
   }
 }

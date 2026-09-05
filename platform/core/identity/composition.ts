@@ -45,6 +45,7 @@ import type { CredentialStore } from './credential-store.ts';
 import type { SessionResolver } from './session-resolution.ts';
 import { createSessionResolver } from './session-resolution.ts';
 import { createSessionPrincipalResolver } from './session-principal-resolver.ts';
+import type { CredentialVerifier } from './credential-verifier.ts';
 import { createCredentialVerifier } from './credential-verifier.ts';
 import { createHmacIdentifierHasher } from './credential-store.ts';
 import {
@@ -124,6 +125,27 @@ export type IdentityComposition = {
    * `platform/core/action/**` or `apps/**` ever importing the control plane.
    */
   readonly sessions: SessionResolver;
+  /**
+   * The ONE credential verifier, exposed for the confirmation mechanism's re-authentication step.
+   *
+   * ===========================================================================================
+   * IT IS SHARED RATHER THAN REBUILT, AND THE EQUAL-WORK PROPERTY IS THE WHOLE REASON.
+   * ===========================================================================================
+   *
+   * `confirmation-v1`: *"THE SERVER REUSES `credential-verifier.ts` AND ITS EQUAL-WORK PROPERTY,
+   * so a wrong password on a confirmation costs the same work as a right one and this route is not
+   * a password oracle."* That property comes from a dummy derivation on the miss branch and from a
+   * dummy record built once at composition — **a second verifier would be a second implementation
+   * of the hardest code in the platform, measured once and trusted twice.**
+   *
+   * IT IS ALSO WHY `0027` COULD CHOOSE RE-AUTHENTICATION AT ALL: *"NOTHING NEW IS NEEDED IN THE
+   * CREDENTIAL LAYER."* Exposing what already exists is the whole of that claim being true.
+   *
+   * IT VERIFIES WHOEVER THE IDENTIFIER NAMES, and the caller must compare the returned principal
+   * against its own. `confirmation-gate.ts` does; anything else that ever uses this must too, or
+   * presenting somebody else's identifier and password satisfies a check about you.
+   */
+  readonly verifier: CredentialVerifier;
 };
 
 export async function createIdentityComposition(
@@ -205,5 +227,6 @@ export async function createIdentityComposition(
       failureReporter: input.failureReporter,
     },
     sessions,
+    verifier,
   };
 }

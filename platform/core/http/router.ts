@@ -150,6 +150,7 @@ export function createRouter(routes: readonly Route[]): Router {
         route.action.id,
         route.action.permission,
         route.action.sensitivity,
+        route.action.errors,
       );
     }
     // ===========================================================================================

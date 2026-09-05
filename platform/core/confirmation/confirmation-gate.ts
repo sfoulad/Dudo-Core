@@ -146,12 +146,35 @@ export function splitConfirmedRequest(
     if (CONFIRMATION_FIELDS.includes(key)) {
       continue;
     }
+    if (value === undefined) {
+      // ABSENT, NOT A PARAMETER. `mergeInputSources` can produce an `undefined` for a declared-but-
+      // unsupplied field, and an absent field is not something the human confirmed. Treating it as
+      // a value would put `undefined` in the binding and make the confirmation unspendable for a
+      // reason no error could explain.
+      continue;
+    }
     if (value === null || typeof value === 'string' || typeof value === 'boolean') {
       parameters[key] = value;
       continue;
     }
-    // A number, an object, an array. `canonicalizeParameters` would refuse it anyway; refusing
-    // here names the field, which it cannot.
+    // ===================================================================================
+    // A NUMBER, AN OBJECT OR AN ARRAY. REFUSED — AND FOR NUMBERS THIS IS A REAL CONSTRAINT ON
+    // CRITICAL OPERATIONS THAT IS WORTH STATING RATHER THAN DISCOVERING.
+    // ===================================================================================
+    //
+    // `canonicalizeParameters` refuses numbers because `1`, `1.0` and `1e0` are one JSON number
+    // and three byte strings, so a number in a binding hash fails across clients. That is right,
+    // and it has a consequence here: **A CRITICAL OPERATION MAY NOT TAKE A NUMERIC PARAMETER.**
+    //
+    // The pipeline passes the MERGED input, and `mergeInputSources` coerces declared
+    // `integerQueryParams` to real numbers — so an Action with a numeric parameter that is
+    // declared critical becomes UNCONFIRMABLE, and therefore unreachable, at request time.
+    //
+    // THAT IS THE FAIL-CLOSED DIRECTION AND IT IS STILL A TRAP, because it fires when the
+    // permission is classified rather than when the Action is written. It is reported rather than
+    // worked around: coercing numbers to a canonical string here would reintroduce exactly the
+    // cross-client disagreement the refusal exists to prevent, one layer down and invisibly.
+    // Numbers belong in a critical operation's parameters as strings.
     return err(invalidArgument([detail(key, 'must_be_a_string_boolean_or_null')]));
   }
   return ok({

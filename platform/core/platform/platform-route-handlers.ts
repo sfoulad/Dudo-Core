@@ -40,7 +40,13 @@
 import type { Clock } from '../kernel/clock.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
-import { internal } from '../kernel/errors.ts';
+import { detail, internal, invalidArgument } from '../kernel/errors.ts';
+import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
+import type { ConfirmationParameters } from '../confirmation/binding.ts';
+import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
+import { confirmablePermissionFor } from '../confirmation/critical-permissions.ts';
+import { resolveStatementLocale, statementAuditTarget } from '../confirmation/statements.ts';
+import type { PlatformActionTarget } from './platform-audit.ts';
 import type { PlatformOperatorStore } from './platform-operator-store.ts';
 import type { PlatformCursorCodec } from './platform-cursor.ts';
 import { reachablePlatformPermissions } from './platform-permissions.ts';
@@ -209,13 +215,113 @@ function whoami() {
   };
 }
 
+/**
+ * The confirmation challenge — platform class.
+ *
+ * ===========================================================================================
+ * IT IS THIN BECAUSE EVERY RULE IS ENFORCED ABOVE OR BELOW IT, WHICH IS THE DESIGN.
+ * ===========================================================================================
+ *
+ * ABOVE: `dispatchPlatformRoute` has already resolved the permission FROM THE NAMED OPERATION and
+ * authorized against it, so a caller who could not perform the operation never reaches this
+ * function and receives the identical refusal it would have received from the operation itself.
+ * *"WITHOUT THIS PROPERTY THE CHALLENGE ENDPOINT WOULD BE A UNIVERSAL EXISTENCE ORACLE OVER EVERY
+ * CRITICAL TARGET IN THE PLATFORM."*
+ *
+ * BELOW: `ConfirmationService.issueChallenge` refuses a non-critical operation, canonicalises the
+ * parameters, composes the statement in Core's own words, reserves the write and stores the
+ * binding. None of that is repeated here, and re-implementing any of it would be a second place
+ * for it to drift.
+ *
+ * SO THIS FUNCTION TRANSLATES THE WIRE SHAPE AND CHOOSES THE AUDIT TARGET. That is all.
+ */
+function requestConfirmation(dependencies: { readonly confirmations: ConfirmationService }) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const actionId = body.action_id;
+    if (typeof actionId !== 'string') {
+      return err(invalidArgument([detail('action_id', 'required')]));
+    }
+    const permissionId = confirmablePermissionFor(actionId);
+    if (permissionId === undefined) {
+      // Unreachable in practice — the dispatcher resolved the permission from the same value and
+      // refused already. Kept because this handler is exported for verification and because a
+      // resolver and a handler that disagreed about what is confirmable would issue a token under
+      // one permission for an operation described by another.
+      return err(invalidArgument([detail('action_id', 'not_a_confirmable_operation')]));
+    }
+
+    const locale = typeof body.locale === 'string' ? body.locale : undefined;
+    // The declared object field, already validated as a flat primitive map by the class. An
+    // ABSENT `parameters` is an EMPTY set rather than an error: an operation may legitimately take
+    // none, and `issueChallenge` refuses if the statement needs one that is missing.
+    const parameters = (context.objects.parameters ?? {}) as ConfirmationParameters;
+
+    const challenge = await dependencies.confirmations.issueChallenge({
+      principalId: context.authority.principalId,
+      // SERVER-DERIVED, BOTH. `requestConfirmationInput` declares neither, and says why: *"an
+      // input that decides its own binding is not an input, it is a grant."*
+      sessionId: context.sessionId,
+      actionId,
+      permissionId,
+      parameters,
+      locale: resolveStatementLocale(locale),
+    });
+    if (!challenge.ok) {
+      return err(challenge.error);
+    }
+
+    return ok({
+      body: {
+        confirmation_id: challenge.value.confirmationId,
+        statement: challenge.value.statement,
+        // THE LOCALE ACTUALLY USED, WHICH IS NOT ALWAYS THE ONE REQUESTED. `0027`'s fallback rule
+        // does its work here: an unsupported locale falls back to English AND SAYS SO. A silent
+        // fallback would show a user text they cannot read while the client believed it had been
+        // localised — CF-4 restored in a smaller and harder-to-notice form.
+        statement_locale: challenge.value.statementLocale,
+        expires_at: challenge.value.expiresAt,
+      },
+      // THE AUDIT RECORD NAMES WHAT THE STATEMENT NAMED, from the template's own declaration
+      // rather than from a guess at parameter names. See `statementAuditTarget` — and note that
+      // an operation whose target is TENANT BUSINESS DATA declares none, because `0025` Decision 5
+      // forbids the operator log from holding it.
+      target: auditTargetFor(actionId, parameters),
+    });
+  };
+}
+
+function auditTargetFor(actionId: string, parameters: ConfirmationParameters): PlatformActionTarget {
+  const target = statementAuditTarget(actionId, parameters);
+  if (target === null) {
+    return NO_TARGET;
+  }
+  return target.kind === 'principal'
+    ? { kind: 'principal', principalId: target.id }
+    : { kind: 'organization', organizationId: target.id };
+}
+
 export function createPlatformRouteHandlers(dependencies: {
   readonly store: PlatformOperatorStore;
   readonly cursors: PlatformCursorCodec;
   readonly clock: Clock;
+  /**
+   * OPTIONAL, AND ABSENT MEANS THE CHALLENGE ROUTE IS UNREACHABLE — not open. `dispatchPlatformRoute`
+   * answers `unavailable` for a registered route with no composed handler, which is the same
+   * fail-closed shape `http/api.ts` gives an uncomposed `preAuth`.
+   */
+  readonly confirmations?: ConfirmationService;
 }): PlatformRouteHandlers {
-  return Object.freeze({
+  const handlers: Record<string, unknown> = {
     'platform.organizations.list': listOrganizations(dependencies),
     'platform.session.whoami': whoami(),
-  });
+  };
+  if (dependencies.confirmations !== undefined) {
+    handlers['platform.confirmations.request'] = requestConfirmation({
+      confirmations: dependencies.confirmations,
+    });
+  }
+  return Object.freeze(handlers) as PlatformRouteHandlers;
 }

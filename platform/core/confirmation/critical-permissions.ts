@@ -52,6 +52,7 @@
  */
 
 import type { Sensitivity } from '../action/action.ts';
+import { hasStatement } from './statements.ts';
 
 /**
  * Every permission `packages/contracts/registries/permission-catalog.yaml` marks
@@ -103,6 +104,49 @@ export function requiresConfirmation(permissionId: string): boolean {
 /** For the coherence guard and for `qa-agent`'s comparison against the catalog. */
 export function criticalPermissions(): readonly string[] {
   return CRITICAL_PERMISSIONS;
+}
+
+/**
+ * ===========================================================================================
+ * THE OPERATIONS THE **PLATFORM-CLASS** CHALLENGE ROUTE MAY ISSUE A CONFIRMATION FOR, AND THE
+ * PERMISSION EACH ONE BORROWS.
+ * ===========================================================================================
+ *
+ * A CORE-OWNED FROZEN LITERAL, with no registration function and no manifest channel — the same
+ * shape as the platform route table and the pre-auth registry, and for the same reason: an entry
+ * here decides which permission a challenge is authorized against, so a caller that could add one
+ * could obtain a challenge under a permission of its choosing.
+ *
+ * IT IS THE **PLATFORM CLASS'S** LIST AND NOT THE PLATFORM'S. `customers.customer.delete` is
+ * critical and is deliberately absent: it is an ACTION, it needs a tenant, and its challenge
+ * belongs to the Action class — which is deferred. Listing it here would let a platform route
+ * issue a confirmation for an operation that platform routes cannot perform, and the confirmation
+ * would be unspendable: the binding covers the action id, and no platform route will ever submit
+ * a `customers.customer.delete`.
+ *
+ * ONE ENTRY TODAY, AND A SECOND NEEDS ITS OWN ARGUMENT — the discipline `0021` imposed on its
+ * class of two and `0025` on its block of six.
+ */
+const CONFIRMABLE_PLATFORM_OPERATIONS: Readonly<Record<string, string>> = Object.freeze({
+  'platform.credentials.reset': 'core.credential.reset',
+});
+
+export function confirmableOperations(): readonly string[] {
+  return Object.freeze(Object.keys(CONFIRMABLE_PLATFORM_OPERATIONS));
+}
+
+/**
+ * The permission a platform-class challenge borrows, or `undefined` for an operation this class
+ * cannot confirm.
+ *
+ * `undefined` IS REFUSED BY THE DISPATCHER WITH `invalid_argument` and never falls back. A
+ * fallback would authorize a caller against a permission it did not name, which is the whole of
+ * what this indirection must not do.
+ */
+export function confirmablePermissionFor(actionId: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(CONFIRMABLE_PLATFORM_OPERATIONS, actionId)
+    ? CONFIRMABLE_PLATFORM_OPERATIONS[actionId]
+    : undefined;
 }
 
 export class CriticalSetIncoherentError extends Error {
@@ -166,7 +210,45 @@ export function assertCriticalSetIsCoherent(
   }
 }
 
+/**
+ * Runs at module load beside the critical-set guard.
+ *
+ * TWO PROPERTIES, AND EACH CLOSES A WAY THE CHALLENGE ROUTE COULD ISSUE A USELESS OR DANGEROUS
+ * TOKEN:
+ *
+ *   1. EVERY CONFIRMABLE OPERATION BORROWS A **CRITICAL** PERMISSION. One that borrowed a
+ *      non-critical permission would be refused by `issueChallenge` anyway — but silently, at
+ *      request time, looking like a client error. This makes it a build failure.
+ *   2. EVERY CONFIRMABLE OPERATION HAS A **STATEMENT**. Without one the challenge refuses at
+ *      request time with `no_confirmation_statement`, which is correct and is a strange thing to
+ *      discover in production. The gate is that declaring an operation confirmable and forgetting
+ *      its text makes the build stop rather than the route fail.
+ */
+export function assertConfirmableOperationsAreCoherent(
+  operations: Readonly<Record<string, string>> = CONFIRMABLE_PLATFORM_OPERATIONS,
+  isCritical: (permissionId: string) => boolean = requiresConfirmation,
+  hasText: (actionId: string) => boolean = hasStatement,
+): void {
+  for (const [actionId, permissionId] of Object.entries(operations)) {
+    if (!isCritical(permissionId)) {
+      throw new CriticalSetIncoherentError(
+        `'${actionId}' is confirmable but borrows '${permissionId}', which is not critical. ` +
+          'A confirmation for a non-critical operation is a token nothing consumes, and issuing ' +
+          'one invites a client to attach one to everything.',
+      );
+    }
+    if (!hasText(actionId)) {
+      throw new CriticalSetIncoherentError(
+        `'${actionId}' is confirmable and has no statement in the catalog. A human would be ` +
+          'asked to confirm an operation Core cannot describe, which docs/decisions/0007 D15 ' +
+          'refuses: "states exactly what will happen" is not satisfied by an action identifier.',
+      );
+    }
+  }
+}
+
 assertCriticalSetIsCoherent();
+assertConfirmableOperationsAreCoherent();
 
 export class ActionSensitivityMismatchError extends Error {
   constructor(message: string) {
@@ -202,8 +284,39 @@ export function assertActionSensitivityMatchesCatalog(
   actionId: string,
   permissionId: string,
   sensitivity: Sensitivity,
+  declaredErrors: readonly string[] = [],
 ): void {
   const catalogSaysCritical = requiresConfirmation(permissionId);
+
+  // =========================================================================================
+  // A CRITICAL ACTION MUST DECLARE `forbidden` AND `invalid_argument`, OR ITS CONFIRMATION
+  // REFUSALS BECOME `internal`.
+  // =========================================================================================
+  //
+  // `constrainToDeclaredErrors` collapses anything an Action did not declare into `internal()`.
+  // The gate refuses with `forbidden` (a bad, spent or expired confirmation; a wrong password; a
+  // password belonging to somebody else) and with `invalid_argument` (a malformed or missing
+  // confirmation field). An Action that declared neither would answer `internal` to every one of
+  // them — **so a user who mistyped their password would be told the platform had a defect**, and
+  // an operator debugging it would look in the wrong place entirely.
+  //
+  // IT IS A LOAD-TIME ERROR RATHER THAN A REQUEST-TIME SURPRISE, because the alternative is
+  // discovering it the first time somebody gets a confirmation wrong — which is the moment the
+  // message matters most. `qa-agent` found exactly this shape as five `internal`s where
+  // `forbidden` was expected.
+  if (catalogSaysCritical && declaredErrors.length > 0) {
+    for (const required of ['forbidden', 'invalid_argument'] as const) {
+      if (!declaredErrors.includes(required)) {
+        throw new ActionSensitivityMismatchError(
+          `The Action '${actionId}' has the critical permission '${permissionId}' and does not ` +
+            `declare '${required}'. The confirmation gate refuses with it, and ` +
+            '`constrainToDeclaredErrors` would collapse that into `internal` — telling a user ' +
+            'who mistyped their password that the platform is broken, and sending whoever ' +
+            'investigates to the wrong file.',
+        );
+      }
+    }
+  }
   if (catalogSaysCritical && sensitivity !== 'critical') {
     throw new ActionSensitivityMismatchError(
       `The Action '${actionId}' declares sensitivity '${sensitivity}' but its permission ` +
