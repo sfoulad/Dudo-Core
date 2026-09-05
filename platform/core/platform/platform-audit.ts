@@ -111,7 +111,29 @@ import type {
 export type PlatformActionTarget =
   | { readonly kind: 'none' }
   | { readonly kind: 'organization'; readonly organizationId: string }
-  | { readonly kind: 'principal'; readonly principalId: string };
+  | {
+      readonly kind: 'principal';
+      readonly principalId: string;
+      /**
+       * *** REQUIRED, NOT OPTIONAL, AND THAT IS THE WHOLE OF `0014`'s POINT. ***
+       *
+       * WHICH ORGANIZATION THE ACTION HAPPENED IN — a different question from what it acted on.
+       * A resolve acts on a principal and happens in an Organization; a credential reset will do
+       * the same. `0028` Decision 3's Organization feed selects on this, and **without it a
+       * principal-targeted record is invisible to the feed built to disclose it.**
+       *
+       * IT IS REQUIRED SO THE OMISSION IS UNREPRESENTABLE. `0009` stored one target and the gap
+       * was found by reading a contract against a schema, not by anything failing. An optional
+       * field here would reproduce that exactly: the feed would return 200 and be empty of the
+       * records it exists for, and every handler that forgot would look like every handler that
+       * did not.
+       *
+       * A PRINCIPAL-TARGETED ACTION THAT GENUINELY HAPPENS IN NO ORGANIZATION HAS NO WAY TO SAY
+       * SO, DELIBERATELY. There is no such operation today and one would be a design question —
+       * a platform action naming a person outside any tenant — rather than a field to widen.
+       */
+      readonly organizationId: string;
+    };
 
 /** The one target value for an operation that names nothing. Frozen so it cannot be mutated. */
 export const NO_TARGET: PlatformActionTarget = Object.freeze({ kind: 'none' as const });
@@ -146,14 +168,27 @@ export type PlatformAuditDependencies = {
 function targetColumns(target: PlatformActionTarget): {
   kind: PlatformActionTargetKind;
   id: string | null;
+  organizationId: string | null;
 } {
   switch (target.kind) {
     case 'organization':
-      return { kind: 'organization', id: target.organizationId };
+      // BOTH COLUMNS CARRY THE SAME IDENTIFIER, and that is not redundancy. `target_id` says what
+      // the operation acted on; `target_organization_id` says where it happened. For an
+      // Organization-targeted action those coincide — and writing only the first would make the
+      // Organization feed miss every onboarding, which is the same defect one row over.
+      return {
+        kind: 'organization',
+        id: target.organizationId,
+        organizationId: target.organizationId,
+      };
     case 'principal':
-      return { kind: 'principal', id: target.principalId };
+      return {
+        kind: 'principal',
+        id: target.principalId,
+        organizationId: target.organizationId,
+      };
     case 'none':
-      return { kind: 'none', id: null };
+      return { kind: 'none', id: null, organizationId: null };
     default: {
       const unreachable: never = target;
       throw new Error(`Unsupported platform action target: ${JSON.stringify(unreachable)}`);
@@ -231,6 +266,7 @@ export function createPlatformAuditRecorder(
           actionId: entry.actionId,
           targetKind: columns.kind,
           targetId: columns.id,
+          targetOrganizationId: columns.organizationId,
           outcome: entry.outcome,
           occurredAt: toRfc3339Utc(nowMs),
           correlationId: entry.correlationId,

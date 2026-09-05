@@ -46,6 +46,10 @@ import { consumeControlPlaneWriteReservation } from '../../../identity/control-p
 import { toPlatformRole } from '../../platform-permissions.ts';
 import type { MembershipRole } from '../../../authorization/roles.ts';
 import type {
+  PlatformActionOutcome,
+  PlatformAuditAnchor,
+  PlatformAuditFilters,
+  PlatformAuditRecord,
   PlatformMemberResolution,
   PlatformOperatorActionRecord,
   PlatformOperatorRecord,
@@ -105,6 +109,144 @@ function organizationStatus(row: SqlRow): PlatformOrganizationStatus | null {
   }
   return ORGANIZATION_STATUSES.includes(value as PlatformOrganizationStatus)
     ? (value as PlatformOrganizationStatus)
+    : null;
+}
+
+/**
+ * ===========================================================================================
+ * BOTH AUDIT FEEDS, ONE STATEMENT BUILDER. `platform-audit-read-v1`.
+ * ===========================================================================================
+ *
+ * ONE FUNCTION FOR TWO ROUTES, AND THE DIFFERENCE IS TWO PARAMETERS. Two builders would be two
+ * places the principal-omission has to stay correct, and the omission is the whole security
+ * property — `0028` Decision 3. Here it is one `CASE` expression, in one place, and
+ * `disclosePrincipal` is a required argument so no caller can reach the disclosing form by
+ * forgetting an option.
+ *
+ * *** THE ORDER IS `(occurred_at DESC, action_record_id DESC)` AND THE ANCHOR CARRIES BOTH. ***
+ * `occurred_at` is not unique — a route writes one record and the clock has millisecond
+ * resolution — so an anchor on the timestamp alone would skip or repeat the second record of a
+ * pair. **An audit feed that silently drops records is worse than one that is slow.**
+ *
+ * NO INDEX SUPPORTS ANY OF THIS AND THAT IS A RULING, NOT AN OVERSIGHT. See
+ * `0014_platform_operator_action_organization.sql` for the argument, the row-count trigger, and
+ * the fact that what degrades first is sign-in rather than this feed.
+ *
+ * EVERY FILTER IS A BOUND PARAMETER. The only interpolated value is `limit`, which is validated as
+ * an integer first — the same rule `listOrganizations` and `sql-compiler.ts` follow.
+ */
+async function listAudit(
+  database: D1Database,
+  filters: PlatformAuditFilters,
+  limit: number,
+  afterCursor: PlatformAuditAnchor | null,
+  organizationId: string | null,
+  disclosePrincipal: boolean,
+): Promise<Result<readonly PlatformAuditRecord[]>> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    return err(internal());
+  }
+
+  const conditions: string[] = [];
+  const parameters: unknown[] = [];
+
+  if (organizationId !== null) {
+    conditions.push('target_organization_id = ?');
+    parameters.push(organizationId);
+  }
+  if (filters.actorPrincipalId !== null) {
+    conditions.push('actor_principal_id = ?');
+    parameters.push(filters.actorPrincipalId);
+  }
+  if (filters.actionId !== null) {
+    conditions.push('action_id = ?');
+    parameters.push(filters.actionId);
+  }
+  if (filters.since !== null) {
+    // INCLUSIVE. `occurred_at` is RFC 3339 UTC with a fixed width, so lexicographic comparison IS
+    // chronological comparison — which is why the column is TEXT and why every writer goes through
+    // `toRfc3339Utc`. A writer that stored a different format would break ordering silently.
+    conditions.push('occurred_at >= ?');
+    parameters.push(filters.since);
+  }
+  if (filters.until !== null) {
+    // EXCLUSIVE, so consecutive windows neither overlap nor gap.
+    conditions.push('occurred_at < ?');
+    parameters.push(filters.until);
+  }
+  if (afterCursor !== null) {
+    // KEYSET, ON THE COMPOUND ORDER. "Strictly older, or same instant and a lower record id."
+    conditions.push('(occurred_at < ? OR (occurred_at = ? AND action_record_id < ?))');
+    parameters.push(afterCursor.occurredAt, afterCursor.occurredAt, afterCursor.actionRecordId);
+  }
+
+  const target = disclosePrincipal
+    ? "CASE WHEN target_kind = 'principal' THEN target_id END AS target_principal_id"
+    : // THE PRINCIPAL IDENTIFIER IS NEVER READ. `NULL` is selected under the same alias so the
+      // mapper is identical for both feeds and cannot be given the disclosing shape by accident.
+      'NULL AS target_principal_id';
+
+  const rows = await selectRows(
+    database,
+    'SELECT action_record_id, occurred_at, actor_principal_id, actor_platform_role, action_id, ' +
+      `outcome, correlation_id, target_organization_id, ${target} ` +
+      'FROM platform_operator_action' +
+      (conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '') +
+      ` ORDER BY occurred_at DESC, action_record_id DESC LIMIT ${String(limit)}`,
+    parameters,
+  );
+  if (!rows.ok) {
+    return err(rows.error);
+  }
+
+  const records: PlatformAuditRecord[] = [];
+  for (const row of rows.value) {
+    const actionRecordId = requiredText(row, 'action_record_id');
+    const occurredAt = requiredText(row, 'occurred_at');
+    const actorPrincipalId = requiredText(row, 'actor_principal_id');
+    const actionId = requiredText(row, 'action_id');
+    const correlationId = requiredText(row, 'correlation_id');
+    const role = toPlatformRole(text(row, 'actor_platform_role'));
+    const outcome = actionOutcome(row);
+    if (
+      actionRecordId === null ||
+      occurredAt === null ||
+      actorPrincipalId === null ||
+      actionId === null ||
+      correlationId === null ||
+      role === null ||
+      outcome === null
+    ) {
+      // A MALFORMED AUDIT ROW FAILS THE READ RATHER THAN BEING SKIPPED. Skipping would mean a feed
+      // that silently omits records — and the records most likely to be malformed are the ones
+      // written by a build that disagreed with this one, which is exactly what an investigator is
+      // looking for.
+      return err(internal());
+    }
+    records.push({
+      actionRecordId,
+      occurredAt,
+      actorPrincipalId,
+      actorPlatformRole: role,
+      actionId,
+      outcome,
+      correlationId,
+      targetOrganizationId: requiredText(row, 'target_organization_id'),
+      targetPrincipalId: disclosePrincipal ? requiredText(row, 'target_principal_id') : null,
+    });
+  }
+  return ok(Object.freeze(records));
+}
+
+const ACTION_OUTCOMES: readonly PlatformActionOutcome[] = ['ok', 'denied', 'failed'];
+
+function actionOutcome(row: SqlRow): PlatformActionOutcome | null {
+  const value = text(row, 'outcome');
+  if (value === null) {
+    return null;
+  }
+  return ACTION_OUTCOMES.includes(value as PlatformActionOutcome)
+    ? (value as PlatformActionOutcome)
     : null;
 }
 
@@ -393,6 +535,33 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
       return ok({ principalId, role });
     },
 
+    async listPlatformAudit(
+      filters: PlatformAuditFilters,
+      limit: number,
+      afterCursor: PlatformAuditAnchor | null,
+    ): Promise<Result<readonly PlatformAuditRecord[]>> {
+      // *** `target_id` IS NOT SELECTED WHEN THE TARGET IS A PRINCIPAL. ***
+      //
+      // The column holds a principal identifier for a resolve and a reset. Selecting it and
+      // filtering in the mapper would put the value in this process, one edit from a response.
+      // **`CASE WHEN target_kind = 'organization' THEN target_id END` means the principal
+      // identifier is never read at all** — the omission is in the statement, which is where a
+      // reviewer looks, and `target_organization_id` is selected separately because `0014` records
+      // WHERE an action happened rather than what it named.
+      return listAudit(database, filters, limit, afterCursor, null, false);
+    },
+
+    async listOrganizationAudit(
+      organizationId: string,
+      filters: PlatformAuditFilters,
+      limit: number,
+      afterCursor: PlatformAuditAnchor | null,
+    ): Promise<Result<readonly PlatformAuditRecord[]>> {
+      // SELECTS ON `target_organization_id` — `0014`'s column. Selecting on `target_id` would
+      // return every onboarding and not one resolve, which is the defect that migration fixes.
+      return listAudit(database, filters, limit, afterCursor, organizationId, true);
+    },
+
     async recordAction(
       record: PlatformOperatorActionRecord,
       reservation: ControlPlaneWriteReservation,
@@ -407,8 +576,9 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
           database
             .prepare(
               'INSERT INTO platform_operator_action (action_record_id, actor_principal_id, ' +
-                'actor_platform_role, action_id, target_kind, target_id, outcome, occurred_at, ' +
-                'correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'actor_platform_role, action_id, target_kind, target_id, ' +
+                'target_organization_id, outcome, occurred_at, ' +
+                'correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             )
             .bind(
               record.actionRecordId,
@@ -417,6 +587,8 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
               record.actionId,
               record.targetKind,
               record.targetId,
+              // `0014`. WHERE the action happened, as distinct from what it acted on.
+              record.targetOrganizationId,
               record.outcome,
               record.occurredAt,
               record.correlationId,

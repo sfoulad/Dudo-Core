@@ -149,6 +149,64 @@ export type PlatformMemberResolution = {
 };
 
 /**
+ * The filters both feeds accept. **THE SAME TYPE FOR BOTH, WITH NO PRINCIPAL FIELD.**
+ *
+ * *** THERE IS NO `targetPrincipalId` AND ADDING ONE REOPENS `0028` Decision 3. *** Filtering by a
+ * principal and counting results discloses that principal's Organizations one bit at a time — the
+ * omitted field reconstructed through a query parameter. *"An ignored parameter is one someone will
+ * later honour"*, so the class refuses it as an undeclared query parameter rather than accepting
+ * and dropping it, and this type gives it nowhere to live even if that check were bypassed.
+ *
+ * ONE TYPE FOR BOTH FEEDS, deliberately: two would be two places the absent filter has to stay
+ * absent.
+ */
+export type PlatformAuditFilters = {
+  /** The OPERATOR. Not a disclosure — operators are a known set to anyone who can read a feed. */
+  readonly actorPrincipalId: string | null;
+  readonly actionId: string | null;
+  /** RFC 3339 UTC, inclusive. Validated as a strict instant before it reaches here. */
+  readonly since: string | null;
+  /** RFC 3339 UTC, exclusive. */
+  readonly until: string | null;
+};
+
+/**
+ * Where a page resumes. **A COMPOUND ANCHOR, BECAUSE `occurred_at` IS NOT UNIQUE.**
+ *
+ * Two records written in the same millisecond are ordinary — a route writes one record and the
+ * clock has millisecond resolution — so an anchor of `occurred_at` alone would either **skip** the
+ * second record of a pair or **repeat** it, depending on the comparison. An audit feed that
+ * silently drops records is worse than one that is slow.
+ *
+ * SO THE ORDER IS `(occurred_at DESC, action_record_id DESC)` and the anchor carries both.
+ */
+export type PlatformAuditAnchor = {
+  readonly occurredAt: string;
+  readonly actionRecordId: string;
+};
+
+/**
+ * One record as a feed returns it.
+ *
+ * `targetPrincipalId` IS PRESENT ON THIS TYPE AND THE PLATFORM FEED NEVER POPULATES IT — its
+ * statement does not select the column. **The handler for that feed does not read this field**, and
+ * `PlatformFeedRecord` on the wire has no place for it. Two types would be tidier and would mean
+ * two statements, two mappers and two places the omission has to be re-made correctly.
+ */
+export type PlatformAuditRecord = {
+  readonly actionRecordId: string;
+  readonly occurredAt: string;
+  readonly actorPrincipalId: string;
+  readonly actorPlatformRole: PlatformRole;
+  readonly actionId: string;
+  readonly outcome: PlatformActionOutcome;
+  readonly correlationId: string;
+  readonly targetOrganizationId: string | null;
+  /** ALWAYS `null` from `listPlatformAudit`. Populated only by the Organization feed. */
+  readonly targetPrincipalId: string | null;
+};
+
+/**
  * What an operator action record names.
  *
  * `'none'` IS A FIRST-CLASS VALUE rather than an absent kind: an enumeration has no single
@@ -183,6 +241,18 @@ export type PlatformOperatorActionRecord = {
   readonly targetKind: PlatformActionTargetKind;
   /** An identifier, or `null` when `targetKind` is `'none'`. NEVER a name or a description. */
   readonly targetId: string | null;
+  /**
+   * WHICH ORGANIZATION THE ACTION HAPPENED IN. `0014_platform_operator_action_organization.sql`.
+   *
+   * A DIFFERENT QUESTION FROM `targetId`, and the distinction is what `0028` Decision 3's
+   * Organization feed selects on. For an Organization-targeted action the two coincide; for a
+   * principal-targeted one they do not, and **storing only `targetId` made every resolve and every
+   * future credential reset invisible to the feed built to disclose them.**
+   *
+   * NULL FOR AN ACTION THAT HAPPENS IN NO ORGANIZATION — `whoami`, the Template routes, the
+   * Organization list. That is the ordinary case, not a gap.
+   */
+  readonly targetOrganizationId: string | null;
   readonly outcome: PlatformActionOutcome;
   /** RFC 3339, UTC. The server's clock. */
   readonly occurredAt: string;
@@ -320,4 +390,59 @@ export type PlatformOperatorStore = {
     organizationId: string,
     identifierHash: string,
   ): Promise<Result<PlatformMemberResolution | null>>;
+
+  /**
+   * ===========================================================================================
+   * THE PLATFORM FEED. EVERY OPERATOR ACTION, ACROSS ALL ORGANIZATIONS, **WITHOUT THE PRINCIPAL.**
+   * `platform-audit-read-v1` · `docs/decisions/0028` Decision 3.
+   * ===========================================================================================
+   *
+   * *** THE OMISSION IS AT THIS PORT AND IN THE SQL, NOT IN A HANDLER. ***
+   *
+   * `target_principal_id` is the field that aggregates into the `CO1` mapping: every resolve
+   * record is *"principal P was resolved in Organization O"*, which is a membership fact, and a
+   * bulk read collects every one of them in **one request the affected tenants cannot see.**
+   *
+   * SO THE STATEMENT DOES NOT SELECT IT. A handler that deleted the field from a row it was handed
+   * would be one edit from forgetting; **a method that never reads the column cannot leak it**, and
+   * the SQL is where a reviewer looks. `PlatformFeedRecord` has no field for it either, so there is
+   * nothing to omit at the wire — the value does not exist in this code path at all.
+   *
+   * THE ORGANIZATION-LEVEL TARGET IS RETURNED AND THAT IS FINE: an operator can enumerate
+   * Organizations from their own home screen, so learning that one was acted on discloses nothing
+   * they could not obtain there.
+   *
+   * **THERE IS DELIBERATELY NO `targetPrincipalId` FILTER PARAMETER.** Filtering by a principal and
+   * counting results reconstructs the omitted field one bit at a time. `actorPrincipalId` is
+   * permitted — operators are a known set to anyone who can read this feed at all.
+   */
+  listPlatformAudit(
+    filters: PlatformAuditFilters,
+    limit: number,
+    afterCursor: PlatformAuditAnchor | null,
+  ): Promise<Result<readonly PlatformAuditRecord[]>>;
+
+  /**
+   * ===========================================================================================
+   * THE ORGANIZATION FEED. ONE NAMED ORGANIZATION, **WITH** THE PRINCIPAL-LEVEL TARGET.
+   * ===========================================================================================
+   *
+   * IT MAY CARRY `targetPrincipalId` **BECAUSE THE CALLER NAMED THE ORGANIZATION** — the identical
+   * gate `0028` Decision 2 applies to the resolve. An operator must already have a reason to ask
+   * about a specific customer, and the route writes a tenant-side record so that customer sees the
+   * asking.
+   *
+   * IT SELECTS ON `target_organization_id`, WHICH IS `0014`'s COLUMN. Selecting on `target_id`
+   * would return only Organization-targeted actions — every onboarding, and **not one resolve or
+   * reset**, which is the defect that migration exists to fix.
+   *
+   * NO `targetOrganizationId` IN THE RESULT. The path parameter already fixed it, and repeating it
+   * would invite a client to trust the body over the path.
+   */
+  listOrganizationAudit(
+    organizationId: string,
+    filters: PlatformAuditFilters,
+    limit: number,
+    afterCursor: PlatformAuditAnchor | null,
+  ): Promise<Result<readonly PlatformAuditRecord[]>>;
 };

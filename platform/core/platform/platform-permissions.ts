@@ -113,6 +113,8 @@ const TEMPLATE_READ = 'core.template.read';
 const TEMPLATE_LIST = 'core.template.list';
 const TEMPLATE_CREATE = 'core.template.create';
 const CREDENTIAL_RESET = 'core.credential.reset';
+/** `platform-audit-read-v1`. BOTH feeds declare it; `0028` leaves them splittable later. */
+const PLATFORM_AUDIT_READ = 'core.platform-audit.read';
 
 /**
  * `core.organization.list`, exported because the two routes in this slice declare it.
@@ -126,21 +128,26 @@ export const PLATFORM_ORGANIZATION_LIST_PERMISSION = ORGANIZATION_LIST;
 
 /**
  * ===========================================================================================
- * CORE'S PLATFORM PERMISSION ENVELOPE. SIX PERMISSIONS AND NOTHING ELSE.
+ * CORE'S PLATFORM PERMISSION ENVELOPE. SEVEN PERMISSIONS AND NOTHING ELSE.
  * ===========================================================================================
  *
- * The membership of this class across all four platform contracts is SIX: `organizations.list`,
- * `templates.list`, `templates.read`, `templates.create`, `organizations.create`,
- * `credentials.reset`. A SEVENTH NEEDS ITS OWN ARGUMENT — the same discipline `0021` imposed on
- * its class of two and `0023` on its block of two. That discipline is what keeps "it is a
- * platform route so it needs no tenant" from becoming a way to write an Action without a tenant
+ * `organizations.list`, `templates.list`, `templates.read`, `templates.create`,
+ * `organizations.create`, `credentials.reset`, and — added 2026-09-05 —
+ * **`core.platform-audit.read`**. AN EIGHTH NEEDS ITS OWN ARGUMENT — the same discipline `0021`
+ * imposed on its class of two and `0023` on its block of two. That discipline is what keeps "it is
+ * a platform route so it needs no tenant" from becoming a way to write an Action without a tenant
  * check.
  *
- * FOUR OF THE SIX HAVE NO ROUTE YET. `template-v1`, `organization-onboarding-v1` and
- * `credential-reset-v1` are still being written and are deliberately NOT implemented in this
- * slice. They are declared here anyway, because the envelope is the CLASS's ceiling rather than
- * this slice's, and because a ceiling that has to be widened to add a route is a ceiling somebody
- * widens without reading it.
+ * *** THE SEVENTH IS THE CEILING RISING DELIBERATELY, ONE CONTRACT AT A TIME. ***
+ * `core.platform-audit.read` sat in `HELD_BUT_UNREACHABLE` from the moment the catalog granted it,
+ * with the note that it would move here when its routes landed. `platform-audit-read-v1` has
+ * landed, so it moves. **The floor was never trimmed to meet the ceiling and the ceiling was never
+ * widened in advance** — which is the shape that keeps "why can this role do that?" answerable.
+ *
+ * SOME OF THESE STILL HAVE NO ROUTE. `credentials.reset` is next and is not implemented. They are
+ * declared here anyway, because the envelope is the CLASS's ceiling rather than any one slice's,
+ * and because a ceiling that has to be widened to add a route is a ceiling somebody widens without
+ * reading it.
  *
  * `appId` IS `platform`, MATCHING `worker-entry.ts`'s `NO_APP` CONVENTION, so an audit record
  * produced on this path cannot be mistaken for one attributed to an installed App. It is a Core
@@ -158,6 +165,7 @@ export const PLATFORM_PERMISSION_ENVELOPE: AppPermissionEnvelope = Object.freeze
     Object.freeze({ permissionId: TEMPLATE_LIST, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: TEMPLATE_CREATE, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: CREDENTIAL_RESET, scope: PLATFORM_SCOPE }),
+    Object.freeze({ permissionId: PLATFORM_AUDIT_READ, scope: PLATFORM_SCOPE }),
   ]),
 });
 
@@ -201,7 +209,9 @@ const HELD_BUT_UNREACHABLE: readonly string[] = Object.freeze([
   'core.principal.grant-platform-scope',
   'core.marketplace.moderate',
   // ---- Unreachable UNTIL BUILT, not by design. See above.
-  'core.platform-audit.read',
+  //
+  // `core.platform-audit.read` LEFT THIS LIST ON 2026-09-05 when `platform-audit-read-v1` landed,
+  // exactly as this comment said it would. It is now in `PLATFORM_PERMISSION_ENVELOPE`.
   'core.principal.revoke-platform-scope',
 ]);
 
@@ -253,6 +263,20 @@ const PLATFORM_ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
   TEMPLATE_LIST,
   TEMPLATE_CREATE,
   CREDENTIAL_RESET,
+  // ---- MOVED HERE FROM `HELD_BUT_UNREACHABLE` ON 2026-09-05, WHEN ITS ROUTES LANDED.
+  //
+  // *** AND THE MOVE WAS BRIEFLY A DEFECT, WHICH IS WORTH LEAVING RECORDED. *** Taking it out of
+  // `HELD_BUT_UNREACHABLE` also took it out of the ROLE, because this list spreads that constant —
+  // so for a few minutes the permission was in the envelope (the ceiling admitted it) and in no
+  // role (the floor did not grant it), and both audit feeds would have answered `forbidden` to
+  // every operator.
+  //
+  // NOTHING FAILED TO COMPILE AND NO GUARD FIRED: a ceiling with nothing under it is a coherent
+  // state, and it is the same "reachable by nobody" shape the envelope's own guard is designed to
+  // tolerate for permissions whose routes do not exist yet. **It was found by printing
+  // `reachablePlatformPermissions('platform-admin')` and reading it**, which is the whole argument
+  // for measuring the thing rather than reasoning about the edit.
+  PLATFORM_AUDIT_READ,
 ]);
 
 /**
@@ -334,8 +358,21 @@ export function reachablePlatformPermissions(role: PlatformRole | null): readonl
   return Object.freeze(reachable);
 }
 
-/** Six. Named so the guard below compares against a stated number rather than a bare literal. */
-const PLATFORM_ROUTE_PERMISSION_COUNT = 6;
+/**
+ * Seven. Named so the guard below compares against a STATED number rather than a bare literal.
+ *
+ * *** IT WENT FROM SIX TO SEVEN ON 2026-09-05 AND THE GUARD IS WHAT MADE THAT A DECISION. ***
+ * Adding `core.platform-audit.read` to the envelope threw at module load until this line was
+ * edited — so widening the class's ceiling cannot happen as a side effect of adding a route. **The
+ * failure message IS the argument the widener has to answer**, and editing this constant is the
+ * act of answering it.
+ *
+ * THE SEVENTH'S ARGUMENT: `platform-audit-read-v1` is accepted, `0028` Decision 3 designs its two
+ * feeds around a disclosure rule, and the permission was already in the catalog and already
+ * granted to `platform-admin` — it sat in `HELD_BUT_UNREACHABLE` precisely so that the ceiling
+ * would rise when the routes landed rather than in advance. **An eighth needs its own.**
+ */
+const PLATFORM_ROUTE_PERMISSION_COUNT = 7;
 
 export class PlatformPermissionModelIncoherentError extends Error {
   constructor(message: string) {
@@ -431,8 +468,8 @@ export function assertPlatformPermissionModelIsCoherent(
   if (envelope.declared.length !== PLATFORM_ROUTE_PERMISSION_COUNT) {
     throw new PlatformPermissionModelIncoherentError(
       `The platform envelope declares ${String(envelope.declared.length)} permissions and the ` +
-        `class has ${String(PLATFORM_ROUTE_PERMISSION_COUNT)}. Membership in this class is six ` +
-        'across all four platform contracts, and a seventh needs its own argument — the ' +
+        `class has ${String(PLATFORM_ROUTE_PERMISSION_COUNT)}. Membership is stated in ` +
+        'PLATFORM_ROUTE_PERMISSION_COUNT and every increment needs its own argument — the ' +
         'discipline that keeps "it is a platform route so it needs no tenant" from becoming a ' +
         'way to write an Action without a tenant check.',
     );

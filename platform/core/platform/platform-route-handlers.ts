@@ -41,7 +41,16 @@ import type { Clock } from '../kernel/clock.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import type { ErrorDetail } from '../kernel/errors.ts';
-import { conflict, detail, internal, invalidArgument, notFound, quotaExceeded } from '../kernel/errors.ts';
+import {
+  conflict,
+  detail,
+  internal,
+  invalidArgument,
+  notFound,
+  quotaExceeded,
+  unavailable,
+} from '../kernel/errors.ts';
+import { rejectedCursor } from '../pagination/cursor.ts';
 import { isSubmittableIdentifier } from '../identity/credential-store.ts';
 import type { OnboardingInput, OnboardingService } from '../onboarding/onboarding.ts';
 import type { MemberResolutionService } from '../directory/member-resolution.ts';
@@ -57,7 +66,11 @@ import type { ConfirmationService } from '../confirmation/confirmation-service.t
 import { confirmablePermissionFor } from '../confirmation/critical-permissions.ts';
 import { resolveStatementLocale, statementAuditTarget } from '../confirmation/statements.ts';
 import type { PlatformActionTarget } from './platform-audit.ts';
-import type { PlatformOperatorStore } from './platform-operator-store.ts';
+import type {
+  PlatformAuditAnchor,
+  PlatformAuditRecord,
+  PlatformOperatorStore,
+} from './platform-operator-store.ts';
 import type { PlatformCursorCodec } from './platform-cursor.ts';
 import { reachablePlatformPermissions } from './platform-permissions.ts';
 import { NO_TARGET } from './platform-audit.ts';
@@ -69,6 +82,8 @@ import type {
 import {
   PLATFORM_MAX_PAGE_SIZE,
   readCursorParameter,
+  readIdentifierParameter,
+  readInstantParameter,
   readPageSize,
 } from './platform-routes.ts';
 
@@ -132,6 +147,10 @@ function listOrganizations(dependencies: {
     const binding = {
       principalId: context.authority.principalId,
       pageSize: pageSize.value,
+      // THE ROUTE ID ALONE, because this query has no filters. If one is ever added it must join
+      // this string — see `PlatformCursorBinding.scope`, where the failure a missing filter causes
+      // is a wrong page rather than an error.
+      scope: 'platform.organizations.list',
     };
     let anchor: string | null = null;
     if (offered.value !== null) {
@@ -308,9 +327,31 @@ function auditTargetFor(actionId: string, parameters: ConfirmationParameters): P
   if (target === null) {
     return NO_TARGET;
   }
-  return target.kind === 'principal'
-    ? { kind: 'principal', principalId: target.id }
-    : { kind: 'organization', organizationId: target.id };
+  if (target.kind === 'organization') {
+    return { kind: 'organization', organizationId: target.id };
+  }
+  // ===========================================================================================
+  // A PRINCIPAL-TARGETED CHALLENGE RECORDS `NO_TARGET` RATHER THAN NAMING THE PRINCIPAL WITHOUT
+  // ITS ORGANIZATION. `0014` made the pairing required, and this is the one call site that cannot
+  // satisfy it.
+  // ===========================================================================================
+  //
+  // THE CHALLENGE ROUTE HAS NO ORGANIZATION. It takes `action_id`, `locale` and `parameters`, no
+  // path parameter, and the operation it confirms has not happened yet — so "which Organization
+  // did this happen in" has no answer at challenge time.
+  //
+  // *** THE ALTERNATIVE WOULD HAVE BEEN TO INVENT ONE, AND THAT IS THE FAILURE THE REQUIRED FIELD
+  // EXISTS TO PREVENT. *** Reading an `organization_id` out of `parameters` would let a CALLER
+  // choose which Organization's audit feed its challenge appears in — a caller-supplied audit
+  // value, which `0025` Decision 5 and `audit.ts`'s actor-context brand both refuse by name.
+  //
+  // WHAT IS LOST, STATED RATHER THAN GLOSSED: a challenge for a principal-targeted operation
+  // records that a challenge was issued, by whom, for which operation, and NOT for whom. **The
+  // operation it precedes records the principal in full**, and that record is the one the
+  // Organization feed carries — so the trail is complete at the operation and thinner at the
+  // request for permission to perform it. That is the correct direction; a challenge is not the
+  // act.
+  return NO_TARGET;
 }
 
 /**
@@ -593,12 +634,255 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
         // it would put an email address in a response body for no purpose, and in a log line for
         // anyone who logs responses.
       },
-      // THE PRINCIPAL, NOT THE ORGANIZATION. `0025` Decision 5 permits both kinds, and this
-      // operation's target is the person asked about — which is what makes the operator log usable
-      // for the question "who has been asking about our staff".
-      target: { kind: 'principal', principalId: resolved.value.principalId },
+      // THE PRINCIPAL, AND THE ORGANIZATION IT HAPPENED IN. `0025` Decision 5 permits both kinds;
+      // this operation's target is the person asked about — which is what makes the operator log
+      // usable for "who has been asking about our staff" — and `0014` requires the Organization
+      // alongside it, because `0028`'s Organization feed selects on that and **a principal-targeted
+      // record without it is invisible to the feed built to disclose it.**
+      //
+      // THE ORGANIZATION IS THE PATH PARAMETER, VALIDATED BY THE MATCHER, and it is the one the
+      // request addressed rather than one this handler chose. There is no body field that could
+      // influence it.
+      target: {
+        kind: 'principal',
+        principalId: resolved.value.principalId,
+        organizationId,
+      },
     });
   };
+}
+
+/**
+ * ===========================================================================================
+ * THE TWO AUDIT FEEDS. `platform-audit-read-v1`, `docs/decisions/0028` Decision 3.
+ * ===========================================================================================
+ *
+ * ONE FUNCTION, TWO ROUTES, AND `organizationId` IS THE ONLY DIFFERENCE THE HANDLER SEES. The
+ * principal-omission is NOT here — it is in the store method and in the SQL, which is where a
+ * reviewer looks and where a handler cannot undo it. This function reads
+ * `record.targetPrincipalId` in both cases and the platform feed's is always `null` because the
+ * statement selected `NULL`.
+ *
+ * *** `PA-3`, AT THE PLACE IT MATTERS RATHER THAN IN A REPORT. *** This route lets the PLATFORM see
+ * what the platform did. **The customer still cannot see it.** `core.audit.read` is catalogued,
+ * granted to tenant roles, and **has no route** — so the tenant-side records the resolve and the
+ * Organization feed write are **written and unreadable by their owner.** That is the largest gap
+ * left in this surface, and until it closes, *"the customer can see the platform asking about
+ * their staff"* is a property of the DATA and not of anything a customer can do.
+ *
+ * *** `PO-4`, ALSO FALSE, ALSO HERE. *** `0028` bounds the aggregation residual with *"N requests,
+ * audited in both homes, visible to each victim, RATE LIMITED."* There is no rate limiter on this
+ * class. What bounds a feed read is the per-principal daily write ceiling — P4 charges 2
+ * row-writes for the platform feed and 2 plus a tenant reservation for the Organization feed, so
+ * ~300 and ~150 reads per operator per UTC day. **That is a bound. It is not rate limiting.**
+ */
+function listAuditFeed(dependencies: {
+  readonly store: PlatformOperatorStore;
+  readonly cursors: PlatformCursorCodec;
+  readonly clock: Clock;
+  readonly members?: MemberResolutionService;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const scoped = context.routeId === 'platform.organizations.audit.list';
+    const organizationId = scoped ? context.pathParams.organization_id : undefined;
+    if (scoped && organizationId === undefined) {
+      return err(internal());
+    }
+
+    const pageSize = readPageSize(context.query);
+    if (!pageSize.ok) {
+      return err(pageSize.error);
+    }
+    const offered = readCursorParameter(context.query);
+    if (!offered.ok) {
+      return err(offered.error);
+    }
+    const actorPrincipalId = readIdentifierParameter(context.query, 'actor_principal_id');
+    if (!actorPrincipalId.ok) {
+      return err(actorPrincipalId.error);
+    }
+    const actionId = readActionIdParameter(context.query);
+    if (!actionId.ok) {
+      return err(actionId.error);
+    }
+    const since = readInstantParameter(context.query, 'since');
+    if (!since.ok) {
+      return err(since.error);
+    }
+    const until = readInstantParameter(context.query, 'until');
+    if (!until.ok) {
+      return err(until.error);
+    }
+    if (since.value !== null && until.value !== null && since.value >= until.value) {
+      // AN EMPTY WINDOW IS REFUSED RATHER THAN RETURNING NOTHING. `since >= until` selects no
+      // records, and "no records" on an audit feed is a statement a caller may act on — it must
+      // mean "nothing happened", never "you asked incoherently".
+      return err(invalidArgument([detail('until', 'must_be_after_since')]));
+    }
+
+    const filters = {
+      actorPrincipalId: actorPrincipalId.value,
+      actionId: actionId.value,
+      since: since.value,
+      until: until.value,
+    };
+
+    // THE CURSOR IS BOUND TO THE WHOLE QUERY, not just the operator and the page size. Every
+    // filter joins the scope, and so does the Organization — a cursor from the platform feed
+    // cannot resume the Organization feed, and one issued under one filter set cannot resume
+    // another. See `PlatformCursorBinding.scope`: the failure it prevents is a WRONG PAGE that
+    // looks like a right one, with no error anywhere.
+    const binding = {
+      principalId: context.authority.principalId,
+      pageSize: pageSize.value,
+      scope: [
+        context.routeId,
+        organizationId ?? '',
+        filters.actorPrincipalId ?? '',
+        filters.actionId ?? '',
+        filters.since ?? '',
+        filters.until ?? '',
+      ].join(' '),
+    };
+
+    const nowMs = dependencies.clock.nowMs();
+    let anchor: PlatformAuditAnchor | null = null;
+    if (offered.value !== null) {
+      const decoded = await dependencies.cursors.decode(offered.value, binding, nowMs);
+      if (!decoded.ok) {
+        return err(decoded.error);
+      }
+      anchor = decodeAuditAnchor(decoded.value);
+      if (anchor === null) {
+        // A SIGNED CURSOR WHOSE ANCHOR IS NOT AN ANCHOR. Only reachable if a cursor signed by this
+        // key was minted by a different build; `rejectedCursor` is the same answer every other
+        // cursor failure gives, so this cannot be distinguished from a forgery.
+        return err(rejectedCursor());
+      }
+    }
+
+    // ONE EXTRA ROW IS REQUESTED to decide `next_cursor` without a second query or a COUNT — the
+    // same device `listOrganizations` uses.
+    const found = scoped
+      ? await dependencies.store.listOrganizationAudit(
+          organizationId as string,
+          filters,
+          pageSize.value + 1,
+          anchor,
+        )
+      : await dependencies.store.listPlatformAudit(filters, pageSize.value + 1, anchor);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    const hasMore = found.value.length > pageSize.value;
+    const page = hasMore ? found.value.slice(0, pageSize.value) : found.value;
+    const last = page[page.length - 1];
+
+    // ---- THE ORGANIZATION FEED WRITES A TENANT-SIDE RECORD ON EVERY CALL, INCLUDING AN EMPTY ONE.
+    //
+    // *"IT IS WHAT KEEPS THE BACK DOOR THE SAME SIZE AS THE FRONT ONE."* A per-Organization audit
+    // read discloses the same class of fact the resolve does, so it carries the same visibility —
+    // otherwise an operator would simply read the log instead of resolving, and the control would
+    // have been routed around rather than enforced.
+    //
+    // *** THE RECURSION IS REAL, BOUNDED, AND NOT A DEFECT: reading an Organization's trail writes
+    // to that Organization's trail. *** One record per read, not one per record read, so it
+    // terminates — but a reader WILL see their own previous visits in the feed, and that is
+    // correct. It is stated here and in `member-resolution.ts` so it is not filed as a bug.
+    //
+    // IT IS WRITTEN BEFORE THE ANSWER IS PRODUCED, and an unwritable record refuses the read.
+    // `0013` D2: inability to record the evidence is not a reason to proceed without it.
+    if (scoped) {
+      if (dependencies.members === undefined) {
+        // ABSENT MEANS REFUSED. A deployment that cannot write the tenant-side record must not
+        // serve the scoped feed, because the record is the control rather than a by-product.
+        return err(unavailable());
+      }
+      const recorded = await dependencies.members.recordOrganizationAccess({
+        organizationId: organizationId as string,
+        actionId: context.routeId,
+        actorPrincipalId: context.authority.principalId,
+        requestId: context.requestId,
+        correlationId: context.correlationId,
+      });
+      if (!recorded.ok) {
+        return err(recorded.error);
+      }
+    }
+
+    return ok({
+      body: {
+        data: page.map((record) => ({
+          record_id: record.actionRecordId,
+          occurred_at: record.occurredAt,
+          actor_principal_id: record.actorPrincipalId,
+          actor_platform_role: record.actorPlatformRole,
+          action_id: record.actionId,
+          outcome: record.outcome,
+          correlation_id: record.correlationId,
+          // THE TWO FEEDS DIFFER HERE AND NOWHERE ELSE IN THIS FUNCTION. The scoped feed carries
+          // the principal because the caller named the Organization; the platform feed carries the
+          // Organization because an operator can enumerate Organizations anyway. **Neither field is
+          // filtered out of a row that had it — the store never read the one it must not disclose.**
+          ...(scoped
+            ? { target_principal_id: record.targetPrincipalId }
+            : { target_organization_id: record.targetOrganizationId }),
+        })),
+        next_cursor:
+          hasMore && last !== undefined
+            ? await dependencies.cursors.encode(encodeAuditAnchor(last), binding, nowMs)
+            : null,
+      },
+      // THE PLATFORM FEED NAMES NO TARGET — it is an enumeration across every Organization. The
+      // SCOPED feed names the Organization it read, so "who has been reading this customer's
+      // trail" is answerable from the operator log itself.
+      target: scoped
+        ? { kind: 'organization', organizationId: organizationId as string }
+        : NO_TARGET,
+    });
+  };
+}
+
+/**
+ * The compound anchor, as one string.
+ *
+ * `PlatformCursorCodec` carries a single opaque anchor, and this feed's order is
+ * `(occurred_at, action_record_id)`. **The separator is ` `, which cannot appear in either
+ * component** — `occurred_at` is RFC 3339 and `action_record_id` matches the identifier grammar —
+ * so the split is unambiguous rather than merely unlikely.
+ */
+function encodeAuditAnchor(record: PlatformAuditRecord): string {
+  return `${record.occurredAt} ${record.actionRecordId}`;
+}
+
+function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
+  const parts = anchor.split(' ');
+  if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
+    return null;
+  }
+  return { occurredAt: parts[0], actionRecordId: parts[1] };
+}
+
+/**
+ * `action_id` is a route identifier — dotted, not the `{8,64}` platform identifier grammar — so it
+ * needs its own check rather than `readIdentifierParameter`.
+ *
+ * IT IS NOT VALIDATED AGAINST THE ROUTE TABLE, deliberately. A filter naming an operation that does
+ * not exist returns an empty feed, which is TRUE; refusing it would make this parameter an oracle
+ * for which operations the build knows about, and the log legitimately contains identifiers from
+ * older builds whose routes have since been removed.
+ */
+const ACTION_ID_PATTERN = /^[a-z][a-z0-9]*(?:\.[a-z][a-zA-Z0-9]*)+$/u;
+
+function readActionIdParameter(query: ReadonlyMap<string, string>): Result<string | null> {
+  const raw = query.get('action_id');
+  if (raw === undefined) {
+    return ok(null);
+  }
+  if (raw.length > 120 || !ACTION_ID_PATTERN.test(raw)) {
+    return err(invalidArgument([detail('action_id', 'must_be_an_action_identifier')]));
+  }
+  return ok(raw);
 }
 
 /**
@@ -682,7 +966,11 @@ function listTemplates(dependencies: {
       return err(offered.error);
     }
     const nowMs = dependencies.clock.nowMs();
-    const binding = { principalId: context.authority.principalId, pageSize: pageSize.value };
+    const binding = {
+      principalId: context.authority.principalId,
+      pageSize: pageSize.value,
+      scope: 'platform.templates.list',
+    };
     let anchor: string | null = null;
     if (offered.value !== null) {
       const decoded = await dependencies.cursors.decode(offered.value, binding, nowMs);
@@ -791,6 +1079,20 @@ export function createPlatformRouteHandlers(dependencies: {
       templates: dependencies.templates,
     }),
     'platform.organizations.members.resolve': resolveMember({
+      members: dependencies.members,
+    }),
+    'platform.audit.list': listAuditFeed({
+      store: dependencies.store,
+      cursors: dependencies.cursors,
+      clock: dependencies.clock,
+    }),
+    'platform.organizations.audit.list': listAuditFeed({
+      store: dependencies.store,
+      cursors: dependencies.cursors,
+      clock: dependencies.clock,
+      // ONLY THE SCOPED FEED RECEIVES IT. The platform feed writes no tenant-side record and has
+      // no Organization to write one into — so it is not given the ability, rather than given it
+      // and trusted not to use it.
       members: dependencies.members,
     }),
     'platform.session.whoami': whoami(),

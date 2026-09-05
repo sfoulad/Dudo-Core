@@ -102,6 +102,31 @@ export type PlatformCursorBinding = {
   /** The operator this cursor was issued to. Server-derived; carried as a digest, never a value. */
   readonly principalId: string;
   readonly pageSize: number;
+  /**
+   * ===========================================================================================
+   * WHICH QUERY THIS CURSOR BELONGS TO. **REQUIRED, AND ADDED FOR THE AUDIT FEEDS.**
+   * ===========================================================================================
+   *
+   * A cursor is an anchor into an ORDERED, FILTERED result set. The binding already covered who
+   * asked and how big the page was; **it did not cover WHAT WAS ASKED**, which was harmless while
+   * one route paged one unfiltered table and becomes wrong the moment a route has filters.
+   *
+   * *** THE FAILURE IT PREVENTS IS SILENT AND IS NOT AN ERROR. *** Page 1 of "actions by operator
+   * A since Tuesday", then page 2 with the filters changed to "actions by operator B": the anchor
+   * is still valid, the signature still verifies, and the caller receives a page of B's actions
+   * resumed from a position in A's. **No error, wrong data, and the second page looks exactly like
+   * a second page.** For an audit feed that is a record set nobody can trust.
+   *
+   * IT ALSO SEPARATES THE FEEDS FROM EACH OTHER. A cursor issued for the platform feed cannot
+   * resume the Organization feed, so it cannot be used to page a principal-disclosing query from a
+   * position obtained in the omitting one.
+   *
+   * THE VALUE IS A CALLER-COMPOSED STRING and it is compared, never parsed — the codec neither
+   * knows nor cares what is in it. Callers build it from the route id plus every filter that
+   * affects the result set, so **a filter added later that is not in the scope is a defect of the
+   * same shape this field exists to close.**
+   */
+  readonly scope: string;
 };
 
 export type PlatformCursorCodec = {
@@ -213,6 +238,10 @@ export async function createPlatformCursorCodec(
         // THE OPERATOR, AS A DIGEST. See the header: comparable, and worthless to whoever finds
         // this string in a log.
         o: await digest(binding.principalId),
+        // THE QUERY, AS A DIGEST, for the same reason the operator is: comparable and opaque. A
+        // scope carries filter VALUES — an operator identifier, a time range — and those have no
+        // business being legible in a string that ends up in browser history and access logs.
+        s: await digest(binding.scope),
         i: nowMs,
       });
       const bodyEncoded = toBase64Url(encoder.encode(body));
@@ -270,6 +299,13 @@ export async function createPlatformCursorCodec(
       // AUTHENTICATED operator, and the cursor's contribution is a yes or a no. There is no code
       // path that reads a principal out of a cursor, because none is in there to read.
       if (body.o !== (await digest(binding.principalId))) {
+        return err(rejectedCursor());
+      }
+      // ISSUED FOR A DIFFERENT QUERY. The sixth cause, and the same single answer — a cursor from
+      // the platform feed cannot resume the Organization feed, and a cursor from one filter set
+      // cannot resume another. **Without this the result is not an error, it is a wrong page that
+      // looks right.**
+      if (body.s !== (await digest(binding.scope))) {
         return err(rejectedCursor());
       }
       return ok(body.a);

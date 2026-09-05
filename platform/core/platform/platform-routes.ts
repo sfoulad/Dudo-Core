@@ -171,6 +171,8 @@ export type PlatformRouteId =
   | 'platform.organizations.create'
   | 'platform.organizations.read'
   | 'platform.organizations.members.resolve'
+  | 'platform.audit.list'
+  | 'platform.organizations.audit.list'
   | 'platform.session.whoami'
   | 'platform.confirmations.request'
   | 'platform.templates.create'
@@ -491,6 +493,64 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     fields: Object.freeze(['identifier']),
     objectFields: Object.freeze([]),
     queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  // ===========================================================================================
+  // THE TWO AUDIT FEEDS. `platform-audit-read-v1`, `docs/decisions/0028` Decision 3.
+  //
+  // *** TWO ROUTES, NOT ONE WITH A FILTER, AND THE DISCLOSURE IS IN THE PATH. ***
+  //
+  // *"A response whose columns change with a query parameter is one nobody can reason about — a
+  // client branches, a reviewer traces which branch produced which fields, and the security
+  // property lives in an `if` rather than in the route table."*
+  //
+  // THE RULE THAT GENERATES BOTH: **principal-level targets are disclosed only when the caller
+  // names the Organization** — the identical gate `0028` Decision 2 applies to the resolve. Two
+  // routes put that in the path where a reviewer looks, and leave the permission splittable later
+  // if oversight is ever separated from support.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.audit.list' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/audit`,
+    permission: fixedPermission('core.platform-audit.read'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    // *** THERE IS NO `target_principal_id` FILTER AND ITS ABSENCE IS THE CONTROL. ***
+    //
+    // Filtering by a principal and counting results discloses that principal's Organizations ONE
+    // BIT AT A TIME — the omitted response field reconstructed through a query parameter. Because
+    // it is not in this list, the class refuses it with `invalid_argument` before authentication
+    // rather than accepting and ignoring it: *"an ignored parameter is one someone will later
+    // honour."*
+    //
+    // `actor_principal_id` IS PERMITTED. Filtering by the OPERATOR is not a disclosure — operators
+    // are a known set to anyone who can read this feed at all.
+    queryParameters: Object.freeze([
+      'page_size',
+      'cursor',
+      'actor_principal_id',
+      'action_id',
+      'since',
+      'until',
+    ]),
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.organizations.audit.list' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/organizations/{organization_id}/audit`,
+    // THE SAME PERMISSION AS THE PLATFORM FEED. `0028` leaves them splittable later if oversight is
+    // ever separated from support; today one role does both, and inventing a second permission
+    // nobody could hold separately is the ceremony this class has twice refused to add.
+    permission: fixedPermission('core.platform-audit.read'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    // NO `actor_principal_id` HERE, WHICH IS THE CONTRACT'S LIST AND IS WORTH NOT "CORRECTING".
+    // This feed already discloses principal-level targets; adding an actor filter would let a
+    // caller ask "which of our operators touched this customer" — a reasonable question, and one
+    // that belongs to the platform feed where the principal target is omitted.
+    queryParameters: Object.freeze(['page_size', 'cursor', 'action_id', 'since', 'until']),
     successStatus: 200 as const,
   }),
   // ===========================================================================================
@@ -1176,6 +1236,75 @@ function splitObjectFields(
  * different question from the one asked, and a client paging on the assumption it got 1000 rows
  * would skip records without any error to notice.
  */
+/**
+ * ===========================================================================================
+ * A STRICT RFC 3339 UTC INSTANT, AND `Date.parse` IS NOT ONE. `platform-audit-read-v1`.
+ * ===========================================================================================
+ *
+ * `since` and `until` are the first timestamp inputs this class accepts, and the obvious
+ * implementation — `Number.isNaN(Date.parse(value))` — is wrong in a way that produces no error.
+ *
+ * **`Date.parse` ACCEPTS A STARTLING RANGE OF THINGS AND ENGINES DISAGREE ABOUT WHICH.**
+ * `"2026-09-05"`, `"Sep 5 2026"`, `"2026-09-05T12:00:00"` with no zone — that last one is read as
+ * LOCAL time by some engines and UTC by others, so **the same request would select a different set
+ * of audit records depending on where the Worker ran.** For a feed whose purpose is evidence, a
+ * time window that means different things in different places is worse than no filter.
+ *
+ * SO THE GRAMMAR IS FIXED AND THE VALUE MUST MATCH IT EXACTLY: `YYYY-MM-DDTHH:MM:SSZ`, or with
+ * milliseconds. **`Z` only** — no `+00:00`, no offsets. An offset would have to be normalised
+ * before comparison, and the comparison here is lexicographic against a stored `Z` string, so an
+ * accepted `+01:00` would silently select the wrong hour.
+ *
+ * IT IS THEN CHECKED FOR REALITY, because `2026-02-31T00:00:00Z` matches the shape. Round-tripping
+ * through `Date` catches it — and that check is safe here precisely BECAUSE the grammar already
+ * ran, so `Date` is being asked to validate a string it cannot misinterpret.
+ *
+ * THIS IS THE SAME PROPERTY `canonicalizeParameters` ENFORCES FOR NUMBERS, one type over: a value
+ * whose textual form is not byte-specified does not belong in a place two implementations must
+ * agree about.
+ */
+const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+
+export function readInstantParameter(
+  query: ReadonlyMap<string, string>,
+  name: string,
+): Result<string | null> {
+  const raw = query.get(name);
+  if (raw === undefined) {
+    return ok(null);
+  }
+  if (!RFC3339_UTC.test(raw)) {
+    return err(invalidArgument([detail(name, 'must_be_an_rfc3339_utc_instant')]));
+  }
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed) || new Date(parsed).toISOString().slice(0, 19) !== raw.slice(0, 19)) {
+    // A SHAPE THAT IS NOT A DATE — `2026-02-31`. The round trip is compared on the seconds prefix
+    // because `toISOString` always emits milliseconds and the input may not.
+    return err(invalidArgument([detail(name, 'must_be_an_rfc3339_utc_instant')]));
+  }
+  return ok(raw);
+}
+
+/**
+ * A declared identifier-shaped filter, or `null`.
+ *
+ * REFUSED RATHER THAN IGNORED when malformed. An accepted-but-unusable filter would silently widen
+ * the result set to everything, which on an audit feed reads as "there is nothing to hide here".
+ */
+export function readIdentifierParameter(
+  query: ReadonlyMap<string, string>,
+  name: string,
+): Result<string | null> {
+  const raw = query.get(name);
+  if (raw === undefined) {
+    return ok(null);
+  }
+  if (!IDENTIFIER_PATTERN.test(raw)) {
+    return err(invalidArgument([detail(name, 'must_be_an_identifier')]));
+  }
+  return ok(raw);
+}
+
 export function readPageSize(query: ReadonlyMap<string, string>): Result<number> {
   const raw = query.get('page_size');
   if (raw === undefined) {

@@ -99,6 +99,35 @@ export type MemberResolutionService = {
     readonly requestId: string;
     readonly correlationId: string;
   }): Promise<Result<PlatformMemberResolution | null>>;
+
+  /**
+   * ===========================================================================================
+   * APPEND A TENANT-SIDE RECORD FOR A PLATFORM READ OF THIS ORGANIZATION, WITHOUT RESOLVING
+   * ANYTHING. `platform-audit-read-v1`'s Organization feed.
+   * ===========================================================================================
+   *
+   * *** IT IS ON THIS SERVICE RATHER THAN IN A THIRD MODULE, AND THAT IS A JUDGEMENT I WANT
+   * VISIBLE. *** The scoped audit feed needs exactly the write half of `resolve` and none of its
+   * lookup. The alternatives were a third `platform/core/**` directory holding a resolver — which
+   * is one more component that can reach a tenant store, and the count is the thing `0025`'s
+   * amendment asks to be measured — or duplicating the write, which is two places the *"names no
+   * principal, decision always allowed"* rules have to stay correct.
+   *
+   * **SO THE REACH DOES NOT GROW: the same service, the same resolver, the same audit shape, one
+   * more caller.** If a fourth operation ever needs this, the right move is a named
+   * `TenantAuditAppender` port rather than a third method here — and that is the point at which to
+   * ask whether P1 still means anything.
+   *
+   * IT TAKES `actionId` because the record must say WHICH read happened. A feed read and a resolve
+   * are different disclosures and a customer reading their trail must be able to tell them apart.
+   */
+  recordOrganizationAccess(input: {
+    readonly organizationId: string;
+    readonly actionId: string;
+    readonly actorPrincipalId: string;
+    readonly requestId: string;
+    readonly correlationId: string;
+  }): Promise<Result<void>>;
 };
 
 export type MemberResolutionDependencies = {
@@ -157,6 +186,7 @@ export function createMemberResolutionService(
       // trail into a hit/miss oracle for anyone who can read it, which is the customer's owner.
       const recorded = await recordProbe(dependencies, {
         organizationId: input.organizationId,
+        actionId: 'platform.organizations.members.resolve',
         actorPrincipalId: input.actorPrincipalId,
         requestId: input.requestId,
         correlationId: input.correlationId,
@@ -167,6 +197,23 @@ export function createMemberResolutionService(
         return err(recorded.error);
       }
       return ok(found.value);
+    },
+
+    async recordOrganizationAccess(input): Promise<Result<void>> {
+      // THE SAME WRITE, THE SAME SHAPE, A DIFFERENT `action_id`. There is deliberately no lookup
+      // here and no branch inside `recordProbe` — the feed read has nothing to resolve, and a
+      // shared function with a "sometimes resolve" flag would be one place two operations are
+      // half-merged.
+      const nowMs = dependencies.clock.nowMs();
+      return recordProbe(dependencies, {
+        organizationId: input.organizationId,
+        actionId: input.actionId,
+        actorPrincipalId: input.actorPrincipalId,
+        requestId: input.requestId,
+        correlationId: input.correlationId,
+        occurredAt: toRfc3339Utc(nowMs),
+        nowMs,
+      });
     },
   };
 }
@@ -193,6 +240,8 @@ async function recordProbe(
   dependencies: MemberResolutionDependencies,
   context: {
     readonly organizationId: string;
+    /** WHICH platform read this was. A resolve and a feed read are different disclosures. */
+    readonly actionId: string;
     readonly actorPrincipalId: string;
     readonly requestId: string;
     readonly correlationId: string;
@@ -252,11 +301,17 @@ async function recordProbe(
   const operations: readonly WriteOperation[] = [
     audit.operation({
       appId: 'core',
-      actionId: 'platform.organizations.members.resolve',
+      actionId: context.actionId,
       principalId: context.actorPrincipalId,
       principalType: 'user',
       onBehalfOfPrincipalId: null,
-      permissionId: 'core.credential.reset',
+      // THE PERMISSION THE CALLER EXERCISED, derived from the operation rather than fixed, so the
+      // tenant's own trail says which grant was used. A resolve is `core.credential.reset`; a feed
+      // read is `core.platform-audit.read`, and a customer can tell the two apart.
+      permissionId:
+        context.actionId === 'platform.organizations.members.resolve'
+          ? 'core.credential.reset'
+          : 'core.platform-audit.read',
       scope: 'platform',
       // ALWAYS `allowed`. See the header: the record is of the probe, not of its result.
       decision: 'allowed',
