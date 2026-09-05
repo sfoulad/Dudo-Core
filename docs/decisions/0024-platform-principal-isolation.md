@@ -129,6 +129,44 @@ UPDATE — **verified against a real D1, all four directions, with both negative
 accepted contract that the code does not implement is a defect whether or not anyone can reach it.**
 The contract is what the next implementer will trust.
 
+### The restore scenario — where the Action half is the *only* control, not a second one
+
+`security-agent` searched for a path to the both-tables state that does not need direct database
+access and **found none**. But it identified the case `0025` named and the triggers structurally
+cannot cover, and it is the case that should be in this record:
+
+**A restore from two backups taken at different moments, or a partially applied migration.**
+
+**A restore does not re-run triggers**, and `0010` deliberately does not validate rows that already
+exist — `qa-agent`'s case *"`0010` does not validate rows that already exist"* passes, confirming
+that is designed behaviour rather than an assumption. In that state:
+
+- **Invariant 1 has been violated and nothing notices.**
+- The platform routes deny correctly. **The Actions do not.**
+- **What still holds the line is invariant 2** — which is precisely the correction above.
+
+**So for this scenario the Action check is not defence in depth. It is the only control.** And that
+is why `0025` says the write-side check is hygiene while **the authorization check is the control**:
+
+> **"The triggers cover it" is the reasoning `0025` forbids by name.**
+
+This is the case to point at when someone argues that four verified database triggers make the
+authorization check redundant. **They cover every path that goes through a write. A restore does
+not go through a write.**
+
+### And the write-side guards have no callers yet
+
+`assertNotAPlatformOperator` and `assertNotAnOrganizationMember` are exported, tested, and **called
+by nothing** — because no Core code writes either table today. So the ordering `0025` requires,
+code check first with triggers behind it, **is currently inverted: the triggers are the whole of the
+write-side enforcement.**
+
+The file says so plainly rather than implying coverage, which is the right way to ship it. But the
+hazard is scheduled rather than hypothetical: **the moment membership administration or onboarding
+lands, someone must remember to add the call, and omitting it is silent** — nothing fails, no test
+goes red, and the only remaining layer is a trigger on a database where `0010` may or may not have
+been applied in the right order. Same shape as *"a bound that is true by accident is not a bound."*
+
 ## What this does NOT decide
 
 - **Where platform authority lives** (`CO4`/`AZ9`) — the open question this record works around

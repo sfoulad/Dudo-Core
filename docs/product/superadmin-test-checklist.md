@@ -84,7 +84,9 @@ ineligible principal is rejected in the application layer before the database tr
 - [ ] An operator **cannot reach any tenant's data** through the console. No customer, no business,
       no Organization contents. There is no screen for it because there is no route for it.
 - [ ] The platform routes **404 on `app.dudo.work` and `api.dudo.work`** — they are bound to the
-      admin host. *(See "Known gaps" — this is currently disputed between two measurements.)*
+      admin host. **Verified in `workerd`**, including the case that makes it evidence: a caller
+      holding a **valid operator session still gets 404 on the wrong host**, so the refusal is the
+      host and not the credential.
 
 ### E — What is deliberately NOT built
 
@@ -111,11 +113,26 @@ database access, because `0010`'s four triggers refuse it in both directions on 
 normative rule in an accepted contract that the code does not implement is a defect regardless of
 reachability.**
 
-**DISPUTED — the host binding.** `core-agent`'s harness reports 404 on non-admin hosts. The Team
-Lead's `wrangler dev` run reports **401 on every host including `evil.example.com`**, where 404 is
-specified. One of the two measurements is wrong; `qa-agent`'s `host-binding.ts` is a third
-measurement. **Authorization is unaffected either way** — this is about *which refusal* is returned,
-and therefore about whether an unauthenticated caller can learn the route exists.
+**RESOLVED — the host binding works, and the Team Lead's contrary measurement was invalid.** A
+`wrangler dev --local` run reported 401 on every host including `evil.example.com`. The cause:
+**a `custom_domain` route makes `wrangler dev` overwrite the caller's `Host` header before the
+Worker runs**, so all five probes arrived as `admin.dudo.work` and 401 was the correct answer to
+every one of them. **Five rows, one request.**
+
+**Do not test anything host-dependent through `wrangler dev` with a `custom_domain` route
+configured** — it silently rewrites the input you are varying, so a host guard can appear to pass,
+appear to fail, or appear absent regardless of whether it works.
+
+**HIGH — a write-side guard with no callers.** `assertNotAPlatformOperator` and
+`assertNotAnOrganizationMember` are exported and tested but **called by nothing**, because no Core
+code writes either table yet. `0025` requires the code check first with triggers behind it; **today
+that ordering is inverted.** The hazard is scheduled rather than hypothetical: when membership
+administration or onboarding lands, **omitting the call is silent.**
+
+**And the case that makes the HIGH finding matter:** a **restore from two backups taken at different
+moments** produces the both-tables state without any write. A restore does not re-run triggers, and
+`0010` deliberately does not validate rows that already exist. In that state platform routes deny
+and **Actions do not** — so the Action check is not a second layer there, **it is the only one.**
 
 **Accepted costs, recorded rather than discovered:**
 
