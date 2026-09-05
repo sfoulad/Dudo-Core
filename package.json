@@ -11,6 +11,8 @@
     "typecheck": "npm run typecheck:core && npm run typecheck:tests",
     "typecheck:core": "tsc --noEmit",
     "typecheck:tests": "tsc -p packages/testing/tsconfig.json --noEmit",
+    "//check:contracts": "Unsatisfiable request shapes: a `required` field absent from `properties` under `additionalProperties: false` can be satisfied by NO request. Nothing here executes JSON Schema, so this is invisible to typecheck, to every suite, and to review — `required` and `properties` are read separately and each looks correct alone. It found FOUR real instances on its first run (2026-09-05), one of which `core-agent` was mid-build against. DELIBERATELY NOT part of `typecheck` yet: it is RED on `login-v1`'s `loginCompleteRequest`, which requires `email` and `derived_key` and declares neither. Folding a red gate into a green one makes the green one worthless — the same reason `typecheck:tests` was kept out until it passed. Fold it in when login-v1 is fixed.",
+    "check:contracts": "node scripts/check-contract-shapes.mjs",
     "//migrations": "LOCAL variants act on the local simulated D1 and are safe to run freely. REMOTE variants act on the deployed database and are a production-class action requiring explicit user approval each time (.claude/rules/security.md §7). They are separate scripts, and named, so neither can be run by accident.",
     "d1:migrate:tenant:local": "wrangler d1 migrations apply dudo-tenant --local",
     "d1:migrate:control:local": "wrangler d1 migrations apply dudo-control-plane --local",
