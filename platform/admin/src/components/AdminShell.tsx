@@ -32,21 +32,27 @@
  * not translated.
  *
  * ===========================================================================
- * THE SESSION NOTICE IS PART OF THE FRAME, NOT A DECORATION
+ * THE "SESSION NOT VERIFIED" BANNER IS GONE, BECAUSE IT WAS ANSWERED
  * ===========================================================================
  *
- * It is here rather than on a screen because it is true of the whole console.
- * See `api/platform-session.ts` for why the state cannot be verified and why
- * saying so is the honest option. It should disappear by being ANSWERED — a
- * ratified `platform.session.whoami` — not by being hidden when it gets
- * annoying.
+ * The shell carried a permanent notice saying this console could not confirm a
+ * session was live, because no accepted contract let a principal with no
+ * Organization verify itself. `platform.session.whoami` is now accepted and
+ * implemented, so the notice is REMOVED RATHER THAN HIDDEN — which was the
+ * stated condition for removing it. What stands in its place is the operator's
+ * actual identity, reported by Core.
+ *
+ * The header shows the principal identifier and platform role because on a
+ * console that acts on other people's businesses, "who am I signed in as" should
+ * not require a click. It is display only: `0007` D8 and ADR 0010 §7 —
+ * UI hiding is presentation, never security.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { ROUTES, buildHash, type RoutePath } from '@/lib/router';
-import { VERIFICATION_UNAVAILABLE_REASON } from '@/api/platform-session';
+import type { WhoamiOutput } from '@/api/platform';
 import { CONFIG } from '@/api/config';
 
 interface NavItem {
@@ -67,8 +73,8 @@ const NAV_ITEMS: readonly NavItem[] = [
 
 export interface AdminShellProps {
   readonly currentPath: string;
-  /** False after a reload, when only the per-tab hint says anyone is signed in. */
-  readonly sessionConfirmedThisPageLoad: boolean;
+  /** The operator's own context, as Core reported it. Display only. */
+  readonly whoami: WhoamiOutput;
   readonly signingOut: boolean;
   readonly onSignOut: () => void;
   readonly children: ReactNode;
@@ -76,7 +82,7 @@ export interface AdminShellProps {
 
 export function AdminShell({
   currentPath,
-  sessionConfirmedThisPageLoad,
+  whoami,
   signingOut,
   onSignOut,
   children,
@@ -146,22 +152,21 @@ export function AdminShell({
           </p>
         </div>
 
-        <div className="ms-auto flex items-center gap-2">
+        <div className="ms-auto flex items-center gap-2 sm:gap-3">
+          {/*
+            Who Core says you are. Hidden below `sm` where the header has no room
+            — it is repeated in the sidebar, which is where a phone user reaches
+            it, so nothing is lost rather than merely dropped.
+          */}
+          <p className="hidden text-end text-[0.75rem] leading-tight text-navy-100 sm:block">
+            <span className="block font-mono break-all">{whoami.principal_id}</span>
+            <span className="block">{whoami.platform_role}</span>
+          </p>
           <Button variant="onNavy" size="sm" busy={signingOut} onClick={onSignOut}>
             {signingOut ? 'Signing out…' : 'Sign out'}
           </Button>
         </div>
       </header>
-
-      {!sessionConfirmedThisPageLoad ? (
-        <p
-          role="status"
-          className="border-b border-gold-500 bg-gold-50 px-4 py-2.5 text-[0.8125rem] leading-relaxed text-ink sm:px-6"
-        >
-          <span className="font-bold">Session not verified.</span>{' '}
-          {VERIFICATION_UNAVAILABLE_REASON}
-        </p>
-      ) : null}
 
       <div className="lg:flex">
         {/* The backdrop exists only while the drawer is open, and only below
@@ -231,10 +236,38 @@ export function AdminShell({
             })}
           </ul>
 
-          <p className="border-t border-navy-700 p-3 text-[0.75rem] leading-relaxed text-navy-100">
-            An operator belongs to no Organization and cannot reach customer records. That is
-            structural, not a setting.
-          </p>
+          <div className="border-t border-navy-700 p-3 text-[0.75rem] leading-relaxed text-navy-100">
+            {/* The identity again, for the phone layout where the header hides it. */}
+            <p className="mb-3 sm:hidden">
+              <span className="block font-mono break-all text-white">{whoami.principal_id}</span>
+              <span className="block">{whoami.platform_role}</span>
+            </p>
+            <p>
+              An operator belongs to no Organization and cannot reach customer records. That is
+              structural, not a setting.
+            </p>
+            {/*
+              The permission list, as Core reports it. RENDERING ONLY — the
+              contract, the schema and the handler all say so, and it is shown
+              here rather than used to decide anything. It is `platform-admin`'s
+              six reachable permissions, not the eight the role holds: two are
+              reachable by no route, and reporting them would imply an action
+              that does not exist.
+            */}
+            {whoami.permissions.length > 0 ? (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-navy-100 hover:text-white">
+                  {whoami.permissions.length} permission
+                  {whoami.permissions.length === 1 ? '' : 's'}
+                </summary>
+                <ul className="mt-2 grid gap-1 font-mono text-[0.6875rem] break-all">
+                  {whoami.permissions.map((permission) => (
+                    <li key={permission}>{permission}</li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
         </nav>
 
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 sm:px-6 sm:py-8">

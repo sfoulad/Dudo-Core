@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "verify:kdf": "node --experimental-strip-types scripts/verify-kdf.mjs",
-    "verify": "npm run typecheck && npm run verify:kdf"
+    "verify:platform": "node --experimental-strip-types --import ./scripts/node-resolve-hooks.mjs scripts/verify-platform.mjs",
+    "verify": "npm run typecheck && npm run verify:kdf && npm run verify:platform"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

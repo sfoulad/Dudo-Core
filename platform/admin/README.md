@@ -2,9 +2,9 @@
 
 The operator console for **`https://admin.dudo.work`** (ADR 0010, ADR 0022).
 
-**This is the shell only.** Project setup, sign-in, layout, routing and honest empty states.
-The platform features — Organizations, Templates, Operators, Audit — are **not built**, and
-each section says so on screen rather than showing a placeholder table.
+**Organizations is live. Templates, Operators and Audit are not.** Sign-in, the session probe
+and the Organization list call real, accepted, audited platform routes. The other three
+sections say what they are waiting for rather than showing a placeholder table.
 
 It is a sibling of `platform/web` and shares no build, no `package.json`, no session and no
 `node_modules` with it.
@@ -27,8 +27,42 @@ npm install
 npm run dev          # http://127.0.0.1:5174
 npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
-npm run verify       # typecheck + the KDF and cross-client drift checks
+npm run verify       # typecheck + the KDF drift checks + the platform client checks
+npm run verify:kdf       # 56 checks, including byte-identity with platform/web
+npm run verify:platform  # 51 checks against the shapes Core actually returns
 ```
+
+## The two live routes
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/platform/whoami` | The session probe. Returns the operator's own principal id, platform role and reachable permissions. |
+| `GET /api/v1/platform/organizations` | The Organization list. Identifiers, status and creation date, keyset-paginated. |
+
+**The success body is the response — there is no envelope.** `data` and `next_cursor` are
+top-level keys. This was read off the implementation (`platform-routes.ts` ends with
+`ok(outcome.value.body)`, `http/api.ts:364` hands it to `renderSuccess`, `http/response.ts:102`
+is a bare `JSON.stringify`) rather than assumed from the schema, and `verify:platform` asserts
+that an **enveloped body is refused** rather than silently misread.
+
+**Every call on this class writes an audit record — including the reads.** So this console
+**never polls**: no interval, no refetch on focus, no refetch on reconnect, no speculative
+prefetch, and no automatic retry. The probe runs once per page load and on a button. A
+`whoami` on a timer would fill the log that exists to record what operators *did*.
+
+**These routes 404 on `app.dudo.work` and `api.dudo.work`** by construction — `http/api.ts`
+binds the class to an admin host list and answers the same `404` for "wrong host" and "class
+not composed", so a caller cannot tell them apart. Verified in `workerd`, including a caller
+holding a **valid operator session still getting `404` on the wrong host**.
+
+> ### Do not test host-dependent behaviour through `wrangler dev`
+>
+> When a `custom_domain` route is configured, **`wrangler dev` overwrites the caller's `Host`
+> header before the Worker runs.** Five `curl`s with five different `Host` values all arrive as
+> the same host, so the 404-on-the-wrong-host behaviour above **cannot be observed that way** —
+> and the result looks like a defect that is not there. One was reported and disproved with a
+> probe Worker that echoes what the Worker actually sees. Use `workerd` directly, or a probe
+> Worker, for anything that depends on the host.
 
 ### There is no fixture or demo mode, deliberately
 
@@ -43,6 +77,13 @@ reason stated in full:
 and then fails honestly, because nothing is serving `/auth/login/complete` on
 `127.0.0.1:5174`. To exercise sign-in you need Core running **on the same origin** — not on a
 different port. See the next section for why a different port cannot work.
+
+What *is* exercisable without a server is the client's reading of Core: `npm run verify:platform`
+drives the real `platform.ts` through an injected `fetch` against the exact shapes Core emits,
+including the failure envelopes. That is a shape check, not a substitute for a live run.
+
+**Sign-in has still never run against a live Core.** It is honest to say the KDF is verified and
+the sign-in path is not.
 
 ### The API must be same-origin. This is not a preference.
 
@@ -86,19 +127,33 @@ The derivation is a **four-implementation contract**: this console, `platform/we
 byte-identical output, a person who enrols on one client cannot sign in on another. Changing it
 is a contract change that goes to the Team Lead and lands in all four — never a local edit.
 
-## Session state: what this console knows, and what it cannot
+## Session state: four answers, and the one that must not become a loop
 
-**It cannot confirm that a session is still live**, and it says so in the header rather than
-guessing. The reason is structural: every Action requires a tenant, an operator can never have
-one, and the route that would answer the question — `platform.session.whoami` in
-`platform-operator-v1` — is in a contract that is still **proposed**.
+The shell could not confirm a session was live and shipped an honest "Session not verified"
+banner. `platform.session.whoami` is now accepted and implemented, so **the banner is gone
+because it was answered**, not because it got annoying. The probe returns one of four things:
 
-`src/api/platform-session.ts` holds that gap, the reasoning, and the exact steps for closing it
-when the contract is accepted. Nothing in this console calls an unratified route.
+| Probe result | Console state | Why |
+|---|---|---|
+| `200` | signed in | Verified, and the caller is an operator. |
+| `401` | sign-in screen | No usable credential. |
+| `403` | **its own screen** | Signed in, and refused by the platform class. |
+| anything else | loading + retry | An unreachable server says nothing about a session. |
 
-This costs nothing in safety: whatever the console believes changes no authorization outcome.
-Core authorizes every platform route on every call, and ADR 0010 §7 is explicit —
-**hiding a menu or a button is never an authorization control.**
+**A `403` is not a `401`, and rendering it as one builds an infinite loop** — the person would
+sign in successfully and be refused again, forever, with the form implying their password was
+wrong. `0021` documents the same shape for the Organization picker.
+
+**And the console never says *why* it was refused.** `platform-operator-v1` collapses four
+conditions into one argument-free `forbidden` — no `platform_operator` row, an unrecognised
+role, a role lacking the permission, or **a principal present in both tables** — because a
+caller who could tell them apart could use these routes to probe `organization_membership`. A
+friendly "you are not a platform operator" would be unsupported, and on the fourth condition
+actively wrong.
+
+None of this is a security boundary. Core authorizes every platform route on every call, and
+ADR 0010 §7 is explicit — **hiding a menu or a button is never an authorization control.** The
+permission list `whoami` returns is for rendering only and nothing branches on it.
 
 ## Layout
 
@@ -107,12 +162,14 @@ src/
   api/
     kdf.ts kdf-client.ts kdf-worker.ts   copies of platform/web's, drift-checked
     auth.ts                              sign-in and sign-out against login-v1
+    platform.ts                          the platform route class; parses, never casts
+    platform-session.ts                  the probe, and its four answers
     config.ts                            build config; refuses a cross-origin API
     errors.ts                            the shared error envelope, console wording
-    platform-session.ts                  THE SEAM: why a session cannot be verified
   components/
     AdminShell.tsx                       header, sidebar, main; drawer below lg
-    NotBuiltYet.tsx                      the honest empty state
+    StateBlock.tsx                       loading / error / empty, drawn once
+    NotBuiltYet.tsx                      the honest "not built" state
     ui/button.tsx ui/field.tsx           shadcn copy-in source
   lib/
     router.ts                            ~80-line hash router; see the file for why
@@ -120,8 +177,11 @@ src/
     cn.ts
   screens/
     SignIn.tsx                           sign-in with measured KDF progress
-    Organizations.tsx Templates.tsx Operators.tsx Audit.tsx
-scripts/verify-kdf.mjs                   normative checks + the drift check
+    Organizations.tsx                    LIVE — the Organization list
+    Templates.tsx Operators.tsx Audit.tsx   not built; each says what it waits for
+scripts/verify-kdf.mjs                   normative checks + the cross-client drift check
+scripts/verify-platform.mjs              the platform client against Core's real shapes
+scripts/node-resolve-*.mjs               dev-only ESM hooks so the scripts import real modules
 ```
 
 ## Accessibility and internationalisation

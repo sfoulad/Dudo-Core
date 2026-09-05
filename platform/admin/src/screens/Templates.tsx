@@ -16,6 +16,12 @@ import { NotBuiltYet } from '@/components/NotBuiltYet';
  * Template may NAME Apps and CARRY display labels. It may never CONTAIN logic.
  * The moment it carries a workflow, a validation rule or a pricing rule,
  * business-specific behaviour is inside Core permanently.
+ *
+ * THE CONTRACT IS ACCEPTED AND THE ROUTES ARE NOT BUILT. That is a narrower
+ * statement than the shell's original "proposed, so nothing may be built against
+ * it": the shape is now settled and safe to build against — `core-agent` has not
+ * implemented it yet. `platform-routes.ts` currently declares exactly two route
+ * ids, and none of the three template operations is among them.
  */
 export function Templates() {
   return (
@@ -30,11 +36,10 @@ export function Templates() {
         </>
       }
       contract="packages/contracts/core/platform/template-v1.contract.yaml (platform.templates.create, .list, .read)"
-      contractStatus="Proposed. Not accepted."
+      contractStatus="Accepted. The shape is settled; Core has not implemented the routes."
       blockedOn={[
-        'Team Lead acceptance of the contract.',
-        'PO-1 — the platform-operator action log, which every route in this class must write to, has no decision record.',
-        'The inner-unit rename to Workspace (ADR 0025), which the decision requires to land before Templates are built rather than after.',
+        'Core implementation. platform-routes.ts declares two route ids — platform.organizations.list and platform.session.whoami — and none of the three template operations is registered yet.',
+        'The inner-unit rename to Workspace (ADR 0025), which the decision requires to land before Templates are built rather than after, or they are built on the old name and renamed twice.',
       ]}
     />
   );
