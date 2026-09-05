@@ -474,6 +474,10 @@ function onboardOrganization(dependencies: { readonly onboarding: OnboardingServ
       // SERVER-DERIVED. `context.authority` came from a verified session and a `platform_operator`
       // row; there is no body field that could influence it.
       actorPrincipalId: context.authority.principalId,
+      // ONBOARDING TAKES NO CHARGE RECEIPT, AND THAT IS CORRECT RATHER THAN AN OMISSION. It
+      // reserves TEN control-plane row-writes itself, at its own step 2, BEFORE its tenant write —
+      // so an exhausted operator is refused with `quota_exceeded` and no tenant row is written.
+      // **It was already the shape the resolve should have had**, which is where the fix came from.
       requestId: context.requestId,
       correlationId: context.correlationId,
     });
@@ -613,6 +617,10 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
       organizationId,
       identifier,
       actorPrincipalId: context.authority.principalId,
+      // THE OPERATOR'S CHARGE, WITHOUT WHICH THIS CALL DOES NOT COMPILE. Step 4b took it before
+      // this handler ran, which is what stops an exhausted operator from continuing to spend a
+      // customer's write allocation.
+      charge: context.charge,
       requestId: context.requestId,
       correlationId: context.correlationId,
     });
@@ -802,6 +810,8 @@ function listAuditFeed(dependencies: {
         organizationId: organizationId as string,
         actionId: context.routeId,
         actorPrincipalId: context.authority.principalId,
+        // REQUIRED. Step 4b charged the operator before this handler ran.
+        charge: context.charge,
         requestId: context.requestId,
         correlationId: context.correlationId,
       });

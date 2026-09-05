@@ -73,6 +73,8 @@ import type { TenantScopedStore, WriteOperation } from '../storage/store.ts';
 import type { RequestCoordinator } from '../protection/coordination.ts';
 import type { AuditSink } from '../audit/audit.ts';
 import { derivePlatformOperatorActorContext } from '../audit/audit.ts';
+import type { OperatorWriteCharged } from '../platform/platform-audit.ts';
+import { consumeOperatorCharge } from '../platform/platform-audit.ts';
 
 /**
  * A tenant `audit_event` write: 1 row + its primary key + 3 explicit indexes.
@@ -98,6 +100,19 @@ export type MemberResolutionService = {
     readonly actorPrincipalId: string;
     readonly requestId: string;
     readonly correlationId: string;
+    /**
+     * *** PROOF THE OPERATOR'S WRITE BUDGET WAS CHARGED FIRST. REQUIRED. ***
+     *
+     * This is the parameter that makes the fix a mechanism rather than a convention. Before it,
+     * the tenant write happened and the operator was charged afterwards — so an operator whose own
+     * 600 was spent kept spending a customer's 10,000, five row-writes at a time, until that
+     * customer's own mutations began failing. **Measured: 2,000 calls took one Organization's
+     * whole day.**
+     *
+     * IT IS UNFORGEABLE AND NAMES ITS SUBJECT. `dispatchPlatformRoute` is the only producer;
+     * `consumeOperatorCharge` compares it against the actor being recorded.
+     */
+    readonly charge: OperatorWriteCharged;
   }): Promise<Result<PlatformMemberResolution | null>>;
 
   /**
@@ -127,6 +142,19 @@ export type MemberResolutionService = {
     readonly actorPrincipalId: string;
     readonly requestId: string;
     readonly correlationId: string;
+    /**
+     * *** PROOF THE OPERATOR'S WRITE BUDGET WAS CHARGED FIRST. REQUIRED. ***
+     *
+     * This is the parameter that makes the fix a mechanism rather than a convention. Before it,
+     * the tenant write happened and the operator was charged afterwards — so an operator whose own
+     * 600 was spent kept spending a customer's 10,000, five row-writes at a time, until that
+     * customer's own mutations began failing. **Measured: 2,000 calls took one Organization's
+     * whole day.**
+     *
+     * IT IS UNFORGEABLE AND NAMES ITS SUBJECT. `dispatchPlatformRoute` is the only producer;
+     * `consumeOperatorCharge` compares it against the actor being recorded.
+     */
+    readonly charge: OperatorWriteCharged;
   }): Promise<Result<void>>;
 };
 
@@ -188,6 +216,7 @@ export function createMemberResolutionService(
         organizationId: input.organizationId,
         actionId: 'platform.organizations.members.resolve',
         actorPrincipalId: input.actorPrincipalId,
+        charge: input.charge,
         requestId: input.requestId,
         correlationId: input.correlationId,
         occurredAt: toRfc3339Utc(nowMs),
@@ -209,6 +238,7 @@ export function createMemberResolutionService(
         organizationId: input.organizationId,
         actionId: input.actionId,
         actorPrincipalId: input.actorPrincipalId,
+        charge: input.charge,
         requestId: input.requestId,
         correlationId: input.correlationId,
         occurredAt: toRfc3339Utc(nowMs),
@@ -242,6 +272,7 @@ async function recordProbe(
     readonly organizationId: string;
     /** WHICH platform read this was. A resolve and a feed read are different disclosures. */
     readonly actionId: string;
+    readonly charge: OperatorWriteCharged;
     readonly actorPrincipalId: string;
     readonly requestId: string;
     readonly correlationId: string;
@@ -249,6 +280,16 @@ async function recordProbe(
     readonly nowMs: number;
   },
 ): Promise<Result<void>> {
+  // *** THE RECEIPT IS CONSUMED BEFORE THE RESOLVER IS EVEN TOUCHED. ***
+  //
+  // Not merely held — checked, and bound to the actor this record will name. Reaching this line
+  // without a genuine charge means Dudo's own code cast past the type, which throws rather than
+  // returns: no client can cause it, because clients supply values and never receipts.
+  //
+  // IT IS THE FIRST STATEMENT ON PURPOSE. A check placed after the store resolution would still
+  // be correct and would have let a future edit slip a write in between.
+  consumeOperatorCharge(context.charge, context.actorPrincipalId);
+
   const store = await dependencies.resolver.resolve(context.organizationId);
   if (!store.ok) {
     // AN UNRESOLVABLE STORE REFUSES THE OPERATION rather than answering unrecorded. Note what this

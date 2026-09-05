@@ -91,7 +91,10 @@ import type { IdGenerator } from '../kernel/ids.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
 import { unavailable } from '../kernel/errors.ts';
-import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
+import type {
+  ControlPlaneWriteAdmission,
+  ControlPlaneWriteReservation,
+} from '../identity/control-plane-admission.ts';
 import { PLATFORM_OPERATOR_ACTION_ROW_WRITES } from '../identity/control-plane-admission.ts';
 import type { PlatformAuthority } from './platform-authority.ts';
 import type {
@@ -138,7 +141,140 @@ export type PlatformActionTarget =
 /** The one target value for an operation that names nothing. Frozen so it cannot be mutated. */
 export const NO_TARGET: PlatformActionTarget = Object.freeze({ kind: 'none' as const });
 
+/**
+ * ===========================================================================================
+ * *** THE OPERATOR-CHARGE RECEIPT. A DISCIPLINE CONVERTED INTO A TYPE. `architecture.md` §3a.
+ * ===========================================================================================
+ *
+ * **WHAT IT CERTIFIES:** this request's operator has already had its control-plane write budget
+ * charged for the audit record this request will produce. **Nothing else.**
+ *
+ * ===========================================================================================
+ * WHY IT EXISTS, AND IT IS A MEASURED DENIAL OF SERVICE RATHER THAN A TIDINESS ARGUMENT
+ * ===========================================================================================
+ *
+ * Two platform routes write a record into a CUSTOMER'S tenant database — the member resolve and
+ * the scoped audit feed — and the operator's own budget was charged **afterwards**, by
+ * `recordThen`. So once an operator's 600 was spent, **every further call still performed the 5
+ * tenant row-writes and only then failed.** Measured: **2,000 calls exhausted one named
+ * Organization's entire 10,000/day `business` allocation, 85% of it after the operator's own
+ * ceiling was gone** — and that customer's own mutations then start failing, for a reason they
+ * cannot see.
+ *
+ * `0028`'s residual asserted the opposite as a fact — that the attack was bounded and rate
+ * limited. **It was neither.**
+ *
+ * ===========================================================================================
+ * WHY A RECEIPT RATHER THAN MOVING AN `if` EARLIER
+ * ===========================================================================================
+ *
+ * `architecture.md` §3a, and this is exactly its case: **"a guard that must be remembered is a
+ * discipline; a guard whose output the write requires is a mechanism."** An ordering convention
+ * holds until the next route is added by someone who has not read this comment — and the next
+ * route is precisely how this comes back, because the two that have it were written a day apart
+ * by the same person from the same template.
+ *
+ * **THE TENANT-WRITING SERVICES TAKE THIS AS A REQUIRED PARAMETER**, so a tenant write cannot be
+ * reached without proof the operator was charged first. Omission does not compile.
+ *
+ * ===========================================================================================
+ * IT IS A **FACT** RECEIPT AND IS DELIBERATELY NOT SINGLE-USE
+ * ===========================================================================================
+ *
+ * §3a warns that *"single-use copied without its rationale is the exported-mint mistake again"*.
+ * `ControlPlaneWriteReservation` is a **capacity** receipt and must be single-use — spending it
+ * twice spends one budget on two writes. **This one certifies a fact**, and re-using it within one
+ * request consumes no budget and is refused by nothing, because there is one charge per request
+ * either way: the handler holds it as evidence, and `recordThen` spends the reservation inside it
+ * exactly once.
+ *
+ * **AND IT NAMES ITS SUBJECT.** §3a: *"where the receipt names a subject, the consumer compares it
+ * against the record it is writing — a receipt minted for A and spent on B is the obvious hole."*
+ * `consumeOperatorCharge` does that comparison.
+ *
+ * ===========================================================================================
+ * WHAT IT DOES **NOT** FIX, STATED HERE SO IT IS NOT CITED AS THOUGH IT DID
+ * ===========================================================================================
+ *
+ * It converts a total outage into a serious degradation and no more. **One operator can still push
+ * 300 calls × 5 = 1,500 row-writes into one customer's day — 15%. Three operators reach 45%.**
+ *
+ * **AND `PO-4` WILL NOT CLOSE THAT EITHER.** A rate limiter bounds the OPERATOR; the ceiling being
+ * exhausted belongs to the ORGANIZATION. **Both fixes bound the attacker while the exposure is a
+ * property of the target**, so N operators still sum onto one customer. The only structural answer
+ * is a per-Organization sub-ceiling on platform-originated tenant writes — deferred, because today
+ * the operator set is small and trusted and the realistic threat is one taken session, which this
+ * and `PO-4` do address. **Recorded so that nobody has to rediscover it the day the operator set
+ * grows.**
+ */
+const OPERATOR_CHARGE_BRAND: unique symbol = Symbol('dudo.platform.operatorCharge');
+
+export type OperatorWriteCharged = {
+  readonly [OPERATOR_CHARGE_BRAND]: true;
+  readonly principalId: string;
+  readonly reservation: ControlPlaneWriteReservation;
+};
+
+/** The ONLY producer. Module-private, so no caller can fabricate one. */
+function mintOperatorCharge(
+  principalId: string,
+  reservation: ControlPlaneWriteReservation,
+): OperatorWriteCharged {
+  return Object.freeze({
+    [OPERATOR_CHARGE_BRAND]: true as const,
+    principalId,
+    reservation,
+  });
+}
+
+export class OperatorChargeMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OperatorChargeMissingError';
+  }
+}
+
+/**
+ * THROWN, NOT RETURNED, exactly as `consumeControlPlaneWriteReservation` and
+ * `consumeMembershipAdmission` are — **no client can cause this, because clients supply values and
+ * never receipts.** Reaching it means Dudo's own code cast past the type.
+ *
+ * IT BINDS THE RECEIPT TO THE ACTOR. A charge minted for operator A cannot fund a tenant write
+ * attributed to operator B.
+ */
+export function consumeOperatorCharge(
+  charge: OperatorWriteCharged,
+  principalId: string,
+): void {
+  if (charge[OPERATOR_CHARGE_BRAND] !== true) {
+    throw new OperatorChargeMissingError(
+      'A tenant write was attempted with a value that is not an operator-charge receipt. The ' +
+        'receipt is minted only by dispatchPlatformRoute, AFTER the operator\'s control-plane ' +
+        'budget has been charged — which is what stops an operator whose own budget is exhausted ' +
+        "from continuing to spend a customer's.",
+    );
+  }
+  if (charge.principalId !== principalId) {
+    throw new OperatorChargeMissingError(
+      `An operator-charge receipt minted for '${charge.principalId}' was used for a write ` +
+        `attributed to '${principalId}'. A receipt names its subject and the consumer compares ` +
+        'it, or one operator funds another operator\'s writes.',
+    );
+  }
+}
+
 export type PlatformAuditRecorder = {
+  /**
+   * *** CHARGES THE OPERATOR **BEFORE** THE HANDLER RUNS, AND RETURNS THE PROOF. ***
+   *
+   * Split out of `record` on 2026-09-05. It used to reserve and write in one call, which put the
+   * charge AFTER every tenant write a handler performed — see `OperatorWriteCharged` for the
+   * measured consequence.
+   *
+   * A DEFERRED BUDGET REFUSES THE WHOLE REQUEST HERE, before any handler, so **no tenant write
+   * happens at all.** That is the property the whole change exists for.
+   */
+  reserve(actor: PlatformAuthority): Promise<Result<OperatorWriteCharged>>;
   /**
    * Writes one record, or fails the operation.
    *
@@ -155,6 +291,14 @@ export type PlatformAuditRecorder = {
     readonly outcome: PlatformActionOutcome;
     /** Already validated against `^[A-Za-z0-9_-]{8,64}$` at the transport boundary. */
     readonly correlationId: string;
+    /**
+     * The receipt `reserve` returned. **The reservation inside it is spent here, exactly once.**
+     *
+     * `record` NO LONGER RESERVES. Passing the charge rather than re-reserving is what makes "one
+     * charge per request" true rather than "one charge per record", and it is why the receipt can
+     * be a fact rather than a capacity from the handler's point of view.
+     */
+    readonly charge: OperatorWriteCharged;
   }): Promise<Result<void>>;
 };
 
@@ -202,7 +346,7 @@ export function createPlatformAuditRecorder(
   const { store, admission, ids, clock } = dependencies;
 
   return {
-    async record(entry): Promise<Result<void>> {
+    async reserve(actor): Promise<Result<OperatorWriteCharged>> {
       const nowMs = clock.nowMs();
 
       // ===================================================================================
@@ -222,7 +366,7 @@ export function createPlatformAuditRecorder(
       // is about 150 page loads a day. That is workable at closed-beta scale and it is tight
       // enough to be worth knowing.
       const admitted = await admission.reserve({
-        principalId: entry.actor.principalId,
+        principalId: actor.principalId,
         estimatedRowWrites: PLATFORM_OPERATOR_ACTION_ROW_WRITES,
         nowMs,
       });
@@ -251,6 +395,15 @@ export function createPlatformAuditRecorder(
         // diagnose.
         return err(unavailable());
       }
+      // *** THE RECEIPT. Minted here and nowhere else, AFTER the budget is charged. ***
+      return ok(mintOperatorCharge(actor.principalId, admitted.value.reservation));
+    },
+
+    async record(entry): Promise<Result<void>> {
+      const nowMs = clock.nowMs();
+      // THE RECEIPT IS BOUND TO THE ACTOR THIS RECORD NAMES. A charge minted for one operator
+      // cannot fund a record attributed to another.
+      consumeOperatorCharge(entry.charge, entry.actor.principalId);
 
       const columns = targetColumns(entry.target);
       const written = await store.recordAction(
@@ -271,7 +424,9 @@ export function createPlatformAuditRecorder(
           occurredAt: toRfc3339Utc(nowMs),
           correlationId: entry.correlationId,
         },
-        admitted.value.reservation,
+        // THE RESERVATION FROM THE RECEIPT, spent here exactly once — charged before the handler
+        // ran rather than after it.
+        entry.charge.reservation,
       );
       if (!written.ok) {
         // ONE ANSWER FOR EVERY FAILURE. A reservation error, an exhausted budget and a failed

@@ -117,7 +117,11 @@ import {
   PRE_AUTH_MAX_FIELD_LENGTH,
 } from '../identity/pre-auth-admission.ts';
 import type { PlatformAuthority, PlatformAuthorityResolver } from './platform-authority.ts';
-import type { PlatformAuditRecorder, PlatformActionTarget } from './platform-audit.ts';
+import type {
+  OperatorWriteCharged,
+  PlatformAuditRecorder,
+  PlatformActionTarget,
+} from './platform-audit.ts';
 import { NO_TARGET } from './platform-audit.ts';
 import {
   PLATFORM_ORGANIZATION_LIST_PERMISSION,
@@ -979,6 +983,21 @@ export type PlatformRouteContext = {
   readonly sessionId: string;
   readonly requestId: string;
   readonly correlationId: string;
+  /**
+   * *** PROOF THAT THIS OPERATOR'S WRITE BUDGET HAS ALREADY BEEN CHARGED. ***
+   *
+   * The two handlers that write into a CUSTOMER'S tenant database — the member resolve and the
+   * scoped audit feed — must pass this to the service that performs the write, which **requires it
+   * as a parameter.** So a tenant write cannot be reached before the operator has paid, and
+   * forgetting does not compile.
+   *
+   * IT IS NOT STORE-SHAPED AND CANNOT BE MADE SO. It holds a principal identifier and an opaque
+   * write reservation; there is no store, no resolver, no binding and no organization identifier
+   * in it, so `P1` is untouched — this is a budget receipt, not a handle.
+   *
+   * A HANDLER THAT WRITES NOTHING SIMPLY IGNORES IT. Nine of the eleven routes do.
+   */
+  readonly charge: OperatorWriteCharged;
 };
 
 /**
@@ -1480,6 +1499,37 @@ export async function dispatchPlatformRoute(
     return err(authority.error);
   }
 
+  // ===========================================================================================
+  // ---- 4b. *** CHARGE THE OPERATOR'S WRITE BUDGET **BEFORE** ANYTHING ELSE RUNS. ***
+  // ===========================================================================================
+  //
+  // THIS LINE IS THE FIX FOR A MEASURED, TARGETED DENIAL OF SERVICE. The charge used to happen
+  // inside `recordThen`, AFTER the handler — so two routes that write into a customer's tenant
+  // database did so before the operator paid for anything, and **an operator whose own 600 was
+  // exhausted kept spending the customer's 10,000 at 5 row-writes a call.** Measured: 2,000 calls
+  // took one named Organization's entire day, 85% of it after the operator's ceiling was gone,
+  // after which that customer's OWN mutations start failing.
+  //
+  // NOW A DEFERRED BUDGET REFUSES HERE, before the gate, before the handler, before any tenant
+  // write exists to be performed. **The operator's 600 becomes the bound everyone already believed
+  // it was.**
+  //
+  // IT IS AFTER STEP 4 AND BEFORE STEP 5, WHICH PRESERVES TODAY'S CHARGING EXACTLY. A caller that
+  // is not an operator still writes nothing and pays nothing (step 4 refused it); an operator
+  // DENIED at step 5 still pays, because that denial is audited and always was.
+  //
+  // THE RECEIPT IS THE POINT, NOT THE ORDERING. `architecture.md` §3a — an ordering convention
+  // holds until the next route is added by someone who has not read this comment. See
+  // `OperatorWriteCharged`: the tenant-writing services take it as a REQUIRED PARAMETER, so a
+  // tenant write cannot be reached without it and omission does not compile.
+  const charge = await dependencies.audit.reserve(authority.value);
+  if (!charge.ok) {
+    // NO RECORD IS WRITTEN AND NONE CAN BE — the budget for it is exactly what was refused. This
+    // is the same `unavailable` the old code produced from inside `recordThen`, at the same
+    // moment in the operator's day; what changed is that it now arrives before the handler.
+    return err(charge.error);
+  }
+
   // ---- 5. Authorization. The envelope is the CEILING, the operator's role grants are the FLOOR,
   // and neither substitutes for the other. Evaluated at `platform` scope, which is the only scope
   // any route in this class uses — it is not a per-route field, deliberately.
@@ -1494,7 +1544,7 @@ export async function dispatchPlatformRoute(
     'platform',
   );
   if (!decision.allowed) {
-    return recordThen(dependencies, authority.value, route, request, 'denied', NO_TARGET, () =>
+    return recordThen(dependencies, authority.value, charge.value, route, request, 'denied', NO_TARGET, () =>
       err(forbidden()),
     );
   }
@@ -1540,7 +1590,7 @@ export async function dispatchPlatformRoute(
       // ABSENT MEANS REFUSED. Same direction as the missing handler below and as the pipeline's
       // uncomposed gate: a deployment that cannot verify a confirmation must not perform an
       // irreversible operation.
-      return recordThen(dependencies, authority.value, route, request, 'failed', NO_TARGET, () =>
+      return recordThen(dependencies, authority.value, charge.value, route, request, 'failed', NO_TARGET, () =>
         err(unavailable()),
       );
     }
@@ -1560,7 +1610,7 @@ export async function dispatchPlatformRoute(
       body: parsedBody.value,
     });
     if (!confirmed.ok) {
-      return recordThen(dependencies, authority.value, route, request, 'denied', NO_TARGET, () =>
+      return recordThen(dependencies, authority.value, charge.value, route, request, 'denied', NO_TARGET, () =>
         err(confirmed.error),
       );
     }
@@ -1573,7 +1623,7 @@ export async function dispatchPlatformRoute(
     // answers `unavailable` rather than `not_implemented` because the caller has by this point
     // been established as an operator, so there is no disclosure argument for hiding it — and
     // because a missing handler is a composition defect, which is what `unavailable` describes.
-    return recordThen(dependencies, authority.value, route, request, 'failed', NO_TARGET, () =>
+    return recordThen(dependencies, authority.value, charge.value, route, request, 'failed', NO_TARGET, () =>
       err(unavailable()),
     );
   }
@@ -1615,11 +1665,12 @@ export async function dispatchPlatformRoute(
         sessionId: sessionId.value,
         requestId: request.requestId,
         correlationId: request.correlationId,
+        charge: charge.value,
       },
       parsedBody.value,
     );
   } catch {
-    return recordThen(dependencies, authority.value, route, request, 'failed', NO_TARGET, () =>
+    return recordThen(dependencies, authority.value, charge.value, route, request, 'failed', NO_TARGET, () =>
       err(internal()),
     );
   }
@@ -1629,13 +1680,14 @@ export async function dispatchPlatformRoute(
     // A FAILED OPERATION IS STILL RECORDED, with `NO_TARGET`: a handler that failed may not know
     // what it was about to touch, and inventing a target from a partial operation would produce a
     // log line that asserts more than the code knows.
-    return recordThen(dependencies, authority.value, route, request, 'failed', NO_TARGET, () =>
+    return recordThen(dependencies, authority.value, charge.value, route, request, 'failed', NO_TARGET, () =>
       err(outcome.error),
     );
   }
   return recordThen(
     dependencies,
     authority.value,
+    charge.value,
     route,
     request,
     'ok',
@@ -1661,6 +1713,8 @@ export async function dispatchPlatformRoute(
 async function recordThen(
   dependencies: PlatformRouteDependencies,
   actor: PlatformAuthority,
+  /** The receipt from step 4b. Its reservation is spent here; `record` no longer reserves. */
+  charge: OperatorWriteCharged,
   route: PlatformRoute,
   request: PlatformRouteRequest,
   outcome: 'ok' | 'denied' | 'failed',
@@ -1692,6 +1746,7 @@ async function recordThen(
       target,
       outcome,
       correlationId: request.correlationId,
+      charge,
     });
   } catch {
     return err(unavailable());
