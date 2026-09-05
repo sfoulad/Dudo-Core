@@ -79,6 +79,29 @@ ineligible principal is rejected in the application layer before the database tr
 - [ ] **The password is never sent.** Only a derived value leaves the browser (`0015` §D). Confirm
       in the network tab: no field contains the password you typed.
 
+**If sign-in fails, this is now a confirmation of one variable rather than a discovery of four.**
+Four independent implementations — the **admin console**, the web client, the enrolment tool and a
+`node:crypto` reference — are asserted to derive byte-identical values, and a credential enrolled by
+the tool is accepted through the real verifier when derived by **either shipped client**.
+
+**The admin console's KDF is a copy of the web client's and had never been compared to anything
+until 2026-09-05.** A script compared the two files' **text**, character for character — but the
+iteration constant sits **above** the compared region, so a drift there passed the script and would
+have failed only at this login screen. It is now asserted by output, including a case driving the
+admin client at 599,999 iterations and requiring the round trip to refuse it.
+
+**Two limits remain, and the first sign-in is what tests them:**
+
+- **Every test runs under Node** — `node:sqlite` and Node's `crypto.subtle`, not Cloudflare's SQLite
+  build and not `workerd`'s WebCrypto. PBKDF2-SHA-256 is a specified algorithm and the reference
+  agrees, but **the first execution of this derivation inside `workerd` is the deploy.**
+- **The staging database has never held a row with these parameters.** The code agrees; a database
+  nobody has migrated yet proves nothing.
+
+**If it fails, the useful evidence is the derived value and the stored verifier's parameters —
+algorithm, iteration count, and salt as normalised. Never the password.** None of those is secret,
+and they distinguish every failure mode above. Nobody will ask you for the password.
+
 ### B — The session is separate from the web app
 
 - [ ] Being signed in at `app.dudo.work` does **not** sign you in at `admin.dudo.work`. The cookie
@@ -167,6 +190,14 @@ slice finished):
   system. Everything an operator *does* is logged; **becoming one is not.**
 - **`0027`'s `CF-5` will share the per-principal ceiling** at 4 row-writes per challenge — about
   **150 challenges per operator per UTC day**, from the same 600 the console already spends from.
+- **There is no credential rotation path.** `credential-verifier.ts` derives entirely from the
+  stored row — **no parameter comes from configuration**, so a config change cannot silently
+  invalidate credentials. But `record.iterations` is also an *acceptance gate* against a source
+  constant, so **a build that raised the server iteration count would refuse every existing
+  credential, indistinguishable from a wrong password.** That narrowing is deliberate and recorded
+  — honouring any stored count made a row stored at 1,000 iterations cost a tenth of a miss, a
+  per-account timing signal an unauthenticated caller could drive. **The consequence: raising that
+  constant is a decision with a migration attached, not an edit.**
 
 **Two type-level guarantees have no regression cover.** The membership receipt and
 `ControlPlaneWriteReservation` are both enforced by the type system, and **no suite can see them** —
