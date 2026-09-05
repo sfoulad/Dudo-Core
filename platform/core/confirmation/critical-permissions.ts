@@ -157,6 +157,58 @@ export function confirmableOperations(): readonly string[] {
 }
 
 /**
+ * ===========================================================================================
+ * ROUTES THAT AUTHORIZE AGAINST A `critical` PERMISSION WITHOUT PERFORMING THE OPERATION.
+ * ===========================================================================================
+ *
+ * **A BORROWED PERMISSION IS NOT THE ROUTE'S OWN EFFECT**, and this is the list of routes for
+ * which that is true. Each one narrows WHO may call it by pointing at a dangerous operation's
+ * permission, while doing something that is not that operation.
+ *
+ * *** WHY THIS EXISTS RATHER THAN A PER-ROUTE FLAG. *** `0027` forbids an operation declaring
+ * whether it needs confirming, by name: *"if confirmation is something an Action remembers to
+ * require, then the Action that forgets is the dangerous one, and it will look exactly like the
+ * ones that did not."* A `skipsConfirmation: true` on `PlatformRoute` would be exactly that. **This
+ * set is Core-owned, frozen, in the same file as the confirmable operations, and a reviewer reads
+ * both together** — an entry here is a claim a person made, in a file no App can edit, next to the
+ * list it is an exception to.
+ *
+ * *** AND IT CANNOT HIDE A DANGEROUS ROUTE, BECAUSE THE COMPLETENESS CHECK IS THE OTHER WAY
+ * ROUND. *** `assertConfirmationCoverageIsCoherent` requires every route with a critical permission
+ * to be **either** confirmable **or** listed here. Forgetting to register a genuinely critical
+ * route still stops the build. Listing one here wrongly is a deliberate, visible, reviewable act —
+ * which is the most any mechanism can offer against someone who means it.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * THE TWO ENTRIES, AND EACH NEEDED ITS OWN ARGUMENT
+ * ---------------------------------------------------------------------------------------------
+ *
+ * `platform.confirmations.request` — the challenge route. **Gating it is a DEADLOCK**, not merely
+ * unnecessary: the binding covers the action id, the challenge route is not a confirmable
+ * operation, so no challenge for it can ever be issued and every critical operation would become
+ * permanently unreachable while looking gated.
+ *
+ * `platform.organizations.members.resolve` — **a READ.** `0028` Decision 2 binds it to
+ * `core.credential.reset` so that *"revoking the reset grant revokes the ability to resolve
+ * people"* and a Templates-only role cannot accumulate the `CO1` aggregation. It performs no
+ * reset. **`organization-detail-v1`'s request schema settles it independently**: `required:
+ * ["identifier"]` with `additionalProperties: false`, so a confirmation field is not merely
+ * unnecessary there, it is FORBIDDEN by the contract.
+ *
+ * AND GATING IT WOULD HAVE BEEN CIRCULAR IN PRACTICE: to reset a credential an operator needs a
+ * `principal_id`; the only route that produces one is this resolve; so a confirmed resolve would
+ * mean confirming a lookup in order to be allowed to confirm the operation the lookup is for.
+ */
+const BORROWS_WITHOUT_PERFORMING: readonly string[] = Object.freeze([
+  'platform.confirmations.request',
+  'platform.organizations.members.resolve',
+]);
+
+export function borrowsCriticalPermissionWithoutPerforming(routeId: string): boolean {
+  return BORROWS_WITHOUT_PERFORMING.includes(routeId);
+}
+
+/**
  * The permission a platform-class challenge borrows, or `undefined` for an operation this class
  * cannot confirm.
  *

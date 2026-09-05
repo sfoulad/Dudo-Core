@@ -101,6 +101,7 @@ import { createIdentityComposition } from '../../identity/composition.ts';
 import { createD1PlatformStore } from '../../platform/adapters/d1/d1-platform-store.ts';
 import { createD1TemplateStore } from '../../platform/adapters/d1/d1-template-store.ts';
 import { createOnboardingService } from '../../onboarding/onboarding-service.ts';
+import { createMemberResolutionService } from '../../directory/member-resolution.ts';
 import { createHmacIdentifierHasher } from '../../identity/credential-store.ts';
 import { createStoreAuditSink } from '../../audit/store-audit-sink.ts';
 import type { TenantScopedStore } from '../../storage/store.ts';
@@ -425,8 +426,29 @@ export async function createCoreRuntime(
     tenantBindingName: TENANT_BINDING,
   });
 
+  // THE MEMBER RESOLVE. `organization-detail-v1`, `docs/decisions/0028` Decision 2.
+  //
+  // ASSEMBLED HERE FOR THE REASON ONBOARDING IS: it needs the tenant resolver, and the platform
+  // class's composition root must not. **It receives the SAME resolver instance** — a second one
+  // would be a second place "no fallback binding, no default database" is implemented.
+  //
+  // IT RECEIVES `platformStore`, WHICH IS THE READ, AND THE RESOLVER, WHICH IS THE AUDIT WRITE.
+  // Those are the whole of its reach: it cannot enumerate members, because the port it holds has
+  // no method that returns identities.
+  const members = createMemberResolutionService({
+    store: platformStore,
+    identifiers: await createHmacIdentifierHasher(lookupKey),
+    resolver: tenantResolver,
+    coordinator: createDurableObjectRequestCoordinator(coordinationNamespace),
+    auditSinkFor: (store: TenantScopedStore) =>
+      createStoreAuditSink(store, createRandomIdGenerator()),
+    ids: createRandomIdGenerator(),
+    clock,
+  });
+
   const platformRoutes = await createPlatformComposition({
     onboarding,
+    members,
     confirmations,
     // THE SAME GATE INSTANCE THE ACTION PIPELINE RECEIVES, and passing it here is what makes
     // `confirmation-v1`'s "EVERY entry point" true rather than true of one class. Composed

@@ -44,6 +44,7 @@ import type { ErrorDetail } from '../kernel/errors.ts';
 import { conflict, detail, internal, invalidArgument, notFound, quotaExceeded } from '../kernel/errors.ts';
 import { isSubmittableIdentifier } from '../identity/credential-store.ts';
 import type { OnboardingInput, OnboardingService } from '../onboarding/onboarding.ts';
+import type { MemberResolutionService } from '../directory/member-resolution.ts';
 import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
@@ -459,6 +460,148 @@ function onboardOrganization(dependencies: { readonly onboarding: OnboardingServ
 }
 
 /**
+ * Organization detail. `organization-detail-v1`.
+ *
+ * ONE REQUEST, ONE RESPONSE, AND THE TEMPLATE IS EMBEDDED RATHER THAN RETURNED AS AN ID TO FETCH.
+ * `theOnePageOneRequestRule`, and the reason is a budget rather than an aesthetic: **P4 makes every
+ * platform route write an audit record**, so a page firing three requests spends three times the
+ * budget of one firing a single request, against a per-principal ceiling of roughly 300 operator
+ * actions per UTC day. **The ordinary REST instinct — return an id, let the client resolve it — is
+ * the expensive one here**, and it is expensive in a resource that stops the whole platform when
+ * exhausted rather than merely being slow.
+ *
+ * EMBEDDING DISCLOSES NOTHING: a Template is tenant-INDEPENDENT platform configuration, identical
+ * for every caller. Contrast anything tenant-scoped, which is not embedded because it is not
+ * readable at all.
+ */
+function readOrganization(dependencies: {
+  readonly store: PlatformOperatorStore;
+  readonly templates: TemplateStore;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const organizationId = context.pathParams.organization_id;
+    if (organizationId === undefined) {
+      // UNREACHABLE VIA THE MATCHER, which extracts declared segments by pattern. `internal()`
+      // rather than `not_found`, because reaching this line is a defect in the route table rather
+      // than anything a caller did.
+      return err(internal());
+    }
+
+    const found = await dependencies.store.findOrganizationDetail(organizationId);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    if (found.value === null) {
+      // THE ARGUMENT-FREE 404. No oracle concern on THIS route and it is worth saying why rather
+      // than leaving it to be re-derived: every caller who reaches here can already enumerate every
+      // Organization from `platform.organizations.list`, so the distinction discloses nothing to a
+      // population that could not obtain it one screen away. **THAT REASONING IS SPECIFIC TO THIS
+      // CLASS and must not be copied to a route a tenant principal can reach.**
+      return err(notFound());
+    }
+
+    // ---- THE TEMPLATE, RESOLVED. A second point read, and it is the second of the two the
+    // contract budgets for — `organization` with its member count, then `template`.
+    //
+    // A TEMPLATE THAT CANNOT BE READ REFUSES THE WHOLE RESPONSE rather than rendering `null`. A
+    // `null` here would be indistinguishable from "this Organization has no Template", which is a
+    // real and different state — and the operator would be told a school is unconfigured because
+    // one read failed.
+    let template: Readonly<Record<string, unknown>> | null = null;
+    if (found.value.templateId !== null) {
+      const record = await dependencies.templates.findById(found.value.templateId);
+      if (!record.ok) {
+        return err(record.error);
+      }
+      if (record.value === null) {
+        // THE FOREIGN KEY MAKES THIS UNREACHABLE — `0013` will not admit an Organization naming an
+        // absent Template, and no route deletes one. It is `internal()` rather than a silent
+        // `null` because if it ever happens, the referential guarantee has failed and that is a
+        // fact worth surfacing rather than smoothing into "no business type".
+        return err(internal());
+      }
+      template = toTemplateOutput(record.value);
+    }
+
+    return ok({
+      body: {
+        organization_id: found.value.organizationId,
+        status: found.value.status,
+        created_at: found.value.createdAt,
+        // ALWAYS NULL. `0002_organization.sql` declined a name column deliberately and the
+        // organization-structure slice owns that model. The field is contracted nullable so a name
+        // is additive later; **the console's list and detail screens are therefore opaque
+        // identifiers, which is contract `PO-3` and not a defect here.**
+        display_name: null,
+        template,
+        member_count: found.value.memberCount,
+      },
+      target: { kind: 'organization', organizationId: found.value.organizationId },
+    });
+  };
+}
+
+/**
+ * Resolve one member by identifier. `organization-detail-v1`, `docs/decisions/0028` Decision 2.
+ *
+ * THE HANDLER IS THIN BECAUSE EVERYTHING THAT TOUCHES A TENANT STORE LIVES IN `directory/`. This
+ * function names no resolver, no store handle and no binding — see that module for why.
+ */
+function resolveMember(dependencies: { readonly members: MemberResolutionService }) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const organizationId = context.pathParams.organization_id;
+    if (organizationId === undefined) {
+      return err(internal());
+    }
+    const identifier = body.identifier;
+    if (typeof identifier !== 'string' || !isSubmittableIdentifier(identifier)) {
+      // A SHAPE ERROR, REFUSED BEFORE THE LOOKUP AND BEFORE THE AUDIT WRITE. It is not one of the
+      // five collapsed cases: a malformed identifier is not a probe, it is a malformed request,
+      // and it discloses nothing because the constraint is published in the schema.
+      //
+      // IT ALSO MEANS A MALFORMED IDENTIFIER COSTS NO TENANT WRITE, which is the difference
+      // between a validation floor and a rate limit and is worth being clear about — it bounds
+      // garbage, not probing.
+      return err(invalidArgument([detail('identifier', 'must_be_a_submittable_identifier')]));
+    }
+
+    const resolved = await dependencies.members.resolve({
+      organizationId,
+      identifier,
+      actorPrincipalId: context.authority.principalId,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+    });
+    if (!resolved.ok) {
+      return err(resolved.error);
+    }
+    if (resolved.value === null) {
+      // ONE ANSWER FOR FIVE CASES: unknown Organization, an identifier belonging to nobody, a
+      // non-member, a suspended membership, and **a platform operator.** `notFound()` takes no
+      // arguments, so there is no field, message, detail token or response size to vary.
+      return err(notFound());
+    }
+
+    return ok({
+      body: {
+        principal_id: resolved.value.principalId,
+        role: resolved.value.role,
+        // THE SUBMITTED IDENTIFIER IS NOT ECHOED. The caller sent it and already knows it; echoing
+        // it would put an email address in a response body for no purpose, and in a log line for
+        // anyone who logs responses.
+      },
+      // THE PRINCIPAL, NOT THE ORGANIZATION. `0025` Decision 5 permits both kinds, and this
+      // operation's target is the person asked about — which is what makes the operator log usable
+      // for the question "who has been asking about our staff".
+      target: { kind: 'principal', principalId: resolved.value.principalId },
+    });
+  };
+}
+
+/**
  * The four fields, validated individually. The CLASS has already refused anything undeclared, a
  * non-object body, an oversized body and any query string; this is the per-field semantic layer.
  *
@@ -618,6 +761,15 @@ export function createPlatformRouteHandlers(dependencies: {
    * `onboarding/onboarding.ts` for why the resolver lives outside this directory.
    */
   readonly onboarding: OnboardingService;
+  /**
+   * The member resolve. REQUIRED, and a port with one method returning a principal id and a role.
+   *
+   * IT IS NOT A `PlatformOperatorStore` WITH AN EXTRA METHOD, even though the lookup it performs is
+   * on this class's own store. The difference is the tenant-side audit write, which needs a
+   * resolver — so the service lives in `directory/`, outside this directory, and what arrives here
+   * cannot reach a tenant store. See `directory/member-resolution.ts`.
+   */
+  readonly members: MemberResolutionService;
   readonly admission: ControlPlaneWriteAdmission;
   readonly ids: IdGenerator;
   readonly cursors: PlatformCursorCodec;
@@ -633,6 +785,13 @@ export function createPlatformRouteHandlers(dependencies: {
     'platform.organizations.list': listOrganizations(dependencies),
     'platform.organizations.create': onboardOrganization({
       onboarding: dependencies.onboarding,
+    }),
+    'platform.organizations.read': readOrganization({
+      store: dependencies.store,
+      templates: dependencies.templates,
+    }),
+    'platform.organizations.members.resolve': resolveMember({
+      members: dependencies.members,
     }),
     'platform.session.whoami': whoami(),
     'platform.templates.create': createTemplate({

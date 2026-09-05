@@ -44,10 +44,13 @@ import type { D1Database } from '../../../storage/adapters/d1/d1-store.ts';
 import type { ControlPlaneWriteReservation } from '../../../identity/control-plane-admission.ts';
 import { consumeControlPlaneWriteReservation } from '../../../identity/control-plane-admission.ts';
 import { toPlatformRole } from '../../platform-permissions.ts';
+import type { MembershipRole } from '../../../authorization/roles.ts';
 import type {
+  PlatformMemberResolution,
   PlatformOperatorActionRecord,
   PlatformOperatorRecord,
   PlatformOperatorStore,
+  PlatformOrganizationDetailRecord,
   PlatformOrganizationRecord,
   PlatformOrganizationStatus,
 } from '../../platform-operator-store.ts';
@@ -103,6 +106,23 @@ function organizationStatus(row: SqlRow): PlatformOrganizationStatus | null {
   return ORGANIZATION_STATUSES.includes(value as PlatformOrganizationStatus)
     ? (value as PlatformOrganizationStatus)
     : null;
+}
+
+const MEMBERSHIP_ROLES: readonly MembershipRole[] = ['owner', 'member'];
+
+/**
+ * The membership role, validated on read. `null` for absent or unrecognised, and the CALLER
+ * decides what that means — here it is the same 404 every other refusing case produces.
+ *
+ * NOT COERCED TO `'member'`. A role this build does not recognise is not a lesser role, it is an
+ * unknown one, and `authorization/roles.ts` maps only recognised values to permissions.
+ */
+function membershipRole(row: SqlRow): MembershipRole | null {
+  const value = text(row, 'role');
+  if (value === null) {
+    return null;
+  }
+  return MEMBERSHIP_ROLES.includes(value as MembershipRole) ? (value as MembershipRole) : null;
 }
 
 /**
@@ -235,6 +255,142 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
         organizations.push({ organizationId, status, createdAt });
       }
       return ok(organizations);
+    },
+
+    async findOrganizationDetail(
+      organizationId: string,
+    ): Promise<Result<PlatformOrganizationDetailRecord | null>> {
+      // =====================================================================================
+      // ONE STATEMENT, NOT TWO. The row and the member count together.
+      // =====================================================================================
+      //
+      // `theOnePageOneRequestRule` shapes the response; this shapes the reads behind it. A
+      // correlated scalar subquery costs one round trip against a single-threaded database, and
+      // D1 is roughly 1,000 queries/second platform-wide — two statements here would be two.
+      //
+      // *** THE SUBQUERY IS `COUNT(*)` AND THERE IS NO VARIANT OF THIS STATEMENT THAT SELECTS A
+      // principal_id. *** `0028` Decision 1. The count is what the port exposes because the count
+      // is what cannot be inverted, and the SQL is written so that widening it to identities would
+      // be a visible rewrite rather than an added column.
+      //
+      // IT COUNTS EVERY MEMBERSHIP ROW REGARDLESS OF STATUS, deliberately, and it is the one place
+      // in this file where status is NOT filtered. "How many principals belong to this
+      // Organization" is the operator's question — did onboarding work, is this in use, is it
+      // abandoned — and a suspended member is still a member for that purpose. Filtering to
+      // `active` would make the count disagree with what an owner sees in their own directory.
+      const rows = await selectRows(
+        database,
+        'SELECT o.organization_id, o.status, o.created_at, o.template_id, ' +
+          '(SELECT COUNT(*) FROM organization_membership m ' +
+          'WHERE m.organization_id = o.organization_id) AS member_count ' +
+          'FROM organization o WHERE o.organization_id = ? LIMIT 1',
+        [organizationId],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      if (rows.value.length === 0) {
+        return ok(null);
+      }
+      const row = rows.value[0];
+      const id = requiredText(row, 'organization_id');
+      const createdAt = requiredText(row, 'created_at');
+      const status = organizationStatus(row);
+      const memberCount = row.member_count;
+      if (id === null || createdAt === null || status === null) {
+        return err(internal());
+      }
+      if (typeof memberCount !== 'number' || !Number.isInteger(memberCount) || memberCount < 0) {
+        // A `COUNT(*)` that is not a non-negative integer means the driver returned something this
+        // adapter does not understand. `internal()` rather than a coerced `0`, which would render
+        // as "this Organization has no members" — a false statement about a real tenant, on the
+        // screen an operator uses to decide whether onboarding worked.
+        return err(internal());
+      }
+      return ok({
+        organizationId: id,
+        status,
+        createdAt,
+        // NULL IS A REAL STATE. Organizations predating `0013` have no Template.
+        templateId: requiredText(row, 'template_id'),
+        memberCount,
+      });
+    },
+
+    async resolveMemberByIdentifierHash(
+      organizationId: string,
+      identifierHash: string,
+    ): Promise<Result<PlatformMemberResolution | null>> {
+      // =====================================================================================
+      // *** FIVE REFUSING CASES, ONE STATEMENT, AND THE WORK DOES NOT VARY BETWEEN THEM. ***
+      // =====================================================================================
+      //
+      // `0028` Decision 2 and `organization-detail-v1`'s `notFoundCOLLAPSE`. The five:
+      //
+      //   1. the Organization does not exist
+      //   2. the identifier belongs to nobody
+      //   3. the principal exists and is not a member of THIS Organization
+      //   4. the membership is suspended
+      //   5. *** the principal is a PLATFORM OPERATOR ***
+      //
+      // SAME ANSWER IS THE EASY HALF. THE SAME WORK IS THE HALF THAT TAKES DESIGN — and it is why
+      // this is one join rather than a sequence of lookups with early returns. A version that
+      // checked the Organization first and returned would cost one statement for case 1 and three
+      // for case 4, which is an Organization-existence oracle measurable with a stopwatch. The
+      // device is `findMembershipWithOrganization`'s, which records the same finding: *"the ERROR
+      // was already identical; THE WORK WAS NOT, and work is measurable."*
+      //
+      // ---- CASE 5 IS IN THE STATEMENT AND LOOKS REDUNDANT. IT IS NOT.
+      //
+      // `NOT EXISTS (SELECT 1 FROM platform_operator ...)`. A platform operator cannot hold a
+      // membership — `0024` invariant 1, enforced by triggers and by
+      // `createOrganizationWithFirstAdmin`'s in-statement guard — so this subquery can only match
+      // a principal that is in BOTH tables, which is a state the platform refuses everywhere.
+      //
+      // **THAT IS EXACTLY WHY IT IS HERE.** Without it, a principal in both tables resolves, and
+      // this route becomes an oracle for who holds platform authority. `platform-authority.ts`
+      // already refuses such a principal at authentication; this is the same refusal from the
+      // other side, for a principal who is the TARGET rather than the caller. The two are
+      // different questions and only one of them is asked above.
+      //
+      // IT COSTS A CORRELATED SUBQUERY ON A PRIMARY KEY, on a statement that runs anyway.
+      //
+      // ---- IT JOINS ON `identifier_hash`, WHICH IS A PRIMARY KEY.
+      //
+      // No scan, no `LIKE`, and no email address anywhere in this adapter. The hash is computed
+      // above this port; `0001_principal.sql` refused an email column and that purchase is intact.
+      const rows = await selectRows(
+        database,
+        'SELECT m.principal_id, m.role FROM principal_credential c ' +
+          'JOIN organization_membership m ON m.principal_id = c.principal_id ' +
+          'JOIN organization o ON o.organization_id = m.organization_id ' +
+          'JOIN principal p ON p.principal_id = m.principal_id ' +
+          'WHERE c.identifier_hash = ? AND m.organization_id = ? ' +
+          "AND m.status = 'active' AND p.status = 'active' " +
+          'AND NOT EXISTS (SELECT 1 FROM platform_operator po WHERE po.principal_id = m.principal_id) ' +
+          'LIMIT 1',
+        [identifierHash, organizationId],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      if (rows.value.length === 0) {
+        return ok(null);
+      }
+      const row = rows.value[0];
+      const principalId = requiredText(row, 'principal_id');
+      const role = membershipRole(row);
+      if (principalId === null || role === null) {
+        // A NULL OR UNRECOGNISED ROLE IS `null`, WHICH RENDERS AS THE SAME 404 — not `internal()`.
+        //
+        // `0019`: an unrecognised role "is not an error and not a partial grant — it is deny all,
+        // on the same path as an absent membership." A member whose role this build cannot read
+        // holds no permissions, so reporting them as resolvable would tell an operator they can
+        // reset a credential for a principal the platform cannot authorize. It also keeps the
+        // refusal indistinguishable from the other five, which an `internal()` would not.
+        return ok(null);
+      }
+      return ok({ principalId, role });
     },
 
     async recordAction(

@@ -124,6 +124,7 @@ import {
   PLATFORM_PERMISSION_ENVELOPE,
 } from './platform-permissions.ts';
 import {
+  borrowsCriticalPermissionWithoutPerforming,
   confirmableOperations,
   confirmablePermissionFor,
   requiresConfirmation,
@@ -168,6 +169,8 @@ export const PLATFORM_BASE_PATH = '/api/v1/platform';
 export type PlatformRouteId =
   | 'platform.organizations.list'
   | 'platform.organizations.create'
+  | 'platform.organizations.read'
+  | 'platform.organizations.members.resolve'
   | 'platform.session.whoami'
   | 'platform.confirmations.request'
   | 'platform.templates.create'
@@ -435,6 +438,62 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     successStatus: 201 as const,
   }),
   // ===========================================================================================
+  // ORGANIZATION DETAIL AND THE MEMBER RESOLVE. `organization-detail-v1`, `docs/decisions/0028`.
+  //
+  // *** THERE IS NO `GET /organizations/{id}/members` AND ONE MUST NOT BE ADDED. ***
+  //
+  // `0028` Decision 1, and the reason is not that the read is unavailable — `organization_membership`
+  // is a control-plane table and P1 does not stop it. **The transpose of the permitted read is the
+  // forbidden one:** an operator can enumerate every Organization one screen away, so
+  // per-Organization member lists invert into every principal's Organization list, which `CO1`
+  // forbids by name. **Neither permission discloses it alone; the pair does, held by one principal,
+  // with no rule broken at either step.**
+  //
+  // THE ABSENCE IS THE CONTROL, so it is asserted by enumerating this table rather than by trying
+  // a URL — a route added later would pass a URL test that never ran.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.organizations.read' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/organizations/{organization_id}`,
+    // `core.organization.list`, NOT A NEW `core.organization.read-platform`. The catalog's
+    // `core.organization.read` is declared `[organization]` and must stay there — it is a TENANT
+    // principal reading its own record, and widening it to platform is the escalation AZ8 removed
+    // from `marketplace-moderator`. A third permission would be deniable to nobody, because an
+    // operator who cannot enumerate cannot reach a detail page at all.
+    permission: fixedPermission(PLATFORM_ORGANIZATION_LIST_PERMISSION),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    // NONE. The identifier is in the path, and there is no `include=` — which is how a console
+    // would acquire cross-tenant reach in one query parameter.
+    queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.organizations.members.resolve' as const,
+    method: 'POST' as const,
+    path: `${PLATFORM_BASE_PATH}/organizations/{organization_id}/members/resolve`,
+    // ===========================================================================================
+    // *** IT DECLARES `core.credential.reset`, NOT `core.organization.list`, AND THAT IS THE POINT.
+    // ===========================================================================================
+    //
+    // `0028` Decision 2: *"a principal who may not reset a credential may not resolve a principal."*
+    // The only legitimate use of this route is to obtain a `principal_id` for a reset, so binding
+    // it to that permission means **revoking `core.credential.reset` revokes the ability to resolve
+    // people** — one grant, one capability, withdrawn together — and **a Templates-only role cannot
+    // accumulate the `CO1` aggregation this class refuses.**
+    //
+    // It is the same device the confirmation challenge uses: a caller cannot obtain a step toward
+    // something it may not do.
+    permission: fixedPermission('core.credential.reset'),
+    // ONE FIELD. The identifier the operator was given. THERE IS NO `principal_id` — that is what
+    // this route produces, not what it takes — and no `role`, no `status`, no `q`.
+    fields: Object.freeze(['identifier']),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  // ===========================================================================================
   // TEMPLATES. `template-v1`, `docs/decisions/0025` decision 2.
   //
   // THREE PERMISSIONS, NOT ONE, AND THE SEPARATION IS TESTED: a platform operator holding
@@ -496,25 +555,32 @@ export class PlatformConfirmationCoverageError extends Error {
  * `docs/decisions/0027` · `confirmation-v1` §whereItLIVES.
  * ===========================================================================================
  *
- * The rule is the pipeline's rule: **derived from the permission, declarable nowhere else.** A
- * route with a `fixed` permission the catalog calls `critical` is gated, and there is no field a
- * route could set to escape it.
+ * A ROUTE IS GATED WHEN A CONFIRMATION FOR IT CAN EXIST — when its id is a confirmable operation.
+ * **The route declares nothing.** There is no field, flag or opt-out on `PlatformRoute`, and the
+ * decision is made in `critical-permissions.ts`, which no App can edit.
  *
  * ===========================================================================================
- * THE ONE EXEMPTION IS `from-body`, AND IT IS A DEADLOCK RATHER THAN A CONVENIENCE
+ * *** THE RULE WAS "FIXED PERMISSION + CRITICAL" AND IT WAS WRONG. CORRECTED 2026-09-05. ***
  * ===========================================================================================
  *
- * The challenge route BORROWS the permission of the operation it is asked to confirm, so its
- * resolved permission is `core.credential.reset` — which is critical. Gating on the resolved
- * permission alone would therefore **require a confirmation in order to request one**, and the
- * lock has no key: the binding covers the action id, `platform.confirmations.request` is not a
- * confirmable operation, so no challenge for it can ever be issued. Every critical platform
- * operation would become permanently unreachable, and it would look like a working gate.
+ * It gated a route when the catalog called its permission `critical`, exempting only the
+ * `from-body` kind — the challenge route — on the ground that a borrowed permission is not the
+ * route's own effect. **The reasoning was right and the implementation of it was too narrow:
+ * borrowing is not a property of the `from-body` kind.**
  *
- * A BORROWED PERMISSION IS NOT THE ROUTE'S OWN EFFECT. The challenge route performs no critical
- * operation; it authorizes against one so that it cannot become an oracle. So the exemption keys
- * on the KIND — a structural property of how the permission was declared — and not on a route
- * identifier, a flag, or a list of exceptions.
+ * `platform.organizations.members.resolve` is a `fixed` route declaring `core.credential.reset`,
+ * and it **performs no reset.** `0028` Decision 2 binds it to that permission so that *"revoking
+ * the reset grant revokes the ability to resolve people"* — the same narrowing device the challenge
+ * route uses, expressed with a different kind. **The old rule gated it**, and the load-time
+ * assertion caught that the moment the route was added: a confirmation it could never obtain, for
+ * a lookup, whose own contract forbids the fields a confirmation needs.
+ *
+ * IT WOULD ALSO HAVE BEEN CIRCULAR. The only route producing a `principal_id` for a reset is that
+ * resolve, so a gated resolve means confirming a lookup in order to be allowed to confirm the
+ * operation the lookup exists for.
+ *
+ * **THE GUARD FOUND THIS, NOT A REVIEWER AND NOT A TEST.** It refused to load. That is the whole
+ * argument for asserting a rule at module load rather than documenting it.
  *
  * ===========================================================================================
  * FIVE PROPERTIES, EACH CLOSING A WAY THIS COULD FAIL SILENTLY
@@ -544,7 +610,7 @@ export class PlatformConfirmationCoverageError extends Error {
  * which is `splitConfirmedRequest`'s whole argument. Refusing the shape is the honest fix.
  */
 export function isConfirmationGated(route: PlatformRoute): boolean {
-  return route.permission.kind === 'fixed' && requiresConfirmation(route.permission.permissionId);
+  return confirmableOperations().includes(route.id);
 }
 
 /**
@@ -586,15 +652,40 @@ export function assertConfirmationCoverageIsCoherent(
       }
       continue;
     }
+    // =========================================================================================
+    // ---- THE COMPLETENESS CHECK, AND IT IS THE HALF THAT KEEPS THIS FAIL-CLOSED.
+    // =========================================================================================
+    //
+    // The gate now triggers on membership in `confirmableOperations()`, which is precise and has
+    // no false positives — and **on its own it would fail OPEN**: a genuinely critical route whose
+    // author forgot to register it would simply not be gated, silently.
+    //
+    // SO THE CHECK RUNS THE OTHER WAY ROUND. Every route declaring a critical permission must be
+    // **either** confirmable **or** explicitly listed as borrowing it without performing it. There
+    // is no third state, and forgetting stops the build.
+    //
+    // THE EXEMPTION LIST IS CORE-OWNED AND LIVES BESIDE THE CONFIRMABLE SET, so a reviewer reads
+    // both together. It is not a per-route flag — `0027` forbids an operation declaring whether it
+    // needs confirming, and a `skipsConfirmation: true` on `PlatformRoute` would be exactly that.
+    if (route.permission.kind === 'fixed' && requiresConfirmation(route.permission.permissionId)) {
+      if (
+        !confirmable.includes(route.id) &&
+        !borrowsCriticalPermissionWithoutPerforming(route.id)
+      ) {
+        throw new PlatformConfirmationCoverageError(
+          `'${route.id}' declares the critical permission '${route.permission.permissionId}' and ` +
+            'is neither a confirmable operation nor listed as borrowing that permission without ' +
+            'performing it. One of the two must be true and the choice is a decision: if the ' +
+            'route PERFORMS the operation, add it to CONFIRMABLE_PLATFORM_OPERATIONS with a ' +
+            'statement; if it merely authorizes against the permission to narrow who may call it, ' +
+            'add it to BORROWS_WITHOUT_PERFORMING with the reason. Both are in ' +
+            'critical-permissions.ts.',
+        );
+      }
+    }
+
     if (!isConfirmationGated(route)) {
       continue;
-    }
-    if (!confirmable.includes(route.id)) {
-      throw new PlatformConfirmationCoverageError(
-        `'${route.id}' requires a confirmation and is not a confirmable operation, so no ` +
-          'challenge can ever be issued for it and the route is permanently unreachable. Add it ' +
-          'to CONFIRMABLE_PLATFORM_OPERATIONS in critical-permissions.ts, with a statement.',
-      );
     }
     for (const field of [
       CONFIRMATION_ID_FIELD,

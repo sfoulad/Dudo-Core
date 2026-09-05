@@ -68,6 +68,7 @@
 
 import type { Result } from '../kernel/result.ts';
 import type { PlatformRole } from './platform-permissions.ts';
+import type { MembershipRole } from '../authorization/roles.ts';
 import type { ControlPlaneWriteReservation } from '../identity/control-plane-admission.ts';
 
 /**
@@ -106,6 +107,45 @@ export type PlatformOrganizationRecord = {
   readonly status: PlatformOrganizationStatus;
   /** RFC 3339, UTC. */
   readonly createdAt: string;
+};
+
+/**
+ * One Organization's detail row. `organization-detail-v1`.
+ *
+ * `templateId` IS NULLABLE AND THE NULL IS HISTORY RATHER THAN A GAP. Organizations created before
+ * `0013_organization_template.sql` have no Template and never can — nobody can say retroactively
+ * which business type they are, and a backfill would be inventing an answer.
+ *
+ * NO `displayName` FIELD, because there is no column. `organization-detail-v1` contracts the wire
+ * field as nullable so a name is additive later; the ABSENCE of a field here is what stops this
+ * record from implying one exists.
+ *
+ * `memberCount` IS A NUMBER AND THERE IS NO SIBLING HOLDING IDENTITIES. See
+ * `findOrganizationDetail`.
+ */
+export type PlatformOrganizationDetailRecord = {
+  readonly organizationId: string;
+  readonly status: PlatformOrganizationStatus;
+  /** RFC 3339, UTC. */
+  readonly createdAt: string;
+  readonly templateId: string | null;
+  readonly memberCount: number;
+};
+
+/**
+ * What a successful resolve returns. **A principal identifier and a role, and nothing else.**
+ *
+ * NO IDENTIFIER, NO EMAIL, NO CREATION TIME, NO STATUS. The caller sent the identifier and already
+ * knows it; echoing it would put an email address in a response body for no purpose and in a log
+ * line for anyone who logs responses.
+ *
+ * THE ROLE IS RETURNED BECAUSE IT IS A FACT ABOUT THE RELATIONSHIP RATHER THAN ABOUT THE PERSON,
+ * and an operator about to reset a credential should know whether they are taking over an `owner`
+ * or a `member`.
+ */
+export type PlatformMemberResolution = {
+  readonly principalId: string;
+  readonly role: MembershipRole;
 };
 
 /**
@@ -213,4 +253,71 @@ export type PlatformOperatorStore = {
     record: PlatformOperatorActionRecord,
     reservation: ControlPlaneWriteReservation,
   ): Promise<Result<void>>;
+
+  /**
+   * One Organization, with its Template reference and how many principals belong to it.
+   * `organization-detail-v1`.
+   *
+   * ===========================================================================================
+   * *** IT RETURNS A COUNT AND THERE IS NO METHOD ON THIS PORT THAT RETURNS MEMBER IDENTITIES. ***
+   * ===========================================================================================
+   *
+   * `docs/decisions/0028` Decision 1 refuses a member list, and the reason is not that the read is
+   * unavailable — `organization_membership` is a control-plane table and P1 does not stop it. **It
+   * is refused because the transpose of the permitted read is the forbidden one:** an operator can
+   * enumerate every Organization from its own home screen, so per-Organization member lists invert
+   * into every principal's Organization list, which `CO1` forbids by name.
+   *
+   * SO THE PORT HAS NO `listMembers`, AND THAT IS THE ENFORCEMENT. A count method cannot be made
+   * to return identities; a list method with a `.length` at the call site is one edit from
+   * disclosing them, and the edit would look like a simplification.
+   *
+   * **A COUNT DOES NOT INVERT.** Knowing an Organization has five members reconstructs nothing
+   * about any principal. Its one small leak is recorded rather than dismissed: repeated counts
+   * reveal that membership CHANGED, never who or in which direction — a fact about the
+   * Organization rather than about a person.
+   *
+   * `null` FOR AN UNKNOWN ORGANIZATION. The route renders it as the argument-free 404.
+   */
+  findOrganizationDetail(
+    organizationId: string,
+  ): Promise<Result<PlatformOrganizationDetailRecord | null>>;
+
+  /**
+   * ===========================================================================================
+   * RESOLVE ONE MEMBER BY IDENTIFIER HASH. AT MOST ONE, NEVER A SET.
+   * `docs/decisions/0028` Decision 2 · `organization-detail-v1`.
+   * ===========================================================================================
+   *
+   * *"AN OPERATOR RESOLVING AN IDENTIFIER THEY WERE GIVEN IS SUPPORT. AN OPERATOR RECEIVING A LIST
+   * THEY DID NOT ASK FOR BY NAME IS SURVEILLANCE."* The structural difference is that this
+   * **requires the caller to already know something only the customer could have told them**;
+   * enumeration requires knowing only that the Organization exists.
+   *
+   * IT TAKES AN IDENTIFIER **HASH**, NOT AN IDENTIFIER. The keyed HMAC is computed above this port
+   * by `IdentifierHasher`, so this method never sees an email address and no adapter can log one.
+   * `0001_principal.sql` paid for that property deliberately and it is not spent here.
+   *
+   * ===========================================================================================
+   * *** IT MUST DO THE SAME WORK ON EVERY REFUSING PATH, NOT MERELY RETURN THE SAME ANSWER. ***
+   * ===========================================================================================
+   *
+   * `null` covers five cases — unknown Organization, an identifier belonging to nobody, a
+   * principal who is not a member of THIS Organization, a suspended membership, and **a principal
+   * who is a platform operator.** The naive implementation returns early on an unknown Organization
+   * and never touches `organization_membership`, which is measurably cheaper and is an
+   * Organization-existence signal.
+   *
+   * SO THE ADAPTER ANSWERS ALL FIVE IN **ONE STATEMENT** whose work does not vary with which one
+   * holds — the same device `findMembershipWithOrganization` uses, and for the same reason.
+   *
+   * **THE FIFTH CASE IS THE ONE THAT LOOKS REDUNDANT AND IS NOT.** Without it this route is an
+   * oracle for which principals hold platform authority — the single most useful fact an attacker
+   * could extract from this surface. It is enforced in the statement rather than above it, so it
+   * cannot be lost by a caller that forgets, and `0010`'s triggers are not relied on.
+   */
+  resolveMemberByIdentifierHash(
+    organizationId: string,
+    identifierHash: string,
+  ): Promise<Result<PlatformMemberResolution | null>>;
 };

@@ -45,6 +45,7 @@ import type { ConfirmationGate } from '../confirmation/confirmation-gate.ts';
 import type { PlatformOperatorStore } from './platform-operator-store.ts';
 import type { TemplateStore } from './template-store.ts';
 import type { OnboardingService } from '../onboarding/onboarding.ts';
+import type { MemberResolutionService } from '../directory/member-resolution.ts';
 import type { PlatformRouteDependencies } from './platform-routes.ts';
 import { createPlatformAuthorityResolver } from './platform-authority.ts';
 import { createPlatformAuditRecorder } from './platform-audit.ts';
@@ -77,6 +78,18 @@ export type PlatformCompositionInput = {
    * identifiers.
    */
   readonly onboarding: OnboardingService;
+  /**
+   * The member resolve. REQUIRED, and passed in for the same reason `onboarding` is: building it
+   * here would mean this file taking a `TenantStoreResolver`, and the platform class's composition
+   * root would then hold a handle to every tenant database.
+   *
+   * **TWO SERVICES NOW ARRIVE THIS WAY AND THAT IS WORTH NOTICING RATHER THAN NORMALISING.** Each
+   * is one operation that legitimately needs a tenant handle for a bounded purpose — onboarding
+   * writes a Workspace into a tenant it is creating; this appends one audit row to a tenant it is
+   * being asked about. **A third would be the point to ask whether P1 still means anything**, and
+   * `0025`'s amendment is the sentence to measure it against.
+   */
+  readonly members: MemberResolutionService;
   /**
    * The SAME admission port the identity slice uses, drawing from the SAME `DayWriteBudget`.
    *
@@ -156,6 +169,7 @@ export async function createPlatformComposition(
       store: input.store,
       templates: input.templates,
       onboarding: input.onboarding,
+      members: input.members,
       admission: input.admission,
       ids: input.ids,
       cursors,
