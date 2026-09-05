@@ -233,6 +233,9 @@ export async function successfulCallFor(
   if (routeId === 'platform.templates.create') {
     return { bodyText: templateCreateRequest(), pathParams: {} };
   }
+  if (routeId === 'platform.organizations.audit.list') {
+    return { bodyText: '', pathParams: { organization_id: ORG_ALPHA } };
+  }
   if (routeId === 'platform.organizations.read') {
     return { bodyText: '', pathParams: { organization_id: ORG_ALPHA } };
   }
@@ -288,6 +291,12 @@ export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
   // directory on disk and went red the moment the migration landed. That control is the reason a
   // suite cannot quietly run against a schema older than the one shipping.
   '0013_organization_template.sql',
+  // ADDED 2026-09-05. `platform-audit-read-v1` needs `platform_operator_action.
+  // target_organization_id` — the column the scoped feed filters on. THE CENSUS CONTROL FIRED
+  // FOR THE SECOND TIME TODAY and, as with `0013`, it is how the fixture learned rather than a
+  // chore: without it every audit write fails on a missing column, which surfaces as
+  // `unavailable` on EVERY platform route and reads like a Core regression.
+  '0014_platform_operator_action_organization.sql',
 ]);
 
 export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';
@@ -576,6 +585,59 @@ export function seedTemplate(
         "VALUES (?, ?, ?, 'Organization', 'Workspace', 'Branch', 'active', ?)",
     )
     .run(templateId, name, normalizeTemplateName(name), FIXTURE_CREATED_AT);
+}
+
+/**
+ * Writes one `platform_operator_action` row directly.
+ *
+ * ===========================================================================================
+ * RAW SQL, AND FOR THE AUDIT FEEDS IT IS THE ONLY HONEST WAY TO BUILD THE INPUT.
+ * ===========================================================================================
+ *
+ * The feeds are READ paths over a table the dispatcher writes. Building their input by driving
+ * routes would mean every row carried whatever target the route happened to produce, at whatever
+ * moment the clock happened to be — so **a case could never construct the row it needs to see
+ * refused.** `TARGET_KIND` is the clearest example: to prove the platform feed omits principal
+ * identifiers, a row whose `target_kind` IS `principal` has to exist, with an identifier a case
+ * would recognise anywhere in the output. No route in the class reliably produces one on demand.
+ *
+ * That is this morning's rule applied here: **a check ships with a known-failing input, or it has
+ * not been verified — only observed.** A feed test that only ever saw `none`-target rows would
+ * pass with the omission deleted.
+ */
+export function seedActionRow(
+  harness: SqliteHarness,
+  row: {
+    readonly actionRecordId: string;
+    readonly actorPrincipalId?: string;
+    readonly actorPlatformRole?: string;
+    readonly actionId?: string;
+    readonly targetKind?: 'none' | 'organization' | 'principal';
+    readonly targetId?: string | null;
+    readonly targetOrganizationId?: string | null;
+    readonly outcome?: 'ok' | 'denied' | 'failed';
+    readonly occurredAt?: string;
+    readonly correlationId?: string;
+  },
+): void {
+  harness.raw
+    .prepare(
+      'INSERT INTO platform_operator_action (action_record_id, actor_principal_id, ' +
+        'actor_platform_role, action_id, target_kind, target_id, target_organization_id, ' +
+        'outcome, occurred_at, correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    .run(
+      row.actionRecordId,
+      row.actorPrincipalId ?? PRN_ADMIN,
+      row.actorPlatformRole ?? 'platform-admin',
+      row.actionId ?? 'platform.organizations.list',
+      row.targetKind ?? 'none',
+      row.targetId ?? null,
+      row.targetOrganizationId ?? null,
+      row.outcome ?? 'ok',
+      row.occurredAt ?? FIXTURE_CREATED_AT,
+      row.correlationId ?? CORRELATION_ID,
+    );
 }
 
 export function seedSession(

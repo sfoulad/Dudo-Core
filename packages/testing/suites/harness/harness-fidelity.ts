@@ -67,6 +67,13 @@ function migrationsOnDisk(): string[] {
  * be typed here, beside its reason, is one a reviewer sees.
  */
 const CONTROL_PLANE_DELIBERATE_OMISSIONS: Readonly<Record<string, string>> = Object.freeze({
+  '0014_platform_operator_action_organization.sql':
+    'ADDS `platform_operator_action.target_organization_id`, nullable, for the scoped audit feed ' +
+    'to filter on. Added to this list 2026-09-05, when the census went red on it — the second ' +
+    'time today, and the second time it was the control working rather than a chore. OMITTED for ' +
+    'the same reason as 0009 itself: no AZ2 suite reads or writes the operator action log, and ' +
+    'nothing on the authenticated path touches it. If any Core read path on the login path ever ' +
+    'names this column, it moves to the applied list and this entry is deleted.',
   '0013_organization_template.sql':
     'ADDS `organization.template_id`, nullable. Added to this list 2026-09-05, when this control ' +
     'went red on the migration landing — which is the control working rather than a chore. It is ' +

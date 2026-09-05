@@ -110,6 +110,17 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
           'ADDED 2026-09-05 for organization-detail-v1. One Organization id in; its Template ' +
           'reference and a member COUNT out. It returns a count and never a member list, so it ' +
           'cannot be used to enumerate the people in a tenant',
+        listPlatformAudit:
+          'ADDED 2026-09-05 for platform-audit-read-v1. A bounded, keyset-anchored page of the ' +
+          'action log with four optional filters. **IT SELECTS `NULL AS target_principal_id`** — ' +
+          'the column is never read into the process on this path, so the reach it grants stops ' +
+          'short of naming the people an action targeted. That is 0028 Decision 3, expressed in ' +
+          'the projection rather than in a caller that remembers to strip a field',
+        listOrganizationAudit:
+          'ADDED 2026-09-05. The same page, narrowed to ONE Organization by a required ' +
+          'organizationId, and this one DOES read the target principal. The wider reach is the ' +
+          'point: a reader who already holds that Organization\'s trail may see who was acted ' +
+          'upon, and the route calling it writes into that Organization\'s own trail on every call',
         resolveMemberByIdentifierHash:
           'ADDED 2026-09-05 for 0028 decision 2. An Organization id and an identifier HASH in, AT ' +
           'MOST ONE member out. It takes a hash rather than an identifier, so it cannot be swept; ' +
@@ -232,7 +243,12 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
       const foreign = await createPlatformCursorCodec(new Uint8Array(32).fill(0x99));
       const forged = await foreign.encode(
         ORG_ALPHA,
-        { principalId: PRN_ADMIN, pageSize: 1 },
+        // `scope` ADDED 2026-09-05 when `PlatformCursorBinding` gained it for the audit feeds.
+        // **IT MUST BE THE VALUE THIS ROUTE REALLY USES**, or the forgery would be refused for
+        // the wrong reason — a scope mismatch rather than a bad signature — and the case's whole
+        // claim ("the only thing that can refuse it is the signature") would be false while it
+        // still printed green. `listOrganizations` uses the bare route id.
+        { principalId: PRN_ADMIN, pageSize: 1, scope: 'platform.organizations.list' },
         world.clock.nowMs(),
       );
       expectError('a cursor signed with another key is refused', await world.call('platform.organizations.list', {

@@ -51,6 +51,9 @@ export function withMutualExclusionProbeRemoved(store: PlatformOperatorStore): P
     findOrganizationDetail: (organizationId) => store.findOrganizationDetail(organizationId),
     resolveMemberByIdentifierHash: (organizationId, identifierHash) =>
       store.resolveMemberByIdentifierHash(organizationId, identifierHash),
+    listPlatformAudit: (filters, limit, after) => store.listPlatformAudit(filters, limit, after),
+    listOrganizationAudit: (organizationId, filters, limit, after) =>
+      store.listOrganizationAudit(organizationId, filters, limit, after),
   };
 }
 
@@ -106,8 +109,18 @@ export function withActionSideMutualExclusionRemoved(
  * Under this control every P4 case must go red. A P4 case that stays green is asserting that a
  * request succeeded, not that it was recorded.
  */
-export function withAuditRecorderRemoved(_recorder: PlatformAuditRecorder): PlatformAuditRecorder {
+export function withAuditRecorderRemoved(recorder: PlatformAuditRecorder): PlatformAuditRecorder {
   return {
+    // `reserve` DELEGATES AND IS NOT BROKEN, and the split is what makes that necessary. It was
+    // separated from `record` on 2026-09-05, and it now mints the `OperatorWriteCharged` receipt
+    // the two tenant-writing handlers REQUIRE as a parameter — so a control that stubbed it would
+    // make those routes fail before reaching the handler, and every P4 case would go red for a
+    // reason that has nothing to do with the audit record.
+    //
+    // THIS CONTROL BREAKS EXACTLY ONE THING: the write. The charge still happens, the operation
+    // still runs, and nothing is stored — which is the "best effort" mode `platform-audit.ts`
+    // says in capitals it does not have.
+    reserve: (actor) => recorder.reserve(actor),
     async record() {
       return ok(undefined);
     },
@@ -162,9 +175,12 @@ export function withFailingActionLog(store: PlatformOperatorStore): PlatformOper
     },
     // DELEGATED, for this control's own stated reason: it needs "a store whose `recordAction`
     // refuses while EVERY READ STILL WORKS", or the request fails before it reaches the recorder
-    // and the case passes for the wrong reason. Both of these are reads.
+    // and the case passes for the wrong reason. All four of these are reads.
     findOrganizationDetail: (organizationId) => store.findOrganizationDetail(organizationId),
     resolveMemberByIdentifierHash: (organizationId, identifierHash) =>
       store.resolveMemberByIdentifierHash(organizationId, identifierHash),
+    listPlatformAudit: (filters, limit, after) => store.listPlatformAudit(filters, limit, after),
+    listOrganizationAudit: (organizationId, filters, limit, after) =>
+      store.listOrganizationAudit(organizationId, filters, limit, after),
   };
 }

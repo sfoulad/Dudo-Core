@@ -220,6 +220,8 @@ const OPERATION_CONTRACTS: readonly string[] = Object.freeze([
   // `platform.organizations.members.resolve`. The closed list went red on both, which is the
   // list working: a route reached the table before this case knew which contract governed it.
   'organization-detail-v1.contract.yaml',
+  // ADDED 2026-09-05 with the two audit feeds.
+  'platform-audit-read-v1.contract.yaml',
 ]);
 
 /**

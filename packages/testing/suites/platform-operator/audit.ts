@@ -65,7 +65,17 @@ import { PLATFORM_OPERATOR_ACTION_ROW_WRITES } from '../../../../platform/core/i
 
 const ROUTES = platformRoutes();
 
-/** The nine columns `0009_platform_operator_action.sql` declares, and nothing else. */
+/**
+ * The columns the action log declares, and nothing else.
+ *
+ * NINE FROM `0009`, PLUS `target_organization_id` FROM `0014` — added 2026-09-05, and the
+ * assertion below is what demanded the argument for it. **A tenth column is exactly how `0025`
+ * Decision 5's "never the contents of what was touched" would be lost**, so the tenth needs to be
+ * an identifier and not a value: `target_organization_id` names WHICH Organization an action
+ * concerned, which is one of the two target kinds D5 already permits, and carries nothing about
+ * what the Organization contains. It exists because the scoped audit feed has to filter on it —
+ * without it the feed would have to join, and a join is where a value starts travelling.
+ */
 const DECLARED_COLUMNS = [
   'action_id',
   'action_record_id',
@@ -76,6 +86,7 @@ const DECLARED_COLUMNS = [
   'outcome',
   'target_id',
   'target_kind',
+  'target_organization_id',
 ].join(',');
 
 export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatformWorld): Suite {
@@ -121,7 +132,18 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
         const TARGET_KINDS: Readonly<Record<string, string>> = {
           'platform.organizations.list': 'none — an enumeration has no single target, and 0025 D5 forbids recording what it returned',
           'platform.session.whoami': 'none — the target would be the caller, which every row already names',
-          'platform.confirmations.request': 'principal — the challenge names the principal it is for',
+          // CHANGED FROM `principal` TO `none` ON 2026-09-05, AND IT IS A RULING RATHER THAN A
+          // REGRESSION. `0014` made `organizationId` REQUIRED on the principal variant of
+          // `PlatformActionTarget`, and this route has no Organization: no path parameter, and the
+          // operation it confirms has not happened yet. It records NO_TARGET rather than naming a
+          // principal without its Organization. The alternative — reading an organization_id out
+          // of `parameters` — would let a caller choose which Organization's audit feed its own
+          // challenge appears in, which is a caller-supplied audit value and the exact thing the
+          // required field exists to prevent. What is lost: a challenge is attributable to the
+          // operator and the action, not to the person it names.
+          'platform.confirmations.request': 'none — it has no Organization, and 0014 forbids naming a principal without one',
+          'platform.audit.list': 'none — a feed read has no single target, and 0025 D5 forbids recording what it returned',
+          'platform.organizations.audit.list': 'organization — the Organization whose trail was read',
           'platform.organizations.create': 'organization — the Organization it created, and nothing about what it contains',
           'platform.organizations.read': 'organization — the Organization it was asked about, and no field of it',
           'platform.organizations.members.resolve': 'principal — the person asked about, which is what makes the log answer "who has been asking about our staff"',
@@ -241,7 +263,7 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
     }
   });
 
-  suite.test('the action log holds only the nine columns 0009 declares', async () => {
+  suite.test('the action log holds only the columns 0009 and 0014 declare', async () => {
     // THE TRIPWIRE FOR `0025` DECISION 5. A tenth column is how "never the contents of what was
     // touched" would be lost, and it would arrive in a migration written by somebody who had not
     // read the rule. It reads the SHIPPED schema rather than this suite's expectation of it.

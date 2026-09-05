@@ -119,6 +119,14 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         'permission — and is NOT gated, which is a decision and not an omission: it BORROWS the ' +
         'permission to narrow who may call it and performs no reset. See critical-permissions.ts ' +
         'BORROWS_WITHOUT_PERFORMING, and the cases in platform-confirmation.ts that bind it',
+      'platform.audit.list':
+        'platform-audit-read-v1, 0028 Decision 3, added 2026-09-05. The platform-wide feed. It ' +
+        'OMITS principal identifiers — see audit-feeds.ts — so a platform-wide reader cannot ' +
+        "accumulate a picture of one Organization's people",
+      'platform.organizations.audit.list':
+        'platform-audit-read-v1, 0028 Decision 3, added 2026-09-05. One Organization\'s feed, ' +
+        'which DOES disclose principals, and which writes a record into that Organization\'s own ' +
+        'trail on every call — "it keeps the back door the same size as the front one"',
       'platform.templates.create': 'template-v1, 0025 decision 2. Its own permission, not shared',
       'platform.templates.list': 'template-v1. Enumeration is its own disclosure, so its own permission',
       'platform.templates.read': 'template-v1. THE ONLY ROUTE IN THE CLASS WITH A PATH PARAMETER',

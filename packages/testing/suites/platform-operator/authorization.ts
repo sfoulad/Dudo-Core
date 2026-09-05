@@ -111,6 +111,12 @@ function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
     async resolveMemberByIdentifierHash() {
       return ok(null);
     },
+    async listPlatformAudit() {
+      return ok([]);
+    },
+    async listOrganizationAudit() {
+      return ok([]);
+    },
     async recordAction() {
       return ok(undefined);
     },
@@ -357,18 +363,26 @@ export function buildPlatformAuthorizationSuite(
     });
   });
 
-  suite.test('the envelope is exactly six platform-scope permissions, and refuses a seventh', () => {
-    assertEqual('six, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 6);
+  suite.test('the envelope is exactly seven platform-scope permissions, and refuses an eighth', () => {
+    // SIX BECAME SEVEN ON 2026-09-05, and the guard is what made that a decision rather than a
+    // side effect: adding `core.platform-audit.read` threw at module load until
+    // `PLATFORM_ROUTE_PERMISSION_COUNT` was edited. Its argument is that `platform-audit-read-v1`
+    // is accepted and its two routes landed — the permission had been sitting in
+    // HELD_BUT_UNREACHABLE precisely so the ceiling would rise WITH the routes, not before them.
+    //
+    // See `audit-feed-inputs.ts::buildCeilingFloorSuite` for the property this count is a proxy
+    // for, and for why a permission in this envelope and in no role is unambiguously a defect.
+    assertEqual('seven, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 7);
     assertEqual(
       'and every one is declared at platform scope',
       PLATFORM_PERMISSION_ENVELOPE.declared.filter((entry) => entry.scope !== 'platform').length,
       0,
     );
     assertEqual(
-      'they are the six the four platform contracts name',
+      'they are the seven the platform contracts name',
       PLATFORM_PERMISSION_ENVELOPE.declared.map((entry) => entry.permissionId).sort().join(','),
       'core.credential.reset,core.organization.create,core.organization.list,' +
-        'core.template.create,core.template.list,core.template.read',
+        'core.platform-audit.read,core.template.create,core.template.list,core.template.read',
     );
     assertEqual('the envelope is attributed to platform, not to an App', PLATFORM_PERMISSION_ENVELOPE.appId, 'platform');
 
@@ -457,10 +471,11 @@ export function buildPlatformAuthorizationSuite(
       // A permission leaving this map is the expected outcome and needs no argument; one STAYING
       // here after its route ships is the defect — a console that renders nothing.
       const unreachableUntilItsRouteShips: Readonly<Record<string, string>> = {
-        'core.platform-audit.read':
-          'ADDED 2026-09-05. `platform-audit-read-v1` is contracted, its route is not built. THIS ' +
-          'IS THE PERMISSION 0028 IS ABOUT — the operator-visibility decision rests on a feed ' +
-          'nothing serves yet',
+        // `core.platform-audit.read` WAS HERE AND ITS ENTRY IS DELETED, 2026-09-05, because its
+        // routes shipped the same day. **That deletion is the one edit in this case that needs no
+        // argument** — it is what this map exists to make happen, and the assertion below is what
+        // demanded it. A permission left here after its route ships is a console rendering
+        // nothing; the entry going stale in the other direction is caught by the same assertion.
         'core.principal.revoke-platform-scope':
           'ADDED 2026-09-05. `platform-operators-v1` is accepted and the revoke route is next. It ' +
           'is CRITICAL, so when the route lands the confirmation gate applies automatically — ' +
@@ -506,11 +521,16 @@ export function buildPlatformAuthorizationSuite(
         'whoami answers',
         await world.call('platform.session.whoami', { sessionId: SESSION_ADMIN }),
       ) as { permissions: readonly string[] };
+      // SEVEN OF TEN, since 2026-09-05. `whoami` reports what is REACHABLE — the intersection of
+      // the role's floor with the class's ceiling — and not what the role holds. The two extras it
+      // still withholds are the permanently-unreachable pair above; `core.platform-audit.read`
+      // moved into this list the day its routes shipped, which is the whole point of reporting
+      // reachable rather than held: a console renders exactly the actions the operator can take.
       assertEqual(
-        'whoami reports the reachable six and not the held eight',
+        'whoami reports the reachable seven and not the held ten',
         [...answer.permissions].sort().join(','),
         'core.credential.reset,core.organization.create,core.organization.list,' +
-          'core.template.create,core.template.list,core.template.read',
+          'core.platform-audit.read,core.template.create,core.template.list,core.template.read',
       );
     } finally {
       world.close();

@@ -312,6 +312,13 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
           'Organization or a principal on the routes that take one — an identifier, never a store ' +
           'and never a handle. `0025`\'s honest limit applies: this class may NAME a tenant and may ' +
           'never read a row behind `whereWithTenant`',
+        charge:
+          'ADDED 2026-09-05. A BUDGET RECEIPT, NOT A HANDLE. `OperatorWriteCharged` is a branded ' +
+          'value holding a principal identifier and an opaque ControlPlaneWriteReservation — no ' +
+          'store, no resolver, no binding, no organizationId — and the two handlers that write ' +
+          'into a customer\'s tenant database must pass it to the service that performs the ' +
+          'write, which requires it as a parameter. So P1 is untouched: it grants no reach, it ' +
+          'proves the operator already paid. `looksLikeATenantStore` below still walks it',
         requestId: 'an observability value',
         correlationId: 'an observability value, shape-validated at the transport boundary',
       };

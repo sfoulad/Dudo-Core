@@ -50,6 +50,14 @@ import {
   buildPlatformConfirmationScopeSuite,
   buildPlatformConfirmationSuite,
 } from './suites/platform-operator/platform-confirmation.ts';
+import {
+  buildAuditCursorScopeSuite,
+  buildAuditPrincipalOmissionSuite,
+} from './suites/platform-operator/audit-feeds.ts';
+import {
+  buildAuditInstantSuite,
+  buildCeilingFloorSuite,
+} from './suites/platform-operator/audit-feed-inputs.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
 import { buildTemplatesSuite } from './suites/platform-operator/templates.ts';
 import { buildRegistryCoherenceSuite } from './suites/platform-operator/registry-coherence.ts';
@@ -137,6 +145,10 @@ async function main(): Promise<void> {
     buildBootstrapBoundsSuite(),
     buildOnboardingSuite(),
     buildTemplatesSuite(),
+    buildAuditCursorScopeSuite(),
+    buildAuditPrincipalOmissionSuite(),
+    buildAuditInstantSuite(),
+    buildCeilingFloorSuite(),
     // The two standing controls. Neither builds a world: one reads the contract registry and
     // compares it with Core's frozen transcriptions, the other greps `platform/core/**`. They run
     // in the primary set and in no negative control, because neither has a runtime port to break.
