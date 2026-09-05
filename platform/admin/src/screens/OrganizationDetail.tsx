@@ -137,37 +137,50 @@ const REFUSAL =
  * literal appears here, precisely so the substitution below stays derived.
  *
  * ---------------------------------------------------------------------------
- * WHY THIS ONE MUST NOT LOOK LIKE THE COLLAPSED REFUSAL
+ * THE ASCII RESTRICTION IS THE CONTRACT'S, NOT THIS CONSOLE'S
  * ---------------------------------------------------------------------------
  *
- * There is a live asymmetry, and the Team Lead has verified both sides and is
- * routing the underlying question to architecture: **Core's accepted identifier
- * set is strictly larger than the set this console can submit.** Core's
- * `normalizeIdentifier` is NFKC plus an ASCII-only case fold — it NORMALISES
- * non-ASCII and stores it, it does not reject it. This check refuses every code
- * point outside 0x21-0x7E. So a principal with a non-ASCII identifier would be
- * resolvable by Core and permanently unresolvable through this console.
+ * CORRECTED 2026-09-05, AND THE EARLIER FRAMING HERE WAS BACKWARDS. This comment
+ * previously said Core's accepted identifier set was "strictly larger than the
+ * set this console can submit", and treated the difference as an open question
+ * routed to architecture. **The ruling inverted it.**
  *
- * THAT INTERACTS BADLY WITH THE COLLAPSE, WHICH IS THE WHOLE POINT: a refusal
- * caused by THE CONSOLE BEING UNABLE TO TYPE SOMEONE'S ADDRESS is, to an
- * operator, indistinguishable from THAT PERSON NOT EXISTING — unless the two are
- * visibly different. Same-looking is correct for the five server cases and WRONG
- * here, because this is a statement about the console rather than about the
- * member.
+ * DUDO HAS NEVER ACCEPTED NON-ASCII IDENTIFIERS. `0015` §D says so, `login-v1`
+ * says so, and both platform schemas carry the machine-readable pattern
+ * `^[\x21-\x7E]*@[\x21-\x7E]*$` — printable ASCII, no whitespace, nothing above
+ * U+007E. `organization-detail-v1`, the contract this screen is built against,
+ * states it in prose beside that pattern.
  *
- * So the local refusals render in the FIELD — scarlet, with an error icon,
- * attached to the input, above the button — and the server refusal renders in a
- * neutral block BELOW the button. Different colour, different position,
- * different element, different wording. `verify-platform.mjs` asserts they are
- * different strings and that this one names the console as the limitation.
+ * SO THIS IS NOT A CLIENT-SIDE NARROWING. This console is one of the few
+ * components ENFORCING a restriction the contract set has stated all along, and
+ * which two Core call sites do not yet apply. The gap is in Core and is being
+ * closed there.
  *
- * IT IS LATENT RATHER THAN LIVE TODAY, because the onboarding screen applies the
- * same check, so this console cannot create a principal it could not later
- * resolve. It goes live the moment any other path creates one — a seed script,
- * the customer web app, the Apple app.
+ * **DO NOT REMOVE THIS CHECK, AND DO NOT WIDEN IT IF CORE IS EVER OBSERVED
+ * ACCEPTING SOMETHING IT REFUSES.** A client that submits what the contract
+ * forbids is broken whether or not the server happens to catch it, and a console
+ * that submits what it cannot round-trip through the KDF is worse than one that
+ * refuses early.
  *
- * AND THE CHECK IS NOT WIDENED TO MATCH CORE. A console that submits what it
- * cannot round-trip through the KDF is worse than one that refuses early.
+ * ---------------------------------------------------------------------------
+ * WHY IT STILL MUST NOT LOOK LIKE THE COLLAPSED REFUSAL
+ * ---------------------------------------------------------------------------
+ *
+ * THE REASON SURVIVES THE CORRECTION UNCHANGED, which is worth saying because
+ * the framing above moved and this did not. Whatever the restriction's
+ * provenance, a refusal produced HERE is a statement about what this screen
+ * could send; a refusal produced by CORE is the collapsed five-case answer. To
+ * an operator those are indistinguishable unless the console makes them
+ * different — and reading "no match" when the truth is "this address was never
+ * sent" would send them to tell a customer something false.
+ *
+ * Same-looking is correct for the five server cases and WRONG here. So local
+ * refusals render in the FIELD — scarlet, with an error icon, attached to the
+ * input, above the button — and the server refusal renders in a neutral block
+ * BELOW the button. Different colour, position, element and wording.
+ * `verify-platform.mjs` asserts they are different strings, that this one names
+ * the console as the limitation, and that a local refusal never sets the
+ * server-refusal state.
  */
 const NON_ASCII_LOOKUP_REFUSAL =
   'This console can only look up plain ASCII email addresses at the moment, so it cannot send ' +

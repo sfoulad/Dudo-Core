@@ -111,6 +111,18 @@ submitting. That separates well-formed from malformed — a fact the operator al
 cannot separate any two of the five cases, since all five need a well-formed identifier to reach
 Core. It also spares a customer's log an audit record for a typo.
 
+> **The ASCII restriction is the contract's, not this console's.** Dudo has never accepted
+> non-ASCII identifiers: `0015` §D, `login-v1`, and both platform schemas carry the
+> machine-readable pattern `^[\x21-\x7E]*@[\x21-\x7E]*$`. This console is **enforcing** a stated
+> restriction, not narrowing one — the gap is in Core, where two call sites do not yet apply it,
+> and it is being closed there. **Do not remove this check, and do not widen it if Core is ever
+> observed accepting something it refuses.** A client that submits what the contract forbids is
+> broken whether or not the server catches it.
+>
+> **The local refusal is still rendered differently from the server one**, and that requirement
+> survives the correction unchanged: a refusal produced *here* means the address was never sent,
+> and an operator who read that as "no match" would tell a customer something false.
+
 ### There is no member list, and it is not missing
 
 **No route in Dudo returns member identities.** `member_count` is a count and renders as one — no
