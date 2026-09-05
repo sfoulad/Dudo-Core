@@ -36,7 +36,7 @@
         "record_id": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{8,64}$",
-          "description": "Opaque. It is the tiebreaker in the (occurred_at, record_id) sort key, which is why it is on the wire at all — paging over a second-precision timestamp alone either skips records or repeats them, and an audit feed that silently skips a record is worse than one that refuses to page."
+          "description": "Opaque. It is the tiebreaker in the (occurred_at, record_id) sort key, which is why it is on the wire at all — paging over a non-unique timestamp alone either skips records or repeats them, and an audit feed that silently skips a record is worse than one that refuses to page.\n\nCORRECTED 2026-09-05. This justification previously said 'a SECOND-precision timestamp'. CORE WRITES MILLISECONDS — kernel/clock.ts::toRfc3339Utc is new Date(ms).toISOString(), which always emits .sssZ, and nothing truncates. THE CONCLUSION IS RE-DERIVED AND HOLDS MORE STRONGLY, not less: on Workers the clock DOES NOT ADVANCE DURING EXECUTION (docs/decisions/0015 finding 3 — 'Date.now() returns the time of the last I/O'), so two records written between the same pair of I/O operations have an IDENTICAL millisecond timestamp deterministically, not by coincidence. The tiebreaker is therefore load-bearing under exactly the conditions that produce the most records. Do not remove it as redundant."
         },
         "occurred_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC." },
         "actor_principal_id": {

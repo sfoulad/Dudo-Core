@@ -339,6 +339,96 @@ operations:
 # theConfirmedRequest — how the second step is carried, on every critical route
 # ---------------------------------------------------------------------------
 theConfirmedRequest:
+  theTwoIdentifiers:
+    theDEFECT: >-
+      BLOCKING, FOUND 2026-09-05 BY core-agent IMPLEMENTING credential-reset-v1, WHICH STOPPED
+      RATHER THAN IMPROVISING. This contract's confirmation field was called `identifier` and meant
+      THE CALLER'S OWN. credential-reset-v1's field was called `identifier` and meant THE TARGET'S.
+      One request carries both meanings and had one field.
+      TRACED THROUGH THE SHIPPED CODE THE CONSEQUENCE WAS TOTAL: `splitConfirmedRequest` strips
+      `identifier` as a confirmation field, so the gate consumes the TARGET's identifier as the
+      CALLER's; the caller-identity assertion then requires the verified principal to be the
+      operator and never can be; and `reauth_derived_value`, salted with the OPERATOR's identifier,
+      cannot match the target's stored verifier either. BOTH HALVES FAIL. The route returns
+      `forbidden` on every well-formed request, permanently, with no path around the gate because
+      the permission is `critical`.
+    theRULING: >-
+      TWO MEANINGS, TWO NAMES, AND NEITHER IS THE BARE WORD.
+        `reauth_identifier`   THE CALLER'S OWN. This contract's, on every gated route.
+                              Renamed from `identifier`.
+        `target_identifier`   THE PRINCIPAL THE OPERATION ACTS ON, where a route has one.
+                              credential-reset-v1's. Renamed from `identifier`.
+      NO FIELD IN THE PLATFORM IS CALLED PLAINLY `identifier` ANY MORE, and that is the point
+      rather than a side effect: the bare word does not say whose, and a name that does not say
+      whose is a name two contracts can both use correctly and mean different things by.
+    whichNAMEMOVED_ANDWHY: >-
+      BOTH MOVED, AND THE EXPENSIVE ONE MOVED FOR THE STRONGER REASON. Renaming credential-reset's
+      alone would have fixed this route and left the trap armed: `identifier` would still mean
+      "the caller's own" in the shared vocabulary, and the NEXT gated route with a subject would
+      read it the same wrong way. Cheaper is not automatically right.
+      THE LOAD-BEARING ARGUMENT IS THE RESERVED NAMESPACE, NOT READABILITY. The three confirmation
+      field names are forbidden to every gated route's body fields and path parameters, checked at
+      construction. Reserving the generic word `identifier` permanently forbids the most natural
+      name for the most common kind of field, on every route that will ever be gated — a cost that
+      grows with the platform and is paid by routes that have nothing to do with confirmation.
+      Reserving `reauth_identifier` costs nothing anyone will want.
+      AND IT PAIRS WITH A FIELD THAT WAS ALREADY NAMED THAT WAY. `reauth_derived_value` has always
+      carried the prefix; `identifier` beside it was the odd one out, and the triple is now
+      self-describing: `confirmation_id`, `reauth_identifier`, `reauth_derived_value`.
+    theBindingConsequence:
+      ruling: >-
+        A DISTINCTLY-NAMED TARGET IDENTIFIER IS AN ORDINARY BODY FIELD, SO IT IS NO LONGER STRIPPED
+        AND IS THEREFORE COVERED BY THE BINDING. RECORDED AS A DECISION RATHER THAN ACQUIRED AS A
+        SIDE EFFECT, because it changes what a confirmation guarantees.
+      why: >-
+        IT IS CORRECT AND IT CLOSES A REAL GAP. Under the old shape the target's identifier was
+        stripped before the union, so the binding covered `principal_id` and `derived_value` —
+        enough to stop target substitution by identifier alone — but THE HUMAN CONFIRMED A RESET
+        FOR A NAMED ACCOUNT AND THE MACHINERY WAS NOT CHECKING THAT NAME. A statement a person read
+        and approved should be the statement the machinery enforces; any field the human was shown
+        and the binding ignores is a gap between what was consented to and what was authorised.
+      whatITCOSTS: >-
+        The operator cannot alter the target's identifier between challenge and submission without
+        obtaining a new confirmation. That is the intended behaviour, not friction to be relieved.
+    theCOLLISIONRULEAPPLIES: >-
+      `target_identifier` must not collide with the three confirmation field names, and does not.
+      The construction-time check written into theNAMECOLLISIONRULE covers it automatically, which
+      is the first time that rule has been exercised by a real route rather than asserted.
+    whyNOSWEEPWOULDHAVEFOUNDIT:
+      finding: >-
+        *** EACH CONTRACT WAS INTERNALLY COHERENT. THE DEFECT EXISTED ONLY WHERE THE TWO MET. ***
+        No reading of either document finds it, and no citation sweep of either finds it, because
+        neither was wrong on its own terms. It was found by IMPLEMENTING THE INTERSECTION — and
+        specifically because the implementer was told to open the declared fields rather than
+        reason from the prose.
+      whyTHISISADIFFERENTCLASSFROMTHEONESALREADYRECORDED: >-
+        architecture.md §3b is a sentence dismissing a hazard; §3c is a comment citing a document;
+        workflow.md §12 is a document going stale. ALL THREE ARE FAULTS INSIDE ONE DOCUMENT. THIS
+        IS TWO CORRECT DOCUMENTS WHOSE UNION IS CONTRADICTORY, and nothing in the current practice
+        looks at unions.
+      whereITGENERALISES: >-
+        IT IS NOT SPECIFIC TO CONFIRMATION. It arises wherever a CROSS-CUTTING MECHANISM INJECTS
+        FIELDS INTO ANOTHER CONTRACT'S REQUEST SHAPE — confirmation today; pagination, idempotency
+        keys, audit envelopes and any future request-level mechanism tomorrow. The composition
+        creates a SHARED NAMESPACE THAT NEITHER DOCUMENT OWNS: the injecting contract does not know
+        which routes it will be composed with, and the consuming contract does not think of the
+        injected names as its own. Nobody sweeps it, because nothing is stale and nothing is
+        miscited.
+      andTHEMECHANICALCHECKIWROTETODAYWOULDNOTHAVECAUGHTIT: >-
+        STATED PLAINLY BECAUSE IT IS THE MOST USEFUL THING HERE. The construction-time disjointness
+        check compares NAME SETS, and there was no name collision — the field appears exactly once
+        in the merged shape. THE COLLISION WAS SEMANTIC: one name, one field, two meanings. A
+        disjointness check passes cleanly on this defect.
+      theCHECKTHATWOULDCATCHIT: >-
+        A FIELD NAME DEFINED BY A CROSS-CUTTING MECHANISM IS RESERVED PLATFORM-WIDE WITH EXACTLY
+        ONE MEANING, AND A CONSUMING CONTRACT MAY NOT REDEFINE IT. Mechanically: for each field
+        name a mechanism declares, grep every contract that composes with it and confirm each use
+        carries the mechanism's meaning — not merely that the name does not appear twice.
+        THE RENAME MAKES THAT CHECK EASY RATHER THAN MERELY POSSIBLE, which is the second reason
+        the expensive name moved: a prefixed, mechanism-specific name is greppable and a generic
+        one is not. `reauth_` is now a namespace, and a field carrying that prefix that does not
+        belong to this mechanism is visible on sight.
+
   carriage: >-
     TWO FIELDS ON THE OPERATION'S OWN REQUEST BODY: `confirmation_id` and `reauth_derived_value`.
     NOT A HEADER, and not a wrapper envelope.
@@ -381,8 +471,8 @@ theConfirmedRequest:
       `credential-verifier.ts`'s equal-work property ON THE ONE PATH THIS CONTRACT EXPLICITLY
       REQUIRES IT — and turns the route into the password oracle it claims not to be.
     theFIX: >-
-      `confirmedRequestFields` GAINS THE CALLER'S OWN `identifier`, alongside `confirmation_id` and
-      `reauth_derived_value`. `verify(submittedIdentifier, submittedValue)` already takes it and
+      `confirmedRequestFields` GAINS THE CALLER'S OWN `reauth_identifier` — named `identifier` until
+      2026-09-05, see theTwoIdentifiers — alongside `confirmation_id` and `reauth_derived_value`. `verify(submittedIdentifier, submittedValue)` already takes it and
       already has the equal-work property. NO INDEX, NO MIGRATION, NO NEW STORE METHOD, NO COST
       CHANGE.
     itMIRRORSCR_5_EXACTLY: >-
@@ -430,7 +520,7 @@ theConfirmedRequest:
     ruling: >-
       THE `parameters` THE BINDING IS RECOMPUTED OVER ARE:
         (1) THE SUBMITTED REQUEST BODY, MINUS THE THREE CONFIRMATION FIELDS — `confirmation_id`,
-            `reauth_derived_value` and `identifier`;
+            `reauth_identifier` and `reauth_derived_value`;
         (2) UNION THE ROUTE'S DECLARED PATH PARAMETERS, each as a name/value pair.
       Nothing else is removed and nothing else is added. Query parameters and object fields are NOT
       included, and remain REFUSED on a gated route — see whyNOTQUERYPARAMETERS.
@@ -543,7 +633,7 @@ theConfirmedRequest:
         atCONSTRUCTION: >-
           FOR EVERY GATED ROUTE R:
             names(pathTemplate(R)) ∩ ( declaredBodyFields(R) ∪ {confirmation_id,
-            reauth_derived_value, identifier} ) = ∅
+            reauth_identifier, reauth_derived_value} ) = ∅
           A route failing this is refused at construction. This is theNAMECOLLISIONRULE, mechanised.
         atSPEND: >-
           FOR EVERY GATED ROUTE R, the parameters object the binding is recomputed over satisfies:
@@ -656,8 +746,23 @@ testRequirements:
       Read as body-only, which is what the struck definition permitted, this line passes vacuously
       on every route whose only variable is a path segment.
     - >-
+      THE TWO IDENTIFIERS ARE NOT INTERCHANGEABLE, AND THIS IS THE TEST FOR THE DEFECT THAT BLOCKED
+      credential-reset-v1. On a route carrying both: submit the OPERATOR's identifier in
+      `target_identifier` and the TARGET's in `reauth_identifier` — swapped — with everything else
+      correct. REFUSED. Then submit the same identifier in both. REFUSED unless the operator is
+      genuinely resetting their own credential, which is a legitimate case and must be asserted
+      separately rather than assumed impossible.
+      AND ASSERT THE POSITIVE: a correct request succeeds. Under the pre-rename shape it could not,
+      for any input — the route returned `forbidden` permanently — so a suite that only checks
+      refusals would have reported this contract's gate as working while the route was unbuildable.
+    - >-
+      `target_identifier` IS IN THE BINDING. Mint a confirmation for a reset of account A, then
+      submit with `target_identifier` changed to account B and everything else identical. REFUSED.
+      This case did not exist before the rename, because the field was stripped as a confirmation
+      field and never reached the binding.
+    - >-
       CONSTRUCTION-TIME: a gated route declaring a path parameter whose name collides with one of
-      its body fields, or with confirmation_id / reauth_derived_value / identifier, is REFUSED AT
+      its body fields, or with confirmation_id / reauth_identifier / reauth_derived_value, is REFUSED AT
       CONSTRUCTION. Assert the build failure, not a request-time rejection — a collision that
       reaches a request is a precedence rule that already exists.
   lifecycle:

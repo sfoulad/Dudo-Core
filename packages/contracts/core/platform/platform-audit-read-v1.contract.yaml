@@ -165,10 +165,137 @@ pagination:
     confirmation-v1's binding relies on, applied to pagination.
   ordering: >-
     NEWEST FIRST, BY (timestamp, record id) DESCENDING. The composite is required rather than
-    cosmetic: timestamps collide at second precision under a burst, and a cursor over a non-unique
-    sort key either skips records or repeats them. AN AUDIT FEED THAT SILENTLY SKIPS A RECORD IS
-    WORSE THAN ONE THAT REFUSES TO PAGE.
+    cosmetic: a cursor over a non-unique sort key either skips records or repeats them, and AN
+    AUDIT FEED THAT SILENTLY SKIPS A RECORD IS WORSE THAN ONE THAT REFUSES TO PAGE.
+  thePRECISIONCLAIMWASWRONGANDTHECONCLUSIONISREDERIVED:
+    whatWasStruck: >-
+      CORRECTED 2026-09-05. THIS CLAUSE PREVIOUSLY SAID "timestamps collide at SECOND precision
+      under a burst". CORE WRITES MILLISECONDS. `kernel/clock.ts::toRfc3339Utc` is
+      `new Date(ms).toISOString()`, which always emits `.sssZ`, and nothing truncates it anywhere.
+      The same false premise appeared in the schema's justification for `record_id` and in a test
+      requirement; all three are corrected.
+    howItSurfaced: >-
+      TWO AGENTS READING TWO SOURCES THAT ARE SUPPOSED TO AGREE. One reasoned from the code and
+      said a `T23:59:59Z` boundary would drop sub-second records; the other reasoned from this
+      contract and said the feed is second-precision, citing all three sentences. NEITHER WAS
+      CARELESS. This is workflow.md §12's shape exactly, and it is the reason the premise is
+      re-derived here rather than the sentences quietly deleted.
+    theCONCLUSIONSURVIVESONASTRONGERPREMISE: >-
+      RE-DERIVED RATHER THAN LEFT PROPPED UP, because an argument that survives the deletion of its
+      premise is an argument nobody has checked. THE COMPOSITE SORT KEY IS NOT MERELY STILL
+      CORRECT — IT IS MORE NECESSARY AT MILLISECOND PRECISION THAN THE ORIGINAL ARGUMENT CLAIMED.
+      The original reasoning was probabilistic: at one-second granularity a burst is LIKELY to
+      collide. At millisecond granularity the naive version of that argument is weaker, because
+      two records are unlikely to land on the same millisecond BY CHANCE.
+      THAT IS NOT THE SITUATION. ON WORKERS THE CLOCK DOES NOT ADVANCE DURING EXECUTION.
+      `docs/decisions/0015` finding 3, verified against Cloudflare's own documentation and quoted in
+      `identity/credential-verifier.ts`: *"`Date.now()` returns the time of the last I/O. It does
+      not advance during code execution."* So records written within one execution slice do not
+      merely RISK a shared timestamp — THEY ARE GUARANTEED TO HAVE AN IDENTICAL ONE, deterministically,
+      every time. A collision is not a burst-time coincidence; it is the normal case for any two
+      records written between the same pair of I/O operations.
+      SO A NON-UNIQUE SORT KEY IS NOT AN EDGE CASE HERE AND `record_id` ON THE WIRE IS LOAD-BEARING.
+      A reader who finds the tiebreaker unjustified and removes it as redundant would produce a feed
+      that skips records under precisely the conditions that produce the most records.
+    andCOREALREADYKNEW: >-
+      `platform/core/platform/platform-operator-store.ts` documents its own anchor as compound
+      because *"the clock has millisecond resolution"*. THE PORT AND THIS CONTRACT HAVE BEEN SAYING
+      DIFFERENT THINGS ABOUT THE SAME COLUMN, which is what made the divergence survivable long
+      enough for two agents to argue from opposite sides of it.
   bounds: "page_size 1-100, default 25. There is no unbounded form and none may be added."
+
+# ---------------------------------------------------------------------------
+# theTimeWindow — `since` and `until`. ADDED 2026-09-05; the contract previously specified
+# NEITHER the format NOR the inclusivity of its own two time parameters.
+# ---------------------------------------------------------------------------
+theTimeWindow:
+  whyThisBLOCKEXISTS: >-
+    THE CONTRACT ACCEPTED TWO TIMESTAMP PARAMETERS AND DEFINED NEITHER. The schema covers response
+    shapes only, so `since` and `until` had no stated format anywhere; the console inferred RFC 3339
+    UTC from `occurred_at` and was right, by inference rather than by contract. And nothing said
+    whether `until` was inclusive or exclusive, so the console chose a bound that is correct under
+    BOTH readings — a good defensive choice that it should not have had to make.
+
+  format:
+    ruling: >-
+      `since` AND `until` ARE RFC 3339 UTC INSTANTS OF EXACTLY THIS SHAPE:
+        YYYY-MM-DDTHH:MM:SS.sssZ
+      FOUR-DIGIT YEAR, `T` SEPARATOR, `Z` ONLY, AND EXACTLY THREE FRACTIONAL DIGITS. No offset form
+      (`+00:00` is refused), no lowercase `t` or `z`, no omitted fractional part, no more or fewer
+      than three digits. A value not matching is `invalid_argument` with the detail token
+      `must_be_an_rfc3339_utc_instant`, and it is REFUSED rather than ignored — an accepted-but-
+      unusable filter silently widens an audit query to everything, which reads as "there is nothing
+      to hide here".
+    whyZONLY: >-
+      THE COMPARISON IS LEXICOGRAPHIC AGAINST A STORED `Z` STRING, so an accepted `+01:00` would
+      have to be normalised before comparison and, unnormalised, would silently select the wrong
+      hour. `Date.parse` is not a substitute for a fixed grammar: it accepts `2026-09-05`,
+      `Sep 5 2026`, and `2026-09-05T12:00:00` with no zone — which some engines read as local time
+      and others as UTC, so the same request would select a DIFFERENT SET OF AUDIT RECORDS DEPENDING
+      ON WHERE THE WORKER RAN. For a feed whose purpose is evidence, a window that means different
+      things in different places is worse than no filter.
+    whyEXACTLYTHREEFRACTIONALDIGITS_ANDTHISISTHEPARTNOBODYHAD:
+      finding: >-
+        *** A BOUND THAT OMITS THE FRACTIONAL PART DOES NOT MEAN ITS OWN TEMPORAL VALUE, AND THE
+        ERROR IS SILENT AND ONE-SIDED. *** This was found while specifying the format and neither
+        agent in the original disagreement had it.
+      theArithmetic: >-
+        Stored values always carry milliseconds (`toISOString` emits `.sssZ`). Comparison is
+        LEXICOGRAPHIC on fixed-width strings, which is equivalent to temporal comparison ONLY WHEN
+        BOTH OPERANDS HAVE THE SAME WIDTH. They do not when the bound omits `.sss`:
+          At index 19 a stored value has `.` (0x2E) and a bound without milliseconds has `Z` (0x5A),
+          and `.` < `Z`. SO EVERY STORED VALUE IN THAT SECOND SORTS BEFORE THE BOUND — including the
+          `.000Z` record at exactly the bound's own instant.
+        THE CONSEQUENCES ARE OPPOSITE AND BOTH WRONG:
+          `until=...T23:59:59Z` is EXCLUSIVE and yet INCLUDES the whole of second 59, up to
+          `23:59:59.999Z`. It behaves as if it were inclusive-through-the-second.
+          `since=...T00:00:00Z` is INCLUSIVE and yet EXCLUDES every record in second 00, because
+          `00:00:00.000Z` < `00:00:00Z` lexicographically. It behaves as if it were
+          exclusive-through-the-second.
+        BOTH BOUNDS SHIFT FORWARD BY UP TO ONE SECOND, in opposite senses, with no error and no
+        indication. An operator investigating an incident would silently receive a window one second
+        off the one they asked for.
+      theRuling: >-
+        REQUIRING EXACTLY THREE FRACTIONAL DIGITS REMOVES THE DIVERGENCE ENTIRELY, because every
+        compared string then has identical width and lexicographic order IS temporal order. That is
+        the same property `platform-cursor` relies on and the same reason `occurred_at` is stored as
+        a fixed-width string rather than an epoch integer.
+      whatCOREDOESTODAY_ANDWHATISOWED: >-
+        REPORTED, NOT ASSUMED. Core's grammar as observed at `ce6e952` accepts the fractional part
+        as OPTIONAL, so it accepts the shorter form and exhibits the shift above. THIS CONTRACT
+        NARROWS THE ACCEPTED SET, which is BREAKING under API_STANDARD.md §6 — and it is free at
+        this instant for the same reason confirmation-v1's amendment was: the only consumer is the
+        console, which already sends three fractional digits.
+        THE ALTERNATIVE WAS CONSIDERED AND REFUSED: let Core keep accepting the short form and
+        NORMALISE it by appending `.000` for `since` and `.999` for `until`. That is a second place
+        that decides what a bound means, it differs per parameter, and a reader of either the client
+        or the query would have to know it. A grammar that admits only unambiguous values needs no
+        such rule.
+        core-agent's CHANGE IS ONE CHARACTER — make the fractional group required — and it is
+        reported to the Team Lead rather than performed here.
+
+  inclusivity:
+    ruling: >-
+      THE WINDOW IS HALF-OPEN: `since` IS INCLUSIVE, `until` IS EXCLUSIVE. A record is returned when
+      `since <= occurred_at < until`. Either may be omitted; omitting both returns the unfiltered
+      feed, still paged.
+    itMATCHESWHATCOREDOES: >-
+      TRANSCRIBED, NOT CHOSEN AGAINST THE CODE. The adapter builds `occurred_at >= ?` for `since`
+      and `occurred_at < ?` for `until`. The contract is what was missing, not the behaviour.
+    whyHALFOPENISTHERIGHTCONVENTIONANYWAY: >-
+      ADJACENT WINDOWS TILE EXACTLY. `[A, B)` followed by `[B, C)` covers every record once, with no
+      gap and no duplicate — which is what an operator paging a week day by day, or an export job
+      walking an hour at a time, actually needs. A closed interval double-counts every boundary
+      instant; an open one drops it. THIS MATTERS MORE HERE THAN IN AN ORDINARY LISTING because the
+      artifact is EVIDENCE: a record counted twice across two windows suggests two events, and a
+      record dropped between them suggests none.
+    theCLIENTCONSEQUENCE_STATEDPLAINLY: >-
+      A CALENDAR DAY IS `since=...T00:00:00.000Z` AND `until=<next day>T00:00:00.000Z`. Not
+      `T23:59:59.999Z`, which is now merely a very close approximation rather than a necessary
+      defensive choice: under the settled rule it drops any record in the final millisecond of the
+      day. THE CONSOLE'S EXISTING CHOICE WAS CORRECT UNDER BOTH READINGS AND IS NO LONGER
+      NECESSARY — with inclusivity decided, next-day-midnight is exact, and it is the form both
+      clients should use.
 
 # ---------------------------------------------------------------------------
 # operations
@@ -333,7 +460,37 @@ testRequirements:
     - "The Organization feed returns target_principal_id; the platform feed does not. Assert both against the same underlying record, so the difference is proven to be the route and not the data."
     - "A cursor issued by one feed is refused by the other."
     - "A cursor issued to operator A is refused for operator B."
-    - "Paging over records with identical timestamps neither skips nor repeats a record. Seed a burst at one-second precision; this is the defect the composite sort key exists to prevent."
+    - >-
+      THE TIME WINDOW IS HALF-OPEN AND ITS BOUNDS ARE EXACT. Seed records at exactly `since`, one
+      millisecond before it, exactly at `until`, and one millisecond before `until`. The record AT
+      `since` is RETURNED; the one before it is not. The record AT `until` is NOT returned; the one
+      a millisecond before it is. Assert all four — a suite that only tests the middle of a window
+      tests nothing about the boundary, and the boundary is the whole of the ruling.
+    - >-
+      A `since` OR `until` OMITTING THE FRACTIONAL PART IS REFUSED with
+      `must_be_an_rfc3339_utc_instant`, and so are `+00:00`, a lowercase `z`, a bare date, and a
+      value with one or six fractional digits.
+      THIS IS A NEGATIVE CONTROL AND NOT HYGIENE: if the short form is accepted, assert what it
+      then does, because it does NOT mean its own instant. `until=...T23:59:59Z` includes the whole
+      of second 59 and `since=...T00:00:00Z` excludes it, both silently, because a stored `.` sorts
+      before a bound's `Z` at index 19. A suite that accepts the short form and checks only that
+      "some records came back" will not see either shift.
+    - >-
+      Paging over records with identical timestamps neither skips nor repeats a record. This is the
+      defect the composite sort key exists to prevent.
+      CORRECTED 2026-09-05, AND THE OLD WORDING WOULD HAVE PRODUCED A SUITE THAT TESTED NOTHING. It
+      said "seed a burst at one-second precision". CORE CANNOT PRODUCE A SECOND-PRECISION TIMESTAMP
+      — `toRfc3339Utc` always emits `.sssZ` — so a suite written to that sentence would seed values
+      the system never generates, exercise a collision case that does not occur, and leave the
+      collision case that DOES occur untested while reporting the property covered.
+      SEED RECORDS WITH IDENTICAL MILLISECOND TIMESTAMPS — the same `.sssZ` value, byte for byte.
+      That is not a contrived fixture: it is what the platform produces whenever two records are
+      written between the same pair of I/O operations, because the Workers clock does not advance
+      during execution (0015 finding 3). Seed at least three such records so a page boundary can
+      fall INSIDE the identical-timestamp run, which is the position that skips or repeats.
+      THE NEGATIVE CONTROL: remove `record_id` from the sort key and from the cursor anchor, and
+      this test must go RED. If it stays green, the fixture's timestamps are not actually identical
+      and the test is proving something else.
   audit:
     - "Both routes write a platform-operator record. A caller with no platform_operator row writes NONE."
     - "The Organization feed writes a tenant-side record into the named Organization on EVERY call, including one that returns an empty page."

@@ -248,7 +248,8 @@ operations:
     sensitivity: critical
     request: >-
       Path parameter `principal_id`, plus confirmation-v1's three confirmed-request fields
-      (`confirmation_id`, `reauth_derived_value`, `identifier`) in the body. NO OTHER FIELD.
+      (`confirmation_id`, `reauth_identifier`, `reauth_derived_value`) in the body. NO OTHER FIELD.
+      `reauth_identifier` WAS RENAMED FROM `identifier` ON 2026-09-05; see confirmation-v1.
     response: { schemaRef: "urn:dudo:schema:platform-operators:1#/$defs/revokeOperatorOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
