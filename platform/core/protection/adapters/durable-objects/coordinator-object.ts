@@ -134,7 +134,11 @@ import {
   retryAfterSecondsUntilReset,
 } from '../../write-admission.ts';
 import { DENIAL_SUMMARY_ROW_WRITES } from '../../../storage/write-cost.ts';
-import type { CoordinationState, DenialGroupState } from '../../coordination-engine.ts';
+import type {
+  CoordinationState,
+  DenialGroupState,
+  WriteOrigin,
+} from '../../coordination-engine.ts';
 import {
   admit,
   admitWrite,
@@ -662,7 +666,13 @@ export class DudoCoordinatorObject {
       creditWritePermits(state, granted.permits, nowMs, granted.answered);
     }
 
-    const admitted = admitWrite(state, units, nowMs);
+    // THE ORIGIN CROSSES THE WIRE AND IS VALIDATED HERE, NOT TRUSTED. It arrives as JSON from
+    // Core's own Worker — not from a client — but this is a Durable Object boundary and an
+    // unrecognised value must not be read as the cheap side. **Anything that is not exactly
+    // `'tenant'` is treated as `'platform'`**, which is the fail-closed direction: a corrupted or
+    // future origin is charged against the bounded ceiling rather than the unbounded one.
+    const origin: WriteOrigin = body.origin === 'tenant' ? 'tenant' : 'platform';
+    const admitted = admitWrite(state, units, nowMs, origin);
     // PERSISTED WHETHER OR NOT THE WRITE WAS ADMITTED. On success the used counter moved and must
     // survive an eviction; on failure the permit reserve may still have moved, because a block
     // may have been bought that this request could not spend. Persisting only the success path
@@ -900,10 +910,15 @@ export function createDurableObjectRequestCoordinator(
 
         async reserveWrites(
           estimatedRowWrites: number,
+          origin: WriteOrigin,
         ): Promise<Result<WriteAdmissionOutcome>> {
           const answered = await call(instance, '/reserve', {
             organizationId: request.organizationId,
             estimatedRowWrites,
+            // `0` COSTS NOTHING. The call already happens on every tenant write; the sub-ceiling
+            // adds one field to a body already being sent and **no additional Durable Object
+            // request**, which is why C needed no new DO and B does.
+            origin,
             nowMs: request.nowMs,
           });
           if (!answered.ok) {

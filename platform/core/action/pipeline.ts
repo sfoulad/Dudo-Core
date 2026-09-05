@@ -860,7 +860,14 @@ export async function invokeAction(
 
       let admitted;
       try {
-        admitted = await coordination.reserveWrites(reservedUnits);
+        // `'tenant'` — THE ORGANIZATION'S OWN PRINCIPALS SPENDING THEIR OWN ALLOCATION.
+        //
+        // STATED RATHER THAN DEFAULTED, and this call site is the reason the parameter is
+        // required: a customer's own mutations must NEVER be charged against
+        // `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`, because that ceiling exists to stop the platform
+        // spending a customer's day. **A customer refused by a counter they cannot increment
+        // would be the exact failure the sub-ceiling was built to prevent, caused by the fix.**
+        admitted = await coordination.reserveWrites(reservedUnits, 'tenant');
       } catch (cause) {
         // A throw out of the coordinator must not commit anything. Unreachable admission is
         // treated exactly as degraded mode is, one line above: no write.

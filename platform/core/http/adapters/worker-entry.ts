@@ -301,8 +301,30 @@ export async function createCoreRuntime(
   // authenticates at all; composing it means the account-wide failure mode is closed and a
   // credential-holding attacker can cause a bounded, self-healing, one-day login outage. The
   // durable version is the same port backed by a per-principal counter in the coordination
-  // Durable Object, which is a change to `platform/core/protection/**` — another agent's file —
-  // and is REQUESTED through the Team Lead rather than made here.
+  // Durable Object, which is a change to `platform/core/protection/**`.
+  //
+  // ===========================================================================================
+  // *** CORRECTION, 2026-09-05: THIS COMMENT USED TO SAY `protection/**` WAS "ANOTHER AGENT'S
+  // FILE". IT IS NOT, AND THE CLAIM STOPPED CORRECT WORK. ***
+  // ===========================================================================================
+  //
+  // **`platform/core/protection/**` IS CORE-OWNED.** The boundary is `.claude/rules/architecture.md`
+  // §2, which assigns `platform/core/**` to `core-agent`; nothing carves `protection/**` out of it,
+  // no rule in `.claude/rules/` assigns it elsewhere, and no agent definition claims it. **Verified
+  // by the Team Lead against those files rather than from memory.**
+  //
+  // WHAT IT COST: the per-Organization write sub-ceiling — the only fix keyed to the VICTIM rather
+  // than to the attacker — needed exactly these four files, and this sentence deferred it while a
+  // measured denial of service stayed open. **A comment claiming a boundary is a claim about the
+  // RULES**, and this one was wrong.
+  //
+  // THE REFERENT IS GIVEN ABOVE ON PURPOSE. `architecture.md` §2 is checkable in one glance; *"another
+  // agent's file"* was not, which is why nobody checked it for two slices. `architecture.md` §3c: a
+  // comment that cites a source is an assertion about that source, and the fix is to name the source
+  // rather than to be more confident.
+  //
+  // THE RIGHT RESPONSE TO A COMMENT LIKE THIS IS STILL TO ASK, NOT TO CROSS IT. Refusing to edit
+  // until someone with the rules in view confirmed was correct even though the comment was wrong.
   const admission = createInProcessControlPlaneWriteAdmission(
     createDurableObjectDayWriteBudget(coordinationNamespace),
   );

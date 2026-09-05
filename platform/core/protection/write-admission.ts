@@ -219,6 +219,126 @@ export const DAILY_ALLOCATION: Readonly<Record<WriteAllocation, number>> = {
 export const PER_ORGANIZATION_DAILY_ROW_WRITES = 10_000;
 
 /**
+ * ===========================================================================================
+ * *** HOW MUCH OF ONE ORGANIZATION'S DAY THE PLATFORM MAY SPEND. 1,000 OF THE 10,000 ABOVE. ***
+ * Team Lead ruling, 2026-09-05.
+ * ===========================================================================================
+ *
+ * **IT IS A PRODUCT JUDGEMENT, NOT A DERIVED VALUE.** Nothing computes 1,000 — it is a decision
+ * about how much support access is worth to a customer against how much disruption is tolerable,
+ * it is reversible, and it is expected to move once there is real usage. **Do not treat it as
+ * arithmetic and do not "correct" it to match another number.**
+ *
+ * ===========================================================================================
+ * WHAT IT BOUNDS, AND WHY THE OTHER TWO FIXES DID NOT
+ * ===========================================================================================
+ *
+ * Two platform routes write into a CUSTOMER'S tenant database — the member resolve and the scoped
+ * audit feed — at 5 row-writes each. Measured on 2026-09-05: **2,000 calls exhausted one named
+ * Organization's entire 10,000/day allocation**, after which **that customer's own mutations
+ * started failing**, for a reason they could not see.
+ *
+ * TWO FIXES CAME FIRST AND NEITHER CLOSED IT:
+ *
+ *   - **The operator-charge receipt** (`platform-audit.ts`) bounds ONE operator at 300 calls =
+ *     1,500 row-writes. **Three operators reach 4,500.**
+ *   - **`PO-4`, the durable rate limiter**, would bound each operator harder. **It is keyed to the
+ *     operator too.**
+ *
+ * **BOTH BOUND THE ATTACKER WHILE THE EXPOSURE IS A PROPERTY OF THE TARGET.** N operators — or one
+ * taken session plus two colleagues — still sum onto one customer. **This constant is keyed to the
+ * VICTIM**, so one operator, three operators and ten all hit the same 1,000. That is the whole
+ * reason it exists and it is the test any future proposal here should be measured against.
+ *
+ * ===========================================================================================
+ * THE NUMBER
+ * ===========================================================================================
+ *
+ * **1,000 row-writes = 200 platform-originated operations against one customer per day, SHARED
+ * ACROSS ALL OPERATORS.** A real support session is a handful of resolves and a handful of feed
+ * reads — call it 20 operations, 100 row-writes, **10% of this ceiling.** 200 operations against a
+ * single named customer in one day is not a support session, it is a script.
+ *
+ * **IT BINDS BEFORE THE OPERATOR RECEIPT DOES** — 1,000 against that fix's 1,500 — and that is
+ * deliberate: the victim's exposure should be decided by the victim's ceiling, not by how many
+ * attackers there are.
+ *
+ * ===========================================================================================
+ * *** IT DRAWS **FROM** THE 10,000 ABOVE. IT DOES NOT SIT BESIDE IT. ***
+ * ===========================================================================================
+ *
+ * A platform-originated write increments BOTH counters and BOTH ceilings must admit it.
+ * Otherwise platform writes could push an Organization past its real allocation, which is the
+ * outcome this whole exercise exists to prevent.
+ *
+ * **THE CONSEQUENCE, STATED RATHER THAN DISCOVERED:** a customer who has legitimately spent 9,600
+ * of their own 10,000 refuses platform-originated writes at 400, even though this sub-ceiling has
+ * 1,000 left. **A busy customer is harder to support on their busiest day.** That is the rule
+ * working — an operator cannot spend capacity the customer needs — and it is the correct
+ * direction, because the alternative is a customer's own product breaking so that an operator
+ * could look at it.
+ *
+ * ===========================================================================================
+ * THE REFUSAL LANDS ON THE OPERATOR AND NEVER ON THE CUSTOMER
+ * ===========================================================================================
+ *
+ * Structurally, not by policy: this counter is incremented only by writes marked
+ * `'platform'`, and the only callers that mark them so are the two platform services. **A
+ * customer's own mutations go through `pipeline.ts`, which passes `'tenant'`, so they are checked
+ * against the 10,000 alone and cannot be refused by a counter they cannot increment.**
+ *
+ * **If a customer can still experience their own product breaking because of platform activity,
+ * this has not worked** — that is the property to test, and it is the reason the origin is a
+ * required parameter rather than a defaulted one.
+ */
+export const PLATFORM_ORIGINATED_DAILY_ROW_WRITES = 1_000;
+
+/**
+ * ===========================================================================================
+ * *** TWO THINGS FOR WHOEVER PROPOSES `PO-4`, THE DURABLE RATE LIMITER, RECORDED HERE BECAUSE
+ * THIS IS THE FILE THEY WILL BE READING WHEN THEY DO. ***
+ * ===========================================================================================
+ *
+ * ---------------------------------------------------------------------------------------------
+ * 1. A STANDALONE FINDING, TRUE TODAY REGARDLESS OF WHAT IS BUILT NEXT
+ * ---------------------------------------------------------------------------------------------
+ *
+ * **`createDurableObjectDayWriteBudget` reaches a SINGLE GLOBAL Durable Object instance**
+ * (`LEDGER_INSTANCE`), and it sits on the path of **every control-plane write — including session
+ * creation.**
+ *
+ * The Durable Objects allowance is **100,000 requests/day, ACCOUNT-WIDE AND SHARED**. So exhausting
+ * it does not degrade an audit feed or a background job: **nothing can log in.** The consumer that
+ * degrades first is authentication, and the symptom is *"sign-in is broken"* with a cause nobody
+ * would trace to a write ledger.
+ *
+ * **AND NOTHING MEASURES HOW CLOSE THAT IS.** Not a monitor, not a counter, not an alarm. That is
+ * the finding, and it does not depend on `PO-4` ever being built.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * 2. THE CAVEAT ON THE ANALYSIS THAT DEFERRED `PO-4`, WHICH IS EASY TO CITE WITHOUT
+ * ---------------------------------------------------------------------------------------------
+ *
+ * The analysis said: `free-tier-register.md`'s boxed hazard concerns a limiter **in front of
+ * authentication**, and a platform route's steps 1–4 touch **no Durable Object at all** — a caller
+ * with no valid session is refused before any DO call — so **an unauthenticated flood against the
+ * platform class costs zero DO requests.** That is measured and it is true.
+ *
+ * *** IT DOES NOT SAY A LIMITER IS AFFORDABLE, AND IT STOPS BEING TRUE THE MOMENT ANYONE PUTS
+ * `PO-4` IN FRONT OF AUTHENTICATION — WHICH IS WHERE RATE LIMITERS USUALLY BELONG. ***
+ *
+ * It narrows one hazard for one placement. It does not answer what a limiter costs at realistic
+ * load, and it is not a capacity check. **§6a still requires one**, and a check on a new Durable
+ * Object may not stop at *"does it fit inside 100,000"* — it must name which other consumer it
+ * shares with and what happens to that consumer at the limit. The answer to the second half is
+ * above: **logins stop.**
+ *
+ * WHY THIS IS IN THE CODE AND NOT ONLY IN A MESSAGE: the next person to propose `PO-4` will find
+ * the analysis and may not find the caveat. `workflow.md` §12 — an assertion that a known problem
+ * does not apply is a claim, and it needs to name which side it is talking about.
+ */
+
+/**
  * Runs at module load. A budget whose parts do not add up is not a budget, and discovering that
  * from production traffic is discovering it too late.
  */

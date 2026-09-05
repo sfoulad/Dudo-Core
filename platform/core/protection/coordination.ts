@@ -59,6 +59,7 @@
 import type { AuditDenialReason } from '../audit/audit.ts';
 import type { Result } from '../kernel/result.ts';
 import type { AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
+import type { WriteOrigin } from './coordination-engine.ts';
 import type { WriteAdmissionOutcome, WriteReservation } from './write-admission.ts';
 import { DAILY_ALLOCATION, UTC_DAY_MS } from './write-admission.ts';
 import { DENIAL_SUMMARY_ROW_WRITES } from '../storage/write-cost.ts';
@@ -675,7 +676,22 @@ export type RequestCoordination = {
    * `deferred` is not an error and must not be logged as one. It is the day's capacity being
    * spent, which is an ordinary operating state with a known end time.
    */
-  reserveWrites(estimatedRowWrites: number): Promise<Result<WriteAdmissionOutcome>>;
+  reserveWrites(
+    estimatedRowWrites: number,
+    /**
+     * *** WHO IS SPENDING THIS ORGANIZATION'S ALLOCATION. REQUIRED, NO DEFAULT. ***
+     *
+     * `'platform'` draws from `PLATFORM_ORIGINATED_DAILY_ROW_WRITES` **as well as** the
+     * Organization's own ceiling, so an operator cannot spend more than a bounded share of a
+     * customer's day however many operators there are.
+     *
+     * IT IS REQUIRED SO THE CHEAP SIDE CANNOT BE INHERITED BY OMISSION. A defaulted `'tenant'`
+     * would mean the next writer to reach this budget gets the unbounded path without deciding
+     * to — and the two writers that needed bounding were added by the same author from the same
+     * template a day apart, which is exactly how a default gets inherited.
+     */
+    origin: WriteOrigin,
+  ): Promise<Result<WriteAdmissionOutcome>>;
   /** Releases the handle. Never throws. Safe to call more than once. */
   dispose(): void;
 };

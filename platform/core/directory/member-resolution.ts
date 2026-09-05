@@ -327,7 +327,9 @@ async function recordProbe(
 
   let admitted;
   try {
-    admitted = await coordination.value.reserveWrites(RESOLVE_TENANT_ROW_WRITES);
+    // `'platform'` — AN OPERATOR SPENDING A CUSTOMER'S ALLOCATION, WHICH IS THE THING BEING
+    // BOUNDED. This is the call that measured 10,000 of 10,000 before the sub-ceiling existed.
+    admitted = await coordination.value.reserveWrites(RESOLVE_TENANT_ROW_WRITES, 'platform');
   } catch {
     return err(unavailable());
   }

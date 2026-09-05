@@ -70,7 +70,28 @@ import {
   denialGroupKeyText,
   windowStart,
 } from './coordination.ts';
-import { PER_ORGANIZATION_DAILY_ROW_WRITES } from './write-admission.ts';
+import {
+  PER_ORGANIZATION_DAILY_ROW_WRITES,
+  PLATFORM_ORIGINATED_DAILY_ROW_WRITES,
+} from './write-admission.ts';
+
+/**
+ * ===========================================================================================
+ * WHO IS SPENDING THIS ORGANIZATION'S WRITE ALLOCATION. **REQUIRED EVERYWHERE, NEVER DEFAULTED.**
+ * ===========================================================================================
+ *
+ *   `'tenant'`   — the Organization's own principals, through the Action pipeline. Checked
+ *                  against `PER_ORGANIZATION_DAILY_ROW_WRITES` alone.
+ *   `'platform'` — a platform operator acting AT this Organization. Checked against that ceiling
+ *                  **and** `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`.
+ *
+ * *** IT HAS NO DEFAULT, AND THAT IS THE MECHANISM RATHER THAN A STYLE CHOICE. *** A defaulted
+ * origin means the cheap side is inherited by omission, and the next writer to reach this budget
+ * gets the unbounded one without deciding to. `architecture.md` §3a: a guard that must be
+ * remembered is a discipline; a parameter the call cannot omit is a mechanism. **Every existing
+ * caller had to state which it was, and the two platform services could not silently be `tenant`.**
+ */
+export type WriteOrigin = 'tenant' | 'platform';
 import { DENIAL_SUMMARY_ROW_WRITES } from '../storage/write-cost.ts';
 
 // =============================================================================================
@@ -185,6 +206,31 @@ export type CoordinationState = {
 
   /** This Organization's `business` row-writes used today. Ceiling: PER_ORGANIZATION_DAILY_ROW_WRITES. */
   writeDay: { dayStartMs: number; used: number };
+  /**
+   * ===========================================================================================
+   * *** THE PLATFORM'S SHARE OF THIS ORGANIZATION'S DAY. A THIRD PARALLEL COUNTER. ***
+   * Ceiling: `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`.
+   * ===========================================================================================
+   *
+   * **A SECOND, PARALLEL COUNTER RATHER THAN A GENERALISATION — the argument this file already
+   * makes for the pair above, applied a third time.** Folding it into `writeDay` would make the
+   * next person believe the difference is accidental, and the difference is the entire point:
+   * `writeDay` is what the TENANT may spend, this is what the PLATFORM may spend AT the tenant,
+   * and they behave differently at exhaustion. Exhausting `writeDay` stops the customer working.
+   * Exhausting this one stops an operator looking, and **leaves the customer working**, which is
+   * the property the whole mechanism exists for.
+   *
+   * *** IT IS A SUB-COUNTER, NOT A SECOND ALLOWANCE. *** Every platform-originated write
+   * increments **both** this and `writeDay`, and **both ceilings must admit it.** A platform write
+   * cannot push an Organization past its real allocation — see `PLATFORM_ORIGINATED_DAILY_ROW_
+   * WRITES` for why that direction was chosen and what it costs a busy customer.
+   *
+   * WHY IT EXISTS: measured on 2026-09-05, 2,000 platform calls exhausted one named Organization's
+   * whole 10,000 and its own mutations then began failing. Two earlier fixes bounded the OPERATOR;
+   * **this is the only one keyed to the victim**, so N operators summing onto one customer hit the
+   * same number as one.
+   */
+  platformWriteDay: { dayStartMs: number; used: number };
   /** Platform `business` permits held locally, in row-writes, bought in blocks from the ledger. */
   writePermits: number;
   /** The UTC day the write reserve was bought for. A reserve does not survive the day boundary. */
@@ -214,6 +260,7 @@ export function createCoordinationState(): CoordinationState {
     platformPermitsDayStartMs: 0,
     platformExhaustedDayStartMs: -1,
     writeDay: { dayStartMs: 0, used: 0 },
+    platformWriteDay: { dayStartMs: 0, used: 0 },
     writePermits: 0,
     writePermitsDayStartMs: 0,
     writeExhaustedDayStartMs: -1,
@@ -785,6 +832,12 @@ function rollWriteDay(state: CoordinationState, dayStartMs: number): void {
   if (state.writeDay.dayStartMs !== dayStartMs) {
     state.writeDay = { dayStartMs, used: 0 };
   }
+  // THE PLATFORM SUB-COUNTER ROLLS ON THE SAME BOUNDARY, and rolling it here rather than in its
+  // own function is what stops the two drifting apart — a sub-ceiling that reset on a different
+  // day from the ceiling it draws from would admit writes the parent had already refused.
+  if (state.platformWriteDay.dayStartMs !== dayStartMs) {
+    state.platformWriteDay = { dayStartMs, used: 0 };
+  }
   if (state.writePermitsDayStartMs !== dayStartMs) {
     // A reserve bought yesterday is not spendable today: the allocation it was drawn from has
     // already reset at 00:00 UTC, and spending it would be spending capacity twice.
@@ -866,7 +919,12 @@ export function creditWritePermits(
  * here; the caller was already permitted to do this and the day's capacity has run out. See
  * `write-admission.ts` for why that distinction is carried all the way to the caller.
  */
-export function admitWrite(state: CoordinationState, units: number, nowMs: number): boolean {
+export function admitWrite(
+  state: CoordinationState,
+  units: number,
+  nowMs: number,
+  origin: WriteOrigin,
+): boolean {
   assertWriteUnits(units);
   const dayStartMs = windowStart(nowMs, DAY_MS);
   rollWriteDay(state, dayStartMs);
@@ -874,10 +932,33 @@ export function admitWrite(state: CoordinationState, units: number, nowMs: numbe
   if (state.writeDay.used + units > PER_ORGANIZATION_DAILY_ROW_WRITES) {
     return false;
   }
+  // =========================================================================================
+  // *** THE PLATFORM SUB-CEILING. CHECKED IN ADDITION TO THE ABOVE, NEVER INSTEAD OF IT. ***
+  // =========================================================================================
+  //
+  // BOTH MUST ADMIT. A platform-originated write draws FROM the Organization's allocation as well
+  // as from its own share, so it can be refused by either — and a customer who has legitimately
+  // spent 9,600 of their own 10,000 refuses platform writes at 400 even with 1,000 left here.
+  // **That is the rule, not a bug:** an operator must not be able to spend capacity the customer
+  // needs, and the alternative is a customer's product breaking so that an operator could look
+  // at it.
+  //
+  // A `'tenant'` WRITE NEVER TOUCHES THIS COUNTER, which is what makes the refusal land on the
+  // operator and never on the customer. The customer cannot be refused by a counter they cannot
+  // increment.
+  if (
+    origin === 'platform' &&
+    state.platformWriteDay.used + units > PLATFORM_ORIGINATED_DAILY_ROW_WRITES
+  ) {
+    return false;
+  }
   if (state.writePermits < units) {
     return false;
   }
   state.writeDay.used += units;
+  if (origin === 'platform') {
+    state.platformWriteDay.used += units;
+  }
   state.writePermits -= units;
   return true;
 }

@@ -418,7 +418,16 @@ async function createFirstWorkspace(
 
   let admitted;
   try {
-    admitted = await coordination.value.reserveWrites(ONBOARDING_TENANT_ROW_WRITES);
+    // `'platform'` — AND ONBOARDING IS INCLUDED DELIBERATELY, THOUGH IT WAS NEVER THE DEFECT.
+    //
+    // It already charges the operator ten control-plane row-writes BEFORE this line, so it was
+    // never the unbounded path. **It is still platform-originated**, and exempting the one route
+    // that creates the Organization would be an exception with no argument behind it — the shape
+    // that turns a ceiling into a ceiling-with-a-list.
+    //
+    // AT 7 ROW-WRITES IT IS ~143 ONBOARDINGS AGAINST ONE ORGANIZATION, which no legitimate flow
+    // approaches: an Organization is onboarded once.
+    admitted = await coordination.value.reserveWrites(ONBOARDING_TENANT_ROW_WRITES, 'platform');
   } catch {
     return { workspaceId: null, warnings: bothFailed };
   }

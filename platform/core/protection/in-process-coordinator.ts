@@ -63,7 +63,7 @@ import {
   retryAfterSecondsUntilReset,
 } from './write-admission.ts';
 import { DENIAL_SUMMARY_ROW_WRITES } from '../storage/write-cost.ts';
-import type { CoordinationState } from './coordination-engine.ts';
+import type { CoordinationState, WriteOrigin } from './coordination-engine.ts';
 import {
   admit,
   admitWrite,
@@ -285,6 +285,7 @@ export function createInProcessRequestCoordinator(
 
         async reserveWrites(
           estimatedRowWrites: number,
+          origin: WriteOrigin,
         ): Promise<Result<WriteAdmissionOutcome>> {
           if (disposed) {
             return err(internal());
@@ -306,7 +307,7 @@ export function createInProcessRequestCoordinator(
             );
           }
 
-          if (!admitWrite(state, estimatedRowWrites, request.nowMs)) {
+          if (!admitWrite(state, estimatedRowWrites, request.nowMs, origin)) {
             return ok({
               kind: 'deferred',
               resumeAfterMs: nextUtcResetMs(request.nowMs),
