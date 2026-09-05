@@ -129,6 +129,47 @@ official source, not the date usage was measured.
 > operation actually writes **10**. `0025`'s consequences flag this and the constant is still wrong
 > in the source. **A budget constant that under-counts is worse than none** — it spends an allowance
 > nobody is watching, and the failure mode is D1 refusing queries account-wide.
+
+> ## ⚠ THE TABLE ABOVE IS CONTROL-PLANE ONLY, AND THAT OMISSION COST 100% OF A CUSTOMER'S DAY
+>
+> Added 2026-09-05, measured by `core-agent` against the real dispatcher rather than estimated.
+> **Every row above counts control-plane row-writes. A platform route also writes TENANT rows, and
+> those land on the target Organization's `business` allocation — not on the operator's budget.**
+>
+> | Operation | Tenant row-writes | Control-plane |
+> |---|---|---|
+> | `members.resolve` — **hit** | **5** | 2 |
+> | `members.resolve` — **refusal** | **5** | 2 |
+> | `organizations.audit.list` — **with results** | **5** | 2 |
+> | `organizations.audit.list` — **empty** | **5** | 2 |
+> | `audit.list` (platform feed) | **0** | 2 |
+>
+> **The 5 is 1 row + 1 primary key + 3 indexes**, counted from `0001_audit_event.sql` rather than
+> taken from a constant. **Hit and refusal cost the same by design** — that is the anti-enumeration
+> property of `0028` Decision 3 and it must not be "optimised".
+>
+> **What the omission produced:** the tenant write happened *before* the operator's audit record was
+> charged, so once an operator's own 600 was spent, **every further call still wrote 5 tenant rows
+> and then failed at the audit step.** 2,000 calls exhausted **10,000 of 10,000** of one named
+> customer's daily allocation, 85% of it after the attacker's own ceiling was gone. **The attacker
+> was told the call failed; the customer paid for it** — and could not see why, because
+> `core.audit.read` still has no route.
+>
+> **Both fixes are in.** Charging the operator first (`21d6f13`) bounds one operator at **1,500 row-
+> writes, 15%**. The per-Organization platform sub-ceiling (`710b75d`, `30c5593`) bounds **everyone
+> platform-side together at 1,000, 10%** — measured: three operators reach the same 1,000 as one,
+> and the customer still reaches their full 10,000 after the platform share is entirely burned.
+>
+> **The sub-ceiling draws FROM the 10,000, not beside it**, so a customer at 9,600 gives the platform
+> 400. **That is the rule, not a bug** — and the residual is recorded at `write-admission.ts`: *the
+> customer most likely to need support is the one whose usage is spiking, and this design makes them
+> the hardest to support.* **Nothing measures how often that bites.**
+>
+> **The generalisable rule for §6a, which is why this is boxed rather than a table edit:** a
+> free-tier impact check must state **whose allowance is spent, not only how much.** Every number
+> above was correct as a control-plane figure and the design was still broken, because the question
+> nobody asked was *which ledger does this land on.* **An operation that spends someone else's budget
+> is a different risk from one that spends its own, however small the number.**
 >
 > **Why the confirmation cost is affordable for a structural reason rather than a lucky one:** a
 > critical operation requires a human to read a statement and type a password, so **volume is
