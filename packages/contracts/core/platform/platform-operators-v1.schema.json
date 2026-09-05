@@ -70,8 +70,8 @@
           "type": "string",
           "minLength": 3,
           "maxLength": 254,
-          "pattern": "^[!-?A-~]*@[!-?A-~]*$",
-          "description": "The CALLER'S OWN login identifier, required because Core cannot recover the KDF salt from a principal — see confirmation-v1 theSALTPROBLEM."
+          "pattern": "^[\\x21-\\x7E]*@[\\x21-\\x7E]*$",
+          "description": "The CALLER'S OWN login identifier, required because Core cannot recover the KDF salt from a principal — see confirmation-v1 theSALTPROBLEM.\n\nCANONICAL DEFINITION: urn:dudo:schema:account-identifier:1#/$defs/accountIdentifier. Restatement, character-identical by obligation.\n\nPATTERN CORRECTED 2026-09-05 from ^[!-?A-~]*@[!-?A-~]*$ (exactly one '@') to at-least-one, matching credential-store.ts. THIS FILE WAS NOT IN THE TWO THE SWEEP WAS ASKED FOR — it was found by grepping for the pattern rather than for the field, and it is the reason that search was the right one: the fourth restatement of a rule is not reliably found by looking where the third was."
         }
       }
     },

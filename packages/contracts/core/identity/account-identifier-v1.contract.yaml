@@ -284,10 +284,29 @@ consumers:
         both were stricter than Core. Corrected to >= 1. ADDITIVE.
     - contract: credential-reset-v1
       field: identifier
-      note: "NOT AUDITED IN THIS PASS. Named so it is checked rather than assumed — see openQuestions AI-3."
+      wasCorrect: false
+      note: >-
+        AI-3, swept 2026-09-05. Carried the exactly-one pattern. THE ASYMMETRY IT CREATED HAD CR-5's
+        OWN SHAPE: onboarding accepted a quoted local part containing '@' and this contract refused
+        it, so an account could be created and could never have its credential reset — the
+        operation silently stranding the account it exists to rescue, arriving through a pattern
+        rather than through a rule. Corrected; ADDITIVE.
     - contract: confirmation-v1
       field: identifier
-      note: "NOT AUDITED IN THIS PASS. Same. AI-3."
+      wasCorrect: false
+      note: >-
+        AI-3, swept 2026-09-05. Same pattern, and the consequence is one level worse: a principal
+        whose identifier the pattern refused could not satisfy the re-authentication field and
+        therefore could not complete ANY confirmation-gated operation. Not one route stranded —
+        every critical route, for that principal. Corrected; ADDITIVE.
+    - contract: platform-operators-v1
+      field: identifier
+      wasCorrect: false
+      note: >-
+        AI-3, swept 2026-09-05. NOT IN THE TWO THE SWEEP WAS ASKED FOR. Found by grepping for the
+        PATTERN rather than for the field name, which is the whole methodological point: the fourth
+        restatement of a rule is not reliably found by looking where the third was. Corrected;
+        ADDITIVE.
   notAConsumer:
     - contract: template-v1
       field: name
@@ -349,9 +368,22 @@ openQuestions:
     assumptionMade: "Left as is. The shared normalisation is correct and importing it is what stops drift; only the acceptance rule is domain-specific. A rename is noted as optional and not requested."
     decides: "core-agent, if ever"
   AI-3:
-    question: "credential-reset-v1 and confirmation-v1 both carry an identifier field and were NOT audited in this pass."
-    assumptionMade: "None. They are named as unaudited rather than assumed correct, because the pattern of this finding is that restatements diverge silently. ONE CONFIRMED INSTANCE IS WEAK EVIDENCE THAT IT IS THE ONLY ONE (workflow.md §12) — and this pass found two divergent out of three checked."
-    decides: "architecture-agent should audit them next; Team Lead schedules"
+    status: "CLOSED 2026-09-05. Swept."
+    question: "credential-reset-v1 and confirmation-v1 both carry an identifier field and were NOT audited in the first pass."
+    resolution: >-
+      THREE DIVERGENT, NOT TWO. credential-reset-v1, confirmation-v1 AND platform-operators-v1 all
+      carried the exactly-one pattern; the third was not on the list and was found by searching for
+      the pattern rather than the field name. FINAL TALLY: SIX identifier fields in the contract
+      set, FIVE of which had diverged from Core at some point, and the ONLY one that was correct
+      throughout was login-v1's. The rule was restated six times and agreed with the running code
+      once.
+    theMETHODOLOGICALPOINT: >-
+      THE FIELD-NAME SEARCH WAS THE WRONG SEARCH AND IT FOUND FIVE OF SIX. Three independent
+      searches were needed to close the set — by pattern fragment, by field name, and by the
+      3-to-254 length bound — and they converge, which is what makes the boundary statable rather
+      than hopeful. A sweep that had only followed the two named files would have left
+      platform-operators-v1 divergent and would have reported completion.
+    decides: "closed; the standing drift check is in testObligations"
   AI-4:
     question: "The clients hold their own copies of isSubmittableIdentifier and normalizeIdentifier in platform/{admin,web}/src/api/kdf.ts, duplicated from Core."
     assumptionMade: "Unavoidable and correct — the KDF runs client-side, so the client must be able to normalise without a round trip. It is a drift surface and is named as one; the shared test vectors are what bind the copies."
