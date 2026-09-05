@@ -422,16 +422,156 @@ theConfirmedRequest:
       the wrong-password case has not tested this at all.
 
   theSUBMITTEDPARAMETERSAREDEFINED:
+    amendedOn20260905: >-
+      *** THE RULING BELOW REPLACES AN EARLIER ONE THAT SAID "BODY MINUS THE THREE FIELDS, EXACTLY,
+      NOTHING ADDED". THAT SENTENCE IS STRUCK. *** It was false in the only way that matters: it
+      excluded the target. See theBINDINGCOVERSTHEPATHPARAMETERSTOO for what it cost and why it is
+      being changed now rather than later.
     ruling: >-
-      THE `parameters` THE BINDING IS RECOMPUTED OVER ARE THE SUBMITTED REQUEST BODY MINUS THE THREE
-      CONFIRMATION FIELDS — `confirmation_id`, `reauth_derived_value` and `identifier`. Nothing
-      else is removed and nothing is added.
+      THE `parameters` THE BINDING IS RECOMPUTED OVER ARE:
+        (1) THE SUBMITTED REQUEST BODY, MINUS THE THREE CONFIRMATION FIELDS — `confirmation_id`,
+            `reauth_derived_value` and `identifier`;
+        (2) UNION THE ROUTE'S DECLARED PATH PARAMETERS, each as a name/value pair.
+      Nothing else is removed and nothing else is added. Query parameters and object fields are NOT
+      included, and remain REFUSED on a gated route — see whyNOTQUERYPARAMETERS.
+    theTHREEMECHANICALDETAILSTHATMAKEITCOMPUTABLE: >-
+      WITHOUT THESE THREE THE RULE ABOVE IS NOT YET A SPECIFICATION, because two implementations
+      could satisfy it and still produce different bytes.
+        A. THE VALUE IS THE DECODED PATH SEGMENT — the value the client substituted into the
+           template BEFORE percent-encoding, which is the same value the server holds after
+           `decodeURIComponent`. Never the encoded form, so `%40` and `@` cannot become two
+           different bindings for one request.
+        B. THE VALUE IS ALWAYS A JSON STRING. Path segments arrive as text and are not coerced,
+           parsed or narrowed — a numeric-looking path parameter binds as `"42"`, not `42`. There
+           is no route today with a non-string path parameter and this rule is what stops the first
+           one becoming a cross-client divergence.
+        C. ORDER IS IRRELEVANT AND THAT IS NOT AN ACCIDENT. The canonical serialisation already
+           sorts keys, so the union is a set of pairs and the merge is deterministic however either
+           side assembles it. This is the property that lets a client build the object in one order
+           and the server in another and still agree.
+    howACLIENTKNOWSWHICHPATHPARAMETERSAROUTEDECLARES:
+      theAnswer: >-
+        THE PATH TEMPLATE IS THE DECLARATION, AND EVERY CLIENT ALREADY HOLDS IT. The declared path
+        parameter names of a route are EXACTLY the brace-delimited segments of the route's path in
+        this contract set's `httpBinding` — `{principal_id}` in
+        `/platform/operators/{principal_id}/revoke` declares one parameter named `principal_id`.
+      whyThatSATISFIESTHENOSIDEHOLDSALISTREQUIREMENT: >-
+        THIS IS THE PART THE AMENDMENT TURNS ON, SO IT IS ARGUED RATHER THAN ASSERTED. The original
+        sentence said "exactly" in order to guarantee that neither side needs a list, because two
+        lists drift. A NAIVE WIDENING WOULD HAVE BROKEN THAT — "plus the path parameters" is
+        unusable if a client has to be told, separately, which those are.
+        IT IS NOT A NEW THING TO KNOW. A client cannot issue the request at all without the path
+        template and without the values it substituted; constructing the URL IS holding both. So
+        the client derives the parameter names from the same string it already used, and the server
+        derives them from its route table, which is that same template. ONE SOURCE, TWO READERS,
+        NO LIST — which is the property the original wording protected and this wording preserves.
+      theCLIENTRULEINONELINE: >-
+        Take the path template you used to build the URL. For every `{name}`, add `name` mapped to
+        the value you substituted, undecoded-into-plain-text. Merge with the body you are about to
+        send minus the three confirmation fields. Serialise canonically. That is the object you
+        sent as `parameters` at challenge time, and it must be byte-identical.
+    theNAMECOLLISIONRULE:
+      ruling: >-
+        A GATED ROUTE'S PATH PARAMETER NAMES MUST BE DISJOINT FROM ITS DECLARED BODY FIELD NAMES AND
+        FROM THE THREE CONFIRMATION FIELD NAMES. A route violating this is refused AT CONSTRUCTION,
+        not at request time.
+      why: >-
+        A UNION WITH A COLLISION IS A PRECEDENCE RULE, AND A PRECEDENCE RULE IS A PLACE FOR A CALLER
+        TO SHADOW A VALUE A REVIEWER ASSUMED WAS AUTHORITATIVE. That is the same sentence
+        `http/api.ts` uses to refuse a repeated query parameter and `http/router.ts` uses to refuse
+        a field arriving from two sources, and it is the reason the Team Lead refused moving the
+        target into the body. Adopting the union without this rule would reintroduce, inside the
+        binding, exactly the ambiguity that moving the target into the body was rejected for.
+        DISJOINTNESS MAKES THE MERGE TOTAL AND UNAMBIGUOUS, so there is never a value to choose
+        between.
     why: >-
-      IT IS CHECKABLE, AND IT IS THE ONLY READING THAT MAKES THE BINDING RECOMPUTABLE. The
-      challenge was issued over the operation's parameters; the submission carries those parameters
-      plus the confirmation fields; so the parameters are what remains when the confirmation fields
-      are removed. Any other definition requires each side to hold a list of which fields count,
-      and two lists drift.
+      IT IS CHECKABLE, AND IT IS THE ONLY READING THAT MAKES THE BINDING RECOMPUTABLE AND COMPLETE.
+      The challenge was issued over the operation's parameters; the submission carries those
+      parameters plus the confirmation fields; the route's target arrives in the path. So the
+      parameters are what remains of the body when the confirmation fields are removed, plus what
+      the path carries. Any other definition requires each side to hold a list of which fields
+      count, and two lists drift.
+    theBINDINGCOVERSTHEPATHPARAMETERSTOO:
+      whatWASWRONG: >-
+        platform-operators-v1's schema promises that "the binding covers principal_id — a
+        confirmation obtained to revoke operator A cannot be spent revoking operator B". UNDER THE
+        STRUCK WORDING IT WOULD NOT HAVE. `revokeOperatorInput` requires exactly the three
+        confirmation fields and nothing else, so body-minus-three is the EMPTY OBJECT; the target
+        lives in the path and the path was not in the binding. A CONFIRMATION MINTED TO REVOKE ONE
+        OPERATOR WOULD HAVE BEEN SPENDABLE ON ANY OTHER — the exact sentence the schema promises
+        cannot happen, on the route that revokes platform scope.
+      howITWASCAUGHT: >-
+        BY A LOAD-TIME GUARD REFUSING TO BUILD THE ROUTE, not by review and not by a test. Worth
+        recording as the mechanism that worked: the guard refused a shape it could not prove safe,
+        and refusing forced the question upward instead of letting a plausible-looking route ship.
+      theOLDGUARDWASRIGHTFORTHEWRONGREASON:
+        finding: >-
+          THE GUARD REFUSED ANY GATED ROUTE THAT DECLARED A PATH PARAMETER. Its stated reason was to
+          stop the case where a human confirms one target and the request carries another. THE REAL
+          REQUIREMENT WAS NEVER "NO PATH PARAMETERS" — IT WAS "NOTHING OUTSIDE THE BINDING".
+          Refusing path parameters achieved that by making the case UNREACHABLE, which was honest
+          while no gated route existed and is wrong the moment one does.
+        whyTHISISRECORDEDANDNOTJUSTFIXED: >-
+          BECAUSE THE NEXT PERSON TO WIDEN THIS WILL FACE THE SAME CHOICE ABOUT QUERY PARAMETERS AND
+          SHOULD MEET THE ARGUMENT RATHER THAN THE RULE. A rule whose stated reason is narrower than
+          its real one gets repealed by whoever notices the gap between them, and they will repeal
+          it in the direction the stated reason permits. platform-routes.ts's own comment — that a
+          gated route may declare no path parameters, "so this IS the whole of the route's input" —
+          was TRUE ONLY BECAUSE NONE EXISTED. A claim true by emptiness reads exactly like a claim
+          true by design, and this is the second time today that shape has produced a defect.
+      whyNOTQUERYPARAMETERS:
+        ruling: >-
+          QUERY PARAMETERS AND OBJECT FIELDS STAY REFUSED ON A GATED ROUTE. This amendment widens
+          the binding to path parameters ONLY, and the distinction is principled rather than
+          conservative.
+        theArgument: >-
+          A PATH PARAMETER IS STRUCTURALLY REQUIRED: the route cannot be addressed without it, so it
+          ALWAYS exists, ALWAYS has exactly one value, and both sides always hold it. That is what
+          makes it bindable without a list.
+          A QUERY PARAMETER MAY BE ABSENT. So "the declared set" and "the present set" differ, and
+          binding over a sometimes-absent value forces every implementation to agree on how absence
+          is represented — omitted key, null, or empty string — which is three ways for two clients
+          to produce different bytes for the same intent. THAT IS THE SAME CROSS-CLIENT HAZARD THE
+          CANONICAL SERIALISATION RULE EXISTS TO CLOSE, reintroduced through optionality.
+          ANYONE PROPOSING TO BIND QUERY PARAMETERS MUST ANSWER THAT, not merely observe that path
+          parameters are now bound.
+      theINVARIANTTOASSERT:
+        note: >-
+          STATED IN THE FORM THE GUARD SHOULD CHECK, so the implementation derives from this
+          sentence rather than from an implementer's reading of the prose above. The guard INVERTS:
+          it refused path parameters; it must now REQUIRE them to be bound.
+        atCONSTRUCTION: >-
+          FOR EVERY GATED ROUTE R:
+            names(pathTemplate(R)) ∩ ( declaredBodyFields(R) ∪ {confirmation_id,
+            reauth_derived_value, identifier} ) = ∅
+          A route failing this is refused at construction. This is theNAMECOLLISIONRULE, mechanised.
+        atSPEND: >-
+          FOR EVERY GATED ROUTE R, the parameters object the binding is recomputed over satisfies:
+            keys(parameters) = ( keys(body) \ {the three confirmation fields} ) ∪ names(pathTemplate(R))
+          AND for every p in names(pathTemplate(R)): parameters[p] === the DECODED path segment
+          matched for p, as a string.
+          A recomputation whose key set omits any declared path parameter is a defect and must fail
+          closed, not proceed with a narrower binding.
+        theEMPTYPARAMETERSCASE: >-
+          AN EMPTY `parameters` OBJECT REMAINS LEGITIMATE, AND IS NOW VERIFIABLE RATHER THAN
+          ASSUMED: it is correct exactly when the route declares no path parameters AND no body
+          fields beyond the three. The construction-time check makes that a property a reviewer can
+          confirm from the route definition, instead of a coincidence of what the body happened to
+          contain.
+        theNEGATIVECONTROL: >-
+          OWED BY qa-agent AND IT IS THE TEST THAT WOULD HAVE CAUGHT THIS: mint a confirmation to
+          revoke operator A, then spend it on the route for operator B, changing ONLY the path
+          segment. It must be refused. UNDER THE STRUCK WORDING IT WOULD HAVE SUCCEEDED — so this
+          case must be shown to go red against the old definition, or it has verified nothing
+          (workflow.md §11a).
+      theTIMING: >-
+        BREAKING, AND FREE AT THIS INSTANT. It changes a normative rule both clients compute from,
+        which under architecture.md §1 needs Team Lead review and a decision record — it has both.
+        IT HAS ZERO CONSUMERS TODAY because no gated route exists yet, so nothing computes the old
+        binding and nothing has to migrate. THE FIRST GATED ROUTE IS THE ONE BEING BUILT NOW. The
+        moment it ships, this same change becomes a coordinated migration across two clients and the
+        server, in which every confirmation issued under one definition and spent under the other
+        fails. The window in which this is a one-file edit is the window it was made in.
     whyITMUSTBEINTHECONTRACT: >-
       `core-agent` HAD TO DEFINE THIS TO PROCEED, and a definition invented at implementation time
       is a definition the OTHER client invents differently. THE CANONICAL SERIALISATION IS ALREADY
@@ -491,10 +631,35 @@ freeTierImpact:
 testRequirements:
   theBinding:
     - "SUBSTITUTION: confirm a delete of customer X, submit a delete of customer Y with that confirmation_id. Refused. THIS IS THE CENTRAL TEST OF THIS CONTRACT."
+    - >-
+      SUBSTITUTION ON THE PATH, WHICH IS A SEPARATE CASE AND NOT A RESTATEMENT OF THE ONE ABOVE.
+      AMENDED 2026-09-05. Mint a confirmation for a gated route on target A, then submit it to the
+      same route for target B, CHANGING ONLY THE PATH SEGMENT and leaving the body byte-identical.
+      REFUSED.
+      IT MUST BE SHOWN TO GO RED AGAINST THE STRUCK DEFINITION, or it has verified nothing
+      (workflow.md §11a): under "body minus the three, nothing added" this case SUCCEEDS, because
+      the body is identical and the target was in no binding. A suite that only ever saw the
+      amended definition cannot tell a correct implementation from one that ignores path
+      parameters entirely.
+      THE TWO SUBSTITUTION TESTS EXERCISE DIFFERENT AXES AND NEITHER SUBSUMES THE OTHER. The first
+      varies a BODY field; this one varies a PATH segment. On a route like operator revocation the
+      first is not constructible at all — the body carries only the three confirmation fields — so
+      a suite running only the first would report the central property as covered while the only
+      axis that route has is untested.
     - "Confirm on session A, submit on session B for the same principal. Refused."
     - "Confirm as principal P, submit as principal Q. Refused."
     - "Confirm action A, submit action B. Refused."
-    - "Alter one parameter between challenge and submission. Refused."
+    - >-
+      Alter one parameter between challenge and submission. Refused. AMENDED 2026-09-05 TO NAME THE
+      AXIS: "parameter" here means any member of the parameters object as
+      theSUBMITTEDPARAMETERSAREDEFINED computes it — A BODY FIELD **OR** A DECLARED PATH PARAMETER.
+      Read as body-only, which is what the struck definition permitted, this line passes vacuously
+      on every route whose only variable is a path segment.
+    - >-
+      CONSTRUCTION-TIME: a gated route declaring a path parameter whose name collides with one of
+      its body fields, or with confirmation_id / reauth_derived_value / identifier, is REFUSED AT
+      CONSTRUCTION. Assert the build failure, not a request-time rejection — a collision that
+      reaches a request is a precedence rule that already exists.
   lifecycle:
     - "A confirmation is spent on first use and a second submission is refused."
     - "A confirmation is spent even when the operation FAILS — force an unavailable from the store, then retry with the same confirmation_id. Refused."

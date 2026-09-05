@@ -257,9 +257,24 @@ operations:
     theCONFIRMATIONISREQUIRED: >-
       `critical`, so confirmation-v1's pipeline requirement applies automatically — it is DERIVED
       FROM THE SENSITIVITY and is not declared here, which is the property that makes it
-      unforgettable. The challenge's `parameters` are the body minus the three confirmation fields,
-      so the binding covers `principal_id`: A CONFIRMATION OBTAINED TO REVOKE OPERATOR A CANNOT BE
-      SPENT REVOKING OPERATOR B.
+      unforgettable. The challenge's `parameters` are the body minus the three confirmation fields
+      UNION THE ROUTE'S DECLARED PATH PARAMETERS, so the binding covers `principal_id`: A
+      CONFIRMATION OBTAINED TO REVOKE OPERATOR A CANNOT BE SPENT REVOKING OPERATOR B.
+    theSECONDCLAUSEWASADDED20260905ANDTHESENTENCEDIDNOTFOLLOWWITHOUTIT: >-
+      RECORDED BECAUSE THIS SENTENCE IS WHERE THE DEFECT HID, AND THE SHAPE IS WORTH RECOGNISING.
+      It read: "the parameters are the body minus the three confirmation fields, SO the binding
+      covers principal_id". THE CONCLUSION IS THE PROPERTY THIS ROUTE DEPENDS ON. THE PREMISE WAS
+      confirmation-v1's THEN-CURRENT RULE. AND THE 'SO' JOINED THEM WITHOUT SUPPORT: this route's
+      body carries only the three confirmation fields, so body-minus-three was the EMPTY OBJECT and
+      `principal_id` — a path parameter — was nowhere in it. The premise was true, the conclusion
+      was false, and the word between them was doing work it could not do.
+      IT SURVIVED BECAUSE IT ASSERTED RATHER THAN HEDGED, which is architecture.md §3b's finding in
+      a new place: a reviewer checking whether the target is bound found a sentence saying it was,
+      and stopped. The fix was to make the premise true, not to weaken the claim — but the claim
+      should never have been written as following from a rule nobody had checked it against.
+      THE CHECK THAT WOULD HAVE CAUGHT IT IS NARROW AND MECHANICAL: for any route asserting that its
+      binding covers a value, confirm that value appears in the parameters object as the definition
+      computes it — not as the sentence assumes it does.
     failedPrecondition: >-
       RETURNED WHEN THE REVOCATION WOULD LEAVE ZERO PLATFORM OPERATORS AND THE TARGET IS NOT THE
       CALLER. It is `failed_precondition` rather than `forbidden` because the caller IS authorized
