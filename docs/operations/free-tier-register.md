@@ -130,6 +130,51 @@ official source, not the date usage was measured.
 > in the source. **A budget constant that under-counts is worse than none** — it spends an allowance
 > nobody is watching, and the failure mode is D1 refusing queries account-wide.
 
+> ## ⚠ HOW MANY BUSINESSES FIT — MEASURED 2026-09-06, AND THE ANSWER NEEDS A TIME AXIS
+>
+> **`node packages/testing/run-capacity-model.ts`.** Deliberately outside `npm test`: these
+> figures move when a migration adds an index, which is legitimate, and **a suite that goes
+> red on a legitimate change teaches a team to ignore red.**
+>
+> | Scenario | Binds first | Businesses | 100 businesses last |
+> |---|---|---|---|
+> | **Baseline** — 5 users, 20 audited actions/user/day, 12-month retention | **storage** | **32** | **3.9 months** |
+> | Busier — 10 users, 60 actions/day | storage | 5 | 0.6 months |
+> | Quieter — 3 users, 8 actions/day | storage | 135 | 15.9 months |
+> | Baseline, 5-year retention | storage | 6 | 3.9 months |
+>
+> **STORAGE BINDS FIRST IN EVERY SCENARIO**, against the **500 MB per-database** limit —
+> not the 5 GB total, because `0006` put every tenant in one shared database.
+>
+> **A business-count alone is not an answer.** Transactions recover overnight; **history does
+> not.** Measured by writing 2,000 rows and reading `page_count × page_size`: `audit_event` is
+> **611 bytes** and is the dominant grower, at roughly **1.3 MiB per business per month,
+> essentially all of it audit rows.**
+>
+> **The second limit is also low: D1 row-writes bind at 92 businesses** against Dudo's own
+> 80,000/day self-limit.
+>
+> **The Team Lead's estimate of "100–150 businesses" was wrong**, and instructively so. The
+> per-operation arithmetic was close; **the estimate had no time axis**, and it landed near
+> the *quieter* row — defensible only for very light customers keeping about a year.
+>
+> **The Durable Object ledger is NOT a capacity risk.** 120 calls per business-day binds at
+> **832 businesses**, an order of magnitude above everything else. It remains a single point
+> of failure and a contention risk, so **`PO-4` should now be argued on latency and blast
+> radius rather than on exhaustion** — a better argument than the one it was deferred on.
+>
+> **Every tempting fix here is a `0030` violation, recorded before anyone proposes one:**
+> dropping the per-Action audit row, aggregating audit rows on write, or removing `customer`'s
+> search-key columns. `0030` names the first two; the third bakes a limit into a data shape.
+> **The legitimate levers are all configuration** — ten databases against the 5 GB total,
+> retention as operational policy, or paying. **None requires a schema change.**
+>
+> **Named as unmeasured rather than assumed:** D1's own billing (this is `node:sqlite`) · the
+> adapter step from ledger *calls* to *requests* · multi-row statements (so bulk-delete figures
+> are a lower bound and therefore an **over**-estimate of capacity) · concurrency · and
+> **READ allowances entirely — D1 bills rows read, nothing counts them, and a feed read over a
+> large table is the obvious candidate to bind before writes do.** That is the next gap.
+
 > ## ⚠ THE TABLE ABOVE IS CONTROL-PLANE ONLY, AND THAT OMISSION COST 100% OF A CUSTOMER'S DAY
 >
 > Added 2026-09-05, measured by `core-agent` against the real dispatcher rather than estimated.
