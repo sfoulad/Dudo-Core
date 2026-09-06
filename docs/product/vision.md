@@ -5,8 +5,10 @@
 
 ## What Dudo is
 
-Dudo is a modern, **MVP-focused, AI-native business-management platform for startups and
-SMEs**.
+Dudo is a modern, **AI-native business-management platform for startups and SMEs**.
+
+*(This read "MVP-focused" until 2026-09-06. `docs/decisions/0030` withdrew that framing:
+the target is the full system.)*
 
 It gives a small company one place to run its operations, with AI built into the
 product from the ground up rather than added as a feature, and with a plugin system
