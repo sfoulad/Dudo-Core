@@ -14,7 +14,8 @@ testing can begin the moment they are given, rather than being written afterward
 
 ## ✅ DEPLOYED AND TESTABLE — 2026-09-05
 
-**Nothing is blocking. The slice is live and awaiting your acceptance (step 7).**
+**Nothing is blocking. The slice is live and awaiting your milestone acceptance** — which
+under `0030` no longer blocks other work from starting, and is still yours alone to give.
 
 | | |
 |---|---|

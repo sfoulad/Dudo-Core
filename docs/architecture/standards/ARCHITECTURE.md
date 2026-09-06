@@ -99,6 +99,41 @@ this order. **No stage may be skipped, and no caller may be trusted to have done
 Stages 1–6 are Core's responsibility and happen in Core, once. An App that re-implements
 any of them has duplicated a security decision, and duplicated security decisions diverge.
 
+### 3.1 CONTRADICTED, 2026-09-06 — there are four request classes, not one
+
+**"No stage may be skipped" is false of the deployed system, and it is false by accepted
+decision rather than by drift.** Three route classes were built that this table does not
+describe, each skipping stages, each argued in its own record.
+
+| Class | Record | Stages 1–9 it runs | Where |
+|---|---|---|---|
+| **Pre-authentication entry point** | `0014` §B | **None of them.** No principal, no tenant, no permission, no Action. Five paths, closed union, never manifest-declarable | `platform/core/identity/pre-auth-registry.ts:95–100`, dispatched at `platform/core/http/api.ts:197–233` |
+| **Session route** | `0021` | Stage 1 **at session level only**. No principal, no tenant, no permission | `platform/core/identity/session-routes.ts:62–64`, dispatched at `api.ts:252–288` |
+| **Platform route** | `0025` decision 3 | Stages 1, 3, 4, 5, 8. **No stage 2** — no tenant, deliberately | `platform/core/platform/platform-routes.ts:332–709`, dispatched at `api.ts:321–379` |
+| **Action** | this table | All nine, unchanged | `api.ts:499–511` → `platform/core/action/pipeline.ts` |
+
+**The skips are the point, not a shortcut, and the argument is worth carrying here rather
+than leaving in three records.** `0021`, on refusing a tenant-optional branch inside the
+pipeline: *"it would work, and every future reviewer of every future Action would then have
+to check which side of that branch it lands on."* And: **"the invariant that an Action always
+has a tenant is worth more than the code it saves."** So the platform chose four small,
+separately-typed classes over one pipeline with optional stages — a pseudo-principal with a
+null `organizationId` was named and refused in both records, because it *"would flow through
+the authorization pipeline and could accumulate grants"* (`0014` §B).
+
+**What this table must be read as saying, until the Team Lead rewrites it:** *every request
+that reaches an Action passes all nine stages in this order, and no Action may skip one.*
+That is still true and is enforced structurally — `api.ts` returns from each class's block
+before `invokeAction` is reachable, so there is no code path by which a session or platform
+route becomes an Action with stages missing.
+
+**What is genuinely owed:** this document, not the three decision records, is what an agent
+reads before touching a route (§5 of `CONSTITUTION.md` makes it required reading for *any*
+change). A reader of §3 alone would conclude a fifth class must run all nine stages, and
+would be wrong in the direction that adds a tenant requirement to a route that cannot have
+one. **Team Lead to decide whether §3 is rewritten around the four classes or whether this
+subsection stands as the amendment.**
+
 ---
 
 ## 4. One Action, six surfaces

@@ -90,9 +90,13 @@ Each web release must:
   two clients. Divergence between what the web and Apple clients expect is a defect.
 - **Never deploy to production without separate user approval.**
 
-## 4. The feature completion gate
+## 4. ~~The feature completion gate~~ — the CHECKLIST survives, the BLOCKING does not
 
-A feature is complete only when **all seven** conditions hold:
+> **SUPERSEDED by `0030` (2026-09-06).** Work no longer stops after each feature.
+> **The seven conditions below remain the right list of what a milestone owes the user** —
+> read them as *"what evidence is owed"*, never as *"when to wait"*.
+
+~~A feature is complete only when **all seven** conditions hold:~~
 
 | # | Condition | Owner |
 |---|---|---|
@@ -127,7 +131,10 @@ When the Team Lead performs step 6, the handoff to the user states:
 - **Known gaps:** anything not covered, not working, or not yet verified.
 
 Honest partial delivery is reported as partial. A slice with a green web release and a
-still-processing TestFlight build is reported exactly that way, and step 7 waits.
+still-processing TestFlight build is reported exactly that way — ~~and step 7 waits~~ **and
+under `0030` the work does not wait, but the milestone is not claimed complete until the
+build is genuinely installable. Reporting it as partial is the requirement; stopping is
+not.**
 
 ## 6. Public-repository safety
 

@@ -1,6 +1,6 @@
 # Testing Standard
 
-- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **No test framework is approved** — see §11. This standard is framework-neutral by construction.
+- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **No *third-party* test framework is approved, and a first-party suite exists and runs anyway** — `npm test` → `tools/run-suites.mjs` → four entry points under `packages/testing/`. See TS1, reclassified 2026-09-06. This standard is framework-neutral by construction, and that turned out to be the property that mattered.
 - **Authored by:** `architecture-agent`. **Tests are authored by `qa-agent`.**
 - **Applies to:** `packages/testing/**`, `apps/*/tests/**`, `connectors/*/tests/**`, and Apple test targets.
 - **Depends on:** every other standard — the checklists in each are what tests verify.
@@ -81,9 +81,15 @@ For every consumer:
 
 ### 5.1 What these tests are carrying, under the decided model
 
-`0006` is **Accepted**: **Option A — one shared production D1 database** — for the
-Zero-Cost MVP while `0008` is active (`MULTITENANCY_STANDARD.md` §7.1). State the
-consequence for testing plainly, because everything in this section follows from it:
+`0006` is **Accepted**: **Option A — one shared production D1 database** (`MULTITENANCY_STANDARD.md`
+§7.1). State the consequence for testing plainly, because everything in this section follows from it:
+
+> **STALE PREMISE, corrected 2026-09-06 (`workflow.md` §12).** This paragraph read *"for the
+> Zero-Cost MVP while `0008` is active."* **`0030` withdrew the MVP framing**; `0008` (zero cost) is
+> untouched and `0006` is **not** reversed. What changed is the reason this section is binding:
+> Option A is no longer a temporary concession to be tested loosely until a better model arrives,
+> it is the model, and `0030` requires the *choice* to stay reversible. **Nothing below weakens;
+> §5.5's structural bypass test is now also the test that keeps the tenancy model replaceable.**
 
 > **There is no physical boundary between two Organizations' data.** Every row of every
 > tenant sits in one database, and the only thing keeping tenant A out of tenant B's
@@ -269,8 +275,22 @@ evidence in a gate report**:
   report. A permanently broken-by-configuration path does not exist in the repository.
 - Where the toolchain supports mutation testing, mutating the tenant predicate is the
   preferred mechanical form of this requirement; where it does not, a manually recorded run
-  satisfies it. The requirement is the evidence, not the tool. **TS1 is unresolved, so the
-  mechanism is chosen when the framework is chosen; the obligation does not wait for it.**
+  satisfies it. The requirement is the evidence, not the tool.
+
+> **BUILT — the sentence that stood here was wrong about the future.** It read *"TS1 is unresolved,
+> so the mechanism is chosen when the framework is chosen."* **The mechanism was built without a
+> framework decision, and all three controls this section names exist and run.**
+> `packages/testing/run-customer-directory.ts:13` — *"A primary run, then THREE NEGATIVE-CONTROL
+> RUNS — predicate, resolver and boundary"* — with the substituted stores in
+> `packages/testing/harness/broken-controls.ts` (`createPredicateBrokenStore:87`,
+> `createBoundaryBypassStore:155`, `createAdmissionBypassStore:269`) and the resolver control at
+> `run-customer-directory.ts:129` (`resolverMode: 'always-organization-b'`). The break is
+> substituted at composition and never committed, as this section requires.
+> **The reporting half is in the runner, not in the suite:** `packages/testing/harness/runner.ts`
+> labels isolation assertions (`ISOLATION`, line 54) so a control run distinguishes *red on an
+> isolation assertion* from *red on something else* from **green — the case does not test isolation,
+> whatever its name says.** That third outcome is the one §5.6 exists to detect and it is
+> machine-detected rather than argued.
 
 ### 5.7 What a gate report may and may not claim
 
@@ -399,6 +419,23 @@ Fixed by `0004`:
 `qa-agent` owns all of them. **Root-level shared test configuration belongs to the Team
 Lead** (`0001`); `qa-agent` proposes changes to it and does not edit the root.
 
+> **CONTRADICTED, 2026-09-06 — the first App's suites are not colocated, and this standard should
+> not be quietly rewritten to match.** `0004` and this section both say `apps/<app>/tests/`.
+> **`apps/customers/` has no `tests/` directory.** The Customer Directory suites live in
+> `packages/testing/suites/customer-directory/` (eleven files), reached through
+> `packages/testing/run-customer-directory.ts`, and the App-manifest fixtures live in
+> `packages/testing/fixtures/app-manifest/`.
+>
+> **Which side is wrong is a Team Lead call, and there is a real argument each way.** Colocation is
+> what makes an App a self-contained installable unit — the property `APP_STANDARD.md` §1 calls
+> ownership that "leaks" when it is partial, and the property a third-party App author will need.
+> Against that: these suites compose **Core's** pipeline, storage boundary, resolver and negative
+> controls, so under the current in-process App runtime they are not App-local tests at all — which
+> is a fact about the missing SDK (`SDK_STANDARD.md` SD7), not about where files belong.
+> **The forecast, stated so it can be checked: if the App runtime lands and this is still
+> unresolved, the second App will copy the first**, and colocation will then cost a migration
+> rather than a decision.
+
 ---
 
 ## 10. CI
@@ -415,9 +452,14 @@ security checks · build · integration test · deploy staging · smoke test.
 
 ## 11. Open questions
 
-| # | Question | Recommendation |
-|---|---|---|
-| TS1 | **No test framework is approved.** Vitest against the Workers runtime is the candidate; `0003` approves no npm package. | Needs an ADR **before any test is written**. Recommend the framework that can execute against the real Workers runtime rather than a Node emulation — testing Workers code in Node proves the wrong thing. `qa-agent` should evaluate and the Team Lead record it. **This blocks Phase 1 verification.** |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would — those
+are reported, never resolved by editing the standard to agree).
+
+| # | State | Question | Recommendation |
+|---|---|---|---|
+| TS1 | **CONTRADICTED**, then narrowed | **What this row asserted is false as written.** It said an ADR was needed *"before any test is written"* and that this *"blocks Phase 1 verification."* **Phase 1 was verified. Four suite entry points run from `npm test`, with no third-party framework and no ADR** — the Team Lead's last recorded measurement was 564 cases, 0 failed, which is a figure from a run rather than from this file, and no count is recorded anywhere in the repository. The gate is `package.json:16` → `tools/run-suites.mjs`, whose `SUITES` array names `run-platform-operator.ts`, `run-customer-directory.ts`, `run-az2-login.ts` and `run-type-negative.ts`; it reports each suite's actual state, runs all four even when one fails, and exits non-zero. The runner is `packages/testing/harness/runner.ts` — ~150 dependency-free lines whose own header says *"when TS1 is decided, the suites move and this file is deleted."* **The framework-neutrality this standard was written for is what made that possible**, and the blocking claim was the part that was wrong. | **The residual question is real and much smaller: adopt a third-party framework, or ratify the first-party runner as the answer.** `0016` (Accepted) records it as open — *"Choosing Vite did not choose Vitest, and `qa-agent`'s dependency-free runner stays until TS1 is decided on its own merits"* — and `docs/decisions/README.md` line 113 says the same. **It blocks nothing.** Two facts the eventual ADR must weigh, neither of which existed when this row was written: **(1)** the original recommendation — execute against the real Workers runtime rather than a Node emulation — is **still unmet**, because the suites run on Node against a SQLite double (`packages/testing/harness/sqlite-d1.ts`), so "testing Workers code in Node proves the wrong thing" remains a live criticism of what exists, not an argument for a package; **(2)** replacing the runner costs the three things it was built for and a generic one does not do — whole-error comparison in `expectError`, `ISOLATION:`-labelled assertions, and `not_run` as a distinct state. **Do not adopt a framework that cannot express those three.** Team Lead records; `qa-agent` evaluates. |
 | TS2 | ~~**Test data for the tenancy model** depends on a model that is not decided~~ — **UNBLOCKED by the model. MT2 is CLOSED; `0006` is Accepted** (Option A, one shared D1 database, MVP-scoped while `0008` is active). | The two-tenant harness is now specifiable: **one database, two `tenant_id` values**, no per-tenant provisioning step, no database creation, and **no remote slot consumed** — local and CI runs use `wrangler dev`'s local mode and never set `"remote": true` (`CLOUDFLARE_STANDARD.md` §4.1). The harness must also provision the `TenantStoreResolver` mapping for both tenants plus one **unmapped** Organization, because §5.4's fail-closed case cannot be tested without one. **What TS2 now depends on instead: TS1 only** — the harness cannot be written until a test framework is approved. It is no longer blocked on the architecture, only on the toolchain. |
 | TS3 | **Cross-repository contract testing.** `Dudo-Apple` is a separate repository, so verifying it against `Dudo-Core`'s contracts needs a distribution mechanism. | Depends on AS1 (contract form and transport). Flagged before the first shared contract. |
 | TS4 | **Coverage targets.** Not specified anywhere. | Do not set a percentage. Require instead that every checklist item in every applicable standard has a test. A percentage is satisfiable without testing anything that matters. **Note:** §5.3 sets a coverage *denominator* for isolation specifically — query paths enumerated versus exercised — which is a completeness measure, not a percentage target, and is required regardless of how TS4 is resolved. |
