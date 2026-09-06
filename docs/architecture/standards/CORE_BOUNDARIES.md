@@ -4,6 +4,15 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** `platform/core/**` and every proposal to add something to it.
 - **Depends on:** `CONSTITUTION.md` Rule 1, `ARCHITECTURE.md`.
+- **Reconciled 2026-09-06.** This document carries **one** open issue — §4's primitive-versus-
+  Capability resolution — and it is still open. **Everything else in it survived contact with
+  the code**, which is worth recording rather than leaving as silence: §6's six rules for code
+  inside Core all hold against `platform/core/**` as built, and rule 2 in particular is
+  enforced structurally rather than by review — the deployment entry module sits at the
+  repository root precisely so that mounting an App does not require Core to import one
+  (`wrangler.jsonc:67–72`, `"main": "worker.ts"`). **Most of §3 is unbuilt, not contradicted:**
+  of §3.7's ten Core platform services only the audit log exists, and §3.6's platform billing
+  has no table in either migration set.
 
 Core is the smallest thing that lets every other thing exist. This document makes "Core
 stays small" enforceable instead of aspirational.
@@ -101,6 +110,20 @@ Search, Notifications, and Files each have a claim to being **both** a Core serv
 Capability (`CAPABILITY_STANDARD.md` §3 lists `search`, `notifications`, and `files` as
 capability domains). That is a genuine ambiguity, and this is the resolution
 `architecture-agent` recommends — it needs Team Lead confirmation.
+
+> **STILL OPEN, classified 2026-09-06 — needs an architecture decision from the Team Lead.**
+> Unchanged since it was written and unexercised: `platform/core/**` contains no search,
+> notification or file module, and `wrangler.jsonc` binds no R2 bucket, so the file service
+> has no store even if it existed. Nothing blocks it and nothing has answered it.
+>
+> **This is the same question as `CONSTITUTION.md` C3 and `ARCHITECTURE.md` A2**, stated three
+> times in three documents. One decision closes all three, and they should be closed in one
+> change rather than three — three copies of an open question are three places for the answer
+> to land in only two.
+>
+> **It is cheapest to record now and most expensive to discover later**, because it decides
+> which side of the boundary the first notification path is built on, and moving it afterwards
+> means moving an App's call site.
 
 | Layer | Role |
 |---|---|

@@ -237,6 +237,12 @@ not name Studio; `platform/` domain services belong to `core-agent` and
   the Team Lead. **This requires an amendment to `0004` and is not decided here.**
 - Until that amendment exists, **no Studio code has a home and none may be written.**
   Recorded as ST1 in §10 rather than resolved by an agent's assumption.
+- **The same gap has already been crossed once, by something that is not Studio.** Added
+  2026-09-06. `platform/admin/**` is a deployed platform application — its own Worker at
+  `admin.dudo.work` — and `0004` names neither the path nor an owner for it, while its stack
+  record `0010` sits unmerged on a branch. **That is the outcome this section exists to
+  prevent, and it arrived without anyone deciding to allow it**, which is the argument for
+  amending `0004` now rather than at Phase 9. See ST1.
 - What is not in doubt: Studio does **not** own `packages/contracts/**` (that is
   `architecture-agent`), does not own the manifest schema, and does not own Core.
 
@@ -266,10 +272,16 @@ not name Studio; `platform/` domain services belong to `core-agent` and
 
 ## 10. Open questions
 
-| # | Question | Status |
-|---|---|---|
-| ST1 | **Studio has no path and no owning agent.** `0004` does not name it. | Needs a Team Lead decision amending `0004` before any Studio work. Recommendation: `platform/studio/**` as a platform application. **No code until then.** |
-| ST2 | **Executable Studio output has no isolation mechanism.** §4.3 requires one, and the intended mechanism — Workers for Platforms — is not approved (`0003`). | Hard blocker on any code-generating surface. A declarative-only Studio is unblocked. Same root as `APP_STANDARD.md` AP2. |
-| ST3 | **Can a business user meaningfully consent to a permission set they authored?** Studio makes the creator and the grantor the same person, which removes the review a marketplace install provides. | Unresolved. Related to AZ4 (consent grouping). Needs a product decision before Studio ships permission creation. |
-| ST4 | **Who reviews an AI-generated App, and against what?** §6 requires security and moderator review; the plan does not say whether AI-generated submissions get a different depth. | Recommendation: same path, and volume is handled by better automated validation rather than by lighter review. Team Lead decision. |
-| ST5 | **The Studio secret surface is blocked on CN1** — no tenant-scoped secret store exists. | Cannot be built before CN1. Recorded, not worked around. |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would).
+**No Studio code exists and none may be written (ST1)**, so nothing here is contradicted by
+Studio. **ST1's gap has, however, already been crossed by something else** — see the row.
+
+| # | State | Question | Status |
+|---|---|---|---|
+| ST1 | **OPEN — ROOT R7. Team Lead decision, and the evidence that it is real arrived from an unexpected direction** | **Studio has no path and no owning agent.** `0004` does not name it. | Needs a Team Lead decision amending `0004` before any Studio work. Recommendation unchanged: `platform/studio/**` as a platform application, with an owner assigned. **No code until then.** **New evidence, 2026-09-06, and it is the useful part of this row:** `0004`'s layout names exactly three things under `platform/` — `core/`, `web/` and `capabilities/`. **`platform/admin/**` now exists**, is deployed as its own Worker at `admin.dudo.work`, and is named in neither `0004`'s tree nor its ownership table. Its stack decision, `0010`, is recorded as **"Accepted, not on `main`"** — it lives on branch `decision/admin-frontend` and was never merged. **So the precise gap this row predicted for Studio has already happened once for a different platform application, and it happened by drift rather than by decision.** That makes amending `0004` more urgent than a Phase 9 item suggests: whatever amendment names Studio should name `platform/admin` in the same edit. **Raised to the Team Lead; `0004` and `docs/decisions/**` are not this agent's to change.** |
+| ST2 | **NARROWED 2026-09-06 — the declarative Studio is unblocked and always was; the code-generating surface is OPEN under root R1** | **Executable Studio output has no isolation mechanism.** §4.3 requires one, and the intended mechanism — Workers for Platforms — is not approved. | Unchanged as to conclusion, sharper as to scope. `0030`: *"Workers is free. Workers for Platforms is a different product and is paid-only"*, and it gates **only untrusted code execution** — which is exactly and only what §4.3 is about, so **this row is one of the few places the Workers-for-Platforms blocker genuinely applies at full width.** Contrast `APP_STANDARD.md` AP2 and `CONNECTOR_STANDARD.md` CN3, where it turned out to gate much less than it appeared to. **The declarative split §4.3 offers — entities, forms, pages, dashboards, workflows composed of declared Actions — remains unblocked**, and is now the whole of what a first Studio could be. Same root as AP2's third-party half. |
+| ST3 | **OPEN** — product decision; unchanged | **Can a business user meaningfully consent to a permission set they authored?** Studio makes the creator and the grantor the same person, which removes the review a marketplace install provides. | Unresolved. Related to AZ4 (consent grouping). Needs a product decision before Studio ships permission creation. **One decision has since made the shape clearer without answering it:** `0027`'s rule that **the party being constrained does not author the statement of the constraint** is the same objection this row raises, resolved for confirmation by having the *server* author the statement. Whether the analogue holds — that the platform, not the creator, states what a permission set grants — is the question ST3 should now be asked as. |
+| ST4 | **OPEN** — Team Lead decision; unchanged | **Who reviews an AI-generated App, and against what?** | Recommendation unchanged: same path, and volume is handled by **better automated validation rather than lighter review**. **The automated half is weaker than this row assumed**, and that is worth knowing before it is relied on: §7 names two mechanisms, and **neither runs by itself.** No JSON Schema implementation is executed anywhere in this repository, and the registry-aware validator that exists — `packages/contracts/validation/app-manifest-relations.mjs`, ADR `0009` — covers **one rule family (AZ7)** and is **not wired into CI or any installation path** (`APP_STANDARD.md` §11). "Handled by automated validation" is therefore a plan, not a capability. |
+| ST5 | **OPEN** — root R2 (CN1) | **The Studio secret surface is blocked on CN1** — no tenant-scoped secret store exists. | Cannot be built before CN1. Recorded, not worked around. One of four rows across this directory pointing at that single root; the argument is stated once at `CONNECTOR_STANDARD.md` CN1 and not repeated. |

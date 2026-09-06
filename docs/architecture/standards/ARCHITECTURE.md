@@ -4,6 +4,14 @@
 - **Authored by:** `architecture-agent`.
 - **Applies to:** the shape of the whole system.
 - **Depends on:** `CONSTITUTION.md`, `docs/decisions/0003`, `0004`.
+- **Reconciled against the built system 2026-09-06.** §9 classifies all six ambiguities — **A4
+  closed, A1, A2, A3, A5 and A6 still open**, with four of the five open ones blocked on the
+  same root: nothing above Core has been built. Two contradictions are marked where the claim
+  is made: **§3's request lifecycle** (see §3.1 — there are four request classes, not one, and
+  three of them skip stages by accepted decision) and **§7's environments** (there is one
+  environment and it is production). **§2's dependency directions hold as built**, including
+  the one that is easiest to break: the deployment entry module sits at the repository root so
+  that mounting an App does not require Core to import one.
 
 `CONSTITUTION.md` says what may not be violated. This document says what the system *is*.
 Ownership and forbidden edges are in `docs/architecture/boundaries.md`; this document does
@@ -211,9 +219,42 @@ Local · Development · Staging · Production. Separate configuration, separate 
 separate data. Production actions require explicit user approval in the current
 conversation, every time (`.claude/rules/security.md` §7).
 
+> **CONTRADICTED, 2026-09-06 — there is one environment, and it is production.**
+> `wrangler.jsonc` declares **no `env` block**. Its two `d1_databases` entries carry literal
+> production `database_id` values (`wrangler.jsonc:141,147`) and its `routes` are the live
+> custom domains `app.dudo.work` and `api.dudo.work` (lines 63–66). `wrangler.admin.jsonc` is
+> a second Worker, not a second environment. There is a `deploy:staging` script
+> (`package.json:23`) invoking `wrangler deploy --env staging` against **an environment no
+> configuration file defines** — it cannot succeed as written.
+>
+> `docs/decisions/0006` §0.3 allocated database slot 3 as a *"Combined staging database"*, and
+> `MULTITENANCY_STANDARD.md` §7.4 carries that budget. **It has not been created**, and the two
+> databases that exist are both production.
+>
+> **Two consequences, and the second is the one that matters.** First, `0017` accepted the
+> in-process pre-auth limiter *"Staging only"* — there is no staging, so that condition is
+> unmet wherever the limiter is deployed. Second, **the separation this section requires is
+> what makes "production actions require explicit user approval" a meaningful boundary**; with
+> one environment, every migration and every deploy is a production action, which is why
+> `package.json:17–21` splits the `:local` and `:remote` migration scripts by name rather than
+> by flag. That split is the substitute for environment separation and should be read as such.
+>
+> **Team Lead's to route.** Either staging is created and this section becomes true, or the
+> section is narrowed to what the project actually operates and the `deploy:staging` script is
+> removed rather than left as an affordance for an environment that does not exist.
+
 Customer-generated Workers, when Phase 7 arrives, use a **staging namespace and a
 production namespace** — not a namespace per customer. That runtime depends on Workers for
 Platforms, which is **not approved**; Phase 7 is blocked on its own decision record.
+
+> **Clarified 2026-09-06 by `docs/decisions/0030`, which settles the scope of that block.**
+> *"Workers is free. Workers for Platforms is a different product and is paid-only. The
+> similarity of the names is the whole confusion."* The block covers **only third-party code
+> execution** — an open marketplace where third parties upload and run code. It does **not**
+> block tenancy, Apps as a concept, or the capability model, and `0006` had already recorded
+> that. **First-party Apps as separate Workers, deployed by Dudo and reached through service
+> bindings with least-privilege bindings per App, are free and available today** — `0030` calls
+> that *"a real isolation boundary, not a pretend one."*
 
 ---
 
@@ -239,11 +280,18 @@ itself, carry the requirement until a record says otherwise.
 Recorded rather than papered over. Each needs a Team Lead decision; recommendations are
 `architecture-agent`'s.
 
-| # | Ambiguity | Recommendation |
+**Classified 2026-09-06 against the built system**, on the three states defined in
+`CONSTITUTION.md` §7. **Five of the six are still open and four of those five are blocked on
+the same root:** *nothing above Core has been built.* There is one App, no Capability, no
+Connector, no SDK and no marketplace, so A1, A2, A3 and A5 have had nothing to press against.
+That is a reason to record them cheaply now, not a reason to defer them again — each is a
+model decision whose cost rises the moment the first Capability exists.
+
+| # | Ambiguity | State, and the recommendation or citation |
 |---|---|---|
-| A1 | **AI Skills as a fifth extension type** are never given a runtime, a manifest, or a lifecycle distinct from Connectors. | Treat as a marketplace category of Connector providing the AI Capability. Recorded above; no separate runtime built. |
-| A2 | **Core owns search infrastructure, notifications, and a file service**, while Search, Notifications, and Files are also capability domains (`CAPABILITY_STANDARD.md` §3). | Core owns the primitive; the Capability is the interface; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
-| A3 | **Core owns platform billing** but Rule 6 forbids Core depending on an external integration. Charging a card requires a payment provider. | Core owns billing *state* — plans, quotas, usage, subscription status. Money movement is invoked through the Payment **Capability contract**, which is a contract dependency, not a connector dependency. `CORE_BOUNDARIES.md` §5. |
-| A4 | **Per-App logical data ownership × per-tenant isolation** multiplies storage units by Apps × tenants, which is never confronted against D1's limits. | The storage port must make the physical mapping a routing decision, not an App-visible one. `MULTITENANCY_STANDARD.md` §7. |
-| A5 | **Egress control** is required by the App manifest's `externalNetworkAccess` (`APP_STANDARD.md` §4) but the intended enforcement mechanism is the Workers for Platforms outbound Worker — **not approved**. | Declare the allowlist in the manifest from Phase 2 and enforce it in the Connector/SDK egress helper; full enforcement needs the Phase 7 record. Gap flagged, not hidden. |
-| A6 | **Two versioning schemes** — `/api/v1` for APIs (`CONSTITUTION.md` Rule 9), integer `event_version` for events (`EVENT_STANDARD.md` §3) — are never reconciled. | Keep both; they version different things. Defined in `API_STANDARD.md` §6 and `EVENT_STANDARD.md` §7. |
+| A1 | **AI Skills as a fifth extension type** are never given a runtime, a manifest, or a lifecycle distinct from Connectors. | **STILL OPEN — needs an architecture decision (Team Lead).** Blocked on nothing; unexercised because `connectors/` holds no provider and no AI Capability exists. Recommendation unchanged: a marketplace category of Connector providing the AI Capability, with no separate runtime. **Note for whoever records it:** `0025` established the precedent that an extension type can arrive early and inert — a `Template` is §1's fifth type, built five phases ahead of its phase and *"complete and inert on arrival"*. An AI Skill may arrive the same way, and deciding its shape now costs one record. |
+| A2 | **Core owns search infrastructure, notifications, and a file service**, while Search, Notifications, and Files are also capability domains (`CAPABILITY_STANDARD.md` §3). | **STILL OPEN — needs an architecture decision (Team Lead).** None of the three exists in `platform/core/**`, and `wrangler.jsonc` binds no R2 bucket, so the file service has no storage either. Recommendation unchanged. **Same question as `CONSTITUTION.md` C3 and `CORE_BOUNDARIES.md` §4 — one decision closes all three, and they should be closed together rather than three times.** |
+| A3 | **Core owns platform billing** but Rule 6 forbids Core depending on an external integration. Charging a card requires a payment provider. | **STILL OPEN — needs an architecture decision (Team Lead), and it is not urgent.** No billing exists: no plan, quota, usage or subscription table in either migration set, and `platform/core/**` has no billing module. Recommendation unchanged — Core owns billing *state*; money movement goes through the Payment **Capability contract**. **Interacts with `SECURITY_STANDARD.md` SE3:** PCI scope is decided by this design, and `SE3`'s recommendation (never store full instrument numbers) is the constraint this decision must satisfy. Record both together, before `payment@1`. |
+| A4 | **Per-App logical data ownership × per-tenant isolation** multiplies storage units by Apps × tenants, which is never confronted against D1's limits. | **CLOSED for the current model — decided, then re-scoped.** `0006` (**Accepted**, user, 2026-09-01) makes the physical mapping a routing decision behind `TenantStoreResolver`, exactly as recommended: no App, plugin, Connector or client selects a database or a binding. Built — `platform/core/tenancy/tenant-store-resolver.ts` and `directory-tenant-store-resolver.ts`, with the predicate emitted at one point (`platform/core/storage/adapters/sql/sql-compiler.ts:141`). The multiplication does not arise under one shared database. **`0030` re-scopes rather than reopens it:** *"anything that assumes exactly one database exists"* is now a named violation, and the requirement is that the choice stay **reversible**. So the storage port's existence is not optional and is not an abstraction awaiting a second consumer — it is the mechanism `0030` names. **The arithmetic A4 asked for is still owed**, as `0030`'s *"a measured capacity model"*: the 100–150-business estimate is arithmetic, not measurement, and is to be measured against a seeded workload. |
+| A5 | **Egress control** is required by the App manifest's `externalNetworkAccess` (`APP_STANDARD.md` §4) but the intended enforcement mechanism is the Workers for Platforms outbound Worker — **not approved**. | **STILL OPEN — and the block is now precisely scoped rather than total.** `0030` settles what Workers for Platforms gates: *only* third-party code execution, not tenancy, not Apps, not the capability model. **First-party Apps as separate Workers with least-privilege bindings are free and available today**, and a first-party App reached by service binding has no ambient egress to control — its network access is the bindings it was given. So the recommendation splits: **first-party egress is a binding question, decidable now**; **third-party egress remains blocked on Phase 7's record** with the rest of untrusted execution. Nothing is exercised — `connectors/` is empty and no SDK egress helper exists. |
+| A6 | **Two versioning schemes** — `/api/v1` for APIs (`CONSTITUTION.md` Rule 9), integer `event_version` for events (`EVENT_STANDARD.md` §3) — are never reconciled. | **STILL OPEN, and a third scheme has appeared that this row does not cover.** The two named schemes are fine and the recommendation stands — they version different things. **What is new:** contracts carry their own `-v1` suffix in the filename (`login-v1`, `confirmation-v1`, `customer-directory-v1` — thirteen sets in `packages/contracts/`), and **that is a third versioning axis nothing reconciles with the first two.** A contract may be revised without a version bump (`business-read-v1` changed its resolve route from `GET` to `POST` on 2026-09-04 and stayed `v1`) while `/api/v1` is unchanged and no event exists. **And the `/auth/**` and `/health` routes have no version at all** — see `CONSTITUTION.md` Rule 9's contradiction note. Team Lead: this is AS1's neighbour and should be recorded with it, as contract versioning mechanics (`docs/decisions/README.md` scheduled item 4). |

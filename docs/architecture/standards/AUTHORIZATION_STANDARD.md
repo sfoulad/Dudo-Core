@@ -5,6 +5,16 @@
 - **Applies to:** every entry point in Dudo — API, event consumer, workflow step, MCP tool, SDK call, scheduled job.
 - **Depends on:** `CONSTITUTION.md` Rule 10, `MULTITENANCY_STANDARD.md`, `SECURITY_STANDARD.md`.
 - **Machine-readable:** `packages/contracts/registries/permission-catalog.yaml`.
+- **Reconciled against the built system 2026-09-06.** §13 classifies all eight open issues.
+  **This file carries four contradictions and they are the most serious in the corpus**, so
+  they are marked where the rule is stated rather than only in the table: §3.2's wildcard
+  clause (superseded by `0007` rule 3), §3.2's absolute `list`/`read` separation (narrowly
+  contradicted by an argued contract), §4's *"only two permissions at `platform` scope"* (now
+  ten), and §9's role model (two hardcoded roles, no custom roles, no audited assignment).
+  **Nothing was rewritten to match the code.** Where the standard is the correct side, the
+  divergence is reported for the Team Lead to route; where an Accepted decision has overtaken
+  it, the superseding record is cited and the old text is struck rather than deleted.
+  **`0007`'s ten binding rules outrank this document** wherever the two differ — see AZ1.
 
 ---
 
@@ -64,17 +74,28 @@ are a subset. Where an AI acts on behalf of a user, the effective permission is 
 - **Every permission exists in `permission-catalog.yaml`** before any code references it.
   An undeclared permission string is a typo waiting to become an authorization bypass —
   or, worse, an authorization *failure* that someone "fixes" by removing the check.
-- **Wildcards may appear in role definitions, never in App manifests.** A customer's
-  admin role may carry `crm.*`; an App may never request it. An App requests each
-  permission by name, which is what makes a permission screen meaningful.
-- **What a wildcard *expands to* is not yet decided (AZ6), and until it is, no role uses
-  one.** This rule says only *where* a wildcard may appear. The naive reading — expand to
-  every matching permission regardless of that permission's own declared `scopes` — makes
+- ~~**Wildcards may appear in role definitions, never in App manifests.** A customer's
+  admin role may carry `crm.*`; an App may never request it.~~ **CONTRADICTED and
+  SUPERSEDED, 2026-09-06. A wildcard is permitted NOWHERE.** `docs/decisions/0007`
+  (**Accepted** by the user, 2026-09-01) binding rule 3: *"**No wildcard permissions.** Not
+  in roles, not in manifests, not in grants."* The struck sentence permitted in a role
+  definition exactly what rule 3 forbids, and it is the sentence a reviewer would check a
+  role against. **An App still requests each permission by name**, which is the half of the
+  original rule that survives and is what makes a permission screen meaningful.
+- ~~**What a wildcard *expands to* is not yet decided (AZ6), and until it is, no role uses
+  one.**~~ **DECIDED, and harder than a expansion rule.** There are no expansion semantics
+  to define, because there is nothing left to expand. The reasoning below is retained
+  because it is why rule 3 is absolute rather than a preference: the naive reading — expand
+  to every matching permission regardless of that permission's own declared `scopes` — makes
   a tenant role at `organization` scope hold `core.principal.grant-platform-scope`, which
-  is tenant-to-platform privilege escalation. The seed roles in `permission-catalog.yaml`
-  are therefore written as explicit lists that are safe under every candidate expansion
-  rule. **Do not reintroduce a wildcard into a role definition until AZ6 is recorded as an
-  accepted decision.**
+  is tenant-to-platform privilege escalation, and that is the defect `0007` records as
+  CRIT-1. The seed roles in `permission-catalog.yaml` are explicit lists.
+  **Never reintroduce a wildcard into a role definition.**
+  **Enforced in code, not by this rule:** `platform/core/authorization/roles.ts:31–34` —
+  *"the sets below are frozen arrays of literal permission identifiers. There is no pattern,
+  no prefix, no `startsWith`, no glob"* — and `assertRoleMappingIsCoherent` checks it at
+  module load. `permission-catalog.yaml:887–895` carries the same supersession and names
+  `roles.ts` as *"the file where a wildcard would otherwise be smuggled back in."*
 - **An App manifest may never request a permission at `platform` scope.** `platform` is
   reserved to platform principals (§4). A manifest declaring it **fails validation and the
   App does not install** — it is not accepted-then-trimmed, because an App installed in a
@@ -85,6 +106,36 @@ are a subset. Where an AI acts on behalf of a user, the effective permission is 
   review item.
 - **`list` is a separate permission from `read`.** Enumeration is its own disclosure: the
   count and the identifiers are information even when the records are not readable.
+
+  > **CONTRADICTED in one argued case, 2026-09-06 — and the standard is what should move.**
+  > `core.ListAuthorizedBusinesses` enumerates, and it is gated on `core.business.read`;
+  > **`core.business.list` is deliberately not declared** in `permission-catalog.yaml`
+  > (`platform/core/http/core-routes.ts:74–76`,
+  > `packages/contracts/core/organization/business-read-v1.contract.yaml:452–494`). The
+  > contract does not hide this — it quotes this rule, calls its own position *"a judgement
+  > that has to be argued rather than assumed"*, and argues it:
+  >
+  > > *"THE RULE PROTECTS AGAINST ENUMERATING A POPULATION YOU MAY OTHERWISE ONLY READ ONE AT
+  > > A TIME … ENUMERATING PRECISELY WHAT YOU MAY READ, AND NOTHING MORE, IS NOT A SECOND
+  > > DISCLOSURE."*
+  >
+  > **And the fail-closed alternative is worse, which is the part that decides it.** A
+  > `core.business.list` held by nobody leaves a principal unable to discover any valid
+  > `business_id` — a value `CreateCustomer` requires — so *"the practical repair is for each
+  > client to invent its own"*. Fail-closed is normally the safe direction; here it produces
+  > two clients guessing an identifier, which is worse than the disclosure it prevents.
+  >
+  > **The contract also fences its own ruling** — it covers only listings whose row set **is**
+  > the caller's authorized set, and an Action listing Businesses beyond it *"IS NOT
+  > COVERED"* and needs `core.business.list` declared at that time. It keeps `export`
+  > separate absolutely: `core.business.export` is undeclared so nobody can hold it.
+  >
+  > **Recommendation to the Team Lead: amend this rule rather than the code.** The narrowing
+  > it needs is one clause — *a separate `list` permission is required wherever the
+  > enumerated set can exceed what the principal may already read one at a time*. Left as an
+  > absolute, the rule is one a correct implementation violates, and a rule that correct code
+  > breaks is a rule the next author will discount. **`export` stays absolute and is not
+  > narrowed.**
 - **`export` is always separate.** Reading one record and downloading the whole book are
   different risks.
 - Permissions are additive. There are no negative permissions and no deny rules — a deny
@@ -115,14 +166,44 @@ Rules:
   organizations, it belongs to platform operators, and it never grants access to tenant
   *business data* without an explicit, audited, time-bounded elevation (§7).
   **That elevation mechanism does not exist yet (AZ3), so the rule must hold by
-  construction rather than by control.** Only two permissions are declared at `platform`
-  scope — `core.principal.grant-platform-scope` and `core.marketplace.moderate` — and
-  `platform-admin` holds exactly those two and nothing else. A platform operator therefore
-  has *no* path to tenant business data, including for support, which is the cost being
-  paid deliberately until AZ3 is recorded. A control that exists only as an English
-  sentence is not a control, so it must not be re-stated as one: **no platform-scope role
+  construction rather than by control.**
+
+  > **CONTRADICTED, 2026-09-06 — the count below is stale, and it is the sentence the whole
+  > safety argument is built on.** The paragraph asserted *"only two permissions are declared
+  > at `platform` scope … and `platform-admin` holds exactly those two and nothing else."*
+  > **`permission-catalog.yaml` now declares ten**, and `platform-admin` holds **all ten**
+  > (lines 914–924): `core.principal.grant-platform-scope`, `core.marketplace.moderate`,
+  > `core.organization.create`, `core.organization.list`, `core.template.read`,
+  > `core.template.list`, `core.template.create`, `core.credential.reset`,
+  > `core.platform-audit.read`, `core.principal.revoke-platform-scope`. Eight arrived with
+  > `0025`, `0026`, `0027` and `0028`.
+  >
+  > **The rule holds; the enumeration does not.** Every one of the ten declares
+  > `scopes: [platform]`, so none is a tenant-scoped permission held by a platform role, and
+  > the invariant in bold below is satisfied. `CONSTITUTION.md` §1 settles which side is
+  > wrong when a standard and a registry disagree about a **value**: *"the registry wins,
+  > because the registry is the artifact that is machine-checked. Fix the other side in the
+  > same change."* This is that fix, and the same staleness sits in
+  > `permission-catalog.yaml:898–899` — *"those are the only two that are"* — which is
+  > `architecture-agent`'s file but outside the file set for this pass, and is reported to the
+  > Team Lead rather than edited.
+  >
+  > **What genuinely changed, and it is not nothing.** "A platform operator has *no* path to
+  > tenant business data" is still true and is now structural rather than arithmetic —
+  > `docs/decisions/0024` (**Accepted**) makes a memberless platform principal *incapable* of
+  > reading tenant rows: no membership → no selection → no store handle → no `whereWithTenant`
+  > → no rows. **But the operator surface is far wider than two permissions**, and two of the
+  > ten are severe on their own terms: `core.credential.reset` is described in its own catalog
+  > entry as *"the most dangerous permission in this catalog that is not AZ3: holding it is
+  > the ability to take over any account on the platform"*, and `core.platform-audit.read`
+  > reads a log of what the platform did to its customers. **Neither is tenant business data,
+  > and neither is covered by the sentence this paragraph uses to reassure a reader.** `0028`
+  > is the record that reasoned about that surface; this standard had not caught up.
+
+  **No platform-scope role
   may be given a permission declared at any tenant scope in place of the break-glass
-  record.** Both platform-scope seed roles now satisfy this. `marketplace-moderator`
+  record.** Both platform-scope seed roles satisfy this, and all ten permissions above are
+  declared at `platform` scope. `marketplace-moderator`
   carried `core.app.read`, declared `scopes: [organization, business]`; it has been
   removed. That was the last surviving instance of a platform role reaching a
   tenant-scoped permission, and it was unsafe under both candidate readings of scope
@@ -327,6 +408,32 @@ platform surface — never a model asserting that the user agreed (`MCP_STANDARD
 - A role is a named bundle of permissions at a scope. Role assignment is a `sensitive`
   operation and is always audited.
 
+> **CONTRADICTED on three of those clauses, 2026-09-06.** This is the recorded
+> **role-vocabulary fork** (`docs/decisions/0023`), and it already has a trigger the Team Lead
+> set: *"It must be reconciled before a second App exists, because that is the point at which
+> 'add it to both roles' stops being a small change and becomes a fork"*
+> (`docs/decisions/README.md`). It is reported here rather than repaired, because reconciling
+> it is a decision and not an edit.
+>
+> | This standard says | The system does |
+> |---|---|
+> | Six default roles ship | **Two tenant roles exist.** `platform/core/authorization/roles.ts:65` — `export type MembershipRole = 'owner' \| 'member'`. The catalog's six seed roles are `status: proposed`; only `platform-admin` is separately reachable, through `platform_operator.platform_role` |
+> | **Customers create custom roles** | **They cannot, by construction.** `0019` (**Accepted**) decided the role is *"a closed union of literals. Not free text"*, and an unrecognised stored value is not an error and not a partial grant — it is **deny all**. There is no surface for creating a role, and adding one is an edit to `platform/core/**` |
+> | Role assignment is `sensitive` and **always audited** | **There is no audited assignment path at all.** `docs/decisions/README.md` records it four times over — *"No audited path for a role or permission change. `0007` rule 9 requires it; `0018`, `0019`, `0020` and `0023` each record its absence. Operator SQL and Organization creation have the same gap."* A role is set today by seed tooling and by hand |
+>
+> **The one clause that holds is the one about conditionals**, and it holds for a reason worth
+> keeping: `grantsForRole` is a **map lookup over frozen literal permission lists**, not a
+> branch on a role name, so code still checks permissions. `roles.ts:31–34` states why the
+> shape was chosen — a role is *"exactly the construct that tempts"* rules 3 and 4 to be
+> relaxed.
+>
+> **Which side is wrong.** The **standard** is, on "customers create custom roles" — `0019`
+> reasoned it out against `0008`'s write ceiling and deferred the grant table rather than
+> rejecting it, and its argument stands. The **system** is wrong on **audited role
+> assignment**: `0007` binding rule 9 requires it, four records note its absence, and nothing
+> has been assigned to close it. **That gap is the one to route, and it is not a documentation
+> problem.**
+
 ---
 
 ## 10. Service accounts, API credentials, and devices
@@ -393,13 +500,19 @@ Audit records are append-only and are never mutated. Details in
 
 ## 13. Open questions
 
-| # | Question | Recommendation |
+**Classified 2026-09-06 against the built system**, on the three states defined in
+`CONSTITUTION.md` §7. **Three closed, five still open.** Two of the five open ones — AZ4 and
+AZ8 — are blocked on the same root: **there is no marketplace, no App install path and no SDK**,
+so neither has anything to press against. AZ3 is the one whose *urgency* changed rather than its
+answer.
+
+| # | Question | State, and the recommendation or citation |
 |---|---|---|
-| AZ1 | **This document is the logical permission model `0001` requires.** It is a standard, not a decision record. | Team Lead records §1–§10 as an ADR — `architecture-agent` will draft it on request. Nothing implements against it until then. |
-| AZ2 | **Authentication mechanism** — sessions, tokens, OAuth/OIDC — is unrecorded. Authorization assumes an authenticated principal but cannot produce one. | Needs an ADR with the Phase 1 identity work. This standard is written so it does not depend on the choice. |
-| AZ3 | **Platform-operator access to tenant business data.** §4 forbids it without elevation, but support will eventually need it. | Break-glass: explicit, time-bounded, reason-required, tenant-notified, always audited. Needs its own record before any admin portal reads tenant data — which is Phase 1. |
-| AZ4 | **Permission grouping for the install screen.** Twenty individually-named permissions are unreadable, and unreadable consent is not consent. | Group by resource with an expandable detail view; the catalog carries a `group` field for this. Product decision, flagged. |
-| AZ5 | **How does a principal come to hold an `own`-scope permission?** `core.notification.read` is declared `scopes: [own]`, so no role at `organization`, `business`, `branch` or `team` scope can legitimately carry it — yet every principal must read their own notifications. | Either a baseline self-role held at `own` scope by every principal, or widen the permission's declared scopes. Both are model decisions. Fail-closed meanwhile: the permission is in no seed role, so it is granted to nobody. Needed in Phase 1. |
-| AZ6 | **What does a wildcard in a role definition expand to?** §3.2 says only where one may appear. The naive union reading is tenant-to-platform escalation; the intersection reading is drafted as `docs/decisions/0007` D6, which is **Proposed and decides nothing**. | Record the expansion rule, then add the catalog lint that recomputes every role's expanded set and fails on any permission whose declared `scopes` exclude the role's `scope`. Until then no role uses a wildcard and none may be added. Blocks Phase 1 and the CI lint. |
-| AZ7 | **Binding an Action to its target entity.** *Contract enforcement closed; automated and runtime enforcement open.* `$defs/action` carries `targetEntity`, and the schema requires it whenever `scope` is `own`, so an `own`-scoped Action can no longer borrow an unrelated entity's `ownershipField` to satisfy VAL-OWN unnoticed. The referential clause is no longer unenforceable: `packages/contracts/validation/app-manifest-relations.mjs` implements VALIDATOR-AZ7 (§4.1) as a zero-dependency module, approved by `0009` as a narrow Phase 0 exception, and **the standalone relation validator has been executed against the recorded AZ7 fixtures** — `az7-n4`, the CWE-863 exploit manifest, moves ACCEPT → REJECT as `AZ7_TARGET_ENTITY_NOT_OWNED` while the positive owned-target fixture `az7-p2` still accepts. **The current measured result, fixture count, revision, date and runner are maintained in the permission catalog's authoritative `AZ7` entry** under `openQuestions` in `packages/contracts/registries/permission-catalog.yaml`. **This standard deliberately does not duplicate mutable result counts** — a hand-maintained number that nothing recomputes rots in whichever copy is not being read. **Not every fixture executes:** the invocation cases are runtime obligations no static validator can decide. **JSON Schema execution and production admission-path integration remain separate outstanding obligations.** Three things remain open. (a) **Nothing runs it automatically** — no CI job, no install path, no runtime. The clause is *enforceable and proven against fixtures*; it is **not** enforced in production, and writing it up as though it were is the CRIT-4 overclaim. (b) This is a **manifest-format change** touching the SDK, Studio, `APP_STANDARD.md`, and every future published manifest; `0009` records the validator, not the format change, which still needs its own decision record — the Team Lead owns it. (c) An Action may target **exactly one** entity today. Multi-entity Actions are deliberately not given targeting semantics here rather than invented. | Team Lead records the format change; CI runs the validator over the AZ7 fixtures, and Phase 1 wires it into the install path against that same conformance suite (`0009`). Do not treat the schema half as the rule, and do not treat a fixture run as production enforcement — §4.1 states which half is which, and that distinction is load-bearing. |
-| AZ8 | **Marketplace moderation has no permission it may legitimately hold to view Apps.** `marketplace-moderator` is `platform` scope; `core.app.read` is declared `scopes: [organization, business]` and has been removed from it (§4). Moderation reviews *published App versions*, which is not the same object as *a tenant's installed Apps*. | Declare a new permission at `platform` scope over published App versions and marketplace submissions — not a widening of `core.app.read`, which would push a tenant-scope permission above the tenant boundary. Declaring a new platform-scope permission is a model decision, so it is recorded, not invented. Related to AZ3 but distinct: this needs no tenant business data. Blocks Phase 6 moderation. |
+| AZ1 | **This document is the logical permission model `0001` requires.** It is a standard, not a decision record. | **CLOSED — recorded and accepted.** `docs/decisions/0007-logical-permission-model.md`, **Status: Accepted**, 2026-09-01, by **explicit written user acceptance**. Its own header answers this row by name: *"This record satisfies the obligation `0001` decision 2 requires and `AUTHORIZATION_STANDARD.md` AZ1 records as outstanding. Implementation may now proceed against it."* It was accepted subject to **ten binding rules** (`0007` lines 12–35) which *"govern wherever the body of this record is silent or less specific"* — so `0007`'s rules, not this document's prose, are the higher authority where the two differ. Rule 3 is why §3.2's wildcard clause above is struck. **`permission-catalog.yaml`'s own `AZ1` entry is stale and still says "nothing implements until then"** — reported to the Team Lead; that file is outside this pass's set. |
+| AZ2 | **Authentication mechanism** — sessions, tokens, OAuth/OIDC — is unrecorded. Authorization assumes an authenticated principal but cannot produce one. | **CLOSED — decided and built.** `docs/decisions/0014-authentication-az2.md` (**Accepted**) states it in its own front matter: *"Closes: `AUTHORIZATION_STANDARD.md` AZ2."* Three parts — §A daily D1 write admission, §B the closed five-entry pre-authentication registry, §C the identity control plane. Continued by `docs/decisions/0015` (**Accepted**), which decides the credential format: **the browser runs 600,000 PBKDF2 iterations and the server rehashes at 10,000, so the server never receives a password**, because the Workers 10 ms CPU budget cannot fit a properly tuned KDF. Amended 2026-09-04 for **NFC** password normalisation — *the identifier uses NFKC, the password must not*. Built: `platform/core/identity/login.ts`, `session-credential.ts`, `credential-verifier.ts`, `session-principal-resolver.ts`; registry at `platform/core/identity/pre-auth-registry.ts:254–334`; contract at `packages/contracts/core/identity/login-v1.contract.yaml`. **Amended twice since:** `0017` (in-process pre-auth limiter, closed beta only) and `0018` (revocation carriers and cookie clearing). **This standard's claim that it "does not depend on the choice" held** — nothing in §1–§10 needed changing when the mechanism landed. |
+| AZ3 | **Platform-operator access to tenant business data.** §4 forbids it without elevation, but support will eventually need it. | **STILL OPEN — needs an architecture decision (Team Lead), and the blocking claim in the original recommendation is now wrong.** It said *"needs its own record before any admin portal reads tenant data — which is Phase 1."* **The admin portal shipped and reads no tenant data**, so the deadline did not bind. Two Accepted records confirm the question is untouched: `0024` *"Break-glass access to tenant data (AZ3). Nothing here permits it. If a platform operator ever needs to read a customer's records, that is a separate decision with its own audit story, and the invariants above are what it must argue against rather than quietly relax"*; and `0028` *"Break-glass access to tenant data. Nothing here permits it, and `0024`'s invariants remain what any such proposal must argue against."* **What changed is the ground any future proposal stands on.** `0024` makes the prohibition **structural rather than declarative** — a memberless platform principal cannot reach a store handle, so there is no `whereWithTenant` to satisfy and no rows to return — and it names the trap a break-glass design would fall into: `scope.ts` ranks `platform` at 0, so **a membership row carrying platform authority would pass authorization everywhere and the storage boundary would then politely serve that tenant's rows.** Cross-tenant access assembled entirely from legitimate parts. **A break-glass record must not grant access by giving an operator a membership.** Recommendation otherwise unchanged: explicit, time-bounded, reason-required, tenant-notified, always audited. Same question as `SECURITY_STANDARD.md` SE5. |
+| AZ4 | **Permission grouping for the install screen.** Twenty individually-named permissions are unreadable, and unreadable consent is not consent. | **STILL OPEN — a product decision needing the USER, and blocked on there being an install screen.** Nothing has moved: there is no marketplace, no App install path and no consent surface anywhere in `platform/**`; the one App is mounted by the composition root, not installed. The catalog's `group` field exists and is populated on every permission, so the data the recommendation depends on is already there. **Blocked with AZ8 on the same root** — both need the marketplace to exist. Not urgent, and cheap to answer when it is. |
+| AZ5 | **How does a principal come to hold an `own`-scope permission?** `core.notification.read` is declared `scopes: [own]`, so no role at `organization`, `business`, `branch` or `team` scope can legitimately carry it — yet every principal must read their own notifications. | **STILL OPEN — needs an architecture decision (Team Lead). ⚠ AND THE LABEL "AZ5" NOW NAMES THREE DIFFERENT QUESTIONS, WHICH IS WHY THIS ROW LOOKS CLOSED AND IS NOT.** `docs/decisions/0019` is titled *"Where a principal's permission grants live (AZ5)"* and `0020` *"the second half of AZ5"* — both **Accepted**, both closing questions inherited from `0001`, and **neither touching this one**. `docs/decisions/README.md` still lists *"How a principal comes to hold an `own`-scope permission (AZ5)"* as unwritten, item 6, and that is correct. `permission-catalog.yaml:1118–1125` records the collision in the same terms. **Do not close this row by citing `0019` or `0020`.** The question is unchanged: `core.notification.read` is still declared `scopes: [own]` (`permission-catalog.yaml:560–564`) and still appears in **no** seed role, so it is granted to nobody and fails closed. Recommendation unchanged — a baseline self-role at `own` scope, or widen the permission's declared scopes; both are model decisions. **Team Lead: the three-way name collision is worth retiring with a rename, not only a footnote.** |
+| AZ6 | **What does a wildcard in a role definition expand to?** §3.2 says only where one may appear. The naive union reading is tenant-to-platform escalation; the intersection reading is drafted as `docs/decisions/0007` D6, which is **Proposed and decides nothing**. | **CLOSED — and decided harder than this row asked for.** `docs/decisions/0007` was **Accepted 2026-09-01 subject to ten binding rules**, and **rule 3 prohibits wildcards outright**: *"No wildcard permissions. Not in roles, not in manifests, not in grants."* **So there are no expansion semantics to define, because nothing is left to expand**, and D6's intersection rule governs nothing here. `permission-catalog.yaml:887–895` records the same supersession. **The CI lint this row asked for is therefore not owed in the form described** — there is no expanded set to recompute. What replaced it is a stronger check in a cheaper place: `platform/core/authorization/roles.ts` holds frozen arrays of literal permission ids with *"no pattern, no prefix, no `startsWith`, no glob"*, and `assertRoleMappingIsCoherent` runs at module load, so a wildcard smuggled into a role stops the module rather than shipping. **§3.2 above still permitted a wildcard in a role definition and is struck there.** **`permission-catalog.yaml`'s own `AZ6` entry is stale** and still asks for the expansion rule — reported to the Team Lead. |
+| AZ7 | **Binding an Action to its target entity.** *Contract enforcement closed; automated and runtime enforcement open.* `$defs/action` carries `targetEntity`, and the schema requires it whenever `scope` is `own`, so an `own`-scoped Action can no longer borrow an unrelated entity's `ownershipField` to satisfy VAL-OWN unnoticed. The referential clause is no longer unenforceable: `packages/contracts/validation/app-manifest-relations.mjs` implements VALIDATOR-AZ7 (§4.1) as a zero-dependency module, approved by `0009` as a narrow Phase 0 exception, and **the standalone relation validator has been executed against the recorded AZ7 fixtures** — `az7-n4`, the CWE-863 exploit manifest, moves ACCEPT → REJECT as `AZ7_TARGET_ENTITY_NOT_OWNED` while the positive owned-target fixture `az7-p2` still accepts. **The current measured result, fixture count, revision, date and runner are maintained in the permission catalog's authoritative `AZ7` entry** under `openQuestions` in `packages/contracts/registries/permission-catalog.yaml`. **This standard deliberately does not duplicate mutable result counts** — a hand-maintained number that nothing recomputes rots in whichever copy is not being read. **Not every fixture executes:** the invocation cases are runtime obligations no static validator can decide. **JSON Schema execution and production admission-path integration remain separate outstanding obligations.** Three things remain open. (a) **Nothing runs it automatically** — no CI job, no install path, no runtime. The clause is *enforceable and proven against fixtures*; it is **not** enforced in production, and writing it up as though it were is the CRIT-4 overclaim. (b) This is a **manifest-format change** touching the SDK, Studio, `APP_STANDARD.md`, and every future published manifest; `0009` records the validator, not the format change, which still needs its own decision record — the Team Lead owns it. (c) An Action may target **exactly one** entity today. Multi-entity Actions are deliberately not given targeting semantics here rather than invented. | **STILL OPEN on all three residuals, verified 2026-09-06 — and (a) has NOT moved.** Nothing invokes `packages/contracts/validation/app-manifest-relations.mjs`: `package.json:16` runs `node tools/run-suites.mjs`, there is no CI workflow, and no installation or admission path exists to wire it into. **The gap is currently harmless for a reason that will expire** — there is no App install path at all, so no manifest can reach installation unchecked because none can reach installation. **That is not the same as being enforced, and the day an install path is built is the day the gap becomes live.** (b) the manifest-format change still needs its own record — `0009` approves the validator and not the format. (c) single-entity targeting is unchanged. Team Lead records the format change; CI runs the validator over the AZ7 fixtures, and Phase 1 wires it into the install path against that same conformance suite (`0009`). Do not treat the schema half as the rule, and do not treat a fixture run as production enforcement — §4.1 states which half is which, and that distinction is load-bearing. |
+| AZ8 | **Marketplace moderation has no permission it may legitimately hold to view Apps.** `marketplace-moderator` is `platform` scope; `core.app.read` is declared `scopes: [organization, business]` and has been removed from it (§4). Moderation reviews *published App versions*, which is not the same object as *a tenant's installed Apps*. | **STILL OPEN — needs an architecture decision (Team Lead), and blocked with AZ4 on the same root: there is no marketplace.** Verified unchanged: `permission-catalog.yaml:932–936` still gives `marketplace-moderator` exactly `[core.marketplace.moderate]` and describes it as *"Holds no tenant-scoped permission, so it currently has no view of Apps at all."* `core.app.read` is still declared `scopes: [organization, business]`. **The cost stays stated rather than absorbed** — moderation can moderate and cannot look. Recommendation unchanged, including its prohibition: **do not widen `core.app.read` to include `platform`**; that pushes a tenant-scope permission above the tenant boundary and recreates the escalation this row exists to record. **Eight platform-scope permissions have been added since this row was written and none of them is the one it asks for**, which is evidence the gap is real rather than an artefact of an empty catalog. Distinct from AZ3: this needs no tenant business data. Blocks Phase 6 moderation and nothing before it. |

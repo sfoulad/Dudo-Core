@@ -114,23 +114,38 @@ destroyed the experiment and produced a false pass.
 
 **Relationship to the delivery gates:**
 
-- **Neither validation application needs to become a production release during the
+> **STALE, corrected 2026-09-06 (`workflow.md` §12).** The three bullets below reason from the
+> **seven-step per-feature gate**, which `0030` withdrew and replaced with **milestone acceptance**.
+> They are kept visible rather than deleted, because the *distinction* they draw survives the gate
+> that expressed it. **What is unchanged and was never an MVP concession: production actions —
+> migrations, deploys, credential changes, any spend — require explicit user approval, every
+> time** (`0030`). **What is changed: "the full seven-step gate applies when it ships" now reads
+> "it is accepted at a milestone the user tests."** Re-derive AV5 on that basis rather than on the
+> struck gate.
+
+- ~~**Neither validation application needs to become a production release during the
   Foundation Gate.** `0005` suspends the runnable-release steps for Phases 0–3 precisely
   because foundation work produces nothing a user can open, and the purpose here is
-  evidence about the architecture, not a shipped feature.
-- **This does not exempt either application from the full delivery gate if and when it
+  evidence about the architecture, not a shipped feature.~~ **The reason survives the gate:**
+  the purpose here is evidence about the architecture, not a shipped feature, and a validation
+  report is complete without a release.
+- ~~**This does not exempt either application from the full delivery gate if and when it
   ships.** `0005` is explicit that the full seven-step gate is triggered by work becoming
-  runnable, not by a phase number. A validation App that is later released to users passes
-  the full gate then, on its own merits.
+  runnable, not by a phase number.~~ **Re-derived:** a validation application released to users
+  is released work, and is accepted by the user like any other — the trigger was never the phase
+  number and still is not.
 - The validation is complete when its **report** is complete and dispositioned — not when the
-  applications are feature-complete.
+  applications are feature-complete. **(Unaffected by `0030`.)**
 
 ---
 
 ## 6. The deliverable
 
 A written validation report, owned by `architecture-agent`, reviewed by `qa-agent`, recorded
-by the Team Lead, and approved by the user under `0005` step 7. It contains all eight:
+by the Team Lead, and **approved by the user** — under `0005` step 7 while the Foundation Gate
+governs, and otherwise at the milestone `0030` assigns it. *(Amended 2026-09-06: `0030` replaced
+the per-feature gate with milestone acceptance. **The user's approval is not what changed** — it
+is required either way, and no agent may infer, assume or grant it.)* It contains all eight:
 
 1. **What was built**, per application, with the entities and Actions actually implemented —
    and what was *not* built, stated plainly.
@@ -200,10 +215,20 @@ experiment rather than a demonstration.** Any of the following is a `fails`:
 
 ## 9. Open questions
 
-| # | Question | Status |
-|---|---|---|
-| AV1 | **How complete must each application be?** Enough to exercise the six areas is the criterion here; nothing quantifies it further. | Recommendation: the smallest slice that exercises all six honestly, chosen per application and stated in the report. Team Lead confirms before Phase 4 planning. |
-| AV2 | **Phase 4 is planned around four official Apps** (Customers, Appointments, Commitments, Finance Health); **§1 requires Appointments and E-commerce.** E-commerce is not in the Phase 4 list. | Unresolved. The validation needs the *difference* between the two, and Commitments and Finance Health are closer to Appointments than E-commerce is. Team Lead decides which Apps constitute Phase 4. |
-| AV3 | **Both applications need a Payment Connector**, and Connectors are Phase 5 — after Phase 4. | An ordering conflict between the two phases. Either the payment path is validated with a test provider, which validates the capability boundary but not a real Connector, or Phase 5 partially precedes Phase 4. Team Lead decides; the report must state which was done. |
-| AV4 | **Application B needs SMS**, which is a Capability with no approved provider. | Same shape as AV3. A test provider validates the interface, not the integration; the report must not claim otherwise. |
-| AV5 | **Which gate applies to the validation applications** if either is released to users. | `0005` says the full gate is triggered by runnable work. Team Lead states which gate applies when assigning the work, per `CONSTITUTION.md` §4.5. |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would).
+
+**Read this table against one fact that changed everything about its timing.** This standard is a
+**gate before broad App development**, and `0030` committed Dudo to *"the business Apps — CRM,
+Finance, Projects, Inventory, HR"*. **That is five Apps, and this gate stands in front of them.**
+Every row below was written as Phase 4 planning; all five are now decisions in the immediate path,
+and AV2 in particular is no longer a scheduling detail.
+
+| # | State | Question | Status |
+|---|---|---|---|
+| AV1 | **OPEN** — Team Lead; unchanged | **How complete must each application be?** Enough to exercise the six areas is the criterion here; nothing quantifies it further. | Recommendation unchanged: the smallest slice that exercises all six honestly, chosen per application and stated in the report. **One precedent now exists to calibrate against** — the Customer Directory slice: eight Actions built, two contracted and deliberately not built, with the deferral recorded in the App's own README and enforced at router construction. **That is roughly the right size**, and it demonstrates the discipline this row needs: what was *not* built is stated as plainly as what was. |
+| AV2 | **OPEN, and materially wider than this row says** — Team Lead | ~~**Phase 4 is planned around four official Apps** (Customers, Appointments, Commitments, Finance Health); **§1 requires Appointments and E-commerce.**~~ | **The premise needs restating, because its source is not in this repository.** The four-App Phase 4 list comes from the master-plan PDF, which is deliberately outside both public repositories; `docs/product/vision.md` names *"CRM, Finance, Projects, Inventory, HR"* and **`0030` (Accepted) commits to that list**. **Neither Appointments nor E-commerce appears in the only *accepted* statement of the target App set** — so the conflict is not "E-commerce is missing from Phase 4", it is that **§1's validation pair and the committed App list now share no member at all.** The substantive point survives untouched: the validation needs the *difference* between two applications, and Inventory-plus-Finance is a plausible substitute for E-commerce's catalogue/fulfilment shape while CRM is close to what already exists. **Team Lead decides two things, not one: which Apps constitute the first App programme, and whether §1's pairing is amended or honoured with throwaway scope** — noting §5's warning that building throwaway prototypes validates a throwaway. |
+| AV3 | **OPEN** — Team Lead sequencing; the conflict is real and now nearer | **Both applications need a Payment Connector.** | ~~An ordering conflict between the two phases.~~ **`0030` withdrew the phase framing, and the conflict does not go away with it — it becomes an ordering question with no phase numbers to hide behind.** The dependency chain is: a Payment Connector needs `payment@1` (`CAPABILITY_STANDARD.md` CP1, unspecified), which needs the concurrent-provider question answered first (CP3), **and any real Connector needs a tenant-scoped secret store (CN1, root R2, undecided).** So the honest position today is that **a real Payment Connector cannot be built at all**, and the choice this row offers is not open: the payment path is validated with a **test provider**, which validates the capability boundary and not an integration. **The report must say exactly that** rather than describing the capability as validated. |
+| AV4 | **OPEN** — same root as AV3 (R2/CN1), plus no approved provider | **Application B needs SMS**, which is a Capability with no approved provider. | Same shape as AV3 and the same conclusion, now firmer: a test provider validates the interface, not the integration; **the report must not claim otherwise.** Note the messaging capability is unspecified exactly as payment is (`CAPABILITY_STANDARD.md` §3 records the domain and no contract), so this is not a provider-shopping problem — there is nothing yet for a provider to implement. |
+| AV5 | **STALE — its premise was withdrawn; re-derive rather than answer as written** | **Which gate applies to the validation applications** if either is released to users. | ~~`0005` says the full gate is triggered by runnable work.~~ **`0030` withdrew the seven-step per-feature gate and replaced it with milestone acceptance** (`workflow.md` §12: a withdrawn decision leaves live assertions behind, and this is one). **What is unchanged and must not be read as relaxed:** production actions — migrations, deploys, credential changes, any spend — require **explicit user approval every time**, and `0030` says why that survived: on the day before it was accepted, that control caught a targeted denial-of-service, a confirmation binding that covered nothing, and four unsatisfiable request shapes. **Re-ask AV5 as: at which milestone is the validation report accepted, and is a released validation application its own milestone?** Team Lead states it when assigning the work. |

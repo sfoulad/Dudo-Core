@@ -260,8 +260,10 @@ and a rollback path. Partial completion is reported as partial.
 > is corrected rather than deleted, because a paragraph naming a withdrawn gate is precisely
 > the residue `.claude/rules/workflow.md` §12 exists to catch, and it instructed.
 
-- **Phases 0–3:** the Foundation Gate (`0005`), seven conditions ending in user approval.
-  **Unaffected by `0030`**, which supersedes the MVP delivery policy and not `0005`.
+- **The Foundation Gate (`0005`) — seven conditions ending in user approval.** Its
+  *conditions* are unaffected by `0030`, which supersedes the MVP delivery policy and not
+  `0005`. **Its return clause is not**, and that clause is where this section went wrong —
+  see below.
 - ~~**From the first runnable vertical feature (in practice Phase 4):** the full seven-step
   delivery gate (`docs/product/mvp-delivery-policy.md` §4).~~ **Withdrawn by `0030`.** Work
   proceeds continuously and stops at named milestones for the user to test and accept.
@@ -269,7 +271,25 @@ and a rollback path. Partial completion is reported as partial.
   **production actions — migrations, deploys, credential changes, any spend — still require
   explicit user approval, each time.** `0030`: *"That control is not MVP overhead."*
 
-The Team Lead states which gate applies when assigning work.
+> **The trigger had already fired, which is worth recording rather than tidying away.**
+> `0005`'s return clause — struck at `docs/decisions/0005-foundation-gate-for-phases-0-3.md`
+> lines 94–117 by an amendment dated 2026-09-06 — fired on *"any Phase 0–3 work that produces
+> something a user can actually open."* **The admin console is deployed at `admin.dudo.work`
+> and is something a user can open.** So the condition was met, then the gate it summoned was
+> withdrawn, and **for a few hours this document required a gate that no longer existed,
+> triggered by a condition that had already been satisfied.** Nothing went red at either
+> moment, which is the whole of `.claude/rules/workflow.md` §12's subject.
+>
+> **No approval point is lost in the supersession, and this is the mapping to carry forward.**
+> `0005` required **user approval per phase** — four approval points before the first App
+> (`0005` Consequences). `0030` requires **milestone acceptance**. **The phases ARE the
+> milestones**; it is the same mechanism under a different name, not a relaxation.
+
+**There is now ONE gate, and this sentence used to say otherwise.** ~~The Team Lead states
+which gate applies when assigning work.~~ That instruction assumed a choice between two gates
+and survived the first correction of this section by three lines — struck on a second pass,
+not the first. The Foundation Gate's conditions are what apply; the Team Lead states the
+**milestone**, not the gate.
 
 ### 4.6 Amending this Constitution
 

@@ -204,8 +204,21 @@ that claim being true.
 
 ## 12. Open questions
 
-| # | Question | Recommendation |
-|---|---|---|
-| CP1 | **Which capability is specified first.** Phase 5 lists payments, messaging, email, shipping, accounting, IoT with no order. | `payment@1` first — it is the one with the hardest semantics (idempotency, money, partial refunds). If the capability model survives payment, it survives the rest. |
-| CP2 | **The AI capability's action set** is specified (`AI_STANDARD.md`) but no provider is approved. | Define the interface now; provider selection blocked on an ADR. `AI_STANDARD.md` §2. |
-| CP3 | **Whether a tenant may run two providers of one capability simultaneously** (e.g. two payment gateways for different currencies). Not addressed by the plan. | Allow it, with the App selecting by *declared capability attributes* (currency, region) rather than by provider identity. Needs a contract mechanism; flagged before `payment@1` is written. |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would).
+**Nothing here has been contradicted, because nothing here has been built:**
+`platform/capabilities/` holds a README, `connectors/` holds a README, and
+`packages/contracts/registries/capability-manifest.schema.json` is the only machine-readable
+artifact this standard has. **No capability is specified and no provider exists.**
+
+**The whole document moved from distant to near on 2026-09-06 without a word of it changing.**
+`0030` withdrew the MVP framing and made the target *"the full system… the capability registry and
+SDK, Connectors, and the business Apps"*, so the capability layer is now in scope work rather than
+a later phase — while every row below still says "not yet".
+
+| # | State | Question | Recommendation |
+|---|---|---|---|
+| CP1 | **OPEN** — Team Lead sequencing; the recommendation is unchanged and is now actionable | **Which capability is specified first.** | `payment@1` first — it is the one with the hardest semantics (idempotency, money, partial refunds). If the capability model survives payment, it survives the rest. **Two things now sit in front of it rather than beside it.** **(1) CN1** — no tenant-scoped secret store, so a payment provider has nowhere to keep a tenant's credential; a `payment@1` contract can be *written* without it but no Connector can be *built*. **(2) `ARCHITECTURE_VALIDATION_STANDARD.md` AV3** records the ordering conflict from the other side: the validation applications both need a Payment Connector. **Specifying `payment@1` now is what makes AV3 answerable**, so the sequencing argument favours doing it early even though it cannot ship. |
+| CP2 | **OPEN** — root R3 (no AI provider), unchanged | **The AI capability's action set** is specified (`AI_STANDARD.md`) but no provider is approved. | Unchanged: define the interface now; provider selection is blocked on `AI_STANDARD.md` AI1, which under `0008` is a **user budget decision** and not only an ADR. This row is one of several pointing at that single root; it is stated once at AI1 and not re-argued here. |
+| CP3 | **OPEN** — architecture decision; must be answered *before* `payment@1`, not after | **Whether a tenant may run two providers of one capability simultaneously** (e.g. two payment gateways for different currencies). | Unchanged: allow it, with the App selecting by *declared capability attributes* (currency, region) rather than by provider identity — an App that can name a provider has defeated §1. **The reason this is properly ordered before CP1's contract rather than alongside it:** §5 forbids automatic failover and makes resolution *"per tenant and explicit"*, and a second concurrent provider is the case that decides whether resolution takes an argument at all. **A capability whose resolution signature is retrofitted is a breaking change to every App that consumed it** (§7). |
