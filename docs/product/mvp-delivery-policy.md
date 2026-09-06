@@ -1,14 +1,34 @@
-# Dudo — MVP Delivery Policy
+# Dudo — Delivery Policy
 
-How a Dudo feature goes from idea to something the user has actually used and accepted.
-Binding on the Team Lead and every agent. Decision of record:
-`docs/decisions/0002-repository-and-mvp-delivery-strategy.md`.
+How Dudo work reaches something the user has actually used and accepted. Binding on the
+Team Lead and every agent. Decisions of record:
+`docs/decisions/0002-repository-and-mvp-delivery-strategy.md` and
+**`docs/decisions/0030-full-system-zero-cost-and-expandability.md`**.
 
-## 1. One vertical slice at a time
+> ## ⚠ THE PACING RULES IN THIS DOCUMENT ARE SUPERSEDED. THE DELIVERY REQUIREMENTS ARE NOT.
+>
+> **`0030` withdrew the MVP framing on 2026-09-06.** Sections **1** (one vertical slice at
+> a time) and **4** (the seven-step gate) no longer bind — work runs continuously and stops
+> at named milestones.
+>
+> **Everything else in this document still binds**, and none of it was an MVP concession:
+> the Apple and web release requirements, release honesty, the rule that a build is not
+> testable until it is processed and available, **production actions requiring explicit user
+> approval every time**, and public-repository safety.
+>
+> The struck sections are kept rather than deleted. **They were right on their own terms**,
+> and the seven-step shape is still the right checklist for what a milestone owes the user —
+> it is the *waiting* that was withdrawn, not the *evidence*.
 
-Dudo is **MVP-focused**. The team builds **one small, complete vertical feature at a
+## 1. ~~One vertical slice at a time~~ — SUPERSEDED by `0030`
+
+~~Dudo is **MVP-focused**. The team builds **one small, complete vertical feature at a
 time**, and **does not begin the next feature until the user has tested and accepted the
-current one**.
+current one**.~~
+
+**Now:** the target is the full system. Work runs continuously; milestones are named, and
+the user accepts them. **Milestone acceptance is still the user's alone** — never inferred
+from silence, never assumed from a green run.
 
 A **vertical slice** goes all the way through:
 
@@ -84,7 +104,9 @@ A feature is complete only when **all seven** conditions hold:
 | 6 | Team Lead gives the user the web URL, TestFlight build number, release notes, and test checklist | Team Lead |
 | 7 | **The user explicitly accepts the feature** | **User only** |
 
-**No agent may begin the next feature before step 7.**
+~~**No agent may begin the next feature before step 7.**~~ **SUPERSEDED by `0030`** — work
+does not wait on acceptance. **The seven conditions remain the right checklist for what a
+milestone owes the user; only the blocking was withdrawn.**
 
 Step 7 is the user's alone. It cannot be inferred from silence, assumed from a passing
 test run, granted by the Team Lead, or claimed by any agent. "The Team Lead said the
