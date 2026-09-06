@@ -1,9 +1,24 @@
 # 0002 — Repository structure and MVP delivery strategy
 
-- **Status:** Accepted
+- **Status:** Accepted — **delivery strategy PARTLY SUPERSEDED by `0030` (2026-09-06)**
 - **Date:** 2026-08-31
 - **Deciders:** User (explicit approval in conversation), Dudo Team Lead
 - **Owning agent:** Team Lead
+
+> **⚠ What `0030` withdrew, and what it did not.**
+>
+> **Superseded:** the MVP framing, *one small complete vertical feature at a time*, and the
+> rule that no agent begins the next feature before step 7. Work now runs continuously and
+> stops at named milestones.
+>
+> **Still binding, and unaffected:** the **two-repository structure**, `Dudo-Core` and
+> `Dudo-Apple` meeting only through the published contract set; both repositories public;
+> the Apple and web release requirements; release honesty; and **production actions
+> requiring explicit user approval every time.**
+>
+> **Kept rather than rewritten.** The reasoning below was right on its own terms, and the
+> seven-step shape is still the correct checklist for what a milestone owes the user — it
+> is the *waiting* that was withdrawn, not the *evidence*.
 
 ## Context
 
