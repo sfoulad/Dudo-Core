@@ -410,8 +410,11 @@ and reported honestly:
       canonical test alone, and not tickable from a sampled endpoint.**
 - [ ] **Non-disclosure of existence** — status, error shape, response-size class and timing
       distribution, per §5.2. Reported as `UNVERIFIED / NOT RUN` until TS5 defines and the
-      team implements the measurement method. **Never ticked without measurement.** Does not
-      block Phase 0; **blocks any production release serving real tenant data.**
+      team implements the measurement method. **Never ticked without measurement.**
+      ~~Does not block Phase 0;~~ **corrected 2026-09-06 — a runtime and three seeded
+      Organizations now exist, so the "nothing to measure" premise is gone (§5.2).** It does not
+      block *today* only because the data is synthetic and the deployment is staging, and it
+      **blocks any production release serving real tenant data.**
 - [ ] **Permission tests pass.**
 - [ ] Security review passes (`SECURITY_STANDARD.md` §12), by an agent that did not write
       the code.

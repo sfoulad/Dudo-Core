@@ -3,8 +3,8 @@
 - **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **This standard imposes a gate, not a feature.**
 - **Authored by:** `architecture-agent`.
 - **Applies to:** the platform as a whole, before many business Apps are built on it.
-- **Depends on:** `CONSTITUTION.md`; `ARCHITECTURE.md`; `APP_STANDARD.md`; `CAPABILITY_STANDARD.md`; `TESTING_STANDARD.md`; `docs/decisions/0005` (Foundation Gate).
-- **Applies from:** Phase 4.
+- **Depends on:** `CONSTITUTION.md`; `ARCHITECTURE.md`; `APP_STANDARD.md`; `CAPABILITY_STANDARD.md`; `TESTING_STANDARD.md`; `docs/decisions/0005` (Foundation Gate — **amended 2026-09-06**; its seven conditions and its eight not-suspended requirements stand, its "when the full gate returns" clause is struck); `docs/decisions/0030` (**milestone acceptance replaces the per-feature gate**).
+- **Applies from:** Phase 4. *(A phase here is a milestone, not a suspended cadence: `0005`'s amendment records that **the phases ARE the milestones**. Phase labels throughout this directory survive `0030` unchanged.)*
 
 ---
 
@@ -112,28 +112,40 @@ destroyed the experiment and produced a false pass.
 - The two validation applications may be, and probably should be, the first two official
   Apps. Building throwaway prototypes would validate a throwaway.
 
-**Relationship to the delivery gates:**
+**Relationship to the acceptance cadence:**
 
-> **STALE, corrected 2026-09-06 (`workflow.md` §12).** The three bullets below reason from the
-> **seven-step per-feature gate**, which `0030` withdrew and replaced with **milestone acceptance**.
-> They are kept visible rather than deleted, because the *distinction* they draw survives the gate
-> that expressed it. **What is unchanged and was never an MVP concession: production actions —
-> migrations, deploys, credential changes, any spend — require explicit user approval, every
-> time** (`0030`). **What is changed: "the full seven-step gate applies when it ships" now reads
-> "it is accepted at a milestone the user tests."** Re-derive AV5 on that basis rather than on the
-> struck gate.
+> **REWRITTEN 2026-09-06 (`workflow.md` §12).** This subsection was headed *"Relationship to the
+> delivery gates"*, plural, and every bullet below reasoned from **two coexisting gates** — the
+> seven-step per-feature gate of `0002` and `0005`'s Foundation Gate — with the question always
+> being *which one applies*. **`0030` withdrew the seven-step gate. There is now one cadence:
+> milestone acceptance.** `0005` was amended the same day and states the mapping: it required
+> **user approval per phase**, `0030` requires **milestone acceptance**, and **the phases ARE the
+> milestones** — so *"no approval point disappears."*
+>
+> **The struck text is kept visible because the distinction it drew is real and survives the gate
+> that expressed it:** a validation report is not a release, and a released application is not
+> exempt from acceptance. **What is gone is the choosing.** There is nothing to choose between.
+>
+> **Unchanged, and never a gate mechanic in the first place:** production actions — migrations,
+> deploys, credential changes, any spend — require **explicit user approval, every time**
+> (`0030`), and `0005`'s eight explicitly-not-suspended requirements still bind in full,
+> including truthful test reporting and secret protection.
 
 - ~~**Neither validation application needs to become a production release during the
   Foundation Gate.** `0005` suspends the runnable-release steps for Phases 0–3 precisely
   because foundation work produces nothing a user can open, and the purpose here is
-  evidence about the architecture, not a shipped feature.~~ **The reason survives the gate:**
-  the purpose here is evidence about the architecture, not a shipped feature, and a validation
-  report is complete without a release.
+  evidence about the architecture, not a shipped feature.~~ **Re-derived without the gate:**
+  the purpose here is **evidence about the architecture, not a shipped feature**, so **a
+  validation report is complete without a release** — and that was always the reason, with the
+  suspension merely the mechanism that expressed it. *(The premise underneath the struck text
+  has also expired independently: `0005`'s "produces nothing a user can open" ceased to be true
+  when the admin console was deployed.)*
 - ~~**This does not exempt either application from the full delivery gate if and when it
   ships.** `0005` is explicit that the full seven-step gate is triggered by work becoming
-  runnable, not by a phase number.~~ **Re-derived:** a validation application released to users
-  is released work, and is accepted by the user like any other — the trigger was never the phase
-  number and still is not.
+  runnable, not by a phase number.~~ **Re-derived:** **a validation application released to
+  users is released work and is accepted by the user at a milestone, like anything else.** No
+  exemption existed and none is created; what changed is only the name of the thing it is not
+  exempt from.
 - The validation is complete when its **report** is complete and dispositioned — not when the
   applications are feature-complete. **(Unaffected by `0030`.)**
 
@@ -142,10 +154,15 @@ destroyed the experiment and produced a false pass.
 ## 6. The deliverable
 
 A written validation report, owned by `architecture-agent`, reviewed by `qa-agent`, recorded
-by the Team Lead, and **approved by the user** — under `0005` step 7 while the Foundation Gate
-governs, and otherwise at the milestone `0030` assigns it. *(Amended 2026-09-06: `0030` replaced
-the per-feature gate with milestone acceptance. **The user's approval is not what changed** — it
-is required either way, and no agent may infer, assume or grant it.)* It contains all eight:
+by the Team Lead, and **approved by the user at the milestone this validation constitutes.**
+*(Amended 2026-09-06. This read "approved by the user under `0005` step 7". `0030` replaced the
+per-feature gate with milestone acceptance and `0005` was amended to match — **the phases ARE the
+milestones**, so `0005` step 7's approval point is not lost, it is the same point under the current
+name. An earlier draft of this correction offered two regimes — "`0005` step 7 while the Foundation
+Gate governs, otherwise the milestone" — which was wrong in the same way the struck §5 bullets
+were: **there is one cadence, and offering a choice reintroduces the thing `0030` removed.** What
+did not change at all is the load-bearing half: **the user's approval is required, and no agent may
+infer, assume or grant it.**)* It contains all eight:
 
 1. **What was built**, per application, with the entities and Actions actually implemented —
    and what was *not* built, stated plainly.
@@ -231,4 +248,4 @@ and AV2 in particular is no longer a scheduling detail.
 | AV2 | **OPEN, and materially wider than this row says** — Team Lead | ~~**Phase 4 is planned around four official Apps** (Customers, Appointments, Commitments, Finance Health); **§1 requires Appointments and E-commerce.**~~ | **The premise needs restating, because its source is not in this repository.** The four-App Phase 4 list comes from the master-plan PDF, which is deliberately outside both public repositories; `docs/product/vision.md` names *"CRM, Finance, Projects, Inventory, HR"* and **`0030` (Accepted) commits to that list**. **Neither Appointments nor E-commerce appears in the only *accepted* statement of the target App set** — so the conflict is not "E-commerce is missing from Phase 4", it is that **§1's validation pair and the committed App list now share no member at all.** The substantive point survives untouched: the validation needs the *difference* between two applications, and Inventory-plus-Finance is a plausible substitute for E-commerce's catalogue/fulfilment shape while CRM is close to what already exists. **Team Lead decides two things, not one: which Apps constitute the first App programme, and whether §1's pairing is amended or honoured with throwaway scope** — noting §5's warning that building throwaway prototypes validates a throwaway. |
 | AV3 | **OPEN** — Team Lead sequencing; the conflict is real and now nearer | **Both applications need a Payment Connector.** | ~~An ordering conflict between the two phases.~~ **`0030` withdrew the phase framing, and the conflict does not go away with it — it becomes an ordering question with no phase numbers to hide behind.** The dependency chain is: a Payment Connector needs `payment@1` (`CAPABILITY_STANDARD.md` CP1, unspecified), which needs the concurrent-provider question answered first (CP3), **and any real Connector needs a tenant-scoped secret store (CN1, root R2, undecided).** So the honest position today is that **a real Payment Connector cannot be built at all**, and the choice this row offers is not open: the payment path is validated with a **test provider**, which validates the capability boundary and not an integration. **The report must say exactly that** rather than describing the capability as validated. |
 | AV4 | **OPEN** — same root as AV3 (R2/CN1), plus no approved provider | **Application B needs SMS**, which is a Capability with no approved provider. | Same shape as AV3 and the same conclusion, now firmer: a test provider validates the interface, not the integration; **the report must not claim otherwise.** Note the messaging capability is unspecified exactly as payment is (`CAPABILITY_STANDARD.md` §3 records the domain and no contract), so this is not a provider-shopping problem — there is nothing yet for a provider to implement. |
-| AV5 | **STALE — its premise was withdrawn; re-derive rather than answer as written** | **Which gate applies to the validation applications** if either is released to users. | ~~`0005` says the full gate is triggered by runnable work.~~ **`0030` withdrew the seven-step per-feature gate and replaced it with milestone acceptance** (`workflow.md` §12: a withdrawn decision leaves live assertions behind, and this is one). **What is unchanged and must not be read as relaxed:** production actions — migrations, deploys, credential changes, any spend — require **explicit user approval every time**, and `0030` says why that survived: on the day before it was accepted, that control caught a targeted denial-of-service, a confirmation binding that covered nothing, and four unsatisfiable request shapes. **Re-ask AV5 as: at which milestone is the validation report accepted, and is a released validation application its own milestone?** Team Lead states it when assigning the work. |
+| AV5 | **CLOSED 2026-09-06** — the question dissolved rather than being answered | ~~**Which gate applies to the validation applications** if either is released to users.~~ | **There is one cadence, so "which gate" has one answer and is no longer a question.** `0030` withdrew the seven-step per-feature gate and replaced it with **milestone acceptance**; `0005` was amended the same day and records the mapping — it required **user approval per phase**, `0030` requires **milestone acceptance**, and **the phases ARE the milestones**, so *"no approval point disappears."* **This row existed only because two gates coexisted and someone had to choose** — `0005`'s own consequences said so: *"Two gates now coexist. The Team Lead states which gate applies to a unit of work when assigning it, so no agent has to guess."* **One of the two is gone; there is nothing left to state.** The validation report is accepted by the user at the milestone this validation constitutes (§6). **What is unchanged, and must not be read as relaxed by a row that closes:** production actions — migrations, deploys, credential changes, any spend — require **explicit user approval every time**, and `0030` records why that survived the withdrawal when the gate did not: on the day before it was accepted, that control caught a targeted denial-of-service, a confirmation binding that covered nothing, and four unsatisfiable request shapes. **Closed on the Team Lead's instruction of 2026-09-06, citing `0030` and the `0005` amendment.** |
