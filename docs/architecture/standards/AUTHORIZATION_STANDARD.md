@@ -100,10 +100,55 @@ are a subset. Where an AI acts on behalf of a user, the effective permission is 
   reserved to platform principals (§4). A manifest declaring it **fails validation and the
   App does not install** — it is not accepted-then-trimmed, because an App installed in a
   state where it will fail unpredictably at runtime is worse than one that did not
-  install. Enforced structurally by `app-manifest.schema.json` `$defs/appRequestableScope`,
+  install. **The rule is EXPRESSED** by `app-manifest.schema.json` `$defs/appRequestableScope`,
   which is `$defs/scope` minus `platform`. Every marketplace App is untrusted by
   assumption, including our own (`SECURITY_STANDARD.md` §1 threat 2), so this cannot be a
   review item.
+
+  > **CORRECTED 2026-09-06 — this bullet said "Enforced structurally by", and "enforced" was
+  > false.** The twin of this claim in `permission-catalog.yaml` `model.rules` rule 9 was
+  > corrected the same day. **This is one claim with two homes, and the instance nobody fixes
+  > is the one the next reader finds.**
+  >
+  > **Which side is false, per `.claude/rules/architecture.md` §3b — the schema is RIGHT and it
+  > is UNEXECUTED.** Read rather than assumed: `$defs/scope`
+  > (`app-manifest.schema.json:376–388`) enumerates seven values including `platform`;
+  > `$defs/appRequestableScope` (lines 389–400) enumerates the same six minus `platform`. The
+  > constraint is correctly expressed — and it is `$ref`ed at **two** sites, not the one this
+  > bullet named: `permissions[].scope` (line 97) **and `actions[].scope` (line 549)**. So the
+  > schema covers more than the sentence claimed while enforcing less than it promised.
+  >
+  > **That nothing executes it is verified, not asserted.** `packages/contracts/README.md`:
+  > *"Nothing in this directory is executed. There is no JSON Schema implementation in this
+  > repository … normative and hand-checked, never machine-validated."* Three further checks,
+  > recorded so they are not repeated: `0009`'s approved validator,
+  > `packages/contracts/validation/app-manifest-relations.mjs`, mentions `platform` exactly
+  > once and it is inside an unrelated AZ7 error message — **it does not look at scopes at
+  > all**; nothing in `platform/**` parses a manifest; and `apps/customers` is **compiled in,
+  > not installed**. There is no admission path for a manifest to fail at.
+  >
+  > **So name the owner, because that is what makes this actionable rather than merely honest.**
+  > `authorizer.ts` **does** enforce the declared-scope ceiling at call time
+  > (`platform/core/authorization/authorizer.ts:118–130`) — but against an
+  > `AppPermissionEnvelope`, which a Core author **transcribes by hand from the manifest**.
+  > `apps/customers/app.ts:4` says so in its own header — *"transcribed from"* — and hand-writes
+  > `scope: 'organization'` on all nine permissions (lines 39–47), labelling the transcription a
+  > drift surface. **Therefore: whoever writes an `AppPermissionEnvelope` is the last check that
+  > no App reaches `platform` scope**, because the constraint that would have refused the
+  > manifest never runs. **That makes it a review item today — which is precisely what the
+  > sentence above says it must never be.**
+  >
+  > **What would make the original claim true:** a manifest-admission path that executes this
+  > schema, which needs `AS1` (the contract's executable form) and `TS1`. **The claim was
+  > aspirational rather than wrong-headed** — the schema was written to *be* the enforcement,
+  > and there is simply nothing yet to run it. **Do not repair this by weakening the schema:**
+  > it is the specification that admission path will implement, and it is correct as written.
+  >
+  > **Same shape as AZ7 and it is not a coincidence.** §4.1 already draws the line between
+  > *expressible*, *enforceable*, and *automatically enforced*, and records that collapsing it
+  > is *"the CRIT-4 overclaim"*. This bullet collapsed the same distinction one section earlier,
+  > in a rule about the single most dangerous scope in the system. **Both live in this file, and
+  > only one of them had been caught.**
 - **`list` is a separate permission from `read`.** Enumeration is its own disclosure: the
   count and the identifiers are information even when the records are not readable.
 
@@ -237,7 +282,11 @@ Rules:
 > manifest**, and that Entity must itself declare a valid `ownershipField`. An
 > `ownershipField` on any *other* entity does not satisfy this clause, at all, ever.
 >
-> A manifest failing any of the three **fails validation, and the App does not install.**
+> A manifest failing any of the three **must fail validation, so that the App does not
+> install.** *(Wording corrected 2026-09-06 from "fails validation, and the App does not
+> install", which stated as fact what is an obligation: **no manifest is validated today**,
+> because nothing executes JSON Schema and no install path exists. §4.1 and the note under
+> §3.2's `platform`-scope bullet carry the verification.)*
 > It is never accepted and then evaluated as unrestricted. Missing, unknown, malformed, or
 > ambiguous `targetEntity` all **fail closed**.
 
@@ -272,7 +321,19 @@ JSON Schema draft 2020-12 has no keyword that compares two instance values. It i
 limit of the manifest format any more; the Action now names its target. It is a limit of the
 schema language, and it is the *only* part that is one.
 
-**What `app-manifest.schema.json` enforces**, by keyword:
+**What `app-manifest.schema.json` EXPRESSES**, by keyword — *"enforces" corrected 2026-09-06,
+and this correction is the more embarrassing of the two because it is in the section that
+exists to police exactly this distinction:*
+
+> §4.1 got the **harder** axis right and missed the easier one. It is meticulous that clause 3
+> is *expressible-but-not-in-JSON-Schema*, and it says of clauses 1 and 2 that the schema
+> **enforces** them. **It does not. It expresses them, and nothing runs it** — no JSON Schema
+> implementation exists in this repository, `0009`'s validator does not read `scope`, nothing
+> in `platform/**` parses a manifest, and there is no install path. **So all three clauses are
+> unenforced today, for two different reasons**, and the table below reads as though the first
+> two were settled. That is `.claude/rules/architecture.md` §3c's shape: a claim about a
+> contract that a reviewer would not re-derive, because the surrounding prose is so careful
+> about a neighbouring distinction that this one looks already handled.
 
 | Guarantee | Where | Keywords |
 |---|---|---|
@@ -286,6 +347,22 @@ That is clauses 1 and 2, in full, and **nothing of clause 3**. The schema does n
 `targetEntity`, does not know whether the named entity exists, and does not know whether it
 carries an `ownershipField`. Reading the table above as "VAL-OWN is enforced" is the exact
 overclaim that produced the earlier defect, and it is wrong in the same way.
+
+**And it is wrong in a second way this paragraph did not catch.** The sentence above guards
+against reading clauses 1 and 2's coverage as covering clause 3 — a *scope* error. It does not
+guard against reading "the schema expresses it" as "something checks it" — a *liveness* error.
+**Three distinct states, and only the first two were ever separated here:**
+
+| State | Clauses 1 and 2 | Clause 3 |
+|---|---|---|
+| **Expressible in JSON Schema** | yes | **no** — §4.1's subject |
+| **Expressed somewhere executable** | in the schema | in `app-manifest-relations.mjs` (`0009`) |
+| **Actually executed against a manifest on the install path** | **no** | **no** |
+
+The bottom row is the same answer for both, and it is the row that decides whether a hostile
+manifest is refused. **A rule written twice and enforced zero times is not a rule** — this
+section says exactly that of VAL-OWN, and then measured only one of the two ways it can be
+true.
 
 **What the registry-aware validator owes (VALIDATOR-AZ7).** Normative. Every item fails
 closed — the manifest is rejected and the App does not install:
