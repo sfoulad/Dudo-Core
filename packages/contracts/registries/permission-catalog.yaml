@@ -895,9 +895,56 @@ permissions:
 # smuggled back in.
 # ---------------------------------------------------------------------------
 defaultRoles:
-  # Every permission below is declared at 'scopes: [platform]' in this catalog, and those
-  # are the only two that are. This role holds NO tenant-scoped permission: reaching
-  # tenant business data requires the AZ3 break-glass elevation, which does not exist yet.
+  # ===========================================================================
+  # THE PLATFORM ROLES, AND THE INVARIANT THAT SURVIVES THE SET GROWING
+  # ===========================================================================
+  #
+  # THE INVARIANT: every permission held by a role whose own 'scope' is 'platform' declares
+  # 'platform' among that permission's own 'scopes'. Equivalently — NO PLATFORM ROLE HOLDS A
+  # TENANT-SCOPED PERMISSION. It follows that reaching tenant business data from a platform
+  # role requires the AZ3 break-glass elevation, WHICH DOES NOT EXIST.
+  #
+  # IT IS STATED AS A PROPERTY RATHER THAN AS A COUNT, AND THAT IS A CORRECTION.
+  # This comment previously read "those are the only two that are". THERE ARE TEN. Eight
+  # arrived with docs/decisions/0025 through 0028, and the sentence was true when it was
+  # written — which is exactly the problem: A COUNT IN A COMMENT IS AN ASSERTION THAT ROTS
+  # EVERY TIME A DECISION ADDS AN ENTRY, AND NOTHING GOES RED WHEN IT DOES
+  # (.claude/rules/workflow.md §12). The property above does not rot. It stays true as the set
+  # grows and it fails loudly the day it stops being true.
+  #
+  # THE RECONCILIATION, because two counts disagreed and both were right about different
+  # things. Grepping this file for the literal 'scopes: [platform]' finds THIRTEEN occurrences:
+  # TEN are permission entries and THREE are prose inside comments — this block and the
+  # two-line omission note above 'business-owner'. TEN IS THE NUMBER THAT MEANS ANYTHING.
+  # Recorded because "count the string" and "count the entries" will keep giving different
+  # answers to whoever checks next.
+  #
+  # *** THE READING THE OLD COMMENT INVITED WAS THE DANGEROUS PART, NOT THE ARITHMETIC. ***
+  # "Only two" leaves a reader concluding the operator surface is tiny. It is not, and two of
+  # the ten are severe on their own terms: core.credential.reset, which its own entry calls
+  # "the most dangerous permission in this catalog that is not AZ3", and
+  # core.principal.revoke-platform-scope, which can strip platform authority.
+  # THE INVARIANT SAYS THE SURFACE DOES NOT CROSS THE TENANT BOUNDARY. IT SAYS NOTHING ABOUT
+  # HOW MUCH POWER SITS ON THE PLATFORM SIDE OF IT, and it must not be read as though it did.
+  #
+  # TODAY platform-admin HOLDS ALL TEN, and marketplace-moderator holds one of them
+  # (core.marketplace.moderate). THAT IS AN OBSERVATION OF THE CURRENT STATE AND NOT A SECOND
+  # INVARIANT — do not turn it into a set-equality check. This file already anticipates a
+  # break-glass responder role holding REVOKE without GRANT, and a platform permission
+  # deliberately withheld from platform-admin is precisely what that would look like.
+  #
+  # OWED AS A MECHANICAL CHECK — qa-agent, in suites/platform-operator/registry-coherence.ts,
+  # because a hand-maintained assertion about this file is the kind this repository spent
+  # 2026-09-05 learning not to trust:
+  #   For every role whose scope is 'platform', assert that every permission it names resolves
+  #   in this catalog AND declares 'platform' among its own scopes.
+  #   REPORT THE POPULATION EXAMINED — how many platform roles, how many permissions checked —
+  #   AND FAIL WHEN EITHER IS ZERO. A renamed key or a changed shape makes this check examine
+  #   nothing and report success, which is the most confident wrong answer it can give.
+  #   THE KNOWN-FAILING INPUT IT MUST SHIP WITH: a fixture platform role holding one
+  #   tenant-scoped permission — core.audit.read will do — which must turn it RED. A check that
+  #   has only ever been handed passing input has been observed, not verified
+  #   (.claude/rules/workflow.md §11a).
   - id: platform-admin
     scope: platform
     status: proposed

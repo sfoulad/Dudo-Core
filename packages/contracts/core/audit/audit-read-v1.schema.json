@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:audit-read:1",
+  "title": "Tenant audit read — wire shapes, version 1",
+  "description": "The machine-readable half of audit-read-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema (packages/contracts/README.md), so every constraint here is READ BY A PERSON AND HAND-IMPLEMENTED: a `required` list is an instruction someone will follow literally (.claude/rules/workflow.md §12).\n\nTWO RECORD SHAPES, ONE TABLE. `audit_event` holds records from two producers — the tenant's own Action pipeline and the platform operating ON the tenant — and this contract publishes them as two feeds with two shapes. The `scope` enum in `auditEventRecord` OMITS `platform`, and that omission is not tidiness: it is the split, asserted machine-readably. See the contract's theTwoFeeds.\n\nAN OUTPUT SCHEMA MUST BE ABLE TO DESCRIBE EVERY VALUE THE TABLE CAN HOLD. Where a constraint below is looser than the one the write side applies, that is deliberate and is marked: a read schema that refuses to render a stored value produces a route that cannot return the tenant's own record.",
+
+  "$defs": {
+
+    "auditEventId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "Opaque. It is the tiebreaker in the (occurred_at, record id) sort key, which is why it is on the wire at all.\n\nTHE TIEBREAKER IS LOAD-BEARING HERE FOR A STRONGER REASON THAN ON THE PLATFORM FEED, and the reason is in Core rather than in probability. `kernel/clock.ts` states that 'A request reads the clock ONCE, at the start of the pipeline, and every timestamp written by that request is that value', and on Workers the clock does not advance during execution at all (docs/decisions/0015 finding 3). So every record written by one request carries an IDENTICAL millisecond timestamp BY CONSTRUCTION — not by coincidence and not only under load. A sort on `occurred_at` alone would skip or repeat records at any page boundary that falls inside one request's rows. Do not remove this field as redundant.\n\nTHE PATTERN IS `{8,64}` RATHER THAN THE 22 CHARACTERS CORE ACTUALLY GENERATES. `kernel/ids.ts` records that the generation scheme is Core's decision and the contract binds only 'at least 8'. Pinning 22 here would make a scheme change a contract break for no gain."
+    },
+
+    "principalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "A principal identifier. Platform-wide unique (`kernel/ids.ts`), opaque, and never a login handle: Dudo stores no address column against a principal (`0001_principal.sql` refused one), so a principal id resolves to a person only through a route that is authorized to do so."
+    },
+
+    "businessId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "description": "RFC 3339 UTC, `Z` only, EXACTLY THREE FRACTIONAL DIGITS. `kernel/clock.ts::toRfc3339Utc` is `new Date(ms).toISOString()`, which always emits `.sssZ`, and nothing truncates it — so this pattern describes what is stored rather than narrowing it.\n\nTHE PATTERN IS ASSERTED AS WELL AS `format` BECAUSE THE COMPARISON IS LEXICOGRAPHIC. The same fixed width is what makes the request bounds' arithmetic sound; see `since`/`until` and the contract's theTimeWindow."
+    },
+
+    "actionId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9-]*(\\.[A-Za-z][A-Za-z0-9-]*)+$",
+      "maxLength": 128,
+      "description": "Which operation was invoked. A stable token, never a human sentence — a log a machine cannot group is a log nobody can review.\n\n*** THIS PATTERN ADMITS TWO GRAMMARS AND THAT IS A FINDING, NOT A CHOICE. *** Tenant Actions are `core.ListAuditEvents`, `customers.GetCustomer` — an app id and a PascalCase operation. Platform routes are `platform.organizations.members.resolve` — lowercase throughout. Both are written into `audit_event.action_id` by shipped code, so a pattern that admitted only one would refuse to render real records. `platform-audit-read-v1`'s own `actionId` is lowercase-only, which is correct there and means the two contracts define the same-named field differently. Recorded as `TA-11`; unifying the grammars is not this contract's to decide."
+    },
+
+    "permissionId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+      "maxLength": 128,
+      "description": "The permission ACTUALLY EVALUATED, not the one requested — `0001_audit_event.sql`: 'Recording what was evaluated rather than what was requested is what lets an audit trail show a scope checked at the wrong level.' Every id in `permission-catalog.yaml` is lowercase-dotted."
+    },
+
+    "tenantScope": {
+      "type": "string",
+      "enum": ["organization", "business", "branch", "team", "own", "resource"],
+      "description": "The scope the permission was evaluated at.\n\n*** `platform` IS DELIBERATELY ABSENT AND ITS ABSENCE IS THE SECURITY PROPERTY OF THIS SHAPE. *** `authorization/scope.ts` declares seven values and `platform` is the widest. A record in a tenant's `audit_event` carrying `scope: 'platform'` was written BY THE PLATFORM operating on this Organization, never by one of the Organization's own principals — no tenant role holds a platform-scope permission, because `permission-catalog.yaml`'s intersection rule excludes every one of them from every tenant role. Those records are the OTHER feed's, with a different shape and a different disclosure rule.\n\nA RECORD WHOSE `scope` IS NOT IN THIS ENUM MUST NOT BE RENDERED BY THIS SHAPE. If one ever appears here, the discriminator has failed and the contract is what must change — not the enum."
+    },
+
+    "decision": {
+      "type": "string",
+      "enum": ["allowed", "denied"],
+      "description": "`platform/core/audit/audit.ts`: 'FAILURES ARE AUDITED, NOT ONLY SUCCESSES. An attack looks like a long run of failures, and a log containing only successes cannot show one.'"
+    },
+
+    "denialReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unauthenticated",
+            "forbidden",
+            "not_found",
+            "invalid_argument",
+            "failed_precondition",
+            "conflict",
+            "rate_limited",
+            "quota_exceeded"
+          ]
+        },
+        { "type": "null" }
+      ],
+      "description": "A code from the closed taxonomy, never a sentence — transcribed from `AuditDenialReason` in `platform/core/audit/audit.ts`. Null on every `allowed` record. REQUIRED AND NULLABLE rather than optional, so a client never has to distinguish 'absent' from 'none'."
+    },
+
+    "principalType": {
+      "type": "string",
+      "enum": ["user", "team", "service-account", "ai-agent", "iot-device"],
+      "description": "Transcribed from `AuthenticatedPrincipal.principalType` (`tenancy/tenant-context.ts`). IT IS ON THE WIRE BECAUSE `ai-agent` AND `service-account` ARE THE ANSWERS A READER MOST NEEDS: 'a machine did this' and 'a person did this' are different facts, and a trail that renders both as a bare identifier makes the tenant work them out from the id."
+    },
+
+    "targetResourceId": {
+      "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }],
+      "description": "The record acted on, as an opaque identifier. Null for an Action that names no record.\n\n*** NO PATTERN, AND THE OMISSION IS REASONED. *** For a `not_found` on a mutating Action this column holds the identifier AS SUPPLIED BY THE CALLER, with `target_unresolved` true (`0001_audit_event.sql`, contract CD-5). Asserting the generated-identifier pattern here would be a read schema that refuses to render a row the write side legitimately stored — a route unable to return the tenant's own record. `maxLength` is a rendering bound, not an identity claim.\n\nTHE CROSS-TENANT QUESTION, ANSWERED FOR THE SIDE IT ACTUALLY ARISES ON. A cross-tenant attempt is audited IN THE CALLER'S TENANT (az7-r3), so tenant A's trail contains A's failed reach for something in B. The value stored is THE ONE A SUPPLIED, never a resolved foreign identifier — so returning it to A echoes back a string A authored and discloses nothing about B. This is a statement about the STORED VALUE, not about the caller's intent."
+    },
+
+    "fieldName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,62}$",
+      "description": "A wire field NAME. Transcribed byte-for-byte from `FIELD_NAME_PATTERN` in `platform/core/audit/audit.ts`, which is 'deliberately too narrow to admit a value' — a display name or an address does not match it, so the write side throws rather than storing one. THE READ SIDE CANNOT DISCLOSE A FIELD VALUE BECAUSE THE WRITE SIDE STORES NONE."
+    },
+
+    "correlationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "maxLength": 64,
+      "description": "Ties this record to the request that produced it. Transcribed from `platform-audit-read-v1`'s `correlation_id`, which describes the same value: 'the only identifier that crosses the two audit homes'.\n\nON THE PLATFORM-ACTION FEED IT IS THE CUSTOMER'S ACCOUNTABILITY HANDLE. The tenant is not told which operator acted (see `platformActionRecord`); it is told which REQUEST acted, and that is the token it quotes to require an explanation. Withholding the actor and withholding the handle would have been a different and much weaker ruling."
+    },
+
+    "auditEventRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ONE RECORD OF THE ORGANIZATION'S OWN ACTIVITY — an action taken by one of its own principals through the Action pipeline. Every field is the tenant's own data about itself. Nothing here names another Organization, and nothing here can: `tenant_id` is never selected by the storage boundary (`storage/store.ts` property 4) and no Action ever holds an Organization identifier to put in a response (`tenancy/tenant-context.ts`).\n\nWHAT IS ABSENT AND MAY NOT BE ADDED: a field value, a diff, a before/after, a free-text message, a display name, an address. `audit.ts` makes that structural — `AuditEntry` has nowhere to put one — and this shape must not create pressure to change that.",
+      "required": [
+        "record_id",
+        "occurred_at",
+        "app_id",
+        "action_id",
+        "principal_id",
+        "principal_type",
+        "on_behalf_of_principal_id",
+        "permission_id",
+        "scope",
+        "decision",
+        "denial_reason",
+        "target_resource_id",
+        "target_unresolved",
+        "related_business_ids",
+        "actor_business_ids",
+        "changed_field_names",
+        "correlation_id"
+      ],
+      "properties": {
+        "record_id": { "$ref": "#/$defs/auditEventId" },
+        "occurred_at": { "$ref": "#/$defs/timestamp" },
+        "app_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,63}$",
+          "description": "Which App's Action this was. `core` for Core's own."
+        },
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "WHO ACTED — a principal of this Organization. The tenant can resolve it against its own membership; it is data the tenant holds about its own people. Contrast `platformActionRecord`, which names no actor at all."
+        },
+        "principal_type": { "$ref": "#/$defs/principalType" },
+        "on_behalf_of_principal_id": {
+          "oneOf": [{ "$ref": "#/$defs/principalId" }, { "type": "null" }],
+          "description": "Set when an AI agent or a service account acted for a human. Null otherwise. REQUIRED AND NULLABLE: 'an AI did this by itself' and 'an AI did this for Amal' are different facts and must not both render as a missing key."
+        },
+        "permission_id": { "$ref": "#/$defs/permissionId" },
+        "scope": { "$ref": "#/$defs/tenantScope" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "denial_reason": { "$ref": "#/$defs/denialReason" },
+        "target_resource_id": { "$ref": "#/$defs/targetResourceId" },
+        "target_unresolved": {
+          "type": "boolean",
+          "description": "True when `target_resource_id` is a value the caller supplied that resolved to nothing. IT IS THE PROBE SIGNAL: a run of records with this true is what an enumeration attempt looks like from inside the tenant, and it is why CD-5 records the supplied identifier rather than recording nothing."
+        },
+        "related_business_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/businessId" },
+          "description": "The RECORD's Businesses.\n\n*** EMPTY ON EVERY DENIAL, BY DESIGN, AND A READER MUST NOT INFER FROM THAT. *** `audit.ts`: 'telling the log which Business the caller was refused turns the audit trail into the disclosure the refusal withheld.' So an empty array on a `denied` record means the field was suppressed, NOT that no Business was involved. A client that renders empty as 'no Business' is stating something the record does not say."
+        },
+        "actor_business_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/businessId" },
+          "description": "The ACTOR's own authorized Business set at the time of the attempt. Populated identically on denials and successes, because it is derived from the caller and never from what the caller was reaching for.\n\nREAD THIS AND `related_business_ids` AS A PAIR AND DO NOT CONFUSE THEM — `0001_audit_event.sql` says confusing them is a disclosure. This one answers 'what could they see then', which is the forensic question a denial record exists to answer.\n\nNO `maxItems`. For an organization-scope actor this is every Business in the Organization, and a cap would refuse to render a real record. It is the largest field in the shape; see the contract's freeTierImpact.responseSize."
+        },
+        "changed_field_names": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fieldName" },
+          "description": "FIELD NAMES ONLY. Never values, never a diff. This is the whole of the answer to 'what changed', and the contract records why it may never become more than that."
+        },
+        "correlation_id": { "$ref": "#/$defs/correlationId" }
+      }
+    },
+
+    "platformActionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ONE RECORD OF SOMETHING THE PLATFORM DID TO THIS ORGANIZATION. This is the customer's view of the platform's behaviour, and it is the shape `docs/decisions/0028`'s amendment of 2026-09-05 says did not exist — the amendment struck 'visible to each victim' from Decision 2's residual precisely because no route rendered these rows.\n\n*** IT NAMES NO OPERATOR, AND THAT IS A RULING RATHER THAN AN OMISSION. *** The row DOES carry the operator's principal id; this shape does not project it. The full argument is the contract's theOPERATORIDENTITYRULING. In one line: `0028` Decision 2 collapses the resolve's 404 over five cases specifically so the route is not 'an oracle for who holds platform authority', and a tenant-readable operator identifier is that oracle from the other side, harvestable by anyone who can induce a support action.\n\nWHAT IS ABSENT BECAUSE IT IS CONSTANT FOR THIS PRODUCER, recorded here so that a producer which could vary it triggers a contract change instead of a silent widening: `app_id` (always `core`), `scope` (always `platform` — it is the feed), `decision` (always `allowed`), `denial_reason` (always null), `target_unresolved` (always false), `related_business_ids` and `actor_business_ids` and `changed_field_names` (always empty), `principal_type` (always `user`). A FIELD THAT CANNOT VARY IS WORSE THAN NO FIELD: a reader seeing `decision` would believe a refusal could appear here, and none can.",
+      "required": [
+        "record_id",
+        "occurred_at",
+        "action_id",
+        "permission_id",
+        "target_principal_id",
+        "correlation_id"
+      ],
+      "properties": {
+        "record_id": { "$ref": "#/$defs/auditEventId" },
+        "occurred_at": { "$ref": "#/$defs/timestamp" },
+        "action_id": {
+          "$ref": "#/$defs/actionId",
+          "description": "WHICH platform operation this was — `platform.credentials.reset`, `platform.organizations.members.resolve`, `platform.organizations.audit.list`. A reset and a lookup are different disclosures and the customer must be able to tell them apart; `member-resolution.ts` takes this value as a parameter for exactly that reason."
+        },
+        "permission_id": {
+          "$ref": "#/$defs/permissionId",
+          "description": "UNDER WHAT AUTHORITY. `core.credential.reset` for a reset or a member resolve; `core.platform-audit.read` for a scoped feed read. It is derived from the operation rather than fixed, so this feed says which grant was exercised against the Organization."
+        },
+        "target_principal_id": {
+          "oneOf": [{ "$ref": "#/$defs/principalId" }, { "type": "null" }],
+          "description": "The Organization's OWN member the operation named — the person whose credential was reset. It is disclosed because the customer's entitlement is precisely to know which of their members was taken over; 'an account here was reset' without saying which would be useless to the party it is for.\n\n*** NULL IS COMMON AND MEANS THE PLATFORM DID NOT DISCLOSE THE SUBJECT, NOT THAT THERE WAS NONE. *** A member resolve writes `target_resource_id: null` deliberately — `member-resolution.ts`: naming the resolved principal 'would put \"operator X asked about principal P\" in the tenant's trail', and on a miss there is no principal to name, so a record that named one on success and not on failure would be a hit/miss oracle in the log itself. So the customer learns that the platform asked about SOMEONE in their Organization and cannot learn who. That is a stated limit of this feed, carried forward from `0028` Decision 2 rather than introduced here."
+        },
+        "correlation_id": { "$ref": "#/$defs/correlationId" }
+      }
+    },
+
+    "listAuditEventsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every property is optional; omitting all of them returns the unfiltered feed, still paged. NO `required` LIST — the object is trivially satisfiable, which is the state `packages/testing/suites/contracts/satisfiability.ts` checks for.\n\n*** THERE IS NO `scope` FILTER AND SUPPLYING ONE IS REFUSED WITH `invalid_argument`, NOT IGNORED. *** `scope` is the discriminator between the two feeds; a caller-supplied `scope=platform` would cross them and reach the other shape's rows through this one. `docs/decisions/0028`: 'an ignored parameter is a parameter someone will later honour.'\n\nTHERE IS NO `organization_id` PARAMETER AND NONE MAY BE ADDED. Tenant identity is derived from the authenticated context on every call.",
+      "properties": {
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" },
+        "since": {
+          "$ref": "#/$defs/timestamp",
+          "description": "INCLUSIVE lower bound. Exactly three fractional digits, `Z` only. See the contract's theTimeWindow for why a bound omitting `.sss` does not mean its own instant."
+        },
+        "until": {
+          "$ref": "#/$defs/timestamp",
+          "description": "EXCLUSIVE upper bound. A record is returned when `since <= occurred_at < until`."
+        },
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "Filter to one actor. With `decision` this is the query `audit_event_by_tenant_principal_decision_time` was added for — 'everything this actor did', which `0001_audit_event.sql` names as the query an investigator runs after an alert fires."
+        },
+        "decision": { "$ref": "#/$defs/decision" },
+        "target_resource_id": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Filter to one record's history. Served by `audit_event_by_tenant_target`, which the migration describes as the access path for 'what happened to this record'."
+        }
+      }
+    },
+
+    "listPlatformActionsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every property is optional. NO `required` list, for the same reason as `listAuditEventsInput`.\n\nTHERE IS NO ACTOR FILTER, AND ITS ABSENCE FOLLOWS FROM THE RECORD SHAPE RATHER THAN BEING A SECOND DECISION. The feed does not disclose which operator acted, so a filter by operator would disclose it one bit at a time — supply an identifier, count the results. That is the reconstruction-through-a-query-parameter shape `0028` refuses on the platform feed, and it is refused here for the same reason. A caller supplying `actor_principal_id` or `principal_id` receives `invalid_argument`.",
+      "properties": {
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" },
+        "since": { "$ref": "#/$defs/timestamp" },
+        "until": { "$ref": "#/$defs/timestamp" },
+        "action_id": { "$ref": "#/$defs/actionId" },
+        "target_principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "Filter to one of the Organization's own members — 'what has the platform done to this person'. It is safe where the platform feed's equivalent is not, and the difference is the tenant predicate: this query cannot leave the Organization, so counting results discloses nothing about any other Organization's membership."
+        }
+      }
+    },
+
+    "listAuditEventsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "description": "NO TOTAL COUNT, per `urn:dudo:schema:pagination:1#/$defs/collectionEnvelope`. The product consequence is concrete and accepted: no screen can show 'you have 4,812 audit events'.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/auditEventRecord" }
+        },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      }
+    },
+
+    "listPlatformActionsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "description": "AN EMPTY PAGE IS THE ORDINARY STATE AND THE HEALTHY ONE. `data: []` means the platform has done nothing to this Organization in the window — which is what a customer should usually see. It is NOT a failure to load, and it is NOT a guarantee that nothing happened: see the contract's theFEEDCANBEINCOMPLETE.",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/platformActionRecord" }
+        },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      }
+    }
+  }
+}
