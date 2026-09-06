@@ -46,18 +46,78 @@ model:
   default: deny
   rules:
     - "Default = Deny. Not 'deny after the checks fail' — deny unless a check explicitly passed."
-    - "An entry point with no declared permission is unreachable, not open."
+    - >-
+      A ROUTE WITH NO DECLARED PERMISSION IS UNREACHABLE, NOT OPEN — UNLESS it is registered in
+      one of TWO closed, Core-owned, enumerated sets, NEITHER OF WHICH IS MANIFEST-DECLARABLE:
+        docs/decisions/0014 §B's `PreAuthEntryPoint` registry — FIVE routes: login start, login
+          completion, session refresh, logout, and a health endpoint carrying no tenant or user
+          data. `0014` §B AMENDS `0007` D1 rather than contradicting it, and a route enters that
+          registry by a decision, never by declaring itself.
+        docs/decisions/0021's session class, which resolves a session and STOPS — no tenant, no
+          permission, and `0021` states that "widening it is a decision, not a refactor".
+      *** docs/decisions/0025's PLATFORM CLASS IS NOT AN EXCEPTION AND MUST NOT BE LISTED AS
+      ONE. *** All fourteen of its routes DECLARE a permission, and
+      `assertEveryRoutePermissionIsReachable` fails the build if one declares a permission no
+      role can reach. What distinguishes that class is that it evaluates a permission WITHOUT A
+      TENANT, which is an exception to tenant scoping and not to this rule. A PERMISSIONLESS
+      PLATFORM ROUTE IS NOT LEGITIMATE AND CORE REFUSES TO BUILD ONE.
+      *** THIS ENTRY PREVIOUSLY READ: "An entry point with no declared permission is
+      unreachable, not open." *** True of the Action pipeline and false of two request classes
+      that exist because decisions put them there. IT IS A WORSE DEFECT THAN THE WITHDRAWN
+      WILDCARD RULE ABOVE, AND IN THE OPPOSITE DIRECTION: THE WILDCARD ENTRY PERMITTED SOMETHING
+      FORBIDDEN; THIS ONE FORBADE SOMETHING REQUIRED. A validator author following it literally
+      would build something that refuses the login route.
     - "Authorization is decided in Core, at every entry point, on every call."
     - "No caller is trusted to have already checked — not a client, not an App, not another service."
     - "UI hiding is presentation, never security."
     - "No decision is cached beyond its scope. A cached yes that outlives a revoked role cannot be revoked."
     - "Permissions are additive. There are no negative permissions and no deny rules."
-    - "Wildcards may appear in ROLE definitions. Never in an App manifest."
+    - >-
+      NO WILDCARD PERMISSION ANYWHERE. Not in a role, not in an App manifest, not in a grant.
+      docs/decisions/0007 binding rule 3, Accepted by the user 2026-09-01.
+      *** THIS ENTRY PREVIOUSLY READ: "Wildcards may appear in ROLE definitions. Never in an App
+      manifest." IT IS WITHDRAWN, AND IT IS KEPT VISIBLE RATHER THAN DELETED BECAUSE THE REASON
+      IT EXISTED IS STILL WORTH KNOWING. *** It was written when `0007` D6 left wildcard
+      EXPANSION SEMANTICS undecided, and it was an attempt to bound where an undecided thing
+      could appear. `0007`'s acceptance closed the question by removing the construct instead of
+      defining it: there are no expansion semantics because there is nothing left to expand.
+      WHY IT IS STRUCK HERE AND NOT ONLY IN THE PROSE ABOVE `defaultRoles`. That correction sits
+      hundreds of lines below this one — no count, because a line number in a comment rots for
+      the same reason the withdrawn rule did — and A READER WHO FINDS THIS RULE HAS ALREADY GOT
+      WHAT THEY CAME FOR: they will not read on to discover it was withdrawn. `model.rules` is the
+      MACHINE-READABLE half, nothing in this repository executes it, and the reader most likely
+      to act on it literally is whoever eventually writes the validator, who will be reading
+      this list PRECISELY BECAUSE it is the machine-readable form. Prose describes; a rule
+      instructs (.claude/rules/workflow.md §12).
+      `authorization/roles.ts::assertRoleMappingIsCoherent` enforces the prohibition in code, at
+      module load, and names this file as where a wildcard would otherwise be smuggled back in.
     - >-
       An App manifest may never request a permission at 'platform' scope. 'platform' is
-      reserved to platform principals; a manifest declaring it FAILS VALIDATION and the App
-      does not install. Enforced structurally by app-manifest.schema.json
-      ($defs/appRequestableScope), not by review.
+      reserved to platform principals; a manifest declaring it must FAIL VALIDATION and the App
+      must not install — not accepted-then-trimmed, because an App installed in a state where it
+      will fail unpredictably at runtime is worse than one that did not install.
+      *** WHAT ENFORCES THIS TODAY: NOTHING. IT IS A REVIEW OBLIGATION. *** Corrected 2026-09-06;
+      this entry previously ended "Enforced structurally by app-manifest.schema.json
+      ($defs/appRequestableScope), not by review", and that sentence was false in the way the
+      whole corpus keeps being false.
+      NAMING WHICH SIDE IT IS FALSE ABOUT, because a dismissal that does not is how this
+      survives review (.claude/rules/architecture.md §3b). THE SCHEMA EXPRESSES THE CONSTRAINT
+      CORRECTLY — `$defs/appRequestableScope` is `$defs/scope` minus `platform`, and
+      `permissions[].scope` `$ref`s it. NOTHING EXECUTES IT. `packages/contracts/README.md`:
+      "Nothing in this directory is executed. There is no JSON Schema implementation in this
+      repository ... every schema here is normative and hand-checked, never machine-validated."
+      `0009` approved ONE zero-dependency validator, for the AZ7 relation family only, and it
+      does not look at scopes. AND THERE IS NO MANIFEST-ADMISSION PATH AT ALL: no SDK, no App
+      runtime, nothing that parses a manifest. `apps/customers` is compiled in rather than
+      installed, and `authorization/authorizer.ts` enforces the declared-scope CEILING at call
+      time against an `AppPermissionEnvelope` A CORE AUTHOR TRANSCRIBED BY HAND.
+      SO THE REVIEW OBLIGATION IS CONCRETE AND HAS AN OWNER: whoever writes an
+      `AppPermissionEnvelope` is the last check that no App reaches 'platform' scope, because
+      the constraint that would have refused the manifest never runs.
+      WHY THE OVERSTATEMENT WAS WORSE THAN THE GAP: it told the next reader the hazard was
+      handled, which stops the person who would otherwise build the thing that closes it. What
+      would make the original sentence true is a manifest-admission path that executes this
+      schema — `AS1`/`TS1` and the App permission and trust ADR, neither of which exists.
     - >-
       An Action declaring scope 'own' on an entity that declares no ownershipField FAILS
       VALIDATION (rule VAL-OWN, AUTHORIZATION_STANDARD.md §4). It is never accepted and
@@ -950,8 +1010,13 @@ defaultRoles:
     status: proposed
     description: >-
       Platform operator. Holds no tenant-scoped permission and cannot read tenant business data.
-      Support access to tenant data still awaits the AZ3 break-glass record — UNCHANGED by the six
-      permissions added 2026-09-05, every one of which is control-plane or platform configuration.
+      Support access to tenant data still awaits the AZ3 break-glass record — UNCHANGED BY EVERY
+      PLATFORM-SCOPED PERMISSION ADDED SINCE, every one of which is control-plane or platform
+      configuration. THE PROPERTY REPLACED A COUNT ON 2026-09-06: this read "the six permissions
+      added 2026-09-05", the true figure could not be recovered from git history, and the claim
+      is true whichever number is right because none of the additions grants tenant access. A
+      number is decoration on a sentence whose job is to reassure, which is where a wrong figure
+      costs the most.
       THIS ROLE IS NOW REACHABLE. Until docs/decisions/0025 it was seed data describing a role no
       principal could hold, because every grant path ran through organization_membership and a
       platform principal has no membership row (AZ9). `platform_operator.platform_role` is where
