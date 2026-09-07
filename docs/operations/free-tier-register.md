@@ -121,14 +121,38 @@ official source, not the date usage was measured.
 >
 > | Operation | Control-plane row-writes | Platform/day against the 3,000 sub-ceiling |
 > |---|---|---|
-> | Any platform route (audit record, `0025` Decision 5) | **2** | — |
-> | Onboarding an Organization (`0024`, `0025`) | **10** | **300** |
+> | Any platform route (audit record, `0025` Decision 5) | **4** | — |
+> | Onboarding an Organization (`0024`, `0025`) | **14** | ~**214** |
 > | A confirmed critical operation (`0027`) | **+4** over the operation itself | ~**750** confirmations |
 >
-> **The onboarding figure corrects the code.** `control-plane-admission.ts` records **6**; the
-> operation actually writes **10**. `0025`'s consequences flag this and the constant is still wrong
-> in the source. **A budget constant that under-counts is worse than none** — it spends an allowance
+> **UPDATED 2026-09-07 — `0016` MOVED THE AUDIT RECORD FROM 2 TO 4.** Two indexes on
+> `platform_operator_action` mean each record maintains two index entries as well as the row and its
+> primary key. **Every figure in this table that contains an audit record moved with it**, and the
+> ceiling did not: a platform route costs 4, onboarding 14, and onboarding-per-day falls from 300 to
+> **~214**. Derived from `control-plane-admission.ts`'s constants rather than from the previous row,
+> so an error above does not propagate downward.
+>
+> **AND THE OLD `10` WAS ALREADY WRONG BEFORE `0016` TOUCHED IT — IT OMITTED THE AUDIT RECORD
+> ALTOGETHER.** The five components are `PRINCIPAL 2 + ORGANIZATION 2 + MEMBERSHIP 2 +
+> TENANT_DIRECTORY 2 + PRINCIPAL_CREDENTIAL 2`, and every platform route also writes one audit
+> record, which nothing in this row accounted for. **The true figure was 12 yesterday and is 14
+> today.** `architecture-agent` found the identical omission in `core-object-registry.yaml` during
+> an unrelated sweep, from the opposite direction. **Two independent derivations landing on the same
+> missing term is what makes this a correction rather than a re-estimate.**
+>
+> **The onboarding figure still corrects the code.** `control-plane-admission.ts` records **6** for
+> the operation; it writes **14**. `0025`'s consequences flag this and the constant is still wrong in
+> the source. **A budget constant that under-counts is worse than none** — it spends an allowance
 > nobody is watching, and the failure mode is D1 refusing queries account-wide.
+>
+> **WHY THIS ROW WENT STALE SILENTLY, WHICH IS THE REUSABLE PART.** `0016` was a migration in
+> `platform/core/migrations/`. This is a register in `docs/operations/`. **Nothing connects them**,
+> no build breaks, no test turns red, and the number here stays plausible forever. The measured
+> capacity model beneath this section reads `PLATFORM_OPERATOR_ACTION_ROW_WRITES` **from the live
+> schema**, so it moved on its own and printed 4 without anyone editing it. **This hand-transcribed
+> table did not.** That contrast is the argument for deriving figures rather than restating them,
+> and it is the same argument now under consideration for the ~30 transcribed row-write figures
+> across nine contracts.
 
 > ## ⚠ HOW MANY BUSINESSES FIT — MEASURED 2026-09-06, AND THE ANSWER NEEDS A TIME AXIS
 >
@@ -222,8 +246,12 @@ official source, not the date usage was measured.
 > can force a write bounded by something other than the attacker?* — passes.
 >
 > **The hazard, named in `confirmation-v1` rather than discovered later:** both challenge routes are
-> **writes reachable by any authenticated principal holding a critical permission**, at 2 row-writes
-> each. An unbounded challenge loop spends the shared ceiling. **`0017`'s in-process limiter does
+> **writes reachable by any authenticated principal holding a critical permission**, at **6**
+> row-writes each — `CONFIRMATION_ROW_WRITES` **2** for the challenge itself plus the **4** every
+> platform route spends on its audit record (`0016`). **Was stated as 2, which counted only the
+> confirmation row and never the audit record**, so the hazard was understated by a factor of three
+> rather than by the factor of two `0016` alone would explain. An unbounded challenge loop spends the
+> shared ceiling. **`0017`'s in-process limiter does
 > not bound this in a deployed Worker**, because each isolate has its own — so the **durable rate
 > limiter now has two consumers** (pre-auth and confirmation) and has stopped being a
 > single-feature nicety.
