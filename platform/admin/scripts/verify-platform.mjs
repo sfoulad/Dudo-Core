@@ -2355,11 +2355,257 @@ for (const name of ['PlatformAudit.tsx', 'OrganizationAudit.tsx']) {
 for (const name of ['PlatformAudit.tsx', 'OrganizationAudit.tsx']) {
   const source = strip(readScreen(name));
   check(
-    `${name}: the month shift fires no request`,
+    `${name}: the shift fires no request`,
     /shiftWindow[\s\S]{0,300}(setNonce|listPlatformAudit|listOrganizationAudit)/.test(source),
     false,
   );
 }
+
+/*
+ * ===========================================================================
+ * NO SENTENCE MAY PROMISE THE CONTROL MOVES BY A MONTH
+ * ===========================================================================
+ *
+ * The shift was a calendar-month shift, and changing it to shift by the
+ * window's own length TURNED NOTHING RED — while leaving two sentences behind
+ * that still described the old behaviour: the too-wide refusal said the
+ * controls "move the range by a month", and the empty state said "Move the
+ * range back a month to keep looking." Both were found by reading, not by a
+ * check, which is `workflow.md` §12 exactly: the code moved and the assertions
+ * about it did not.
+ *
+ * A MONTH-PROMISE IS WRONG FOR ANY WINDOW THAT IS NOT A MONTH LONG, and an
+ * operator investigating in fortnights would be told the button does something
+ * it does not. Advice to SEARCH a month at a time is still true and is not what
+ * this matches — only a claim about what the control MOVES.
+ */
+const monthPromise = /\b(move|moves|moving|shift|shifts|shifting)\b[^.]{0,80}\b(a|one) (calendar )?month\b/i;
+
+for (const [label, prose] of [
+  ['PlatformAudit.tsx', strip(readScreen('PlatformAudit.tsx'))],
+  ['OrganizationAudit.tsx', strip(readScreen('OrganizationAudit.tsx'))],
+  [
+    'audit-window.ts',
+    strip(readFileSync(join(import.meta.dirname, '..', 'src', 'api', 'audit-window.ts'), 'utf8')),
+  ],
+]) {
+  check(
+    `${label}: no sentence claims the control moves by a month`,
+    monthPromise.test(prose.replace(/\s+/g, ' ')),
+    false,
+  );
+}
+
+/* THE KNOWN-FAILING INPUT: the exact sentence that was shipped and was wrong. */
+checkTrue(
+  'NEGATIVE CONTROL: the month-promise detector catches the sentence that was actually there',
+  monthPromise.test('Move the range back a month to keep looking.'),
+);
+checkTrue(
+  'NEGATIVE CONTROL: and the other one',
+  monthPromise.test('the controls below move the range by a month without retyping it'),
+);
+check(
+  'NEGATIVE CONTROL: advice to SEARCH a month at a time is not a month-promise',
+  monthPromise.test('Search a month at a time and walk backwards.'),
+  false,
+);
+
+/* =========================================================================
+   14. THE TRANSCRIBED CONSTANT, ASSERTED AGAINST THE CONTRACT FILE
+   ========================================================================= */
+
+/*
+ * ===========================================================================
+ * WHY: `MAX_WINDOW_DAYS = 31` IS A NUMBER COPIED OUT OF A DOCUMENT
+ * ===========================================================================
+ *
+ * The 31-day span limit now exists in at least three places — this contract,
+ * Core's validator, and `audit-window.ts`'s constant — and until this section
+ * existed, NOTHING COMPARED THEM. If the limit narrows to 14, this console goes
+ * on refusing at 31 and an operator meets Core's refusal for a request the
+ * screen said was fine. That is the permission-catalog transcription problem in
+ * a new place.
+ *
+ * WHAT THIS CLOSES AND WHAT IT DOES NOT. It binds the console's constant to the
+ * CONTRACT. It does NOT bind either to Core's validator — if Core's code and
+ * Core's contract disagree, every check below stays green. The remaining gap is
+ * real and is narrower than the one before it.
+ *
+ * IT READS THE CONTRACT, WHICH IS READ-ONLY TO THIS AGENT. Nothing here writes,
+ * and the contract is the source of truth by construction.
+ *
+ * THE ANCHORS ARE FOUR INDEPENDENT SENTENCES, on purpose. A single anchor could
+ * be deleted by a rewrite and the check would go quiet; four have to be edited
+ * together, and the floor below turns a MISSING anchor red rather than absent.
+ */
+
+console.log('\n=== The 31-day constant, checked against the contract ===\n');
+
+const AUDIT_CONTRACT_PATH = join(
+  import.meta.dirname,
+  '..',
+  '..',
+  '..',
+  'packages',
+  'contracts',
+  'core',
+  'platform',
+  'platform-audit-read-v1.contract.yaml',
+);
+
+/*
+ * The contract states the limit ONCE IN WORDS AND THREE TIMES IN DIGITS. The
+ * spelled form is in the most normative sentence of the section — the ruling —
+ * and it carries no digit at all, so a digits-only check would not read it.
+ */
+const SPELLED_UNITS = [
+  '', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN',
+  'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN',
+  'EIGHTEEN', 'NINETEEN',
+];
+const SPELLED_TENS = [
+  '', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY',
+];
+
+function spellDays(days) {
+  if (!Number.isInteger(days) || days < 1 || days > 99) return null;
+  if (days < 20) return SPELLED_UNITS[days];
+  const tens = SPELLED_TENS[Math.floor(days / 10)];
+  const unit = days % 10;
+  return unit === 0 ? tens : `${tens}-${SPELLED_UNITS[unit]}`;
+}
+
+check('spellDays(31)', spellDays(31), 'THIRTY-ONE');
+check('spellDays(14)', spellDays(14), 'FOURTEEN');
+check('spellDays(7)', spellDays(7), 'SEVEN');
+check('spellDays(90)', spellDays(90), 'NINETY');
+check('spellDays refuses 0', spellDays(0), null);
+check('spellDays refuses 100', spellDays(100), null);
+
+function contractAnchors(maxDays) {
+  const max = String(maxDays);
+  const overMax = String(maxDays + 1);
+  return [
+    {
+      name: 'the ruling — "the span must not exceed THIRTY-ONE DAYS"',
+      pattern: /span must not exceed ([A-Z]+(?:-[A-Z]+)?) DAYS/,
+      expect: [spellDays(maxDays)],
+    },
+    {
+      name: 'the refusal rule — "A span exceeding 31 days is `invalid_argument`"',
+      pattern: /A span exceeding (\d+) days is `invalid_argument`/,
+      expect: [max],
+    },
+    {
+      name: 'the request spec — "SPAN AT MOST 31 DAYS"',
+      pattern: /SPAN AT MOST (\d+) DAYS/,
+      expect: [max],
+    },
+    {
+      name: 'the QA boundary — "32 days is refused; 31 days exactly is accepted"',
+      pattern:
+        /A span of (\d+) days is refused with `time_window_too_wide`; (\d+) days exactly is accepted/,
+      expect: [overMax, max],
+    },
+  ];
+}
+
+/** `ok`, `mismatch` (the sentence is there and disagrees), or `missing`. */
+function evaluateContract(text, maxDays) {
+  return contractAnchors(maxDays).map((anchor) => {
+    const found = anchor.pattern.exec(text);
+    if (found === null) return { name: anchor.name, status: 'missing', found: null };
+    const captured = found.slice(1);
+    const agrees =
+      captured.length === anchor.expect.length &&
+      captured.every((value, index) => value === anchor.expect[index]);
+    return { name: anchor.name, status: agrees ? 'ok' : 'mismatch', found: captured.join(', ') };
+  });
+}
+
+let auditContractText = null;
+try {
+  auditContractText = readFileSync(AUDIT_CONTRACT_PATH, 'utf8');
+} catch {
+  auditContractText = null;
+}
+checkTrue(
+  'the contract is readable at the path this check assumes',
+  auditContractText !== null && auditContractText.length > 0,
+);
+
+const contractResults = evaluateContract(auditContractText ?? '', MAX_WINDOW_DAYS);
+for (const result of contractResults) {
+  check(
+    `contract agrees with MAX_WINDOW_DAYS: ${result.name}`,
+    result.status === 'ok' ? 'ok' : `${result.status}: ${String(result.found)}`,
+    'ok',
+  );
+}
+
+/*
+ * THE FLOOR. "No findings" must not render as "no input" — an anchor set that
+ * matches nothing would otherwise report four silent passes, which is the most
+ * confident wrong answer a check can give.
+ */
+check(
+  'all four statements of the limit were FOUND, not merely not-contradicted',
+  contractResults.filter((result) => result.status !== 'missing').length,
+  4,
+);
+
+/*
+ * ===========================================================================
+ * NEGATIVE CONTROLS — the known-failing inputs, without which this is observed
+ * rather than verified
+ * ===========================================================================
+ */
+
+/* 1. The drift this exists to catch: the console's constant narrowed to 14. */
+const driftedResults = evaluateContract(auditContractText ?? '', 14);
+check(
+  'NEGATIVE CONTROL: a console constant of 14 is caught by all four anchors',
+  driftedResults.filter((result) => result.status === 'mismatch').length,
+  4,
+);
+check(
+  'NEGATIVE CONTROL: and none of them passes',
+  driftedResults.filter((result) => result.status === 'ok').length,
+  0,
+);
+
+/* 2. Handed nothing, it must fail LOUDLY rather than find nothing wrong. */
+const emptyResults = evaluateContract('', MAX_WINDOW_DAYS);
+check(
+  'NEGATIVE CONTROL: an empty contract reports four MISSING',
+  emptyResults.filter((result) => result.status === 'missing').length,
+  4,
+);
+check(
+  'NEGATIVE CONTROL: and reports nothing as ok',
+  emptyResults.filter((result) => result.status === 'ok').length,
+  0,
+);
+
+/*
+ * 3. The boundary is asserted as MAX + 1, not merely captured. Without this,
+ *    the QA anchor would pass against a contract that had moved the refused
+ *    span while leaving the accepted one alone.
+ */
+const movedBoundary = (auditContractText ?? '').replace(
+  'A span of 32 days is refused',
+  'A span of 33 days is refused',
+);
+checkTrue(
+  'NEGATIVE CONTROL: the boundary mutation actually applied (a no-op control controls nothing)',
+  auditContractText !== null && movedBoundary !== auditContractText,
+);
+check(
+  'NEGATIVE CONTROL: a contract refusing at 33 rather than 32 goes red',
+  evaluateContract(movedBoundary, MAX_WINDOW_DAYS)[3].status,
+  'mismatch',
+);
 
 console.log('');
 if (failures > 0) {

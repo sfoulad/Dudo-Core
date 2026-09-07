@@ -321,9 +321,9 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
             Apply filters
           </Button>
           {/*
-            WALKING BACKWARDS A MONTH AT A TIME. These only rewrite the two date
-            fields — they fire NO request. The operator presses Apply, which is
-            the one place a window costs anything.
+            WALKING BACKWARDS ONE WINDOW AT A TIME. These only rewrite the two
+            date fields — they fire NO request. The operator presses Apply, which
+            is the one place a window costs anything.
           */}
           {draft.since !== '' && draft.until !== '' ? (
             <>
@@ -425,7 +425,8 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
                 Core answered, and nothing matches{' '}
                 <span className="font-semibold text-ink">within {appliedWindow}</span>. This is
                 not a statement about any other period — records outside this range were not
-                searched. Move the range back a month to keep looking.
+                searched. Use <span className="font-semibold text-ink">Earlier window</span> to
+                keep looking.
               </>
             ) : filtered ? (
               <>Core answered, and nothing in the log matches. Widen or clear the filters.</>

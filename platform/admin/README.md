@@ -113,7 +113,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 434 checks — Core's shapes, accessibility, time windows
+npm run verify:platform  # 458 checks — Core's shapes, accessibility, time windows
 npm run verify:css       # 13 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -223,6 +223,35 @@ presses Apply, because every window costs 2 control-plane row-writes against a 6
 > is 31 days, and one month earlier is `1 Aug – 1 Sep`, which is **32** — over the limit, refused by
 > Core, and reached by pressing a button this console offered. Months are not a fixed length; a span
 > limit is. It also overlapped on the shared boundary day, double-counting records.
+>
+> **Changing the shift turned nothing red, and left two sentences behind that still described the
+> old behaviour** — the too-wide refusal said the controls "move the range by a month", and the
+> empty state said "Move the range back a month to keep looking." Both were found by reading. There
+> is now a check that no sentence in either audit screen or in `audit-window.ts` claims the control
+> moves by a month, with the two shipped sentences as its known-failing inputs.
+
+#### `MAX_WINDOW_DAYS` is asserted against the contract file, not just documented
+
+The limit is a **number transcribed out of a document**, and it now lives in at least three places —
+the contract, Core's validator, and this console's constant. Until the check existed, nothing
+compared them: if the limit narrowed to 14, this console would go on refusing at 31 and an operator
+would meet Core's refusal for a request the screen said was fine.
+
+`verify:platform` reads `packages/contracts/core/platform/platform-audit-read-v1.contract.yaml` and
+binds `MAX_WINDOW_DAYS` to **four independent sentences** in it — the ruling (which spells the number
+in words and carries no digit), the refusal rule, the request specification, and the QA boundary
+case, whose *refused* span must be exactly one more than the accepted one. A **floor** requires all
+four to have been *found*, so a rewrite that removes them goes red rather than quiet.
+
+Three negative controls ship with it, because a check that has never failed is observed rather than
+verified: a console constant of `14` must be caught by all four anchors; an empty contract must
+report four `MISSING` and zero passes; and moving the contract's refused boundary from 32 to 33 must
+go red — with a further assertion that the mutation actually applied, since a no-op control controls
+nothing.
+
+**What it does not close.** It binds the console to the *contract*. It does **not** bind either to
+Core's validator. If Core's code and Core's contract disagree, every check here stays green. The
+residual gap is real and it is narrower than the one before it.
 
 ### Reading an Organization's trail writes to it
 

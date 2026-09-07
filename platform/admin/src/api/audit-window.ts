@@ -205,8 +205,8 @@ export function describeWindowRefusal(token: WindowRefusalToken): {
         title: `That range is longer than ${String(MAX_WINDOW_DAYS)} days`,
         body:
           `The most that can be searched at once is ${String(MAX_WINDOW_DAYS)} days. Search a ` +
-          'month at a time and walk backwards — the controls below move the range by a month ' +
-          'without retyping it. Nothing was searched.',
+          'month at a time and walk backwards — the controls below move the range by its own ' +
+          'length without retyping it. Nothing was searched.',
       };
     case 'time_window_inverted':
       return {
