@@ -65,6 +65,7 @@ import {
 } from '../identity/control-plane-admission.ts';
 import type { TemplateStore } from './template-store.ts';
 import { normalizeTemplateName, parseTemplateCreate, toTemplateOutput } from './templates.ts';
+import { toIdentityOutput } from './organization-identity.ts';
 import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
 import type { ConfirmationParameters } from '../confirmation/binding.ts';
 import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
@@ -583,11 +584,15 @@ function readOrganization(dependencies: {
         organization_id: found.value.organizationId,
         status: found.value.status,
         created_at: found.value.createdAt,
-        // ALWAYS NULL. `0002_organization.sql` declined a name column deliberately and the
-        // organization-structure slice owns that model. The field is contracted nullable so a name
-        // is additive later; **the console's list and detail screens are therefore opaque
-        // identifiers, which is contract `PO-3` and not a defect here.**
-        display_name: null,
+        // THE IDENTITY BLOCK, SPREAD RATHER THAN NESTED, because `organization-detail-v1` carries
+        // `display_name`, `commercial_registration` and `vat_registration` as siblings of
+        // `status` and `member_count` rather than under a wrapper.
+        //
+        // *** THIS REPLACED `display_name: null` AND A PARAGRAPH SAYING IT WOULD ALWAYS BE NULL.
+        // *** That paragraph named its own end — *"the field is contracted nullable so a name is
+        // additive later"* — and `PO-3`/`OD-4` were the open questions it pointed at. Both close
+        // here; nothing about the shape changed, which is what "additive" meant.
+        ...toIdentityOutput(found.value.identity),
         template,
         member_count: found.value.memberCount,
       },

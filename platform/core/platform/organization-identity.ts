@@ -282,6 +282,60 @@ export function applyRegistration(
 }
 
 // =============================================================================================
+// The wire edge. `toTemplateOutput`'s pattern: the mapper lives beside the type it maps.
+// =============================================================================================
+
+/**
+ * One registration, as the contract publishes it.
+ *
+ * *** THE WIRE STATE NAMES ARE UNDERSCORED AND THE DOMAIN'S ARE HYPHENATED, AND THE TRANSLATION
+ * HAPPENS HERE AND IN `registrationColumns` AND NOWHERE ELSE. *** Two vocabularies is a cost; the
+ * alternative was matching the wire in the domain, which makes every `switch` in Core read like a
+ * transport concern. Two mapping functions is the whole surface of the divergence.
+ *
+ * `verification` IS PRESENT AND NULL ON THE `registered` BRANCH, NEVER OMITTED. Null means
+ * recorded-but-unverified, which a client must be able to render distinctly from verified — "a
+ * number an operator typed" and "a number an operator checked against the registry" are the two
+ * things this whole design exists to keep apart, and an absent key renders as neither.
+ */
+export function toRegistrationOutput(
+  registration: OrganizationRegistration,
+): Readonly<Record<string, unknown>> {
+  switch (registration.state) {
+    case 'not-recorded':
+      // NO TIMESTAMP, DELIBERATELY: there is no event to date. A `not_recorded_at` would be the
+      // Organization's creation time wearing a name that suggests somebody decided something.
+      return Object.freeze({ state: 'not_recorded' });
+    case 'not-registered':
+      return Object.freeze({ state: 'not_registered', declared_at: registration.declaredAt });
+    case 'registered':
+      return Object.freeze({
+        state: 'registered',
+        number: registration.number,
+        recorded_at: registration.recordedAt,
+        verification:
+          registration.verification === null
+            ? null
+            : Object.freeze({
+                verified_by_principal_id: registration.verification.verifiedByPrincipalId,
+                verified_at: registration.verification.verifiedAt,
+              }),
+      });
+  }
+}
+
+/** The whole block, as `organization-detail-v1` embeds it and the update route returns it. */
+export function toIdentityOutput(
+  identity: OrganizationIdentity,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    display_name: identity.displayName,
+    commercial_registration: toRegistrationOutput(identity.commercialRegistration),
+    vat_registration: toRegistrationOutput(identity.vatRegistration),
+  });
+}
+
+// =============================================================================================
 // The storage edge. SIX COLUMNS PER REGISTRATION, PRODUCED TOGETHER OR NOT AT ALL.
 // =============================================================================================
 

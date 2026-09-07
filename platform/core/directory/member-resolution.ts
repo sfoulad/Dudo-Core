@@ -104,7 +104,11 @@ export const RESOLVE_TENANT_ROW_WRITES = 5;
  */
 export type TenantRecordedPlatformPermission =
   | 'core.credential.reset'
-  | 'core.platform-audit.read';
+  | 'core.platform-audit.read'
+  // ADDED 2026-09-07 for `platform.organizations.identity.update`, and adding it was the stop this
+  // union was built to be: the identity route did not inherit a value, it required a decision in
+  // this file. **It is also the first MUTATION to record here** — the two above are reads.
+  | 'core.platform-organization.update';
 
 export type MemberResolutionService = {
   /**
