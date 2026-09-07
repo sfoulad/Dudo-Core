@@ -52,7 +52,15 @@ import { Field, Input } from '@/components/ui/field';
 import { AuditRecordList } from '@/components/AuditRecordList';
 import { EmptyBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
-import { ErrorBlock } from '@/components/StateBlock';
+import { WindowOrOtherError } from '@/components/WindowRefusal';
+import {
+  MAX_WINDOW_DAYS,
+  describeWindow,
+  shiftWindowByOwnLength,
+  windowIsRequired,
+  windowRefusal,
+  type WindowDraft,
+} from '@/api/audit-window';
 import {
   PLATFORM_DEFAULT_PAGE_SIZE,
   toUtcExclusiveDayEnd,
@@ -82,10 +90,22 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   /** The filters actually in force. Changing them resets the cursor. */
   const [applied, setApplied] = useState<PlatformFeedFilters>({});
+  /**
+   * The window that is IN FORCE, as the operator typed it — held separately from
+   * `applied` so the empty state can name it without reverse-engineering a
+   * display date from the exclusive ISO bound.
+   *
+   * `null` means no window was applied, which is a different sentence.
+   */
+  const [appliedWindowDraft, setAppliedWindowDraft] = useState<WindowDraft | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [nonce, setNonce] = useState(0);
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
+  /** A local refusal, shown instead of spending a request that would be refused. */
+  const [windowError, setWindowError] = useState<string | null>(null);
+
+  const appliedWindow = appliedWindowDraft === null ? null : describeWindow(appliedWindowDraft);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,6 +135,25 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
   const applyFilters = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
+
+      /*
+       * THE LOCAL PRE-CHECK. A request that will certainly be refused still
+       * costs 2 control-plane row-writes and an audit record, so the shape is
+       * checked here first. Core's refusal remains authoritative — see the
+       * server-token branch below, which handles the case where this mirror has
+       * drifted from the contract.
+       */
+      const required = windowIsRequired({
+        actorPrincipalId: draft.actor.trim(),
+        actionId: draft.action.trim(),
+      });
+      const refusal = windowRefusal({ since: draft.since, until: draft.until }, required);
+      if (refusal !== null) {
+        setWindowError(refusal);
+        return;
+      }
+      setWindowError(null);
+
       // Mutable while being assembled, then handed to the readonly type. The
       // fields are optional and omitted when blank — never sent empty.
       const next: {
@@ -132,6 +171,12 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
       if (since !== null) next.since = since;
       if (until !== null) next.until = until;
       setApplied(next);
+      // Recorded as the operator typed it, so the empty state can name it.
+      setAppliedWindowDraft(
+        next.since !== undefined && next.until !== undefined
+          ? { since: draft.since, until: draft.until }
+          : null,
+      );
       setCursor(null);
       setDepth(1);
     },
@@ -141,8 +186,21 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
   const clearFilters = useCallback(() => {
     setDraft(EMPTY_DRAFT);
     setApplied({});
+    setAppliedWindowDraft(null);
+    setWindowError(null);
     setCursor(null);
     setDepth(1);
+  }, []);
+
+  /*
+   * MOVES THE RANGE AND DOES NOT FETCH. A twelve-month investigation is twelve
+   * requests; this saves the retyping and spends nothing. The operator still
+   * presses Apply, because every window is 2 control-plane row-writes against a
+   * 600/day ceiling and no request may be fired that they did not ask for.
+   */
+  const shiftWindow = useCallback((direction: -1 | 1) => {
+    setDraft((prev) => ({ ...prev, ...shiftWindowByOwnLength(prev, direction) }));
+    setWindowError(null);
   }, []);
 
   const filtered = Object.keys(applied).length > 0;
@@ -240,10 +298,59 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
           time — which is exactly what leaving that column out of this feed prevents.
         </p>
 
+        {/*
+          THE WINDOW RULE, STATED WHERE THE FILTERS ARE — so an operator learns
+          it before being refused rather than by being refused.
+        */}
+        <p className="text-[0.8125rem] leading-relaxed text-ink-muted">
+          Filtering by operator or action needs a date range of at most{' '}
+          {MAX_WINDOW_DAYS} days. Without a filter you can search the whole log, unbounded.
+        </p>
+
+        {windowError !== null ? (
+          <p
+            role="alert"
+            className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.875rem] leading-relaxed text-ink"
+          >
+            {windowError}
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="secondary">
             Apply filters
           </Button>
+          {/*
+            WALKING BACKWARDS A MONTH AT A TIME. These only rewrite the two date
+            fields — they fire NO request. The operator presses Apply, which is
+            the one place a window costs anything.
+          */}
+          {draft.since !== '' && draft.until !== '' ? (
+            <>
+              {/*
+                "EARLIER"/"LATER", NOT "-1 MONTH". The shift moves by the
+                window's own length, so consecutive windows tile without gap or
+                overlap — and a label promising a month would be wrong for any
+                window that is not a month long.
+              */}
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  shiftWindow(-1);
+                }}
+              >
+                Earlier window
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  shiftWindow(1);
+                }}
+              >
+                Later window
+              </Button>
+            </>
+          ) : null}
           {filtered ? (
             <Button variant="ghost" onClick={clearFilters}>
               Clear
@@ -267,7 +374,15 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
             }}
           />
         ) : (
-          <ErrorBlock
+          /*
+           * THE THREE WINDOW TOKENS STAY DISTINCT. Someone who omitted a window
+           * and someone who asked for two years need different sentences — the
+           * first has to add dates, the second has to narrow them — and
+           * "invalid request" for both cannot tell them which. Same shape as the
+           * member-lookup refusal: a collapsed message where the causes are
+           * genuinely different is a message that helps nobody.
+           */
+          <WindowOrOtherError
             error={load.error}
             onRetry={() => {
               setNonce((value) => value + 1);
@@ -277,10 +392,42 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
       ) : null}
 
       {load.kind === 'loaded' && load.page.data.length === 0 ? (
+        /*
+         * ===============================================================
+         * AN EMPTY WINDOWED RESULT SAYS "IN THIS WINDOW". NEVER "NO RECORDS".
+         * ===============================================================
+         *
+         * THIS IS THE HALF THE CONTRACT CANNOT ENFORCE. Core refuses an omitted
+         * window precisely so an operator cannot receive a silently narrowed
+         * answer — and nothing stops them MISREADING a correctly narrow one.
+         *
+         * An investigator who filters by an operator, gets an empty page, and
+         * reads it as "this person did nothing" has drawn a conclusion the data
+         * does not support. On an evidence surface that is the failure that
+         * matters, because **it is indistinguishable from evidence of
+         * innocence.**
+         *
+         * So the window is named in the SENTENCE THE OPERATOR READS when there
+         * is nothing there — not a footnote, not a tooltip, not a caption under
+         * the filters they may have stopped looking at.
+         */
         <EmptyBlock
-          title={filtered ? 'No records match those filters.' : 'The log is empty.'}
+          title={
+            appliedWindow !== null
+              ? 'No records in this window.'
+              : filtered
+                ? 'No records match those filters.'
+                : 'The log is empty.'
+          }
           body={
-            filtered ? (
+            appliedWindow !== null ? (
+              <>
+                Core answered, and nothing matches{' '}
+                <span className="font-semibold text-ink">within {appliedWindow}</span>. This is
+                not a statement about any other period — records outside this range were not
+                searched. Move the range back a month to keep looking.
+              </>
+            ) : filtered ? (
               <>Core answered, and nothing in the log matches. Widen or clear the filters.</>
             ) : (
               <>

@@ -113,7 +113,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 382 checks — Core's shapes, plus accessibility structure
+npm run verify:platform  # 434 checks — Core's shapes, accessibility, time windows
 npm run verify:css       # 13 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -179,6 +179,50 @@ until`. Organization: the same **minus `actor_principal_id`**. And **neither has
 `target_principal_id` filter** — filtering by a principal and counting results would disclose that
 principal's Organizations one bit at a time. The types have no member for it, so this client cannot
 send one even by mistake.
+
+### The bounded time window, and the obligation only the client can meet
+
+**Filtered feed queries require a date range of at most 31 days.** It is an availability control,
+not a UI preference: both feeds scanned the whole action log, and at 50,000 rows **49 feed requests
+exhaust D1's account-wide read allowance** — which stops every query in the platform, including the
+session lookup every login performs.
+
+| Feed | A window is required when |
+|---|---|
+| Platform | `actor_principal_id` **or** `action_id` is present |
+| Organization | `action_id` is present — **`organization_id` is exempt**, being a path parameter served by an index |
+
+**The unfiltered feeds need none and must not gain one.** They are already bounded to a page by an
+index, so requiring one would remove no reads and would remove *"what happened, ever"*.
+
+> #### An empty windowed result says **"No records in this window"** — never "No records"
+>
+> **This is the half a contract cannot enforce.** Core refuses an omitted window so an operator
+> cannot receive a silently narrowed answer. **Nothing stops them misreading a correctly narrow
+> one.** An investigator who filters by an operator, sees an empty page and concludes *"this person
+> did nothing"* has drawn a conclusion the data does not support — and on an evidence surface that
+> is **indistinguishable from evidence of innocence**.
+>
+> So the window is named in the sentence the operator reads when there is nothing there, together
+> with *"records outside this range were not searched"*. Not a footnote, not a tooltip. Asserted in
+> the source and negative-controlled: changing the headline to "No records." fails two checks.
+
+**The three refusals stay distinct** — `time_window_required`, `time_window_too_wide`,
+`time_window_inverted` — because they need three different actions and one sentence cannot say
+which. **This is the opposite case from the member resolve**, where five causes collapse *because*
+distinguishing them would disclose membership; here nothing is disclosed by saying which end of a
+date range is wrong. **The 31-day limit is named** in the message: a span limit is a constant, not a
+fact about data.
+
+**Walking backwards** is `Earlier window` / `Later window`, which shift by the window's **own
+length** — so the span is preserved (a shifted legal window stays legal) and consecutive windows
+**tile with no gap and no overlap**. They rewrite the dates and **fire no request**; the operator
+presses Apply, because every window costs 2 control-plane row-writes against a 600/day ceiling.
+
+> An earlier version shifted by a **calendar month** and produced invalid windows: `1 Sep – 1 Oct`
+> is 31 days, and one month earlier is `1 Aug – 1 Sep`, which is **32** — over the limit, refused by
+> Core, and reached by pressing a button this console offered. Months are not a fixed length; a span
+> limit is. It also overlapped on the shared boundary day, double-counting records.
 
 ### Reading an Organization's trail writes to it
 

@@ -44,6 +44,15 @@ import { Field, Input } from '@/components/ui/field';
 import { AuditRecordList } from '@/components/AuditRecordList';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
+import { WindowOrOtherError } from '@/components/WindowRefusal';
+import {
+  MAX_WINDOW_DAYS,
+  describeWindow,
+  shiftWindowByOwnLength,
+  windowIsRequired,
+  windowRefusal,
+  type WindowDraft,
+} from '@/api/audit-window';
 import { buildHash, organizationDetailPath } from '@/lib/router';
 import {
   PLATFORM_DEFAULT_PAGE_SIZE,
@@ -90,6 +99,11 @@ export function OrganizationAudit({
   const [load, setLoad] = useState<Load>({ kind: 'idle' });
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [applied, setApplied] = useState<OrganizationFeedFilters>({});
+  /** The window in force, as typed. `null` means none was applied. */
+  const [appliedWindowDraft, setAppliedWindowDraft] = useState<WindowDraft | null>(null);
+  const [windowError, setWindowError] = useState<string | null>(null);
+
+  const appliedWindow = appliedWindowDraft === null ? null : describeWindow(appliedWindowDraft);
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [requests, setRequests] = useState(0);
@@ -134,6 +148,22 @@ export function OrganizationAudit({
   const applyFilters = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
+
+      /*
+       * THE WINDOW CONDITION IS NARROWER HERE THAN ON THE PLATFORM FEED, and
+       * that is the contract rather than an oversight: only `action_id`
+       * triggers it. **`organization_id` is exempt, and not as a concession** —
+       * it is a PATH parameter served by an index, so filtering by it costs no
+       * walk. This screen has no actor filter at all.
+       */
+      const required = windowIsRequired({ actionId: draft.action.trim() });
+      const refusal = windowRefusal({ since: draft.since, until: draft.until }, required);
+      if (refusal !== null) {
+        setWindowError(refusal);
+        return;
+      }
+      setWindowError(null);
+
       // Mutable while being assembled. NOTE THERE IS NO `actor_principal_id`
       // HERE — the Organization feed does not accept one, and the type has no
       // member for it.
@@ -145,12 +175,23 @@ export function OrganizationAudit({
       if (since !== null) next.since = since;
       if (until !== null) next.until = until;
       setApplied(next);
+      setAppliedWindowDraft(
+        next.since !== undefined && next.until !== undefined
+          ? { since: draft.since, until: draft.until }
+          : null,
+      );
       setCursor(null);
       setDepth(1);
       setNonce((value) => value + 1);
     },
     [draft],
   );
+
+  /* Rewrites the dates only. Fires nothing — see the platform feed's note. */
+  const shiftWindow = useCallback((direction: -1 | 1) => {
+    setDraft((prev) => ({ ...prev, ...shiftWindowByOwnLength(prev, direction) }));
+    setWindowError(null);
+  }, []);
 
   const filtered = Object.keys(applied).length > 0;
 
@@ -253,10 +294,45 @@ export function OrganizationAudit({
           </Field>
         </div>
 
+        <p className="text-[0.8125rem] leading-relaxed text-ink-muted">
+          Filtering by action needs a date range of at most {MAX_WINDOW_DAYS} days. Reading this
+          business&rsquo;s whole trail needs no range.
+        </p>
+
+        {windowError !== null ? (
+          <p
+            role="alert"
+            className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.875rem] leading-relaxed text-ink"
+          >
+            {windowError}
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="primary">
             {load.kind === 'idle' ? 'Read the trail' : 'Apply filters and read'}
           </Button>
+          {/* Rewrites the dates; fires nothing. Each read costs the customer. */}
+          {draft.since !== '' && draft.until !== '' ? (
+            <>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  shiftWindow(-1);
+                }}
+              >
+                Earlier window
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  shiftWindow(1);
+                }}
+              >
+                Later window
+              </Button>
+            </>
+          ) : null}
           {requests > 0 ? (
             <p className="text-[0.8125rem] text-ink-muted">
               {requests} {requests === 1 ? 'read' : 'reads'} this visit
@@ -291,22 +367,43 @@ export function OrganizationAudit({
               behaviour the ceilings exist to stop.
             */
             <CeilingNotice error={load.error} scope="organization" onRetry={read} />
-          ) : (
+          ) : load.error.code === 'not_found' ? (
             <ErrorBlock error={load.error} onRetry={read}>
-              {load.error.code === 'not_found' ? (
-                <p className="mt-2 leading-relaxed text-ink-soft">
-                  No Organization has this identifier.
-                </p>
-              ) : null}
+              <p className="mt-2 leading-relaxed text-ink-soft">
+                No Organization has this identifier.
+              </p>
             </ErrorBlock>
+          ) : (
+            /* The three window tokens stay distinct. See `WindowRefusal`. */
+            <WindowOrOtherError error={load.error} onRetry={read} />
           )
         ) : null}
 
         {load.kind === 'loaded' && load.page.data.length === 0 ? (
+          /*
+           * AN EMPTY WINDOWED RESULT NAMES ITS WINDOW. The contract refuses an
+           * omitted window so an operator cannot be silently narrowed; nothing
+           * stops them MISREADING a correctly narrow one, and "the platform did
+           * nothing to this customer" is exactly the conclusion a support case
+           * turns on. The window goes in the headline sentence.
+           */
           <EmptyBlock
-            title={filtered ? 'No records match those filters.' : 'Nothing has happened here.'}
+            title={
+              appliedWindow !== null
+                ? 'No records in this window.'
+                : filtered
+                  ? 'No records match those filters.'
+                  : 'Nothing has happened here.'
+            }
             body={
-              filtered ? (
+              appliedWindow !== null ? (
+                <>
+                  Core answered, and nothing in this business&rsquo;s trail matches{' '}
+                  <span className="font-semibold text-ink">within {appliedWindow}</span>. Records
+                  outside this range were not searched, so this says nothing about any other
+                  period.
+                </>
+              ) : filtered ? (
                 <>Core answered, and nothing in this trail matches.</>
               ) : (
                 <>

@@ -77,7 +77,16 @@ import { join } from 'node:path';
  * imports nothing, so a bare loader resolves it.
  */
 import { identifierRefusal } from '../src/api/kdf.ts';
-import { ERROR_CODES, writeIsCertainlyAbsent } from '../src/api/errors.ts';
+import { ApiError, ERROR_CODES, writeIsCertainlyAbsent } from '../src/api/errors.ts';
+import {
+  MAX_WINDOW_DAYS,
+  describeWindowRefusal,
+  shiftWindowByOwnLength,
+  spanInDays,
+  windowIsRequired,
+  windowRefusal,
+  windowRefusalToken,
+} from '../src/api/audit-window.ts';
 import {
   buildConfirmedRequest,
   declaredPathParameters,
@@ -2169,6 +2178,186 @@ for (const name of ['SignIn.tsx', 'Templates.tsx', 'PlatformAudit.tsx', 'Organiz
   checkTrue(
     `${name}: ${String(inputs + selects)} control(s) are wrapped by ${String(fields)} Field(s)`,
     fields >= inputs + selects,
+  );
+}
+
+/* =========================================================================
+   13. THE BOUNDED TIME WINDOW — platform-audit-read-v1, amended
+   ========================================================================= */
+
+console.log('\n=== When a window is required, per feed ===\n');
+
+check('the maximum span is 31 days', MAX_WINDOW_DAYS, 31);
+
+/*
+ * THE TWO FEEDS DIFFER. Platform: required when actor OR action is filtered.
+ * Organization: required when action is filtered; `organization_id` is EXEMPT
+ * because it is a path parameter served by an index.
+ */
+check('no filters -> no window required', windowIsRequired({}), false);
+checkTrue('an actor filter requires one', windowIsRequired({ actorPrincipalId: 'pr_a' }));
+checkTrue('an action filter requires one', windowIsRequired({ actionId: 'platform.audit.list' }));
+checkTrue('both together require one', windowIsRequired({ actorPrincipalId: 'a', actionId: 'b' }));
+check('an empty-string filter does not count as present', windowIsRequired({ actorPrincipalId: '', actionId: '' }), false);
+
+console.log('\n=== The local pre-check mirrors the three refusals ===\n');
+
+const W = (since, until) => ({ since, until });
+
+check('an unfiltered query needs no window', windowRefusal(W('', ''), false), null);
+checkTrue(
+  'HALF a window is refused even unfiltered — it is an unbounded walk one way',
+  windowRefusal(W('2026-09-01', ''), false) !== null,
+);
+checkTrue('a filtered query with no window is refused', windowRefusal(W('', ''), true) !== null);
+checkTrue('a filtered query with only a start is refused', windowRefusal(W('2026-09-01', ''), true) !== null);
+checkTrue('a filtered query with only an end is refused', windowRefusal(W('', '2026-09-30'), true) !== null);
+check('a one-day window is accepted', windowRefusal(W('2026-09-05', '2026-09-05'), true), null);
+check('exactly 31 days is accepted', windowRefusal(W('2026-09-01', '2026-10-01'), true), null);
+checkTrue('32 days is refused', windowRefusal(W('2026-09-01', '2026-10-02'), true) !== null);
+checkTrue('an inverted window is refused', windowRefusal(W('2026-09-30', '2026-09-01'), true) !== null);
+
+/* THE BOUNDARY, ASSERTED RATHER THAN A VALUE IN THE MIDDLE. */
+check('span of a single day is 1', spanInDays(W('2026-09-05', '2026-09-05')), 1);
+check('span of 1 Sep to 1 Oct is 31', spanInDays(W('2026-09-01', '2026-10-01')), 31);
+check('span of 1 Sep to 2 Oct is 32', spanInDays(W('2026-09-01', '2026-10-02')), 32);
+checkTrue('an inverted span is not positive', (spanInDays(W('2026-09-30', '2026-09-01')) ?? 0) <= 0);
+
+/*
+ * THE REFUSAL NAMES THE LIMIT. Safe because a span limit is a CONSTANT, not a
+ * fact about data — it discloses nothing about any record, operator or
+ * Organization, which is why this contract may name it while collapsing its
+ * cursor rejections.
+ */
+checkTrue(
+  'the too-wide refusal names the 31-day limit',
+  (windowRefusal(W('2026-09-01', '2026-12-01'), true) ?? '').includes('31'),
+);
+
+console.log('\n=== The three server tokens stay distinct ===\n');
+
+const tokenError = (issue) =>
+  new ApiError({ code: 'invalid_argument', details: [{ field: 'since', issue }] });
+
+const messages = new Set();
+for (const token of ['time_window_required', 'time_window_too_wide', 'time_window_inverted']) {
+  check(`${token} is recognised`, windowRefusalToken(tokenError(token)), token);
+  const described = describeWindowRefusal(token);
+  checkTrue(`${token} has its own title`, described.title.length > 0);
+  messages.add(described.title);
+}
+check('the three titles are all different', messages.size, 3);
+check(
+  'an unrelated invalid_argument is not treated as a window problem',
+  windowRefusalToken(tokenError('must_be_an_identifier')),
+  null,
+);
+
+console.log('\n=== Walking backwards: the window shift ===\n');
+
+/*
+ * IT SHIFTS BY THE WINDOW'S OWN LENGTH, NOT BY A CALENDAR MONTH, and the first
+ * version did the latter and produced INVALID windows: `1 Sep – 1 Oct` is 31
+ * days, and one calendar month earlier is `1 Aug – 1 Sep`, which is 32 — over
+ * the limit and refused by Core, reached by pressing a button this console
+ * offered. Months are not a fixed length; a span limit is.
+ *
+ * Caught by the check below, which is why it asserts the SPAN of the result
+ * rather than its dates.
+ */
+check(
+  'shifting earlier moves both ends by the span',
+  JSON.stringify(shiftWindowByOwnLength(W('2026-09-01', '2026-09-30'), -1)),
+  JSON.stringify(W('2026-08-02', '2026-08-31')),
+);
+check(
+  'and shifting later returns to where it started',
+  JSON.stringify(shiftWindowByOwnLength(shiftWindowByOwnLength(W('2026-09-01', '2026-09-30'), -1), 1)),
+  JSON.stringify(W('2026-09-01', '2026-09-30')),
+);
+check('an empty draft shifts to nothing', shiftWindowByOwnLength(W('', ''), -1).since, '');
+check(
+  'an inverted draft is returned untouched rather than shifted into nonsense',
+  JSON.stringify(shiftWindowByOwnLength(W('2026-09-30', '2026-09-01'), -1)),
+  JSON.stringify(W('2026-09-30', '2026-09-01')),
+);
+
+/*
+ * THE TWO PROPERTIES THAT MAKE IT USABLE FOR AN INVESTIGATION.
+ */
+for (const [since, until] of [
+  ['2026-09-01', '2026-10-01'],
+  ['2026-01-15', '2026-02-14'],
+  ['2028-02-01', '2028-02-29'],
+  ['2026-09-05', '2026-09-05'],
+]) {
+  const original = W(since, until);
+  const shifted = shiftWindowByOwnLength(original, -1);
+  const originalSpan = spanInDays(original);
+  const shiftedSpan = spanInDays(shifted);
+  check(`${since}..${until}: the span is preserved`, shiftedSpan, originalSpan);
+  checkTrue(
+    `${since}..${until}: the shifted window is still legal`,
+    shiftedSpan !== null && shiftedSpan >= 1 && shiftedSpan <= MAX_WINDOW_DAYS,
+  );
+  /*
+   * CONTIGUOUS, NOT OVERLAPPING. The earlier window must end exactly one day
+   * before this one starts — a gap would hide records while looking exhaustive,
+   * and an overlap would double-count them.
+   */
+  const gapDays =
+    (new Date(`${original.since}T00:00:00.000Z`).getTime() -
+      new Date(`${shifted.until}T00:00:00.000Z`).getTime()) /
+    86_400_000;
+  check(`${since}..${until}: windows tile with no gap and no overlap`, gapDays, 1);
+}
+
+console.log('\n=== The obligation a contract cannot enforce ===\n');
+
+/*
+ * *** A CONSOLE MUST RENDER AN EMPTY WINDOWED RESULT AS "NO RECORDS IN THIS
+ * WINDOW", NEVER AS "NO RECORDS". ***
+ *
+ * Core refuses an omitted window so an operator cannot be silently narrowed.
+ * Nothing stops them MISREADING a correctly narrow one — and an investigator who
+ * filters by an operator, sees an empty page and concludes "this person did
+ * nothing" has drawn a conclusion the data does not support. On an evidence
+ * surface that is indistinguishable from evidence of innocence.
+ *
+ * ASSERTED IN THE SOURCE because it is the one requirement here with no
+ * server-side enforcement at all.
+ */
+for (const name of ['PlatformAudit.tsx', 'OrganizationAudit.tsx']) {
+  const source = readScreen(name);
+  /*
+   * WHITESPACE IS COLLAPSED BEFORE MATCHING PROSE. JSX wraps text at arbitrary
+   * points, so "were not searched" can arrive as "were not\n  searched" — which
+   * is what made the first version of this check report a false failure against
+   * a screen that said exactly the right thing. Any multi-word assertion about
+   * rendered prose has to normalise first.
+   */
+  const prose = source.replace(/\s+/g, ' ');
+  checkTrue(
+    `${name}: the empty state names the window it searched`,
+    /No records in this window\./.test(prose),
+  );
+  checkTrue(
+    `${name}: and states that outside it was not searched`,
+    /were not searched/.test(prose),
+  );
+  checkTrue(
+    `${name}: the window is chosen by whether one was APPLIED, not by whether filters were set`,
+    /appliedWindow !== null\s*\?\s*'No records in this window\.'/.test(strip(source)),
+  );
+}
+
+/* NO PREFETCH. Every window is 2 control-plane row-writes on a 600/day ceiling. */
+for (const name of ['PlatformAudit.tsx', 'OrganizationAudit.tsx']) {
+  const source = strip(readScreen(name));
+  check(
+    `${name}: the month shift fires no request`,
+    /shiftWindow[\s\S]{0,300}(setNonce|listPlatformAudit|listOrganizationAudit)/.test(source),
+    false,
   );
 }
 
