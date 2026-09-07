@@ -33,6 +33,7 @@ import {
   perBusinessDay,
 } from './capacity/model.ts';
 import type { Assumptions, MeasuredCosts } from './capacity/model.ts';
+import { SEARCH_ROWS, rowsRead } from './capacity/reads.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -235,6 +236,119 @@ async function main(): Promise<void> {
   report('LONG RETENTION: baseline traffic, 5 years', { ...BASELINE, retentionMonths: 60 });
 
   // -----------------------------------------------------------------------------------------
+  rule('3b. ROWS READ — the allowance the write model left open');
+
+  console.log(
+    [
+      '  D1 bills 5,000,000 rows read/day, account-wide, and exceeding it STOPS queries rather',
+      '  than billing for them. Rows read is decided by the QUERY PLAN, not by the page size: a',
+      '  SEARCH descends an index and costs a constant; a SCAN steps through every row, so its',
+      '  cost IS the table size and grows with history.',
+      '',
+      '  Plans, taken with EXPLAIN QUERY PLAN over the real schema with the real parameters:',
+    ].join('\n'),
+  );
+
+  const scanning = operations.filter(
+    (operation) =>
+      operation.controlReads.scannedTables.length > 0 ||
+      operation.tenantReads.scannedTables.length > 0,
+  );
+  for (const operation of operations) {
+    const scans = [
+      ...operation.controlReads.scannedTables,
+      ...operation.tenantReads.scannedTables,
+    ];
+    const searches = operation.controlReads.totalSearches + operation.tenantReads.totalSearches;
+    console.log(
+      `    ${operation.name.padEnd(38)}${String(searches).padStart(3)} indexed lookups` +
+        (scans.length > 0 ? `  ·  SCANS ${scans.join(', ')}` : ''),
+    );
+  }
+
+  if (scanning.length === 0) {
+    console.log('\n  NO OPERATION SCANS A TABLE. Read cost is bounded and does not grow with history.');
+  } else {
+    console.log(
+      [
+        '',
+        '  *** THE TWO AUDIT FEEDS SCAN `platform_operator_action`, AND SORT IT IN A TEMP B-TREE. ***',
+        '',
+        '  `0014` records this deliberately — the column it adds has no index, and the migration',
+        '  states the cost at roughly 50,000 rows and names what degrades first. This is that cost,',
+        '  quantified: rows read per feed request IS the size of the action log, twice over for the',
+        '  sort, and the log gains a row on EVERY platform request including the feed reads',
+        '  themselves.',
+        '',
+        '  So read cost has a TIME AXIS exactly as storage does. A business count alone is not an',
+        '  answer for either.',
+      ].join('\n'),
+    );
+  }
+
+  const feedReads = feed.controlReads;
+  const perFeedRead = (logRows: number, perSearch: number): number =>
+    rowsRead(feedReads, (table) => (table === 'platform_operator_action' ? logRows : 0), perSearch);
+
+  console.log('\n  Rows read per feed request, against the action log\'s size:');
+  console.log('    action log rows      rows read   feed reads/day to reach 5,000,000');
+  for (const logRows of [1_000, 10_000, 50_000, 100_000, 500_000]) {
+    const perRead = perFeedRead(logRows, 2);
+    console.log(
+      `    ${String(logRows).padStart(15)}${String(perRead).padStart(12)}` +
+        `${String(Math.floor(5_000_000 / Math.max(perRead, 1))).padStart(36)}`,
+    );
+  }
+
+  // THE INSENSITIVITY, DEMONSTRATED RATHER THAN CLAIMED. `SEARCH_ROWS` is a guess; if the answer
+  // moved with it, the guess would be load-bearing and the model would be worth less.
+  const low = perFeedRead(50_000, 1);
+  const high = perFeedRead(50_000, 10);
+  console.log(
+    `\n  The per-lookup charge is a guess (${String(SEARCH_ROWS)}). At a 50,000-row log, charging 1` +
+      ` gives ${String(low)}\n  and charging 10 gives ${String(high)} — a ` +
+      `${(((high - low) / low) * 100).toFixed(2)}% difference. The scan dominates,\n  so the answer does not turn on the guess.`,
+  );
+
+  // ===========================================================================================
+  // *** READ THE TABLE ABOVE BEFORE THE PROSE BELOW. THE FIRST VERSION OF THIS PARAGRAPH WAS
+  // WRITTEN BEFORE THE NUMBERS EXISTED AND SAID THE OPPOSITE. ***
+  // ===========================================================================================
+  //
+  // I wrote "a few tens of thousands of feed reads per day — comfortable". The measurement says
+  // FORTY-NINE at a 50,000-row log. That is the mistake this whole model exists to stop, made by
+  // the person making the model, one paragraph away from the evidence.
+  const pageSize = 25;
+  const atFifty = perFeedRead(50_000, SEARCH_ROWS);
+  const pagesAtFifty = Math.floor(5_000_000 / Math.max(atFifty, 1));
+  console.log(
+    [
+      '',
+      '  *** THIS IS A DENIAL-OF-SERVICE SHAPE, NOT A CAPACITY HEADROOM NOTE. ***',
+      '',
+      `  At a 50,000-row action log one feed request reads ${String(atFifty)} rows, so`,
+      `  ${String(pagesAtFifty)} FEED REQUESTS EXHAUST THE ACCOUNT'S ENTIRE DAILY READ ALLOWANCE.`,
+      `  At ${String(pageSize)} records a page that is ${String(pagesAtFifty * pageSize)} records —`,
+      '  an ordinary afternoon for one operator investigating one incident.',
+      '',
+      '  And exceeding it stops D1 ACCOUNT-WIDE. Not the feed: every query, including the session',
+      '  lookup every login performs. **One operator doing their job correctly takes the platform',
+      '  down for every tenant**, with no malice and no bug — the same shape the register already',
+      '  records for D2, arriving through a different door.',
+      '',
+      '  IT DOES NOT BIND ON BUSINESS COUNT, which is why the section-3 numbers do not move. It',
+      '  binds on LOG SIZE, so it arrives with time rather than with customers: at 50 operator',
+      '  requests/day the log reaches 50,000 rows in under three years, and every feed read makes',
+      '  it worse because P4 records the read itself.',
+      '',
+      '  THE FIX IS AN INDEX ON (occurred_at, action_record_id) — configuration, not schema shape,',
+      '  so it is available without a 0030 violation. `0014` names the trade the other way round',
+      '  ("what degrades first is not this feed") and that reading is about LATENCY; this is the',
+      '  read ALLOWANCE, which is account-wide and is a different failure.',
+    ].join('\n'),
+  );
+
+  // -----------------------------------------------------------------------------------------
   rule('4. WHAT THIS DOES NOT MEASURE');
 
   console.log(
@@ -245,8 +359,9 @@ async function main(): Promise<void> {
       '    step from a call to a Durable Object REQUEST is an inference from the adapter\'s shape.',
       '  · MULTI-ROW STATEMENTS. Costs count statements, not affected rows, so any figure covering',
       '    a bulk delete is a LOWER bound — which makes the capacity number an OVER-estimate.',
-      '  · READ ALLOWANCES. D1 bills rows read; nothing here counts them, and a feed read over a',
-      '    large table is the obvious candidate for binding before writes do.',
+      '  · ROWS ACTUALLY STEPPED THROUGH. Section 3b classifies plans, which is exact about SCAN',
+      '    versus SEARCH; D1\'s own row-read counter is not visible from here, and the per-lookup',
+      '    charge is a guess whose insensitivity is demonstrated rather than assumed.',
       '  · CONCURRENCY. D1 is single-threaded per database (`0006`); this measures cost, not',
       '    contention, and a latency ceiling could bind long before any allowance does.',
     ].join('\n'),

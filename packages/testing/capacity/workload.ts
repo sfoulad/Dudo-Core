@@ -10,6 +10,8 @@
 
 import { costOfStatements, countingProxy, schemaRowWriteCost } from './measure.ts';
 import type { WriteBreakdown } from './measure.ts';
+import { classifyStatements } from './reads.ts';
+import type { OperationReads } from './reads.ts';
 
 import {
   ORG_ALPHA,
@@ -46,6 +48,9 @@ export type OperationCost = {
   readonly workerRequests: number;
   readonly controlBreakdown: WriteBreakdown;
   readonly tenantBreakdown: WriteBreakdown;
+  /** Every SELECT this operation emitted, classified by query plan. See `reads.ts`. */
+  readonly controlReads: OperationReads;
+  readonly tenantReads: OperationReads;
   /** Anything this measurement could not see. Carried into the report, never dropped. */
   readonly caveats: readonly string[];
 };
@@ -142,6 +147,8 @@ async function measure(
       workerRequests,
       controlBreakdown,
       tenantBreakdown,
+      controlReads: classifyStatements(name, world.control, controlFrom),
+      tenantReads: classifyStatements(name, world.tenant, tenantFrom),
       caveats,
     };
   } finally {
