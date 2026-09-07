@@ -1027,30 +1027,39 @@ defaultRoles:
   # THE INVARIANT SAYS THE SURFACE DOES NOT CROSS THE TENANT BOUNDARY. IT SAYS NOTHING ABOUT
   # HOW MUCH POWER SITS ON THE PLATFORM SIDE OF IT, and it must not be read as though it did.
   #
-  # TODAY platform-admin HOLDS TEN OF THE ELEVEN, and marketplace-moderator holds one of them
+  # TODAY platform-admin HOLDS ALL ELEVEN, and marketplace-moderator holds one of them
   # (core.marketplace.moderate). THAT IS AN OBSERVATION OF THE CURRENT STATE AND NOT A SECOND
   # INVARIANT — do not turn it into a set-equality check. This file already anticipates a
   # break-glass responder role holding REVOKE without GRANT, and a platform permission
   # deliberately withheld from platform-admin is precisely what that would look like.
   #
-  # *** THE ONE IT DOES NOT HOLD IS `core.platform-organization.update`, AND THAT IS DELIBERATE
-  # AND TEMPORARY. *** It is DECLARED here and GRANTED TO NOBODY. Declaring a permission and
-  # granting it are different acts, and .claude/rules/security.md §8 puts the second beyond every
-  # agent including the Team Lead; the user is being asked. DO NOT "FIX" THE ASYMMETRY BY ADDING
-  # IT TO THE LIST BELOW — a permission held by nobody is a coherent, intended state, and it is
-  # the state the paragraph above predicted two days before it occurred.
+  # *** THE HELD-BY-NOBODY STATE LASTED ONE DAY. *** On 2026-09-07 this said
+  # `core.platform-organization.update` was declared and granted to nobody, "deliberate and
+  # temporary". The user granted it the same day and this paragraph is the correction rather than
+  # the argument — WHICH IS WHY IT WAS WRITTEN AS AN OBSERVATION AND NOT AS AN INVARIANT. A
+  # set-equality check would have gone red on the intended state and green on the corrected one,
+  # and somebody would have spent the day defending a number.
+  # THE PROVENANCE OF THE GRANT IS BESIDE THE GRANT, in platform-admin's permission list, not
+  # here: a reader asking "who approved this" is looking at the entry, not at a preamble.
   #
-  # THE ORDERING THIS IMPOSES ON CORE, STATED BECAUSE THE MIDDLE STEP FAILS THE BUILD RATHER THAN
-  # WARNING:
+  # THE ORDERING THIS IMPOSES ON CORE, AND STEP 2 IS NOW THE OUTSTANDING ONE:
   #   1. DECLARED HERE. Done 2026-09-07.
-  #   2. GRANTED BY THE USER, then transcribed into platform/core/platform/platform-permissions.ts
-  #      AND added to that file's HELD_BUT_UNREACHABLE list, because no route serves it yet.
+  #   2. GRANTED BY THE USER. Done 2026-09-07. *** CORE HAS NOT YET TRANSCRIBED IT into
+  #      platform/core/platform/platform-permissions.ts, and it must also go into that file's
+  #      HELD_BUT_UNREACHABLE list, because no route serves it yet. ***
   #   3. THE ROUTE LANDS, and it leaves HELD_BUT_UNREACHABLE in the same change.
-  # assertEveryRoutePermissionIsReachable in platform-routes.ts FAILS THE BUILD when a route
-  # declares a permission no role can reach, so building the route before the grant does not
-  # produce a `forbidden` somebody has to diagnose — it does not build. That check exists because
-  # the revoke route shipped while its permission was still unreachable and was `forbidden` to
-  # every operator alive.
+  #
+  # *** BETWEEN 2 AND CORE'S TRANSCRIPTION, `registry-coherence.ts`'s "platform-admin holds
+  # exactly what the catalog grants it" IS RED, BY DESIGN AND FAIL-CLOSED. *** That suite compares
+  # this list against `grantsForPlatformRole('platform-admin')`, and its own header records which
+  # direction each drift runs: a permission missing from the ROLE mapping denies an operator
+  # something the catalog promises — a broken feature, never a broken boundary. IT IS THE
+  # MECHANISM WORKING, and it goes green on the transcription.
+  # assertEveryRoutePermissionIsReachable in platform-routes.ts is the other half and FAILS THE
+  # BUILD when a route declares a permission no role can reach, so registering the route before
+  # the transcription does not produce a `forbidden` somebody has to diagnose — it does not build.
+  # That check exists because the revoke route shipped while its permission was still unreachable
+  # and was `forbidden` to every operator alive.
   #
   # OWED AS A MECHANICAL CHECK — qa-agent, in suites/platform-operator/registry-coherence.ts,
   # because a hand-maintained assertion about this file is the kind this repository spent
@@ -1093,6 +1102,35 @@ defaultRoles:
       - core.credential.reset
       - core.platform-audit.read
       - core.principal.revoke-platform-scope
+      # =======================================================================
+      # GRANTED BY THE USER, 2026-09-07. Relayed by the Team Lead, who does not
+      # approve — security.md §8 reserves the grant to the user and permits the
+      # Team Lead only to relay it.
+      #
+      # WHAT THE USER WAS TOLD, recorded so the grant can be audited against the
+      # approval rather than against somebody's memory of it. The request was
+      # enumerated and named: THE PERMISSION; that it permits EDITING AN
+      # ORGANIZATION'S DISPLAY NAME, COMMERCIAL REGISTRATION AND VAT
+      # REGISTRATION; that it adds NO NEW TENANT REACH, NO NEW DATA ACCESS AND
+      # NO NEW ROUTE beyond the identity update; and that it takes this role
+      # FROM TEN PLATFORM PERMISSIONS TO ELEVEN.
+      #
+      # CHECKED AGAINST WHAT WAS DESCRIBED, AND IT MATCHES. The permission's own
+      # entry above scopes it to the control-plane `organization` row, states
+      # that it does not cover status, suspension or deletion, and
+      # organization-identity-v1 publishes exactly one route for it.
+      #
+      # ONE THING THE DESCRIPTION DID NOT SAY, RECORDED RATHER THAN ABSORBED:
+      # that route WRITES ONE AUDIT RECORD INTO THE CUSTOMER'S OWN TENANT
+      # DATABASE — five row-writes from that Organization's daily allocation —
+      # and READS NOTHING FROM IT. It is not tenant data ACCESS and it is a
+      # tenant WRITE, so "no new tenant reach" is true of reads and needs the
+      # qualification for writes. It exists because docs/decisions/0028 requires
+      # the customer to be able to see what the platform did to them, so the
+      # write is FOR the customer rather than at their expense — but it is the
+      # kind of detail an approval should contain rather than acquire.
+      # =======================================================================
+      - core.platform-organization.update
   # core.app.read was removed from this role: it is declared scopes: [organization,
   # business], and a platform-scope role holding it reads every tenant's installed Apps
   # across the tenant boundary. Moderation reviews PUBLISHED App versions, which is a
