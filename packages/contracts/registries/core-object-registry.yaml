@@ -186,12 +186,20 @@ objects:
     description: "The tenant. The isolation boundary. Owns the data and holds the subscription."
     notes: >-
       CORRECTED 2026-09-05 from tenant-scoped. The Organization record IS the tenant boundary
-      and therefore cannot sit inside one; `control-plane/0002_organization.sql` holds it, with
-      an identifier and a status and deliberately nothing else — no name, no country, no plan.
+      and therefore cannot sit inside one; `control-plane/0002_organization.sql` holds it.
       Tenant = Organization is still a recommendation pending Team Lead confirmation
       (MULTITENANCY_STANDARD.md MT1).
-      THE MISSING NAME IS A LIVE PRODUCT CONSEQUENCE, not a schema detail: an Organization
-      picker can list 22-character opaque identifiers and nothing a human can choose between.
+      AMENDED 2026-09-07. This said the table holds "an identifier and a status and deliberately
+      nothing else — no name, no country, no plan", and that THE MISSING NAME IS A LIVE PRODUCT
+      CONSEQUENCE. BOTH SENTENCES ARE STILL TRUE OF THE TABLE AS DEPLOYED AND NEITHER IS STILL
+      TRUE OF THE DESIGN: `organization-identity-v1` and `docs/decisions/0031` add a display name,
+      a commercial registration and a VAT registration, and the deliberateness has expired — the
+      absence was a refusal to decide Core's shape while unblocking a login, and the decision has
+      now been made on its own terms.
+      *** UNTIL THE MIGRATION LANDS, THE PRODUCT CONSEQUENCE STANDS: an Organization picker lists
+      22-character opaque identifiers and nothing a human can choose between. *** The contract gap
+      is shut and the data gap is not, and this entry describes the deployed table rather than the
+      agreed one. Country and plan are still absent and are still nobody's decision.
 
   # RENAME PROPOSED 2026-09-05: Business -> Workspace. The entry keeps its current name until
   # the Team Lead records the decision, because renaming it here before the record exists would

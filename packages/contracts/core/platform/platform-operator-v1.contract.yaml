@@ -503,12 +503,18 @@ operations:
     audit: required
     reads: "One bounded page of `organization`. No tenant read of any kind."
     notes: >-
-      IT RETURNS IDENTIFIERS AND STATUS AND NO NAMES, because control-plane/0002_organization.sql
-      declined a name column and the organization-structure slice still owns it. THE CONSOLE'S HOME
-      SCREEN IS THEREFORE A LIST OF 22-CHARACTER OPAQUE IDENTIFIERS, which is not a usable
-      administrative interface. STATED AS A PRODUCT DEPENDENCY RATHER THAN LEFT TO BE DISCOVERED
-      DURING UI WORK — it is the same gap that makes the Organization picker unshippable (0021),
-      and the same fix closes both.
+      IT RETURNS IDENTIFIERS, STATUS AND `display_name`. AMENDED 2026-09-07: this previously said
+      "NO NAMES, because control-plane/0002_organization.sql declined a name column and the
+      organization-structure slice still owns it", and BOTH HALVES OF THAT SENTENCE HAVE MOVED —
+      organization-identity-v1 and docs/decisions/0031 own the field, `display_name` is now
+      `required` in the row shape, and a route exists to set it.
+      *** THE PRODUCT DEPENDENCY IS NOT YET DISCHARGED AND MUST NOT BE REPORTED AS ONE. *** Until
+      control-plane/0002_organization.sql carries the column, every row still returns null and THE
+      CONSOLE'S HOME SCREEN IS STILL A LIST OF 22-CHARACTER OPAQUE IDENTIFIERS. It is the same gap
+      that makes the Organization picker unshippable (0021) and the same fix still closes both —
+      what changed is that the fix has a contract instead of a slice nobody had written.
+      THE REGISTRATIONS ARE DELIBERATELY NOT IN THIS ROW. They are on the detail response only;
+      two objects per row inflate every page of a listing that needs a label.
       IT RETURNS NO COUNTS, NO CUSTOMER TOTALS, NO ACTIVITY AND NO USAGE. Every one of those is a
       tenant read behind whereWithTenant, and a "how many customers does this Organization have"
       column is how a console acquires cross-tenant reach one convenient number at a time.
@@ -686,11 +692,20 @@ openQuestions:
       would convert a bounded exception into a general grant mechanism.
       organization-onboarding-v1 carries all four as executable test requirements.
   - id: PO-3
+    status: "ANSWERED 2026-09-07 by organization-identity-v1 and docs/decisions/0031. NOT CLOSED until the migration lands."
     question: >-
       The console's home screen lists opaque identifiers because Organizations have no name. The
       same gap makes the Organization picker unshippable (0021).
-    recommendation: "The organization-structure slice. One fix closes both; neither is worth solving locally."
-    blocks: "A usable admin console, not the contract."
+    recommendation: >-
+      THE ORIGINAL RECOMMENDATION NAMED THE WRONG OWNER AND THE RIGHT SHAPE. It said "the
+      organization-structure slice"; the fix arrived as its own narrow contract, because a name is
+      the Organization's IDENTITY rather than its STRUCTURE and the structure slice is still
+      unwritten. WHAT HELD IS "one fix closes both": `display_name` was contracted as nullable in
+      the list, the detail response and the picker, so one column closes all three.
+      *** ANSWERED IS NOT CLOSED. *** Until control-plane/0002_organization.sql carries the column
+      the home screen still lists identifiers, and this entry stays open to say so. The contract
+      gap is shut and the data gap is not.
+    blocks: "A usable admin console, until the migration lands. No longer the contract."
   - id: PO-4
     question: >-
       Rate limiting for this class rests on 0017's in-process limiter, which is per-isolate and

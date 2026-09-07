@@ -468,6 +468,42 @@ permissions:
     scopes: [platform]
     status: proposed
     phase: 1
+  - id: core.platform-organization.update
+    group: platform
+    description: >-
+      Set an Organization's display name, its commercial registration and its VAT registration —
+      the control-plane `organization` row, never anything behind whereWithTenant. Requested by
+      organization-identity-v1 and docs/decisions/0031.
+      IT IS SEPARATE FROM core.organization.update, which is declared [organization] and is a
+      TENANT principal editing its OWN Organization record. Two permissions rather than one
+      widened one, for the reason AZ8 records: widening a tenant-scoped permission above the
+      tenant boundary is an escalation, not a convenience. THE TENANT PERMISSION HAS NO ROUTE AND
+      CANNOT BE GIVEN ONE OVER THIS TABLE TODAY — `organization` is control-plane and an Action
+      reaches no control-plane port — which is organization-identity-v1's OI-1 and is the reason
+      the platform enters these values on the customer's behalf.
+      IT DOES NOT COVER STATUS. Not suspension, not deletion, not activation. A suspend route,
+      when it exists, is a separate permission and a separate argument — §3.2's splitting
+      discipline applied before rather than after.
+      NAMING: `core.platform-audit.read` is the only existing platform twin of a tenant permission
+      and its convention is followed, the resource carrying `platform-`. THE ANALOGY IS IMPERFECT
+      AND SAYING SO BEATS INVENTING A SECOND CONVENTION — there the two permissions cover
+      DIFFERENT OBJECTS, here they cover the same Organization and differ in the caller class.
+      SENSITIVE RATHER THAN WRITE, AND SENSITIVE RATHER THAN CRITICAL. It is above `write`
+      because it is a platform principal editing a record inside a customer's own identity, which
+      is not an ordinary record edit. IT INHERITS 0031's REASONING FOR NOT BEING CRITICAL: the
+      ladder grades what the OPERATION does, and this one replaces a correctable field on a
+      mutable record — nothing destroyed, no money moved, no authority changed, and a wrong value
+      fixed by the same route that set it. If "a value that might later appear on a document"
+      made it critical, so would the commercial registration and the display name, and the rung
+      would stop sorting anything (0026, and 0031 Decision 2).
+      A PERMISSION'S CLASSIFICATION IS NOT PER-ACTION AND WILL NOT TRACK ONE. It gates exactly one
+      Action today; core.credential.reset already gates two of different shapes. IF THIS EVER
+      GATES A CRITICAL ACTION, THE PERMISSION IS WHAT MUST BE REVISITED, because that is the level
+      §7's confirmation requirement is read from.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
   - id: core.template.read
     group: platform
     description: "View one Template — its name and its per-level display labels."
@@ -965,33 +1001,56 @@ defaultRoles:
   # role requires the AZ3 break-glass elevation, WHICH DOES NOT EXIST.
   #
   # IT IS STATED AS A PROPERTY RATHER THAN AS A COUNT, AND THAT IS A CORRECTION.
-  # This comment previously read "those are the only two that are". THERE ARE TEN. Eight
-  # arrived with docs/decisions/0025 through 0028, and the sentence was true when it was
-  # written — which is exactly the problem: A COUNT IN A COMMENT IS AN ASSERTION THAT ROTS
-  # EVERY TIME A DECISION ADDS AN ENTRY, AND NOTHING GOES RED WHEN IT DOES
-  # (.claude/rules/workflow.md §12). The property above does not rot. It stays true as the set
-  # grows and it fails loudly the day it stops being true.
+  # This comment previously read "those are the only two that are". THERE ARE ELEVEN. Eight
+  # arrived with docs/decisions/0025 through 0028 and a ninth addition with 0031, and the
+  # sentence was true when it was written — which is exactly the problem: A COUNT IN A COMMENT
+  # IS AN ASSERTION THAT ROTS EVERY TIME A DECISION ADDS AN ENTRY, AND NOTHING GOES RED WHEN IT
+  # DOES (.claude/rules/workflow.md §12). The property above does not rot. It stays true as the
+  # set grows and it fails loudly the day it stops being true.
+  #
+  # THE COUNT MOVED WITHIN TWO DAYS OF BEING WRITTEN DOWN, WHICH IS THE ARGUMENT RATHER THAN AN
+  # EMBARRASSMENT. `core.platform-organization.update` was added 2026-09-07 and the figure went
+  # from ten to eleven; the PROPERTY above needed no edit at all.
   #
   # THE RECONCILIATION, because two counts disagreed and both were right about different
-  # things. Grepping this file for the literal 'scopes: [platform]' finds THIRTEEN occurrences:
-  # TEN are permission entries and THREE are prose inside comments — this block and the
-  # two-line omission note above 'business-owner'. TEN IS THE NUMBER THAT MEANS ANYTHING.
-  # Recorded because "count the string" and "count the entries" will keep giving different
-  # answers to whoever checks next.
+  # things. Grepping this file for the literal 'scopes: [platform]' finds FOURTEEN occurrences:
+  # ELEVEN are permission entries and THREE are prose inside comments — this block and the
+  # two-line omission note above 'business-owner'. THE ENTRY COUNT IS THE NUMBER THAT MEANS
+  # ANYTHING. Recorded because "count the string" and "count the entries" will keep giving
+  # different answers to whoever checks next.
   #
   # *** THE READING THE OLD COMMENT INVITED WAS THE DANGEROUS PART, NOT THE ARITHMETIC. ***
   # "Only two" leaves a reader concluding the operator surface is tiny. It is not, and two of
-  # the ten are severe on their own terms: core.credential.reset, which its own entry calls
+  # them are severe on their own terms: core.credential.reset, which its own entry calls
   # "the most dangerous permission in this catalog that is not AZ3", and
   # core.principal.revoke-platform-scope, which can strip platform authority.
   # THE INVARIANT SAYS THE SURFACE DOES NOT CROSS THE TENANT BOUNDARY. IT SAYS NOTHING ABOUT
   # HOW MUCH POWER SITS ON THE PLATFORM SIDE OF IT, and it must not be read as though it did.
   #
-  # TODAY platform-admin HOLDS ALL TEN, and marketplace-moderator holds one of them
+  # TODAY platform-admin HOLDS TEN OF THE ELEVEN, and marketplace-moderator holds one of them
   # (core.marketplace.moderate). THAT IS AN OBSERVATION OF THE CURRENT STATE AND NOT A SECOND
   # INVARIANT — do not turn it into a set-equality check. This file already anticipates a
   # break-glass responder role holding REVOKE without GRANT, and a platform permission
   # deliberately withheld from platform-admin is precisely what that would look like.
+  #
+  # *** THE ONE IT DOES NOT HOLD IS `core.platform-organization.update`, AND THAT IS DELIBERATE
+  # AND TEMPORARY. *** It is DECLARED here and GRANTED TO NOBODY. Declaring a permission and
+  # granting it are different acts, and .claude/rules/security.md §8 puts the second beyond every
+  # agent including the Team Lead; the user is being asked. DO NOT "FIX" THE ASYMMETRY BY ADDING
+  # IT TO THE LIST BELOW — a permission held by nobody is a coherent, intended state, and it is
+  # the state the paragraph above predicted two days before it occurred.
+  #
+  # THE ORDERING THIS IMPOSES ON CORE, STATED BECAUSE THE MIDDLE STEP FAILS THE BUILD RATHER THAN
+  # WARNING:
+  #   1. DECLARED HERE. Done 2026-09-07.
+  #   2. GRANTED BY THE USER, then transcribed into platform/core/platform/platform-permissions.ts
+  #      AND added to that file's HELD_BUT_UNREACHABLE list, because no route serves it yet.
+  #   3. THE ROUTE LANDS, and it leaves HELD_BUT_UNREACHABLE in the same change.
+  # assertEveryRoutePermissionIsReachable in platform-routes.ts FAILS THE BUILD when a route
+  # declares a permission no role can reach, so building the route before the grant does not
+  # produce a `forbidden` somebody has to diagnose — it does not build. That check exists because
+  # the revoke route shipped while its permission was still unreachable and was `forbidden` to
+  # every operator alive.
   #
   # OWED AS A MECHANICAL CHECK — qa-agent, in suites/platform-operator/registry-coherence.ts,
   # because a hand-maintained assertion about this file is the kind this repository spent

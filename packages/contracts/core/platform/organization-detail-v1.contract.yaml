@@ -42,7 +42,18 @@ theLine:
     it is the reason this contract can be written before AZ3 rather than after it.
   in:
     - "organization_id, status, created_at — control-plane columns, already read by platform.organizations.list."
-    - "display_name — the column does not exist yet; the field is contracted as nullable so names are additive later."
+    - >-
+      display_name — AMENDED 2026-09-07. It previously read "the column does not exist yet; the
+      field is contracted as nullable so names are additive later", and the later has arrived:
+      organization-identity-v1 and docs/decisions/0031 own the field, and the addition was
+      additive exactly as this line predicted. Still null on every response until the column
+      lands.
+    - >-
+      commercial_registration and vat_registration — ADDED 2026-09-07 by organization-identity-v1.
+      Control-plane columns, so they pass theTest for the same mechanical reason the others do.
+      NOTE WHAT THEY ARE NOT: they are not a widening of theLine. A registration number is a fact
+      the PLATFORM records ABOUT an Organization, entered by an operator; it is not read from the
+      tenant and could not be, which is OI-1 and is a limitation rather than a design.
     - "The Template it adopted, INLINE — id, name and level labels. Tenant-independent platform configuration."
     - "member_count — a count, not a list. See theMembershipRuling."
   out:
@@ -439,8 +450,20 @@ openQuestions:
       "one or two operators" and none of them is proportionate to twenty.
     blocks: "Nothing at current scale."
   - id: OD-4
+    status: "ANSWERED 2026-09-07 by organization-identity-v1 and docs/decisions/0031. NOT YET CLOSED — see below."
     question: >-
       Organizations still have no name, so a detail page is headed by a 22-character opaque
       identifier. PO-3 records the same gap for the list.
-    recommendation: "The organization-structure slice. One fix closes the list, the detail page and the Organization picker. `display_name` is already contracted as nullable in all three, so it is additive."
-    blocks: "A usable console, not the contract."
+    recommendation: >-
+      IT WAS ANSWERED BY A CONTRACT RATHER THAN BY THE ORGANIZATION-STRUCTURE SLICE, and the
+      original recommendation named the wrong owner — the fix arrived as its own narrow contract
+      because a name, a commercial registration and a VAT number are the Organization's IDENTITY
+      rather than its STRUCTURE, and the structure slice is still unwritten. The prediction that
+      held was the mechanical one: `display_name` was already contracted as nullable in all three
+      places, so the change was additive in every one of them.
+      *** IT IS ANSWERED AND NOT YET CLOSED, AND THE DIFFERENCE IS THE MIGRATION. *** Until
+      control-plane/0002_organization.sql carries the column, every response still returns null
+      and the console still renders identifiers. DO NOT REPORT THE CONSOLE AS FIXED ON THE
+      STRENGTH OF THIS CONTRACT — the shape is settled and the data is not, which is the same
+      distinction business-read-v1 records as "it closes the CONTRACT gap and not the DATA gap".
+    blocks: "A usable console, until the migration lands. No longer the contract."

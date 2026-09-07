@@ -698,7 +698,40 @@ openQuestions:
       argument reaching the same answer from the other direction.
       core.credential.reset STAYS `critical`, because it replaces a credential a principal is
       already using, which is account takeover with a legitimate front door.
-      REQUIRED OF THE CATALOG: permission-catalog.yaml still declares core.organization.create
-      `critical` and must be updated to `sensitive`, citing 0026. Until it is, this route is
-      unreachable — which remains the correct fail-closed state.
+      REQUIRED OF THE CATALOG, AND DISCHARGED. This clause read "permission-catalog.yaml still
+      declares core.organization.create `critical` and must be updated to `sensitive`, citing
+      0026. Until it is, this route is unreachable." THE CATALOG WAS UPDATED — the entry carries
+      `sensitivity: sensitive` and 0026 Decision 1's reasoning in full — so the obligation is met
+      and the "this route is unreachable" sentence is FALSE ABOUT THE CURRENT STATE. Marked
+      2026-09-07 rather than deleted, because a closed question carrying a live instruction is
+      workflow.md §12's shape: nothing goes red when the instruction is satisfied, and the next
+      reader would have concluded onboarding was unreachable.
       SENSITIVE STILL REQUIRES AN AUDIT RECORD (§6), and this contract already mandates two.
+
+  - id: ON-7
+    status: "OPEN, OWNED, AND DATED BY AN EVENT RATHER THAN BY A CALENDAR."
+    question: >-
+      `display_name` IS OPTIONAL ON THIS ROUTE AND SHOULD BE REQUIRED. Added 2026-09-07 by
+      organization-identity-v1 and docs/decisions/0031, deliberately optional on the Team Lead's
+      sequencing ruling.
+    whyItISOPTIONALTODAY: >-
+      ONBOARDING IS HOW A CUSTOMER ARRIVES, AND A SERVER REQUIRING A FIELD THE DEPLOYED CONSOLE
+      DOES NOT YET SEND IS AN ONBOARDING OUTAGE. A client sending a field the server ignores is
+      harmless; the reverse is not. So the console ships first and Core tightens afterwards. THE
+      RULING IS ABOUT SEQUENCE, NOT ABOUT WHETHER THE FIELD SHOULD BE REQUIRED.
+    whatISOWEDANDWHOOWNSIT: >-
+      *** THE CHANGE THAT FOLLOWS THE CONSOLE'S RELEASE MOVES `display_name` INTO
+      `onboardOrganizationInput.required`. IT IS THAT CHANGE'S OBLIGATION, NOT A BACKLOG ITEM. ***
+      It is BREAKING under API_STANDARD.md §6 and needs Team Lead review, which is the point:
+      it should cost a review rather than happen by drift. WRITTEN AS AN OWNED FOLLOW-UP RATHER
+      THAN AS A CONDITIONAL, per workflow.md §12 — "do not leave conditionals hostage to
+      undecided questions", because a clause saying "if the console ships, this file is wrong"
+      creates an obligation nobody is assigned to collect.
+    whyITMATTERSTHATITHAPPENS: >-
+      organization-identity-v1's argument for a NULLABLE column is that the nameless set is
+      CLOSED AT THE THREE ORGANIZATIONS THAT PREDATE IT and shrinks as an operator names them.
+      *** WHILE THIS FIELD IS OPTIONAL THAT ARGUMENT IS FALSE AND THE SET IS OPEN. *** Every
+      onboarding can create a fourth nameless Organization, and the console's home screen
+      re-acquires the problem the whole slice was written to end. THAT IS THE COST OF THE
+      SEQUENCING RULING, and it is bounded only by how long the window stays open.
+    blocks: "Nothing today. It bounds what may truthfully be said about PO-3 and OD-4 being closed."

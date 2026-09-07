@@ -43,10 +43,10 @@
     },
 
     "organizationSummary": {
-      "description": "One row of the platform's Organization list. NOTE WHAT IS ABSENT AND WHY: there is no name, because control-plane/0002_organization.sql declined a name column and the organization-structure slice owns it; and there is NO COUNT OF ANYTHING — no customers, no members, no activity, no usage. Every one of those would be a read behind whereWithTenant, and a console acquires cross-tenant reach one convenient number at a time.",
+      "description": "One row of the platform's Organization list.\n\nCORRECTED 2026-09-07. IT SAID 'there is no name, because control-plane/0002_organization.sql declined a name column and the organization-structure slice owns it.' THAT SENTENCE IS NOW FALSE AND IT IS THE KIND THAT STOPS A READER LOOKING — organization-identity-v1 and docs/decisions/0031 own `display_name`, and it is in this shape. The name is null until the column lands; what changed is that there is a contract for it and a route that sets it.\n\nNOTE WHAT IS STILL ABSENT AND WHY, because that half is unchanged: THERE IS NO COUNT OF ANYTHING — no customers, no members, no activity, no usage. Every one of those would be a read behind whereWithTenant, and a console acquires cross-tenant reach one convenient number at a time.\n\nAND THE REGISTRATIONS ARE DELIBERATELY NOT HERE. `commercial_registration` and `vat_registration` are on the DETAIL response only: two objects per row inflate every page of a listing that needs a label, and the detail route is one click away. Adding them later is additive.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["organization_id", "status", "created_at"],
+      "required": ["organization_id", "status", "display_name", "created_at"],
       "properties": {
         "organization_id": { "$ref": "#/$defs/organizationId" },
         "status": { "$ref": "#/$defs/organizationStatus" },
@@ -56,7 +56,7 @@
           "format": "date-time"
         },
         "display_name": {
-          "description": "ALWAYS null today. Present in the shape so that adding names later is additive for both clients rather than a new field appearing in a published response. A client renders organization_id verbatim when this is null and must not substitute a placeholder of its own.",
+          "description": "THE ORGANIZATION'S NAME. Canonical definition: urn:dudo:schema:organization-identity:1#/$defs/displayName, restated rather than $ref'd because no URN resolver exists (AS1); the 200 bound is the one this field already published.\n\n*** MOVED INTO `required` ON 2026-09-07, AND THAT IS A DEFECT FIX RATHER THAN A PREFERENCE. *** It was in `properties` and not in `required`, so under `additionalProperties: false` it was A PERMITTED OPTIONAL FIELD — while this description said it was present so that names would be additive, and the identical field in organization-detail-v1 was required-and-nullable. THE PROSE AND THE MACHINE-READABLE HALF DISAGREED ABOUT THE SAME FIELD IN TWO CONTRACTS, which is workflow.md §12 in its purest form: prose describes, `required` instructs. It was latent only because the value was always null, and it stopped being latent the moment a client began depending on the field being there.\n\nNull until control-plane/0002_organization.sql carries the column and an operator sets a value. A client renders organization_id verbatim when this is null and must not substitute a placeholder of its own.",
           "type": ["string", "null"],
           "maxLength": 200
         }

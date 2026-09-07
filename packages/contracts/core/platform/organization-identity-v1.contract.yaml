@@ -283,12 +283,24 @@ theExistingOrganizationsRuling:
     NULL ALREADY IS THAT STATE. A second field asserting namelessness beside a null name is a new
     way for the two to disagree — the same objection this author raised to an `origin` column in
     `audit-read-v1` when `scope` already carried the answer. One fact, one field.
-  theASYMMETRYTHATMATTERS: >-
-    *** THE COLUMN IS NULLABLE BECAUSE OF HISTORY; THE ROUTE MAKES IT REQUIRED. *** Onboarding
-    requires `display_name`, so no new nameless Organization can be created. THE NAMELESS SET IS
-    CLOSED AT THREE AND SHRINKS AS AN OPERATOR NAMES THEM. Saying only "the column is nullable"
-    would leave a future route free to create more, which is how a legacy state becomes a
-    permanent one.
+  theASYMMETRYTHATMATTERS:
+    theARGUMENT: >-
+      *** THE COLUMN IS NULLABLE BECAUSE OF HISTORY; ONBOARDING IS WHAT KEEPS THE NULLS
+      HISTORICAL. *** If onboarding refuses to create a nameless Organization, the nameless set is
+      CLOSED AT THREE and shrinks as an operator names them. Saying only "the column is nullable"
+      would leave a future route free to create more, which is how a legacy state becomes a
+      permanent one.
+    itISNOTTRUEYET_ANDTHATISNOTAQUALIFICATION: >-
+      *** ON THE TEAM LEAD'S SEQUENCING RULING OF 2026-09-07, `display_name` IS **OPTIONAL** ON
+      ONBOARDING SO THAT THE CONSOLE CAN SHIP FIRST — A SERVER REQUIRING A FIELD THE DEPLOYED
+      CLIENT DOES NOT SEND IS AN ONBOARDING OUTAGE. SO THE SET IS OPEN, EVERY ONBOARDING IN THIS
+      WINDOW CAN CREATE A FOURTH NAMELESS ORGANIZATION, AND THE ARGUMENT ABOVE IS SUSPENDED
+      RATHER THAN ESTABLISHED. ***
+      THIS PARAGRAPH EXISTS SO THAT THE ARGUMENT IS NOT READ AS ALREADY TRUE. The nullable column
+      is still the right answer for the three that exist, on the migration-cannot-invent-a-name
+      reasoning above, which does not depend on this. What depends on this is the claim that the
+      set shrinks — and that claim becomes true when `ON-7` is discharged and not before.
+    theFOLLOWUP: "`ON-7` in organization-onboarding-v1, owned by the change that follows the console's release."
   theCLIENTOBLIGATIONISUNCHANGEDANDALREADYSHIPPED: >-
     RENDER `organization_id` VERBATIM WHEN `display_name` IS NULL. Not a blank, not a dash, not
     "Unnamed Organization". It is stated identically in `organization-detail-v1`,
@@ -535,25 +547,43 @@ operations:
 consequentialChanges:
 
   - target: "organization-onboarding-v1 (accepted)"
+    status: "APPLIED 2026-09-07, AS OPTIONAL RATHER THAN REQUIRED. Team Lead ruling."
     change: >-
-      ADD `display_name` TO `onboardOrganizationInput` AS A **REQUIRED** FIELD, defined as
-      `urn:dudo:schema:organization-identity:1#/$defs/onboardingDisplayNameField`. The two
-      registrations are NOT added to onboarding: an operator creating a tenant rarely has the CR
-      or VAT number in hand, and requiring them would push an invented value into a legal field
-      at the one moment the operator cannot pause. They are set afterwards by the update route.
-    changeClass: BREAKING
-    why: >-
-      ADDING A REQUIRED REQUEST FIELD IS BREAKING UNDER API_STANDARD.md §6, AND THIS CONTRACT
-      HAS A DEPLOYED CONSUMER — the admin console. It is accepted rather than avoided because the
-      console must change in this slice anyway (an operator now types a name), and because the
-      only client is one the team controls.
-    theDEPLOYMENTORDERING_ANDITISNOTOPTIONAL: >-
-      *** THE CONSOLE SHIPS FIRST, THEN CORE REQUIRES THE FIELD. *** A client sending a field a
-      server ignores is harmless; A SERVER REQUIRING A FIELD THE CLIENT DOES NOT SEND IS AN
-      ONBOARDING OUTAGE. Reversing this order breaks the one operation that creates customers, on
-      a platform whose operator population is small enough that nobody may notice for a day.
+      `display_name` IS ADDED TO `onboardOrganizationInput.properties` AND **NOT** TO ITS
+      `required` LIST. The two registrations are NOT added to onboarding: an operator creating a
+      tenant rarely has the CR or VAT number in hand, and requiring them would push an invented
+      value into a legal field at the one moment the operator cannot pause. They are set
+      afterwards by the update route.
+    changeClass: additive
+    theRULINGTHATCHANGEDTHIS: >-
+      *** THIS SECTION ORIGINALLY SPECIFIED THE FIELD AS **REQUIRED** AND CLASSED THE CHANGE AS
+      BREAKING. THE TEAM LEAD RULED OPTIONAL ON 2026-09-07 AND THE RULING IS ABOUT SEQUENCE
+      RATHER THAN ABOUT THE FIELD. *** Onboarding is how a customer arrives; a server requiring a
+      field the deployed console does not yet send is an onboarding outage. The console ships
+      first and Core tightens afterwards. IT IS RECORDED HERE RATHER THAN OVERWRITTEN, because a
+      reader who finds only the current text cannot tell a deliberate looseness from an
+      oversight — and the whole argument below depends on knowing which it is.
+    whatTHATCOSTS_ANDITISNOTNOTHING: >-
+      *** WHILE THE FIELD IS OPTIONAL, theExistingOrganizationsRuling's CENTRAL CLAIM IS FALSE.
+      *** That ruling justifies a nullable column on the ground that "the nameless set is CLOSED
+      AT THREE AND SHRINKS", and it is closed only if onboarding refuses to create a fourth. Every
+      onboarding in this window can create one. THE ASYMMETRY THAT MAKES THE NULLABLE COLUMN
+      CORRECT IS SUSPENDED, NOT ESTABLISHED, and the window's length is the size of the cost.
+    theOWNEDFOLLOWUP: >-
+      RECORDED AS `ON-7` IN `organization-onboarding-v1`, ASSIGNED TO THE CHANGE THAT FOLLOWS THE
+      CONSOLE'S RELEASE rather than to a backlog. Making it `required` is BREAKING under
+      API_STANDARD.md §6 and should cost a Team Lead review rather than happen by drift. Written
+      as an owned follow-up rather than as a conditional, per `workflow.md` §12: a clause of the
+      form "if the console ships, this file is wrong" creates an obligation nobody collects.
+    andCOREMUSTNOTSYNTHESISEANAME: >-
+      AN OMITTED `display_name` RECORDS NULL. Not the identifier, not the Template's name, not
+      the Workspace placeholder. An invented name is indistinguishable from one an operator typed,
+      forever — the same reason theExistingOrganizationsRuling refuses a migration default. THIS
+      IS THE SHORTCUT THE OPTIONAL WINDOW INVITES, so it is written down before anyone reaches
+      for it.
 
   - target: "organization-detail-v1 (accepted)"
+    status: "APPLIED 2026-09-07."
     change: >-
       `organizationDetailOutput` GAINS `commercial_registration` AND `vat_registration`, both
       `$ref` to `registrationRecord`, both added to `required`. `display_name` NEEDS NO SHAPE
@@ -563,6 +593,7 @@ consequentialChanges:
     why: "New response fields on a shape whose description already reserved the ground."
 
   - target: "platform-operator-v1 (accepted)"
+    status: "APPLIED 2026-09-07, including the `required` correction."
     change: >-
       `organizationSummary` GAINS NOTHING AND CARRIES `display_name` VALUES. THE REGISTRATIONS
       ARE DELIBERATELY NOT ADDED TO THE LIST — two registration objects per row inflate every
@@ -604,11 +635,21 @@ consequentialChanges:
     changeClass: "internal — no contract shape changes"
 
   - target: "permission-catalog.yaml"
+    status: "DECLARED 2026-09-07. NOT GRANTED — the grant is the user's and is outstanding."
     change: >-
-      REGISTER `core.platform-organization.update`: group `platform`, sensitivity `sensitive`,
-      scopes `[platform]`, status proposed, phase 1. GRANTING IT TO `platform-admin` IS A
-      SEPARATE DECISION AND IS THE TEAM LEAD'S — no agent may grant a permission.
+      `core.platform-organization.update` IS REGISTERED: group `platform`, sensitivity
+      `sensitive`, scopes `[platform]`, status proposed, phase 1. IT IS HELD BY NO ROLE.
+      GRANTING IT IS A SEPARATE ACT AND NO AGENT MAY PERFORM IT (.claude/rules/security.md §8).
     changeClass: additive
+    theORDERINGTHISIMPOSESONCORE: >-
+      *** THE MIDDLE STEP FAILS THE BUILD RATHER THAN WARNING, SO IT IS WORTH KNOWING BEFORE
+      STARTING. *** `assertEveryRoutePermissionIsReachable` in `platform-routes.ts` fails the
+      build when a route declares a permission no role can reach. So: declared (done) → GRANTED
+      BY THE USER and transcribed into `platform-permissions.ts` AND added to its
+      `HELD_BUT_UNREACHABLE` list → the route lands and leaves that list in the same change.
+      BUILDING THE ROUTE BEFORE THE GRANT DOES NOT PRODUCE A `forbidden` SOMEBODY DIAGNOSES; IT
+      DOES NOT BUILD. That check exists because the revoke route shipped while its permission was
+      unreachable and was `forbidden` to every operator alive.
     andITISTHEELEVENTHPLATFORMSCOPEDPERMISSION: >-
       The invariant recorded above `defaultRoles` covers it without amendment — *"every permission
       held by a role whose own scope is `platform` declares `platform` among that permission's own
@@ -736,8 +777,17 @@ testRequirements:
       AN ORGANIZATION WITH `display_name` NULL IS RETURNED, RENDERED AND PAGED WITHOUT ERROR by
       every route that carries the field. The three that exist are the fixture; a suite that only
       tests named Organizations will pass on the day the migration lands and fail in the console.
-    - "Onboarding REFUSES a request with no `display_name`, and the refusal is `invalid_argument`."
-    - "No route can set `display_name` to null. Renaming is permitted; un-naming is not."
+    - >-
+      ONBOARDING ACCEPTS A REQUEST WITH NO `display_name` AND RECORDS NULL — *** NOT a synthesised
+      name, not the identifier, not the Template's name, not the Workspace placeholder. *** Assert
+      the stored value is null, because the shortcut this test guards against produces a
+      plausible-looking string that nobody can later tell from a real one.
+      THIS CASE INVERTS WHEN `ON-7` IS DISCHARGED: the same request must then be
+      `invalid_argument`. WRITE BOTH NOW AND SKIP THE SECOND WITH THE REASON, rather than
+      rewriting this one later — `workflow.md` §12 records that a test asserting withdrawn
+      behaviour is how a suite drives Core toward the wrong answer with a green run as
+      justification, and this case is scheduled to become exactly that.
+    - "No route can set `display_name` to null. Renaming is permitted; un-naming is not. THIS IS ABOUT THE UPDATE ROUTE and is unaffected by onboarding's optionality."
   theFormat:
     - >-
       A FIFTEEN-DIGIT VALUE, A FOURTEEN-DIGIT VALUE AND A SIXTEEN-DIGIT VALUE ARE ALL ACCEPTED.
