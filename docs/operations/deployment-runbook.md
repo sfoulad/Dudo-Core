@@ -69,6 +69,51 @@ npm run d1:migrate:tenant:remote
 npm run d1:migrate:control:remote
 ```
 
+### ⚠ THE ✅ IS THE TOOL'S CLAIM, NOT A VERIFICATION. QUERY THE DATABASE.
+
+Added 2026-09-07, from applying `0015` and `0016` to the remote control plane.
+
+`wrangler d1 migrations apply` prints a table of ✅ glyphs. **That table is the tool reporting on
+itself.** And the obvious way to check it independently — reading the exit code out of a pipeline —
+**does not work in this repository's shell**: `${PIPESTATUS[1]}` came back **empty under zsh**, so
+the line printing it reported nothing at all, and the ✅ was the only signal in the room.
+
+**This is `workflow.md` §11a on a production action.** There, a `grep` for a success token treated
+absence of a failure as success. Here an empty `PIPESTATUS` did the same thing on a **migration**,
+which is the one class of action where "I think it worked" is most expensive.
+
+**So verify against the database, every time, and verify the THING rather than the RECORD.**
+`d1_migrations` says a file ran; it does not say the schema changed. Query the objects:
+
+```
+# the indexes a migration claims to create
+npx wrangler d1 execute dudo-control-plane --remote --json \
+  --command "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='<table>' ORDER BY name"
+
+# the columns a migration claims to add
+npx wrangler d1 execute dudo-control-plane --remote --json \
+  --command "SELECT name FROM pragma_table_info('<table>') ORDER BY cid"
+
+# and that nothing is left pending
+npx wrangler d1 migrations list dudo-control-plane --remote
+```
+
+**Name the expected objects BEFORE running the query and compare against that list.** A query that
+returns rows looks like success; `0015` was expected to add exactly **13** columns, and only a
+stated expectation makes 12 or 14 visible. This is the floor rule: *a count with nothing to compare
+against is a number, not a check.*
+
+**One question this settled, recorded because it had been an assumption for two days.** Local D1
+accepted `ALTER TABLE ADD COLUMN … CHECK` and nobody had confirmed the remote engine would.
+**It does** — `0015` applied and all 13 columns are present. Until this run, *"local accepted it"*
+had been doing the work of *"it works"*.
+
+**And this check cannot live in the test suite.** `qa-agent` was asked whether its migration census
+could distinguish *applied locally* from *applied remotely* and correctly answered no: the
+distinction is invisible from inside a `node:sqlite` fixture, and it declined to build something
+that would look like a check without being one. **The remote state is observable only from outside
+the harness, which is why it is a runbook step and not a test.**
+
 **`0007_membership_role.sql` IS NOT IDEMPOTENT, AND CANNOT BE.** Every other migration here claims
 "forward-only and idempotent" on the strength of `CREATE TABLE IF NOT EXISTS`. **SQLite has no
 `ADD COLUMN IF NOT EXISTS`.** `core-agent` verified this against a real engine rather than assuming
