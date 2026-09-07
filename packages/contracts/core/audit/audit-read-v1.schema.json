@@ -200,6 +200,10 @@
     "listAuditEventsInput": {
       "type": "object",
       "additionalProperties": false,
+      "dependentRequired": {
+        "action_id": ["since", "until"]
+      },
+      "$comment": "`dependentRequired` CARRIES THE CONDITIONAL WINDOW RULE MACHINE-READABLY RATHER THAN IN PROSE, added 2026-09-07. `action_id` is the one filter here that no index prefix serves, so it is tested row by row and needs the walk bounded; `principal_id`, `decision` and `target_resource_id` are each served by an index on `audit_event` and are exempt. THE 31-DAY SPAN LIMIT AND THE BOTH-OR-NEITHER RULE CANNOT BE EXPRESSED IN JSON SCHEMA and live in the contract's theMandatoryWindow — which is the ordinary state here, since nothing in this repository executes either half.",
       "description": "Every property is optional; omitting all of them returns the unfiltered feed, still paged. NO `required` LIST — the object is trivially satisfiable, which is the state `packages/testing/suites/contracts/satisfiability.ts` checks for.\n\n*** THERE IS NO `scope` FILTER AND SUPPLYING ONE IS REFUSED WITH `invalid_argument`, NOT IGNORED. *** `scope` is the discriminator between the two feeds; a caller-supplied `scope=platform` would cross them and reach the other shape's rows through this one. `docs/decisions/0028`: 'an ignored parameter is a parameter someone will later honour.'\n\nTHERE IS NO `organization_id` PARAMETER AND NONE MAY BE ADDED. Tenant identity is derived from the authenticated context on every call.",
       "properties": {
         "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
@@ -229,7 +233,8 @@
     "listPlatformActionsInput": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Every property is optional. NO `required` list, for the same reason as `listAuditEventsInput`.\n\nTHERE IS NO ACTOR FILTER, AND ITS ABSENCE FOLLOWS FROM THE RECORD SHAPE RATHER THAN BEING A SECOND DECISION. The feed does not disclose which operator acted, so a filter by operator would disclose it one bit at a time — supply an identifier, count the results. That is the reconstruction-through-a-query-parameter shape `0028` refuses on the platform feed, and it is refused here for the same reason. A caller supplying `actor_principal_id` or `principal_id` receives `invalid_argument`.",
+      "required": ["since", "until"],
+      "description": "*** `since` AND `until` ARE REQUIRED ON THIS FEED, UNCONDITIONALLY. ADDED 2026-09-07. *** It is the only shape in either audit contract whose ENTIRE query is a filter no index serves: the feed selects on `scope = 'platform'`, `audit_event` has no index on `scope`, and the platform records are a handful inside a tenant trail that grows with every audited action. That is `core-agent`'s rule exactly — a filter matching fewer rows than one page costs a full walk — and here the filter matches few rows BY DESIGN, permanently. Span at most 31 days; see the contract's theMandatoryWindow.\n\nTHERE IS NO ACTOR FILTER, AND ITS ABSENCE FOLLOWS FROM THE RECORD SHAPE RATHER THAN BEING A SECOND DECISION. The feed does not disclose which operator acted, so a filter by operator would disclose it one bit at a time — supply an identifier, count the results. That is the reconstruction-through-a-query-parameter shape `0028` refuses on the platform feed, and it is refused here for the same reason. A caller supplying `actor_principal_id` or `principal_id` receives `invalid_argument`.",
       "properties": {
         "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
         "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" },

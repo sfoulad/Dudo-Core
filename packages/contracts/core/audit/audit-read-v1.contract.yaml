@@ -374,6 +374,112 @@ theFEEDCANBEINCOMPLETE:
 # two halves of one rule drift apart.
 # ---------------------------------------------------------------------------
 theTimeWindow:
+
+  # -------------------------------------------------------------------------
+  # theMandatoryWindow — ADDED 2026-09-07. THE SAME RULE AS THE PLATFORM FEEDS, APPLIED WHERE
+  # IT PAYS AND NOT WHERE IT DOES NOT. Uniformity would have been tidier and wrong.
+  # -------------------------------------------------------------------------
+  theMandatoryWindow:
+    theRULEBEINGAPPLIED: >-
+      `core-agent`'s MEASURED RULE: *** A TIME-ORDERED WALK TESTS EACH FILTER ROW BY ROW, SO ANY
+      FILTER MATCHING FEWER ROWS THAN ONE PAGE COSTS A FULL WALK. *** `qa-agent` measured the
+      consequence on the platform log: 49 requests exhaust D1's account-wide 5,000,000
+      rows-read/day, and exceeding it stops D1 FOR EVERY TENANT, including the session lookup
+      every login performs. The allowance is shared, so a tenant-side scan spends the same budget
+      a platform-side one does.
+
+    ruling: >-
+      *** REQUIRED ON `core.ListPlatformActions`, UNCONDITIONALLY. REQUIRED ON
+      `core.ListAuditEvents` ONLY WHEN `action_id` IS PRESENT. NOT REQUIRED OTHERWISE. *** Both
+      `since` and `until`, span at most THIRTY-ONE DAYS.
+    theSHAPEBYSHAPEDERIVATION:
+      - "UNFILTERED activity feed — served by `audit_event_by_tenant_time`. One page. EXEMPT."
+      - "`principal_id`, with or without `decision` — served by `audit_event_by_tenant_principal_decision_time`. EXEMPT."
+      - "`target_resource_id` — served by `audit_event_by_tenant_target`. EXEMPT."
+      - "`action_id` — NO INDEX. Tested row by row against the tenant's own trail. WINDOW REQUIRED."
+      - >-
+        THE PLATFORM FEED — `scope = 'platform'`, NO INDEX, AND THE FILTER MATCHES FEW ROWS BY
+        DESIGN AND PERMANENTLY. It is the worst instance of the rule in either contract: a handful
+        of records inside a trail that grows with every audited action the tenant takes. WINDOW
+        REQUIRED, UNCONDITIONALLY.
+
+    whyTHISCONTRACTISNOTUNIFORMWITHTHEPLATFORMONE: >-
+      BECAUSE THE TABLES DIFFER IN THE ONE PROPERTY THAT DECIDES THE BLAST RADIUS. Every read of
+      `audit_event` goes through the storage boundary, which emits `tenant_id = ?` from a resolved
+      handle — so the worst case is ONE ORGANIZATION'S TRAIL, and the tenant index prefix already
+      does most of the work that `0016`'s new indexes do for the platform log. The platform log
+      has no such prefix: a scan there walks every operator's activity across every tenant.
+      SO THE RULE TRANSFERS AND THE EXEMPTIONS DO NOT. `audit_event` carries three indexes and the
+      platform log carries none today, which is why three of this contract's five shapes are
+      exempt and only one of the platform contract's is.
+
+    theARITHMETIC_ANDITISWORSEHERETHANONTHEPLATFORMLOG: >-
+      *** STATED IN ROWS, AND THE NUMBER GOES THE UNCOMFORTABLE WAY. *** The platform log's bound
+      is (operators × 300 × days), because a per-principal ceiling of 600 row-writes at 2 a record
+      caps one operator at 300 records a day. THE TENANT TRAIL'S BOUND IS THE ORGANIZATION'S OWN
+      WRITE ALLOWANCE: 10,000 row-writes a day at 5 per `audit_event` row is AT MOST 2,000 AUDIT
+      ROWS A DAY, and in practice fewer because each audited mutation also writes its own row —
+      roughly 1,666 audited mutations a day at the ceiling.
+      SO A 31-DAY WINDOW ON A MAXIMALLY BUSY ORGANIZATION IS UP TO ~52,000 ROWS, against ~18,600
+      for two operators over the same span. THE SAME SPAN IS A WEAKER BOUND HERE.
+      IT IS STILL 31 DAYS, AND THE REASON IS THAT A SECOND NUMBER WOULD BE INVENTED RATHER THAN
+      DERIVED. Nothing has measured a real tenant's trail; the 2,000/day figure is a CEILING that
+      no Organization in the closed beta approaches, and choosing 9 days from it would be
+      arithmetic on a number nobody has observed. ONE SPAN, TWO STATED WORST CASES, AND A NAMED
+      TRIGGER — `TA-12` — rather than a magic number per surface.
+
+    omissionAndExcess: >-
+      IDENTICAL TO THE PLATFORM CONTRACT AND FOR THE IDENTICAL REASON. Omission is
+      `invalid_argument` / `time_window_required`; an over-wide span is `time_window_too_wide`;
+      an inverted window is `time_window_inverted`. *** NEVER DEFAULT, NEVER TRUNCATE, NEVER
+      NARROW SILENTLY. *** On an evidence surface a quietly narrowed window is a feed that hides
+      records, and an owner asking "has the platform touched us" would receive an empty page and
+      conclude nothing happened. A refusal is visible; an omission is not.
+
+    whatITCOSTSTHECUSTOMER_ANDITISSMALLERTHANTHEOPERATORSCOST: >-
+      "WHAT HAS HAPPENED IN OUR ORGANIZATION, EVER" IS UNAFFECTED — the unfiltered activity feed
+      needs no window. So is "everything this person did" and "everything that happened to this
+      record", because both are index-served.
+      WHAT IS CONSTRAINED: "every time the platform has ever touched us" becomes a month at a
+      time. THAT IS THE ONE THAT STINGS, because it is the question `0028` built this feed to
+      answer and a customer asks it rarely and wants all of it. IT COSTS THEM NOTHING IN WRITES —
+      this contract's reads write no rows at all — so the cost is clicks rather than budget, and
+      an interested owner can page back as far as they like.
+      *** AND THE CLIENT OBLIGATION IS THE SHARPER HALF: an empty windowed platform feed must
+      render as "no platform activity in this window", never "no platform activity". *** That is
+      theFEEDCANBEINCOMPLETE's obligation with a second reason attached — the feed can be
+      incomplete AND it can be narrow, and a customer must not read either as an assurance.
+
+    whatITDOESNOTCLOSE:
+      - >-
+        A DENSE FILTER STILL WALKS THE WHOLE WINDOW. The guarantee is "at most the window's
+        records", never "at most `page_size`".
+      - >-
+        THE EXEMPT SHAPES ARE BOUNDED BY THEIR INDEXES AND BY NOTHING ELSE. Drop
+        `audit_event_by_tenant_time` and the unfiltered feed becomes a scan that no window
+        refuses, because it is exempt by design. Same blind spot as the platform contract's, in a
+        table that has the index today.
+      - >-
+        `core-agent` NAMED A REMAINING UNBOUNDED SHAPE ON THE PLATFORM SIDE AND I HAVE NOT READ
+        THAT REPORT. This list is derived from the rule rather than transcribed from the
+        measurement. RECONCILE BEFORE ACCEPTING; if they disagree, the measurement is right.
+
+    andTA6ISREDERIVEDRATHERTHANLEFTPROPPEDUP:
+      whatWasClaimed: >-
+        `TA-6` REFUSED AN INDEX ON `scope` PARTLY ON THE GROUND THAT "reads have their own
+        allowance and remain available at the write ceiling, SO THE COST LANDS WHERE THERE IS ROOM
+        FOR IT." *** THE SECOND HALF OF THAT SENTENCE IS THE KIND OF ADJECTIVE THIS WHOLE FINDING
+        EXISTS TO PUNISH, AND qa-agent's MEASUREMENT FALSIFIED IT: the room is 49 requests. ***
+      theCONCLUSIONSURVIVESONABETTERPREMISE: >-
+        RE-DERIVED, BECAUSE AN ARGUMENT THAT OUTLIVES ITS PREMISE IS ONE NOBODY HAS CHECKED
+        (`workflow.md` §12). THE INDEX IS STILL REFUSED — a fourth index on `audit_event` takes an
+        audit row from 5 row-writes to 6, a 20% increase on the most frequent expensive write in
+        the platform, and makes `0028`'s measured availability hazard worse. WHAT CHANGED IS THE
+        REASON THE READ COST IS ACCEPTABLE: it is no longer "reads are cheap", it is "THE WINDOW
+        BOUNDS THE READ AT ZERO ROW-WRITE COST", which is the `0030`-shaped answer and is
+        strictly better than the claim it replaces.
+        `TA-6` STANDS. Its arithmetic was right and one of its two justifications was not.
+
   format:
     ruling: >-
       `since` AND `until` ARE RFC 3339 UTC INSTANTS OF EXACTLY THIS SHAPE:
@@ -886,12 +992,14 @@ freeTierImpact:
     filteredScans:
       - >-
         *** THE PLATFORM FEED. *** No index selects on `scope`, so `GET /audit/dudo` range-scans
-        the tenant's trail within the window and filters. ROWS READ IS BOUNDED BY THE TENANT'S
-        OWN TOTAL ACTIVITY IN THE WINDOW, NOT BY `page_size` OR BY THE NUMBER OF PLATFORM
-        RECORDS — which is the inverse of what a reader would guess from a feed that usually
-        returns a handful of rows. A `target_principal_id` filter moves it onto the target
-        index and makes it cheap.
-      - "`action_id` on either feed. Filtered after the index range; the same bound applies."
+        the tenant's trail and filters. ROWS READ IS BOUNDED BY THE TENANT'S OWN TOTAL ACTIVITY IN
+        THE WINDOW, NOT BY `page_size` OR BY THE NUMBER OF PLATFORM RECORDS — which is the inverse
+        of what a reader would guess from a feed that usually returns a handful of rows.
+        *** AND "IN THE WINDOW" IS NOW A GUARANTEE RATHER THAN A DESCRIPTION. *** Since 2026-09-07
+        a bounded window is REQUIRED on this feed, so the scan is bounded at 31 days of the
+        tenant's activity instead of the whole trail. See theTimeWindow.theMandatoryWindow. A
+        `target_principal_id` filter moves it onto the target index and makes it cheap.
+      - "`action_id` on the activity feed. Filtered after the index range; a window is REQUIRED with it, for the same reason and with the same bound."
     whyNOINDEXISPROPOSED: >-
       *** AN ADDITIVE `(tenant_id, scope, occurred_at DESC, audit_event_id)` INDEX WOULD FIX IT
       AND IS REFUSED, AND THE ARITHMETIC IS THE REASON. *** An `audit_event` write is FIVE
@@ -903,9 +1011,18 @@ freeTierImpact:
       WORSE: `0028`'s amendment measured 2,000 platform calls exhausting one customer's entire
       daily allocation at five writes each, and the same attack at six needs 1,667.
       A WRITE COST PAID BY EVERY AUDITED ACTION FOREVER, TO SPEED UP A READ PERFORMED
-      OCCASIONALLY BY ONE PRINCIPAL, IS THE WRONG TRADE — and reads have their own allowance
-      and remain available at the write ceiling, so the cost lands where there is room for it.
-      Recorded as `TA-6` with the volume at which to revisit.
+      OCCASIONALLY BY ONE PRINCIPAL, IS THE WRONG TRADE.
+      *** CORRECTED 2026-09-07. THIS CLAUSE CONTINUED: "and reads have their own allowance and
+      remain available at the write ceiling, SO THE COST LANDS WHERE THERE IS ROOM FOR IT." THAT
+      SECOND JUSTIFICATION WAS AN ADJECTIVE WHERE A NUMBER BELONGED, AND qa-agent MEASURED IT
+      FALSE: the room is 49 requests before D1's account-wide 5,000,000 rows-read/day is exhausted
+      at a 50,000-row log, and exhausting it stops D1 for every tenant including login. ***
+      THE CONCLUSION IS RE-DERIVED AND STANDS, ON A BETTER PREMISE. The index is still refused for
+      the arithmetic above, which never depended on the false half; what makes the READ cost
+      acceptable is no longer "reads are cheap" but "THE MANDATORY WINDOW BOUNDS THE READ AT ZERO
+      ROW-WRITE COST" — `0030`'s shape, configuration rather than schema, and strictly better than
+      the claim it replaces. See theTimeWindow.theMandatoryWindow.
+      Recorded as `TA-6` with the volume at which to revisit, and as `TA-12` for the span.
 
   responseSize: >-
     A PLATFORM-FEED PAGE IS TINY — six short fields. AN ACTIVITY-FEED PAGE IS DOMINATED BY
@@ -1040,6 +1157,26 @@ testRequirements:
       not through either feed. The ruling is that the identity is recorded and not disclosed,
       and a suite that cannot tell those apart cannot detect the day it stops being recorded.
 
+  theMANDATORYWINDOW:
+    - >-
+      `core.ListPlatformActions` WITHOUT `since` AND `until` IS REFUSED with
+      `time_window_required`, ON EVERY CALL, including one carrying `target_principal_id`.
+    - >-
+      `core.ListAuditEvents` WITH `action_id` AND NO WINDOW IS REFUSED. *** AND THE EXEMPTIONS
+      HOLD: the same route with NO filter, with `principal_id`, with `principal_id` + `decision`,
+      or with `target_resource_id`, SUCCEEDS WITHOUT A WINDOW. *** A suite that requires the
+      window everywhere passes this contract's prose and breaks four working questions.
+    - "A 32-day span is `time_window_too_wide`; 31 days exactly is accepted. `since` alone or `until` alone is `time_window_required`. An inverted window is `time_window_inverted`, never an empty page."
+    - >-
+      ASSERT ROWS READ, NOT THE ANSWER. An exempt shape reads at most one page's rows; a windowed
+      shape reads at most the window's records. EVERY OTHER TEST HERE PASSES IDENTICALLY AGAINST A
+      FULL SCAN THAT RETURNS THE RIGHT 25 ROWS, which is the state that measured 49 requests to
+      exhaustion on the platform log.
+    - >-
+      THE CONSTRUCTED FAILING INPUT: drop `audit_event_by_tenant_time` and the UNFILTERED feed's
+      rows-read assertion must go RED. That shape is exempt from the window by design, so nothing
+      else in this suite would notice it regressing — it is the shape that looks safest and is
+      least guarded.
   theTIMEWINDOW:
     - >-
       THE BOUNDS ARE EXACT AND THE WINDOW IS HALF-OPEN. Seed records at exactly `since`, one
@@ -1274,6 +1411,22 @@ openQuestions:
       IT IS BUILT it needs its own Action, its own contract section, its own free-tier argument
       and an answer to `TA-4`.
     blocks: "A customer's ability to take their audit trail with them. Not this contract."
+
+  - id: TA-12
+    question: >-
+      THE 31-DAY SPAN IS ONE NUMBER SERVING TWO SURFACES WITH DIFFERENT WORST CASES. On the
+      platform log a 31-day window is bounded by (operators × 300 × days) = ~18,600 rows at two
+      operators. ON A TENANT TRAIL IT IS BOUNDED BY THE ORGANIZATION'S OWN WRITE ALLOWANCE — at
+      most ~2,000 audit rows a day — so the same span is up to ~52,000 rows for a maximally busy
+      Organization. THE SAME NUMBER IS A WEAKER BOUND HERE.
+    recommendation: >-
+      LEAVE IT AT 31 AND MEASURE BEFORE MOVING IT. The 2,000/day figure is a CEILING no
+      Organization in the closed beta approaches, and deriving a narrower tenant span from an
+      unobserved number would be arithmetic dressed as evidence — which is the failure this whole
+      finding exists to punish. WHAT TO MEASURE: the largest real tenant's `audit_event` rows per
+      day. If it approaches four figures, narrow the tenant span rather than adding an index —
+      `TA-6`'s arithmetic against a fourth index has not changed.
+    blocks: "Nothing measured. It is a number with a stated expiry and a named measurement."
 
   - id: TA-11
     question: >-

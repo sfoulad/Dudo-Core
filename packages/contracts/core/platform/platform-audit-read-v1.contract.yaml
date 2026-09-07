@@ -209,6 +209,158 @@ pagination:
 # NEITHER the format NOR the inclusivity of its own two time parameters.
 # ---------------------------------------------------------------------------
 theTimeWindow:
+
+  # -------------------------------------------------------------------------
+  # theMANDATORYWINDOW — ADDED 2026-09-07. THE CHEAP HALF OF AN AVAILABILITY FIX.
+  # -------------------------------------------------------------------------
+  theMANDATORYWINDOW:
+    theFINDING: >-
+      MEASURED TWICE, AND THE NUMBERS ARE THE POINT RATHER THAN THE ADJECTIVES. `qa-agent`
+      measured that 49 feed requests exhaust D1's account-wide 5,000,000 rows-read/day allowance
+      against a 50,000-row log, because both feeds scan the whole table with a temp b-tree sort.
+      EXCEEDING THAT ALLOWANCE STOPS D1 FOR EVERY TENANT — including the session lookup every
+      login performs — so this is an availability finding and not a latency one.
+      `core-agent` then measured six query shapes across four index sets and found the rule
+      underneath: *** A TIME-ORDERED WALK TESTS EACH FILTER ROW BY ROW, SO ANY FILTER MATCHING
+      FEWER ROWS THAN ONE PAGE COSTS A FULL WALK. *** A brand-new operator's own history is the
+      worked example: rare filter, whole table walked.
+
+    ruling: >-
+      *** A BOUNDED TIME WINDOW IS REQUIRED ON ANY REQUEST CARRYING A FILTER THAT NO INDEX PREFIX
+      SERVES, AND IS NOT REQUIRED OTHERWISE. *** Both `since` AND `until` must be present and the
+      span must not exceed THIRTY-ONE DAYS.
+        `platform.audit.list`                  window REQUIRED when `actor_principal_id` or
+                                               `action_id` is present. NOT required otherwise.
+        `platform.organizations.audit.list`    window REQUIRED when `action_id` is present. NOT
+                                               required otherwise — `organization_id` is a PATH
+                                               parameter served by an index prefix, not a filter
+                                               tested row by row.
+
+    whyNOTMANDATORYONEVERYTHING: >-
+      BECAUSE IT WOULD BUY NOTHING AND COST SOMETHING. `core-agent` measured the unfiltered feed
+      as already bounded to ONE PAGE by the ordering index — a time-ordered walk with no filter
+      stops after 25 rows. A window there removes no reads and removes an operator's ability to
+      ask "what happened, ever", which is the question an audit trail exists to answer. THE RULE
+      IS MORE PRECISE THAN "ALWAYS" AND THAT IS WHY IT NEEDS EXPLAINING RATHER THAN WHY IT IS
+      WRONG.
+      THE EXEMPTION HAS ONE SENTENCE BEHIND IT: A FILTER SERVED BY AN INDEX PREFIX IS A SEEK; A
+      FILTER NOT SERVED BY ONE IS A TEST APPLIED TO EVERY ROW THE WALK PASSES. Only the second
+      needs a bound on how many rows are walked, and `organization_id` is the first.
+
+    whyAWINDOWANDNOTATHIRDINDEX: >-
+      `core-agent` MEASURED BOTH. A third index takes the log's write cost from 2 TO 5 ROW-WRITES
+      PER PLATFORM REQUEST and buys ONE query shape; P4 makes every platform request a write, so
+      that cost is paid on every call forever, including the reads. THE WINDOW COSTS ZERO
+      ROW-WRITES and took the equivalent quiet-tenant case from 49,993 rows to 9,033 on one index
+      alone.
+      IT IS THE `0030`-SHAPED ANSWER: the free tier may cost us CONFIGURATION, never SCHEMA. A
+      span limit is a constant somebody can change; an index is a write cost paid into the data
+      shape and never recovered.
+
+    theARITHMETIC_STATEDINROWSRATHERTHANINADJECTIVES:
+      theBOUNDISDERIVEDANDNOTESTIMATED: >-
+        A WINDOW'S ROW COUNT IS BOUNDED BY THE WRITE CEILING THAT PRODUCED IT. The per-principal
+        control-plane allowance is 600 estimated row-writes a day and a record costs 2, so ONE
+        OPERATOR CANNOT PRODUCE MORE THAN 300 RECORDS PER UTC DAY. Therefore a D-day window
+        contains AT MOST (operators × 300 × D) records, whatever the table's total size.
+      atTODAYSPOPULATION: >-
+        TWO OPERATORS, THIRTY-ONE DAYS: at most 2 × 300 × 31 = 18,600 rows walked per request,
+        against 5,000,000 rows-read/day. THAT IS ~268 SUCH REQUESTS A DAY IN THE WORST CASE, where
+        the unbounded form measured 49. Realistic operator volume is tens of actions a day rather
+        than 300, so the ordinary case is one to two orders of magnitude below that.
+      whyTHIRTYONEDAYSANDNOTSEVENORNINETY: >-
+        31 DAYS IS "THE LAST MONTH", which is the natural unit of an investigation, a support case
+        and a billing period. NINETY at today's population is 54,000 rows and 92 requests a day,
+        which is inside the range qa-agent measured as dangerous. SEVEN would be ~4,200 rows and
+        is a materially worse investigative tool for a saving nobody needs yet.
+      *** THE SPAN SCALES WITH THE OPERATOR POPULATION AND THE NUMBER MUST MOVE WITH IT. *** At
+        TEN operators, 31 days is 93,000 rows and 53 requests a day — worse than the number that
+        produced this finding. THIRTY-ONE DAYS IS CORRECT FOR ONE OR TWO OPERATORS AND IS WRONG
+        FOR TEN. Recorded as `PA-4`, with the derivation above so that the next person can
+        re-derive rather than re-measure.
+
+    omissionAndExcess:
+      ruling: >-
+        *** REFUSE. NEVER DEFAULT, NEVER TRUNCATE, NEVER NARROW SILENTLY. *** A request that
+        needs a window and omits one is `invalid_argument` with the detail token
+        `time_window_required`. A span exceeding 31 days is `invalid_argument` with
+        `time_window_too_wide`. A window whose `until` is not after its `since` is
+        `invalid_argument` with `time_window_inverted`.
+      whySILENTNARROWINGISTHEWORSTOPTION: >-
+        *** ON AN EVIDENCE SURFACE, A QUIETLY NARROWED WINDOW IS A FEED THAT HIDES RECORDS. *** An
+        investigator asking "has this operator touched anything" over what they believe is all
+        time would receive an empty page and conclude nothing happened. A REFUSAL IS VISIBLE AND
+        AN OMISSION IS NOT, and that asymmetry decides it: the failure mode of refusing is an
+        operator who has to type two dates, and the failure mode of defaulting is a false
+        negative in an investigation.
+      theERRORNAMESTHELIMIT: >-
+        The refusal states the maximum span, so a client corrects without guessing. THAT IS SAFE
+        HERE AND IT IS WORTH SAYING WHY, because this contract collapses five cursor rejections
+        into one indistinguishable answer for the opposite reason: A SPAN LIMIT IS A CONSTANT,
+        NOT A FACT ABOUT DATA. Disclosing it teaches a caller nothing about any record, any
+        operator or any Organization.
+      bothBOUNDSORNEITHER: >-
+        `since` ALONE OR `until` ALONE IS NOT A BOUNDED WINDOW and is refused with
+        `time_window_required`. Half a window is an unbounded walk in one direction, which is the
+        thing being fixed.
+
+    whatITCOSTSANOPERATOR_ANDTHISISTHEHONESTHALF:
+      whatISUNAFFECTED: >-
+        "WHAT HAPPENED, EVER" — the unfiltered platform feed, unbounded in time, fully paged.
+        "WHAT HAPPENED TO THIS ORGANIZATION, EVER" — the unfiltered Organization feed. NEITHER
+        NEEDS A WINDOW AND NEITHER GAINS ONE. The wide question stays wide.
+      whatISCONSTRAINED: >-
+        "WHAT DID OPERATOR Y DO, EVER" AND "WHEN DID ACTION Z LAST HAPPEN" BECOME A SEQUENCE OF
+        MONTH-SIZED QUESTIONS. An investigator walks backwards a month at a time. THE COST IN
+        NUMBERS: a twelve-month investigation is 12 requests at 2 control-plane row-writes each =
+        24 row-writes of an operator's 600/day. Affordable, and stated as a figure rather than as
+        "manageable".
+        IT IS A REAL DEGRADATION OF AN INVESTIGATIVE TOOL AND IT IS NOT DRESSED UP. An audit
+        trail exists to answer questions about the past, and "you may ask about a month at a
+        time" is a constraint on that. It is accepted because the alternative measured at 49
+        requests to stop D1 for every customer on the platform.
+      theCLIENTOBLIGATION_ANDITISTHETRAPRATHERTHANTHERULE: >-
+        *** A CONSOLE MUST RENDER AN EMPTY WINDOWED RESULT AS "NO RECORDS IN THIS WINDOW" AND
+        NEVER AS "NO RECORDS". *** The refusal above stops an operator receiving a silently
+        narrowed answer; nothing stops them MISREADING a correctly narrow one. An empty page over
+        a month is not evidence of absence, and the console is the only place that difference can
+        be shown. Same obligation, same reason, as `audit-read-v1`'s theFEEDCANBEINCOMPLETE.
+
+    whatITDOESNOTCLOSE:
+      - >-
+        *** THE UNFILTERED FEED IS BOUNDED BY AN INDEX AND BY NOTHING ELSE, AND NO WINDOW GUARDS
+        IT. *** If the ordering index is dropped, renamed or has its column order changed, the
+        unfiltered feed reverts to a full scan with a temp b-tree — and it is EXEMPT from the
+        window, so nothing refuses the request. THIS IS THE SHAPE THAT LOOKS SAFEST AND IS LEAST
+        GUARDED. It needs a test that asserts the access path, not one that asserts the answer.
+      - >-
+        A WINDOW BOUNDS THE WALK; IT DOES NOT MAKE A FILTER SELECTIVE. A filter matching MOST rows
+        in the window still walks the whole window. THE GUARANTEE IS "AT MOST THE WINDOW'S
+        RECORDS", NEVER "AT MOST page_size" — and a reader who takes the second reading will be
+        surprised by a dense filter.
+      - >-
+        THE ORGANIZATION FEED'S `action_id` FILTER IS BOUNDED TO ONE ORGANIZATION'S RECORDS IN THE
+        WINDOW, which is an improvement and not an index. A single very active Organization is
+        still a walk of its own slice.
+      - >-
+        *** `core-agent` NAMED A REMAINING UNBOUNDED SHAPE AND I HAVE NOT READ ITS REPORT. *** The
+        four items above are derived from the rule rather than transcribed from that measurement,
+        so they may not be the same list. RECONCILE THIS SECTION AGAINST core-agent's finding
+        before accepting the contract; if they disagree, the measurement is right and this is what
+        moves.
+
+    theCHANGECLASS:
+      ruling: "BREAKING under API_STANDARD.md §6 — it narrows the set of accepted requests."
+      whatISOWED: >-
+        A DECISION RECORD, per `.claude/rules/architecture.md` §1, and it is the Team Lead's. This
+        contract is `status: accepted` with a deployed consumer.
+      theDEPLOYMENTORDERING_ANDITISTHESAMESHAPEASON7: >-
+        *** THE CONSOLE MUST SEND WINDOWS ON ITS FILTERED QUERIES BEFORE CORE REFUSES REQUESTS
+        WITHOUT THEM. *** A client sending bounds a server ignores is harmless; a server refusing
+        requests the deployed client still makes turns the operator's own audit screens into
+        `invalid_argument`. Reversed, this breaks the console for the population that would have
+        to diagnose it.
+
   whyThisBLOCKEXISTS: >-
     THE CONTRACT ACCEPTED TWO TIMESTAMP PARAMETERS AND DEFINED NEITHER. The schema covers response
     shapes only, so `since` and `until` had no stated format anywhere; the console inferred RFC 3339
@@ -320,6 +472,11 @@ operations:
     request: >-
       Query parameters `page_size`, `cursor`, `actor_principal_id`, `action_id`, `since` and `until`
       only. Every other parameter is refused with invalid_argument by the class (P2).
+      *** A BOUNDED TIME WINDOW — BOTH `since` AND `until`, SPAN AT MOST 31 DAYS — IS REQUIRED
+      WHENEVER `actor_principal_id` OR `action_id` IS PRESENT, AND IS NOT REQUIRED OTHERWISE. ***
+      Neither filter is served by an index prefix, so each is tested row by row and a rare value
+      costs a full walk. See theTimeWindow.theMANDATORYWINDOW for the measurement, the arithmetic
+      and what it does not close.
     response: { schemaRef: "urn:dudo:schema:platform-audit-read:1#/$defs/platformFeedOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, rate_limited, quota_exceeded, unavailable]
@@ -356,7 +513,13 @@ operations:
       it is the view an operator handling a support case actually needs.
     permission: core.platform-audit.read
     scope: platform
-    request: "Path parameter `organization_id`; query parameters `page_size`, `cursor`, `action_id`, `since`, `until`."
+    request: >-
+      Path parameter `organization_id`; query parameters `page_size`, `cursor`, `action_id`,
+      `since`, `until`.
+      *** A BOUNDED TIME WINDOW IS REQUIRED WHENEVER `action_id` IS PRESENT, AND IS NOT REQUIRED
+      OTHERWISE. `organization_id` IS EXEMPT AND THAT IS NOT A CONCESSION — it is a PATH parameter
+      served by an index prefix, so it is a seek rather than a per-row test. *** See
+      theTimeWindow.theMANDATORYWINDOW.
     response: { schemaRef: "urn:dudo:schema:platform-audit-read:1#/$defs/organizationFeedOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
@@ -491,6 +654,27 @@ testRequirements:
       THE NEGATIVE CONTROL: remove `record_id` from the sort key and from the cursor anchor, and
       this test must go RED. If it stays green, the fixture's timestamps are not actually identical
       and the test is proving something else.
+  theMandatoryWindow:
+    - >-
+      A FILTERED REQUEST WITHOUT A WINDOW IS REFUSED. `actor_principal_id` alone, `action_id`
+      alone, `since` alone and `until` alone each return `invalid_argument` with
+      `time_window_required`. HALF A WINDOW IS NOT A WINDOW and is the case a suite skips.
+    - "A span of 32 days is refused with `time_window_too_wide`; 31 days exactly is accepted. Assert the boundary, not a value in the middle."
+    - "An inverted window is refused with `time_window_inverted`, NOT answered with an empty page. An empty page for a malformed question is the silent-narrowing failure in another costume."
+    - >-
+      *** THE EXEMPTION HOLDS: AN UNFILTERED REQUEST WITH NO WINDOW SUCCEEDS *** — on BOTH feeds,
+      and on the Organization feed with only its path parameter. A suite that requires the window
+      everywhere would pass this contract's prose and break the one question the feed exists to
+      answer.
+    - >-
+      THE ACCESS PATH IS ASSERTED, NOT THE ANSWER. The unfiltered feed reads at most one page's
+      rows; a filtered windowed request reads at most the window's records. ASSERT ROWS READ,
+      because every other test here passes identically against a full table scan that returns the
+      right 25 rows — which is exactly the state that measured 49 requests to exhaustion.
+    - >-
+      THE CONSTRUCTED FAILING INPUT: remove the ordering index and the unfiltered feed's rows-read
+      assertion must go RED. It is the shape the window does not guard, it is exempt by design,
+      and nothing else in this suite would notice it regressing.
   audit:
     - "Both routes write a platform-operator record. A caller with no platform_operator row writes NONE."
     - "The Organization feed writes a tenant-side record into the named Organization on EVERY call, including one that returns an empty page."
@@ -529,3 +713,18 @@ openQuestions:
       party being audited, which platform-operator-v1's auditModel already names as insufficient.
       It belongs to the organization-structure slice, alongside OD-2.
     blocks: "A customer's ability to see what the platform did to their account. Not this contract."
+  - id: PA-4
+    question: >-
+      THE 31-DAY SPAN IS CORRECT FOR ONE OR TWO OPERATORS AND WRONG FOR TEN. A window's worst-case
+      row count is (operators × 300 × days), because the per-principal ceiling of 600 row-writes
+      at 2 per record caps one operator at 300 records a UTC day. At two operators, 31 days is
+      18,600 rows and ~268 requests against the 5,000,000/day allowance. AT TEN OPERATORS IT IS
+      93,000 ROWS AND ~53 REQUESTS — worse than the 49 that produced the finding.
+    recommendation: >-
+      RE-DERIVE THE SPAN WHEN THE OPERATOR POPULATION CHANGES, using the arithmetic in
+      theTimeWindow.theMANDATORYWINDOW rather than re-measuring. The lever is the constant, which
+      is the whole reason a window was chosen over an index — `0030`: the free tier may cost us
+      configuration, never schema. IF NARROWING THE SPAN EVER MAKES THE FEED UNUSABLE, THAT IS THE
+      POINT AT WHICH THE INDEX'S 2 → 5 ROW-WRITES BECOMES THE BETTER TRADE, and it should be
+      argued then rather than assumed now.
+    blocks: "Nothing at one or two operators. It is a number with a stated expiry rather than a constant."
