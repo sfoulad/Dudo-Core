@@ -107,7 +107,15 @@ const GRANT_CARRYING_FIELD_NAMES: readonly string[] = Object.freeze([
 export function buildBootstrapBoundsSuite(make: MakePlatformWorld = createPlatformWorld): Suite {
   const suite = new Suite('Platform — the bootstrap exception to 0007 D11 (0025 decision 4)');
 
-  suite.test('the onboarding request declares exactly four fields and closes the object', () => {
+  suite.test('every field on the onboarding request is argued, and the fifth is optional', () => {
+    // =====================================================================================
+    // FOUR BECAME FIVE ON 2026-09-07, AND THE PIN DEMANDED THE ARGUMENT RATHER THAN THE COUNT.
+    // =====================================================================================
+    //
+    // This case exists so a field cannot join this request silently — it is bound 2 and bound 3's
+    // tripwire, and `0025` names bound 2 as the one most likely to erode. **Bumping "four" to
+    // "five" would have been exactly the repair it was built to prevent**, so the fields are named
+    // with their reasons and a new one has to be written down here.
     const schema = readSchema('organization-onboarding-v1.schema.json');
     const input = schema.$defs?.onboardOrganizationInput;
     assertTrue('the input definition exists', input !== undefined, 'onboardOrganizationInput is absent');
@@ -117,17 +125,75 @@ export function buildBootstrapBoundsSuite(make: MakePlatformWorld = createPlatfo
       input!.additionalProperties,
       false,
     );
+
+    const declaredFields: Readonly<Record<string, string>> = {
+      admin_identifier: 'the first admin\'s login identifier, and the KDF salt the console used',
+      template_id: 'which Template the Organization adopts. Validated before any capacity is reserved',
+      first_workspace_name: 'the first Workspace\'s name. Accepted, validated and discarded — 0002_business.sql has no name column',
+      derived_value: 'the console\'s KDF output. NOT a password; 0015 §D holds through onboarding',
+      display_name:
+        'ADDED 2026-09-07 by 0031 and organization-identity-v1 — the Organization\'s own name, ' +
+        'as opposed to the first Workspace\'s. **OPTIONAL ON THE WRITE PATH DELIBERATELY**: the ' +
+        'console ships before the server can require it, and a server requiring a field the ' +
+        'client does not send is an onboarding outage rather than a validation improvement',
+    };
+    const actual = Object.keys(input!.properties ?? {}).sort();
     assertEqual(
-      'the declared properties are exactly the four',
-      Object.keys(input!.properties ?? {}).sort().join(','),
-      'admin_identifier,derived_value,first_workspace_name,template_id',
+      `${ISOLATION} every field on this request is named here with why it may be sent`,
+      actual.filter((field) => !(field in declaredFields)).join(','),
+      '',
     );
     assertEqual(
-      'and all four are required',
+      'and every field named here is still declared — a removal is also a change to argue',
+      Object.keys(declaredFields).filter((field) => !actual.includes(field)).join(','),
+      '',
+    );
+
+    // ---- THE FOUR ORIGINALS ARE STILL REQUIRED. An optional `admin_identifier` would be an
+    // Organization created with no way in.
+    assertEqual(
+      'the four original fields are all still required',
       [...(input!.required ?? [])].sort().join(','),
       'admin_identifier,derived_value,first_workspace_name,template_id',
     );
   });
+
+  suite.test(
+    'ON-7 IS OWED: `display_name` is still optional, so the nameless set is NOT closed at three',
+    () => {
+      // =====================================================================================
+      // A TRIPWIRE THAT FIRES WHEN THE WORK IS DONE, WHICH IS THE CHEAPEST KIND OF REMINDER.
+      // =====================================================================================
+      //
+      // `organization-identity-v1` claims *"the nameless set is closed at three"* — the three
+      // Organizations that predate the field. **THAT CLAIM IS FALSE WHILE `display_name` IS
+      // OPTIONAL**, because every onboarding may add a fourth nameless Organization. The set is
+      // open until the field is required.
+      //
+      // The tightening is `ON-7`, owned by the change that follows the console's release. Nothing
+      // makes an owed tightening go red — `workflow.md` §12's whole subject — so this asserts the
+      // state that makes the claim false, and **goes red on the day the field becomes required.**
+      // Whoever sees it red is the person who just discharged ON-7, and the failure message tells
+      // them what else to close.
+      const input = readSchema('organization-onboarding-v1.schema.json').$defs
+        ?.onboardOrganizationInput;
+      assertTrue('the input definition exists', input !== undefined, 'onboardOrganizationInput is absent');
+      assertTrue(
+        'display_name is declared, or this case is asserting nothing',
+        Object.keys(input!.properties ?? {}).includes('display_name'),
+        'display_name has left the request; if that is deliberate this case should go with it',
+      );
+      assertTrue(
+        'display_name is still OPTIONAL — when this goes red, ON-7 has been discharged',
+        !(input!.required ?? []).includes('display_name'),
+        'display_name is now REQUIRED. That is ON-7 done, and three things follow: ' +
+          "organization-identity-v1's claim that the nameless set is closed at three is now TRUE " +
+          'and can be asserted rather than deferred; the onboarding field pin above should move ' +
+          'display_name into its required list; and this case has served its purpose and should ' +
+          'be deleted rather than inverted.',
+      );
+    },
+  );
 
   suite.test('no platform request input declares a field that could carry a tenant grant', () => {
     // BOUND 2 AND BOUND 3'S TRIPWIRE, applied across every platform contract rather than only to

@@ -4,9 +4,22 @@
  * ===========================================================================================
  *
  * **THE MECHANICAL DETECTOR THAT WAS AVAILABLE AND UNBUILT.** `7254f4b` changed one side of that
- * pair and not the other: encode joined with a raw NUL byte, decode split on the literal
- * six-character string `\u0000`. Page 1 worked, page 2 was unreachable on both feeds, `typecheck`
- * was exit 0, and every suite was green. It was caught by a human asking for page 2.
+ * pair and not the other: encode joined with a raw NUL byte, decode split on a six-character
+ * string. Page 1 worked, page 2 was unreachable on both feeds, `typecheck` was exit 0, and every
+ * suite was green. It was caught by a human asking for page 2.
+ *
+ * **THE EXACT SPELLING MATTERS, AND THIS FILE HAD IT WRONG.** `7254f4b` wrote a split on a
+ * DOUBLED backslash followed by `u0000`, which JavaScript reads as six characters — hence the
+ * defect. A SINGLE backslash followed by `u0000` denotes one NUL and is perfectly correct code.
+ * **The two differ by one byte in the source and by everything at runtime**, and until 2026-09-07
+ * the source reader below could not tell them apart: it read the captured text AS WRITTEN, so it
+ * called the correct spelling broken too. `unescapeSourceText` is the repair, and the six-case
+ * table at the end of this file is the constructed evidence that it discriminates.
+ *
+ * The sentence this header carried until 2026-09-07 named the wrong spelling: it said `7254f4b`
+ * split on `\u0000`, which is the SINGLE-backslash form and denotes one NUL — correct
+ * code, not the defect. The commit's own diff is the source: it wrote the doubled form. **Getting
+ * this wrong in prose is harmless; the reader below encoded the same confusion and was not.**
  *
  * ===========================================================================================
  * WHY BOTH CHECKS, AND WHY NEITHER SUBSUMES THE OTHER
@@ -85,10 +98,85 @@ function readableSource(): string {
 }
 
 /**
+ * ===========================================================================================
+ * *** THE ESCAPE RESOLVER, AND WHY READING SOURCE "AS WRITTEN" WAS A FALSE-POSITIVE MACHINE. ***
+ * ===========================================================================================
+ *
+ * Both readers capture a run of SOURCE TEXT and must answer what STRING that text denotes. Until
+ * 2026-09-07 they answered by taking the characters literally, which is right for a raw byte and
+ * **wrong for every escape** — so a correct single-backslash escape was reported as six characters
+ * disagreeing with a one-character encode.
+ *
+ * **THAT IS A CHECK THAT MANUFACTURES A DEFECT, WHICH IS THE HARDER DIRECTION TO CATCH.** A check
+ * finding nothing is at least suspicious. A check finding something feels like it is working, and
+ * nobody re-derives a red — so it would have been believed, and the natural way to make it green
+ * again is to change the code it is pointing at.
+ *
+ * **IT WAS ABOUT TO SPEAK.** `platform-route-handlers.ts` holds three raw NUL bytes, `file(1)`
+ * therefore classifies it as `data`, and plain `grep` answers every search in it with silence and
+ * exit 1 — indistinguishable from a clean result. The fix for that is to write the bytes as
+ * escapes, and **the moment `encodeAuditAnchor` does so, three cases in this file go red on code
+ * that is correct.** Found before it spoke, by probing the reader rather than by reading it.
+ *
+ * Returns `null` on an escape it does not understand, which the floor turns into a loud failure.
+ * **A resolver that silently passed an unknown escape through would restore the original defect
+ * in a new costume** — an unrecognised notation compared against a recognised one.
+ */
+export function unescapeSourceText(text: string): number[] | null {
+  const codes: number[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index]!;
+    if (character !== '\\') {
+      codes.push(character.charCodeAt(0));
+      index += 1;
+      continue;
+    }
+    const next = text[index + 1];
+    if (next === undefined) {
+      return null;
+    }
+    const simple: Record<string, number> = {
+      '0': 0,
+      n: 10,
+      r: 13,
+      t: 9,
+      b: 8,
+      f: 12,
+      v: 11,
+      '\\': 92,
+      "'": 39,
+      '"': 34,
+      '`': 96,
+    };
+    if (next === 'u' || next === 'x') {
+      const width = next === 'u' ? 4 : 2;
+      const digits = text.slice(index + 2, index + 2 + width);
+      if (!new RegExp(`^[0-9a-fA-F]{${String(width)}}$`).test(digits)) {
+        // `\u{1F600}` and a truncated escape both land here. Neither is understood, and an
+        // unknown escape is reported rather than guessed at.
+        return null;
+      }
+      codes.push(Number.parseInt(digits, 16));
+      index += 2 + width;
+      continue;
+    }
+    if (Object.hasOwn(simple, next)) {
+      codes.push(simple[next]!);
+      index += 2;
+      continue;
+    }
+    return null;
+  }
+  return codes;
+}
+
+/**
  * The separator `encodeAuditAnchor` emits, as character codes.
  *
- * It is the literal text between the two interpolations in the function's template literal, so
- * whatever byte sits there is what a cursor will carry — including a byte no editor renders.
+ * It is the text between the two interpolations in the function's template literal, resolved
+ * through `unescapeSourceText`, so a raw byte and its escape are the same answer — which is what
+ * a cursor will actually carry.
  */
 export function encodeSeparator(source: string): number[] | null {
   const body = /function encodeAuditAnchor\([^)]*\)[^{]*\{\s*return `([\s\S]*?)`;/.exec(source);
@@ -99,7 +187,7 @@ export function encodeSeparator(source: string): number[] | null {
   if (between === null) {
     return null;
   }
-  return [...between[1]!].map((character) => character.charCodeAt(0));
+  return unescapeSourceText(between[1]!);
 }
 
 /**
@@ -122,13 +210,17 @@ export function decodeSeparator(source: string): number[] | null {
   }
   const literal = /\.split\('([\s\S]*?)'\)/.exec(body[1]!);
   if (literal !== null) {
-    // A quoted literal is taken as WRITTEN, not as JavaScript would parse it — `'\u0000'` in
-    // source is six characters here, which is exactly the value `7254f4b` split on and exactly
-    // the disagreement this check exists to find.
-    return [...literal[1]!].map((character) => character.charCodeAt(0));
+    // RESOLVED THE WAY JAVASCRIPT WOULD RESOLVE IT, which is the whole point: a single-backslash
+    // escape denotes one NUL and must AGREE with a raw-byte encode, while the doubled backslash
+    // `7254f4b` actually wrote denotes six characters and must DISAGREE. Reading the text as
+    // written cannot tell those apart and called both of them broken.
+    return unescapeSourceText(literal[1]!);
   }
   return null;
 }
+
+// The reader this replaced took the captured text literally, so it read the escape
+// `\u0000` as six characters rather than as the one NUL it denotes.
 
 function record(overrides: Partial<PlatformAuditRecord> = {}): PlatformAuditRecord {
   return {
@@ -287,41 +379,114 @@ export function buildAuditAnchorSuite(): Suite {
     assertEqual('and it is NUL, which neither component can contain', encodeSeparator(source)![0], 0);
   });
 
-  suite.test('THE READER\'S OWN FAILING INPUT: a disagreeing pair is reported', () => {
-    // `7254f4b`'s diff was one line: a raw byte replaced by a six-character escape. Below,
-    // `encode` keeps the raw byte and `decode` splits on the literal escape — that commit
-    // verbatim. A reader reporting these as agreeing is the reader that let it through.
-    const broken =
+  suite.test('THE READER\'S OWN FAILING INPUTS: six pairs, and it gets each one right', () => {
+    // =====================================================================================
+    // *** THE READER IS A CHECKER, SO IT NEEDS ITS OWN KNOWN-FAILING INPUTS. ***
+    // =====================================================================================
+    //
+    // Before 2026-09-07 this case fed the reader ONE pair and asserted it was reported as
+    // disagreeing — and the pair it fed was `.split('` + one backslash + `u0000')`, which
+    // denotes ONE NUL and is CORRECT CODE. So the case asserted that the reader flags correct
+    // code as broken, and it was green. **The instrument's false positive had been written down
+    // as the expected behaviour**, which is the most durable way for one to survive.
+    //
+    // THE TWO SPELLINGS ARE BUILT FROM A CHARACTER CODE, NOT TYPED. They differ by a single
+    // backslash, an editor may normalise one into the other, and the whole defect lives in that
+    // difference — so neither is written as a literal anywhere in this file.
+    const BACKSLASH = String.fromCharCode(92);
+    const NUL = String.fromCharCode(0);
+    const SINGLE = `'${BACKSLASH}u0000'`;
+    const DOUBLED = `'${BACKSLASH}${BACKSLASH}u0000'`;
+
+    const pair = (encodeBetween: string, decodeSplit: string): string =>
       'function encodeAuditAnchor(record: PlatformAuditRecord): string {\n' +
       '  return `${record.occurredAt}' +
-      String.fromCharCode(0) +
+      encodeBetween +
       '${record.actionRecordId}`;\n' +
       '}\n\n' +
       'function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {\n' +
-      "  const parts = anchor.split('\\u0000');\n" +
+      `  const parts = anchor.split(${decodeSplit});\n` +
       '  return null;\n' +
       '}\n';
 
-    const encode = encodeSeparator(broken);
-    const decode = decodeSeparator(broken);
-    assertEqual('encode still emits the raw NUL', JSON.stringify(encode), JSON.stringify([0]));
-    assertTrue(
-      `${ISOLATION} so the comparison REPORTS the disagreement`,
-      JSON.stringify(encode) !== JSON.stringify(decode),
-      'the reader reports agreement on the pair that broke both audit feeds',
-    );
+    // Each row states what is TRUE of the pair at runtime, independently of what the reader
+    // says. `agree` means the two sides really would carry the same separator.
+    const rows: Array<{ label: string; encode: string; decode: string; agree: boolean | 'floor' }> =
+      [
+        {
+          label: 'raw byte / fromCharCode(0) — what the file holds today',
+          encode: NUL,
+          decode: 'String.fromCharCode(0)',
+          agree: true,
+        },
+        {
+          label: 'raw byte / SINGLE backslash escape — correct code, and the old false positive',
+          encode: NUL,
+          decode: SINGLE,
+          agree: true,
+        },
+        {
+          label: 'raw byte / DOUBLED backslash — 7254f4b verbatim, six characters, the defect',
+          encode: NUL,
+          decode: DOUBLED,
+          agree: false,
+        },
+        {
+          label: 'escaped encode / fromCharCode(0) — the NUL-removal fix, correct',
+          encode: `${BACKSLASH}u0000`,
+          decode: 'String.fromCharCode(0)',
+          agree: true,
+        },
+        {
+          label: 'a real space / fromCharCode(0) — a genuine disagreement',
+          encode: ' ',
+          decode: 'String.fromCharCode(0)',
+          agree: false,
+        },
+        {
+          label: 'raw byte / a notation the reader does not know',
+          encode: NUL,
+          decode: 'SEPARATOR',
+          agree: 'floor',
+        },
+      ];
 
-    // THE MIRROR: two notations for the SAME byte are accepted, so it is not passing by
-    // rejecting everything.
-    const agreeing = broken.replace(
-      "anchor.split('\\u0000')",
-      'anchor.split(String.fromCharCode(0))',
-    );
-    assertEqual(
-      'a pair written in two notations for the same byte is accepted',
-      JSON.stringify(encodeSeparator(agreeing)),
-      JSON.stringify(decodeSeparator(agreeing)),
-    );
+    for (const row of rows) {
+      const source = pair(row.encode, row.decode);
+      const encode = encodeSeparator(source);
+      const decode = decodeSeparator(source);
+      if (row.agree === 'floor') {
+        // NOT "the reader disagrees" — `null` is the floor firing, and the two are different
+        // outcomes. A reader that shrugged and returned a value would be compared against a
+        // real one, which is the original defect wearing a new notation.
+        assertTrue(
+          `${ISOLATION} ${row.label}: reported as NOT UNDERSTOOD rather than as a value`,
+          decode === null,
+          `the reader returned ${JSON.stringify(decode)} for a notation it does not implement`,
+        );
+        continue;
+      }
+      assertTrue(
+        `${row.label}: both sides were read at all`,
+        encode !== null && decode !== null,
+        `encode=${JSON.stringify(encode)} decode=${JSON.stringify(decode)} — a null here means ` +
+          'the floor fired on a pair this case expects a verdict for',
+      );
+      assertEqual(
+        `${ISOLATION} ${row.label}`,
+        JSON.stringify(encode) === JSON.stringify(decode) ? 'agree' : 'disagree',
+        row.agree ? 'agree' : 'disagree',
+      );
+      if (row.agree) {
+        // AND THEY AGREE ON THE RIGHT BYTE. Two sides agreeing on a space would satisfy the
+        // line above; the separator's safety argument is about NUL specifically.
+        assertEqual(
+          `${row.label}: and the byte they agree on is NUL`,
+          JSON.stringify(encode),
+          JSON.stringify([0]),
+        );
+      }
+    }
   });
 
   // =========================================================================================

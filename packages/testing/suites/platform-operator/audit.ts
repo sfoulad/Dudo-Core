@@ -164,6 +164,11 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
           'platform.organizations.audit.list': 'organization — the Organization whose trail was read',
           'platform.organizations.create': 'organization — the Organization it created, and nothing about what it contains',
           'platform.organizations.read': 'organization — the Organization it was asked about, and no field of it',
+          // ORGANIZATION, and the log records WHICH Organization was edited and not WHAT was set.
+          // A registration number in the operator log would be tenant content on the platform
+          // side of the boundary — `0025` D5's line, on the one route that could most easily
+          // cross it.
+          'platform.organizations.identity.update': 'organization — the Organization edited, never the values written',
           'platform.organizations.members.resolve': 'principal — the person asked about, which is what makes the log answer "who has been asking about our staff"',
           'platform.templates.create': 'none — a Template is tenant-independent configuration and names neither an Organization nor a principal, so template_id is not one of the two kinds D5 permits',
           'platform.templates.list': 'none — an enumeration, as above',

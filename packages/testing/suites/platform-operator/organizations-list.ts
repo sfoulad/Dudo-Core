@@ -31,6 +31,7 @@ import {
   SESSION_ADMIN,
   createPlatformWorld,
   expectedInvalidArgument,
+  seedOrganization,
 } from '../../harness/platform-fixture.ts';
 import type { MakePlatformWorld } from '../../harness/platform-fixture.ts';
 import { PLATFORM_DEFAULT_PAGE_SIZE } from '../../../../platform/core/platform/platform-routes.ts';
@@ -110,6 +111,16 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
           'ADDED 2026-09-05 for organization-detail-v1. One Organization id in; its Template ' +
           'reference and a member COUNT out. It returns a count and never a member list, so it ' +
           'cannot be used to enumerate the people in a tenant',
+        findOrganizationIdentity:
+          'ADDED 2026-09-07 for organization-identity-v1. One Organization id in, its identity ' +
+          'record out. **It reads the Organization\'s OWN attributes — display name, commercial ' +
+          'registration, VAT — and no row belonging to anyone inside it.** A control-plane record ' +
+          'about a tenant is not tenant data, which is the distinction platform-operator-store.ts ' +
+          'has to state honestly: "no tenant data" is exact, "no tenant identifier" is not',
+        updateOrganizationIdentity:
+          'ADDED 2026-09-07. The write half, and it takes a reservation — so it cannot be reached ' +
+          'without capacity having been charged. It replaces the identity record wholesale rather ' +
+          'than patching fields, which is what makes the audit record able to name what changed',
         revokeOperator:
           'ADDED 2026-09-05 for platform-operators-v1. **THE ONLY WRITE ON THIS PORT BESIDES THE ' +
           'ACTION LOG**, and it is a CONDITIONAL DELETE rather than a read-then-write: it takes a ' +
@@ -167,6 +178,89 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
       world.close();
     }
   });
+
+  suite.test(
+    'A NAMELESS ORGANIZATION IS STILL LISTED, AND IS STILL READABLE — the population the list exists to show',
+    async () => {
+      // =====================================================================================
+      // *** THIS ASSERTS A DEFECT THAT WAS AVOIDED RATHER THAN ONE THAT HAPPENED, AND THAT IS
+      // WHY IT IS WORTH MORE THAN THE USUAL CASE. ***
+      // =====================================================================================
+      //
+      // `0015` added `display_name` as a NULLABLE column, so every Organization created before it
+      // has none — **including the three in production.** `core-agent` read that field with a
+      // permissive reader rather than a strict one, deliberately: a strict read collapses null and
+      // empty into a failure, and would have made **every Organization predating `0015`
+      // unlistable — the exact population the operator console exists to show.**
+      //
+      // Nothing stood over that judgement. The next person to "tidy" the permissive read into a
+      // strict one gets a green suite and an empty console, and finds out in production against
+      // the only three rows that exist. **This case turns the judgement into a mechanism**, which
+      // is the same shape as the migration probe that models the pre-migration rows by inserting
+      // before and reading after.
+      //
+      // IT ASSERTS THE ROW SURVIVES, NOT THAT THE VALUE IS NULL. A case asserting `display_name`
+      // is always null would be pinning a placeholder — it stopped being true the moment the
+      // update route could set one, and it would have had to be deleted rather than kept.
+      const world = await make();
+      try {
+        const nameless = 'org_nameless_000001';
+        seedOrganization(world.control, nameless);
+        // EXPLICITLY NULL rather than relying on the seeder's default, so the case still holds if
+        // `seedOrganization` ever starts supplying a name.
+        world.control.raw
+          .prepare('UPDATE organization SET display_name = NULL WHERE organization_id = ?')
+          .run(nameless);
+
+        const page = expectOk(
+          'the list is served',
+          await world.call('platform.organizations.list', { sessionId: SESSION_ADMIN }),
+        ) as ListAnswer;
+
+        const listed = page.data.find((row) => row.organization_id === nameless);
+        assertTrue(
+          `${ISOLATION} an Organization with NO display_name still appears in the list`,
+          listed !== undefined,
+          'a nameless Organization is missing from the enumeration. A strict read of `display_name` ' +
+            'would do exactly this, and it would hide every Organization created before 0015 — ' +
+            `which today is all three in production: ${JSON.stringify(page.data)}`,
+        );
+        assertEqual(
+          'and the field is present and null rather than absent, so a client can branch on it',
+          (listed as Record<string, unknown>).display_name,
+          null,
+        );
+
+        // AND THE DETAIL ROUTE TOO. The list and the read are separate handlers reading the same
+        // column; one being permissive says nothing about the other.
+        const detail = expectOk(
+          `${ISOLATION} and the detail route serves it rather than failing`,
+          await world.call('platform.organizations.read', {
+            sessionId: SESSION_ADMIN,
+            pathParams: { organization_id: nameless },
+          }),
+        ) as Record<string, unknown>;
+        assertEqual('the detail carries the same null', detail.display_name, null);
+
+        // THE CONTROL. A NAMED Organization also lists, so the case above is about tolerating
+        // null rather than about the list returning everything regardless.
+        world.control.raw
+          .prepare('UPDATE organization SET display_name = ? WHERE organization_id = ?')
+          .run('Alpha Trading Company', ORG_ALPHA);
+        const withName = expectOk(
+          'the list is served again',
+          await world.call('platform.organizations.list', { sessionId: SESSION_ADMIN }),
+        ) as ListAnswer;
+        assertEqual(
+          'a NAMED Organization reports its name, so the reader is reading and not ignoring',
+          withName.data.find((row) => row.organization_id === ORG_ALPHA)?.display_name,
+          'Alpha Trading Company',
+        );
+      } finally {
+        world.close();
+      }
+    },
+  );
 
   suite.test('the default page size is 25 and pages are keyset-anchored', async () => {
     const world = await make();

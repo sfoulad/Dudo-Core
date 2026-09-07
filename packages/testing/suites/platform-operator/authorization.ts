@@ -123,6 +123,12 @@ function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
     async revokeOperator() {
       return ok(null);
     },
+    async findOrganizationIdentity() {
+      return ok(null);
+    },
+    async updateOrganizationIdentity(_organizationId, identity) {
+      return ok(identity);
+    },
     async recordAction() {
       return ok(undefined);
     },
@@ -369,7 +375,7 @@ export function buildPlatformAuthorizationSuite(
     });
   });
 
-  suite.test('the envelope is exactly eight platform-scope permissions, and refuses a ninth', () => {
+  suite.test('the envelope is exactly nine platform-scope permissions, and refuses a tenth', () => {
     // SIX BECAME SEVEN ON 2026-09-05, and the guard is what made that a decision rather than a
     // side effect: adding `core.platform-audit.read` threw at module load until
     // `PLATFORM_ROUTE_PERMISSION_COUNT` was edited. Its argument is that `platform-audit-read-v1`
@@ -386,17 +392,18 @@ export function buildPlatformAuthorizationSuite(
     // count guard compares the envelope's size against the stated constant, and 7 == 7 was true
     // of a table that had eight routes' worth of permissions. The check that caught it is `and
     // the separation is real: the envelope is exactly what the ROUTES declare`.
-    assertEqual('eight, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 8);
+    assertEqual('nine, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 9);
     assertEqual(
       'and every one is declared at platform scope',
       PLATFORM_PERMISSION_ENVELOPE.declared.filter((entry) => entry.scope !== 'platform').length,
       0,
     );
     assertEqual(
-      'they are the eight the platform contracts name',
+      'they are the nine the platform contracts name',
       PLATFORM_PERMISSION_ENVELOPE.declared.map((entry) => entry.permissionId).sort().join(','),
       'core.credential.reset,core.organization.create,core.organization.list,' +
-        'core.platform-audit.read,core.principal.revoke-platform-scope,core.template.create,' +
+        'core.platform-audit.read,core.platform-organization.update,' +
+        'core.principal.revoke-platform-scope,core.template.create,' +
         'core.template.list,core.template.read',
     );
     assertEqual('the envelope is attributed to platform, not to an App', PLATFORM_PERMISSION_ENVELOPE.appId, 'platform');
@@ -492,12 +499,17 @@ export function buildPlatformAuthorizationSuite(
         // demanded it. A permission left here after its route ships is a console rendering
         // nothing; the entry going stale in the other direction is caught by the same assertion.
         // AND `core.principal.revoke-platform-scope` IS DELETED TOO, later the same day, when
-        // `platform.operators.revoke` shipped. **The map is now empty, and emptying it is the
-        // outcome it was built for** — each deletion is the one edit here that needs no argument.
+        // `platform.operators.revoke` shipped. **Emptying this map is the outcome it was built
+        // for** — each deletion is the one edit here that needs no argument.
         //
-        // AN EMPTY MAP IS NOT A DEAD CHECK. The assertion below still runs against the permanent
-        // map, and a NEW pending permission arriving with no entry still fails. What has gone
-        // away is the backlog, not the mechanism.
+        // *** AND IT DID NOT STAY EMPTY, WHICH IS THE MECHANISM WORKING RATHER THAN A REGRESSION.
+        // *** It was empty for a day. `core.platform-organization.update` arrived on 2026-09-07
+        // and the assertion below demanded this entry rather than absorbing it.
+        // `core.platform-organization.update` PASSED THROUGH THIS MAP IN UNDER AN HOUR on
+        // 2026-09-07 — added when it was declared and granted with no route, deleted when
+        // `platform.organizations.identity.update` shipped. **Both edits were demanded by the
+        // assertion below rather than remembered**, which is the whole mechanism: the map is a
+        // waiting room, and the exit is the interesting door.
       };
 
       const unreachable = held.filter((permissionId) => !reachable.includes(permissionId)).sort();
@@ -543,10 +555,11 @@ export function buildPlatformAuthorizationSuite(
       // moved into this list the day its routes shipped, which is the whole point of reporting
       // reachable rather than held: a console renders exactly the actions the operator can take.
       assertEqual(
-        'whoami reports the reachable eight and not the held ten',
+        'whoami reports the reachable nine and not everything the role holds',
         [...answer.permissions].sort().join(','),
         'core.credential.reset,core.organization.create,core.organization.list,' +
-          'core.platform-audit.read,core.principal.revoke-platform-scope,core.template.create,' +
+          'core.platform-audit.read,core.platform-organization.update,' +
+          'core.principal.revoke-platform-scope,core.template.create,' +
           'core.template.list,core.template.read',
       );
     } finally {

@@ -449,10 +449,45 @@ export function buildMembershipWriteGuardSuite(
     // the triggers absent or inert. Layer 2 does not depend on that migration at all.
     const world = await make({ withMutualExclusionTriggers: false });
     try {
-      const triggers = world.control.raw
-        .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")
+      // ===================================================================================
+      // `0010`'s TRIGGERS SPECIFICALLY, NOT "NO TRIGGERS AT ALL".
+      // ===================================================================================
+      //
+      // This counted every trigger in the database and required zero, which was correct while
+      // `0010` was the only migration that created any. **`0015` creates four of its own** — the
+      // commercial-registration and VAT coherence guards on `organization` — and the case went
+      // red on a database that was in exactly the state it wanted.
+      //
+      // The property was always about the MUTUAL-EXCLUSION triggers; the old assertion was a
+      // proxy that happened to be equivalent. Naming them makes it exact, and makes the next
+      // migration that adds an unrelated trigger a non-event.
+      const mutualExclusionTriggers = world.control.raw
+        .prepare(
+          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' " +
+            "AND (name LIKE '%excludes_membership%' OR name LIKE '%excludes_platform_operator%')",
+        )
         .all() as { n: number }[];
-      assertEqual('the fixture really has no triggers', triggers[0].n, 0);
+      assertEqual("the fixture really has none of 0010's triggers", mutualExclusionTriggers[0].n, 0);
+
+      // THE FLOOR, because "count of things matching a pattern is zero" is also what a pattern
+      // that matches NOTHING returns. A world WITH `0010` must find all four, or the assertion
+      // above is satisfied by a typo in the LIKE clause rather than by an absent migration.
+      const withTriggers = await make();
+      try {
+        const present = withTriggers.control.raw
+          .prepare(
+            "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' " +
+              "AND (name LIKE '%excludes_membership%' OR name LIKE '%excludes_platform_operator%')",
+          )
+          .all() as { n: number }[];
+        assertEqual(
+          'and the SAME pattern finds all four when 0010 IS applied',
+          present[0].n,
+          4,
+        );
+      } finally {
+        withTriggers.close();
+      }
 
       const admission = expectOk(
         'the receipt is minted while the principal is clean',

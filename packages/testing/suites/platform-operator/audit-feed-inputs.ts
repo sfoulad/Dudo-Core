@@ -150,6 +150,12 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
   suite.test('an empty window is refused rather than answered with nothing', async () => {
     // `since >= until` selects no records, and "no records" on an audit feed is a statement a
     // caller may act on. It must mean "nothing happened", never "you asked incoherently".
+    //
+    // THE TOKEN IS `time_window_inverted` AND IT IS THE CONTRACT'S. Until 2026-09-07 these two
+    // assertions expected `must_be_after_since`, which was Core's own name and **which no contract
+    // ever published** — so a client could only have learned it by reading Core's source. Core
+    // renamed it to the published token when the window landed; this case followed the contract,
+    // which is the authority, rather than the code.
     const world = await make();
     try {
       expectError(
@@ -158,7 +164,7 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
           sessionId: SESSION_ADMIN,
           queryString: 'since=2026-09-02T00:00:00.000Z&until=2026-09-01T00:00:00.000Z',
         }),
-        expectedInvalidArgument('until', 'must_be_after_since'),
+        expectedInvalidArgument('until', 'time_window_inverted'),
       );
       // EQUAL BOUNDS TOO. `since === until` also selects nothing.
       expectError(
@@ -167,7 +173,180 @@ export function buildAuditInstantSuite(make: MakePlatformWorld = createPlatformW
           sessionId: SESSION_ADMIN,
           queryString: 'since=2026-09-01T00:00:00.000Z&until=2026-09-01T00:00:00.000Z',
         }),
-        expectedInvalidArgument('until', 'must_be_after_since'),
+        expectedInvalidArgument('until', 'time_window_inverted'),
+      );
+    } finally {
+      world.close();
+    }
+  });
+
+  // ===========================================================================================
+  // THE BOUNDED TIME WINDOW. `platform-audit-read-v1` `theMandatoryWindow`.
+  // ===========================================================================================
+  //
+  // *** THE RULE IS NOT "ALWAYS", AND A SUITE THAT ASSERTED "ALWAYS" WOULD PASS THE PROSE AND
+  // BREAK THE FEED'S PURPOSE. *** A window is required only on a request carrying a filter that
+  // no index prefix serves — `actor_principal_id` or `action_id` on the platform feed, `action_id`
+  // on the Organization feed. The unfiltered walk is already bounded to one page by the ordering
+  // index, so a window there would remove no reads and would remove *"what happened, ever"*,
+  // which is the question an audit trail exists to answer.
+  //
+  // **SO THE EXEMPTION IS ASSERTED AS HARD AS THE REQUIREMENT IS**, and the two cases below are
+  // a matched pair rather than a check and a courtesy.
+
+  suite.test('A FILTERED REQUEST WITHOUT A FULL WINDOW IS REFUSED — including half a window', async () => {
+    const world = await make();
+    try {
+      // Each row is a request that MUST be refused with `time_window_required`, and `missing`
+      // is EVERY bound the refusal should name. Half a window is an unbounded walk in one
+      // direction, which is precisely the thing being bounded — and it is the case a suite skips.
+      //
+      // *** THE COUNT IS PART OF THE ASSERTION AND WAS NOT AN OBVIOUS CALL. *** With no window at
+      // all Core names BOTH bounds, not one. A case expecting a single detail here passes only if
+      // Core stops after the first missing field, which would tell a client to add `since` and
+      // then refuse them again for `until` — two round trips to learn one rule.
+      const refused: readonly {
+        readonly query: string;
+        readonly missing: readonly string[];
+        readonly why: string;
+      }[] = Object.freeze([
+        {
+          query: 'actor_principal_id=prn_platform_admin01',
+          missing: ['since', 'until'],
+          why: 'a filter no index prefix serves, and no window at all',
+        },
+        {
+          query: 'action_id=platform.organizations.list',
+          missing: ['since', 'until'],
+          why: 'the other unserved filter, and no window at all',
+        },
+        {
+          query: 'actor_principal_id=prn_platform_admin01&since=2026-09-01T00:00:00.000Z',
+          missing: ['until'],
+          why: 'HALF A WINDOW — a lower bound and an unbounded walk forward',
+        },
+        {
+          query: 'actor_principal_id=prn_platform_admin01&until=2026-09-30T00:00:00.000Z',
+          missing: ['since'],
+          why: 'HALF A WINDOW the other way — an unbounded walk backward',
+        },
+      ]);
+
+      for (const entry of refused) {
+        expectError(
+          `${ISOLATION} refused: ${entry.why}`,
+          await world.call('platform.audit.list', {
+            sessionId: SESSION_ADMIN,
+            queryString: entry.query,
+          }),
+          {
+            code: 'invalid_argument',
+            message: 'The request is not valid.',
+            details: entry.missing.map((field) => ({ field, issue: 'time_window_required' })),
+          },
+        );
+      }
+
+      // AND THE POSITIVE CONTROL: the same filter WITH both bounds is accepted, so the four
+      // refusals above are about the window and not about the filter being unusable.
+      expectOk(
+        'the same filter with a complete window is accepted',
+        await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString:
+            'actor_principal_id=prn_platform_admin01' +
+            '&since=2026-09-01T00:00:00.000Z&until=2026-09-30T00:00:00.000Z',
+        }),
+      );
+    } finally {
+      world.close();
+    }
+  });
+
+  suite.test('THE SPAN BOUNDARY: 31 days exactly is accepted, 32 days is refused', async () => {
+    // THE BOUNDARY, NOT A VALUE IN THE MIDDLE. A comparison written as `>=` instead of `>` would
+    // refuse the documented maximum and pass every test that asked for 10 days and 90 days.
+    const world = await make();
+    try {
+      const since = '2026-09-01T00:00:00.000Z';
+      expectOk(
+        'a span of exactly 31 days is accepted — the documented maximum is inclusive',
+        await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString:
+            `actor_principal_id=prn_platform_admin01&since=${since}&until=2026-10-02T00:00:00.000Z`,
+        }),
+      );
+      expectError(
+        `${ISOLATION} a span of 32 days is refused`,
+        await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString:
+            `actor_principal_id=prn_platform_admin01&since=${since}&until=2026-10-03T00:00:00.000Z`,
+        }),
+        expectedInvalidArgument('until', 'time_window_too_wide'),
+      );
+      // ONE MILLISECOND OVER, because "32 days" and "31 days plus an instant" are the same side of
+      // the boundary and only the second shows the comparison is on the span rather than on a day
+      // count somebody rounded.
+      expectError(
+        'and 31 days plus one millisecond is refused too',
+        await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString:
+            `actor_principal_id=prn_platform_admin01&since=${since}&until=2026-10-02T00:00:00.001Z`,
+        }),
+        expectedInvalidArgument('until', 'time_window_too_wide'),
+      );
+    } finally {
+      world.close();
+    }
+  });
+
+  suite.test('*** THE EXEMPTION HOLDS: an UNFILTERED request with NO window succeeds, on BOTH feeds ***', async () => {
+    // =====================================================================================
+    // *** THIS IS THE CASE THAT MUST GO RED IF SOMEBODY MAKES THE WINDOW MANDATORY EVERYWHERE. ***
+    // =====================================================================================
+    //
+    // A suite carrying only the four refusals above would be satisfied by a Core that demanded a
+    // window on every request — and that Core would pass this contract's prose while breaking the
+    // one question the feed exists to answer. The requirement and the exemption are one ruling,
+    // and a suite that asserts half of it is worse than one that asserts neither, because it
+    // reads as coverage.
+    const world = await make();
+    try {
+      expectOk(
+        'the platform feed, unfiltered and unwindowed — "what happened, ever"',
+        await world.call('platform.audit.list', { sessionId: SESSION_ADMIN, queryString: '' }),
+      );
+      expectOk(
+        'and with a page size, which is not a filter',
+        await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString: 'page_size=25',
+        }),
+      );
+      // THE ORGANIZATION FEED WITH ONLY ITS PATH PARAMETER. `organization_id` is a path parameter
+      // served by an index prefix — a seek, not a test applied to every row — so it is NOT a
+      // filter for this rule's purposes, and treating it as one is the obvious wrong reading.
+      expectOk(
+        'the Organization feed with only its path parameter — "what happened to this one, ever"',
+        await world.call('platform.organizations.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString: '',
+          pathParams: { organization_id: ORG_ALPHA },
+        }),
+      );
+      // AND `since`/`until` ALONE ON AN UNFILTERED REQUEST. Half a window is refused only when a
+      // window is REQUIRED; with no unserved filter present there is nothing to bound, so a lone
+      // bound is an ordinary narrowing and is accepted. This distinguishes "half a window is
+      // always illegal" — which it is not — from "half a window does not satisfy a requirement".
+      expectOk(
+        'a lone `since` on an otherwise unfiltered request is a narrowing, not half a window',
+        await world.call('platform.audit.list', {
+          sessionId: SESSION_ADMIN,
+          queryString: 'since=2026-09-01T00:00:00.000Z',
+        }),
       );
     } finally {
       world.close();
@@ -333,11 +512,11 @@ export function buildCeilingFloorSuite(): Suite {
     },
   );
 
-  suite.test('the envelope is EIGHT, and a ninth still throws at module load', () => {
+  suite.test('the envelope is NINE, and a tenth still throws at module load', () => {
     assertEqual(
-      'eight, as PLATFORM_ROUTE_PERMISSION_COUNT states',
+      'nine, as PLATFORM_ROUTE_PERMISSION_COUNT states',
       PLATFORM_PERMISSION_ENVELOPE.declared.length,
-      8,
+      9,
     );
     // AND THE GUARD STILL BITES. The count is only a control if adding one is refused; asserting
     // the number alone would pass with the guard deleted.

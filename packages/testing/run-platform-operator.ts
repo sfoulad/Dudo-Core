@@ -59,6 +59,8 @@ import {
   buildCeilingFloorSuite,
 } from './suites/platform-operator/audit-feed-inputs.ts';
 import { buildAuditAnchorSuite } from './suites/platform-operator/audit-anchor.ts';
+import { buildAuditReadCostSuite } from './suites/platform-operator/audit-read-cost.ts';
+import { buildMemberResolveRenameSuite } from './suites/platform-operator/member-resolve-rename.ts';
 import { buildContractSatisfiabilitySuite } from './suites/contracts/satisfiability.ts';
 import { buildCredentialResetSuite } from './suites/platform-operator/credential-reset.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
@@ -154,6 +156,15 @@ async function main(): Promise<void> {
     buildAuditPrincipalOmissionSuite(),
     buildAuditInstantSuite(),
     buildCeilingFloorSuite(),
+    // THE ACCESS PATH, which no other case in this runner can see. Every other audit-feed case
+    // passes identically against a full table scan returning the right 25 rows — the exact state
+    // that measured ~100 feed requests to exhaust D1's account-wide daily read allowance for
+    // every tenant. It carries `0016`'s rollback as its negative control.
+    buildAuditReadCostSuite(),
+    // The middle state of the `identifier` -> `target_identifier` rename. Its last case is a
+    // tripwire that is SUPPOSED to go red when `OD-5` is discharged, and says what must move
+    // with it.
+    buildMemberResolveRenameSuite(),
     // The contract-set sweep. It builds no world and drives no route — it reads
     // `packages/contracts/**` and asserts a property JSON Schema would enforce if anything here
     // executed it. Runs in the primary set and in no negative control, for the same reason as the

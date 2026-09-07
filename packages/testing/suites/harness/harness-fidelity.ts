@@ -41,7 +41,7 @@
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { Suite, assertEqual, assertTrue } from '../../harness/runner.ts';
+import { ISOLATION, Suite, assertEqual, assertTrue } from '../../harness/runner.ts';
 import { createSqliteDatabase } from '../../harness/sqlite-d1.ts';
 import { APPLIED_MIGRATIONS } from '../../harness/control-plane-fixture.ts';
 import {
@@ -65,46 +65,83 @@ function migrationsOnDisk(): string[] {
  * IT IS A CLOSED LIST AND ADDING TO IT IS A DELIBERATE ACT. That is the whole mechanism: an
  * omission anyone can justify in a comment is an omission nobody notices; an omission that has to
  * be typed here, beside its reason, is one a reviewer sees.
+ *
+ * ===========================================================================================
+ * *** IT IS EMPTY AS OF 2026-09-07, AND THE EMPTINESS IS THE FINDING. ***
+ * ===========================================================================================
+ *
+ * Every entry has been deleted and the AZ2 fixture now applies the full set. The reasons were
+ * genuine — each omission was a tripwire meant to go red if login started consulting the omitted
+ * table — but **the principle failed three times in this one fixture**, and each failure looked
+ * like something else:
+ *
+ *   `0003`/`0008` — `findPrincipal` began reading two more tables in one statement, and five
+ *   session-revocation cases went red with `unavailable`. Diagnosed as a Core defect first.
+ *
+ *   `0016` — two indexes on `platform_operator_action`, a table `0009` creates and this fixture
+ *   omitted. `CREATE INDEX` failed and **five login cases went red because of an index on a table
+ *   logins never touch.** `IF NOT EXISTS` guards the index, not the table.
+ *
+ * THE SHARPER PRINCIPLE, and it is the Team Lead's: **a partial migration set is not a smaller
+ * version of production, it is a DIFFERENT SCHEMA.** A migration written against production can
+ * fail against it for reasons unrelated to anything the suite tests.
+ *
+ * WHAT WAS LOST: the tripwire. WHY THAT IS ACCEPTABLE: it never fired as a clean signal — both
+ * times it arrived as an unrelated crash that had to be diagnosed before it meant anything — and
+ * the census below already forces the question on every migration, by name, at the moment it
+ * lands. **The census is the tripwire that reports rather than crashes.**
+ *
+ * AN EMPTY MAP IS NOT A DEAD CHECK. `each deliberate omission carries a reason` still runs, and
+ * the census below still fails on a migration that is neither applied nor listed here — so a
+ * future omission still has to be argued in this file.
+ *
+ * ===========================================================================================
+ * *** AN OMISSION NOW HAS TO STATE ITS CONSEQUENCE, NOT ONLY ITS REASON. ***
+ * ===========================================================================================
+ *
+ * Added 2026-09-07 at the Team Lead's request, from the `0016` finding: **an omitted migration
+ * silently constrains which LATER migrations may be applied.** `0016` indexes a table `0009`
+ * creates, so omitting `0009` made a later and entirely unrelated migration unappliable, and
+ * thirty-nine cases went red at once. **Nothing in the old omission list carried that dependency,
+ * and there was no way to learn it except by hitting it** — the reason field said why the table
+ * was not needed, which is a statement about the PRESENT and says nothing about what it forecloses.
+ *
+ * So `forecloses` is a required field rather than a documented habit. An author who cannot say
+ * what an omission forecloses has not finished deciding whether to make it, and the type makes
+ * that omission fail to compile rather than fail later in someone else's suite. **`\*.md` §3a
+ * applied to a list instead of to a write: the check's output is an argument of the thing it
+ * guards.**
  */
-const CONTROL_PLANE_DELIBERATE_OMISSIONS: Readonly<Record<string, string>> = Object.freeze({
-  '0014_platform_operator_action_organization.sql':
-    'ADDS `platform_operator_action.target_organization_id`, nullable, for the scoped audit feed ' +
-    'to filter on. Added to this list 2026-09-05, when the census went red on it — the second ' +
-    'time today, and the second time it was the control working rather than a chore. OMITTED for ' +
-    'the same reason as 0009 itself: no AZ2 suite reads or writes the operator action log, and ' +
-    'nothing on the authenticated path touches it. If any Core read path on the login path ever ' +
-    'names this column, it moves to the applied list and this entry is deleted.',
-  '0013_organization_template.sql':
-    'ADDS `organization.template_id`, nullable. Added to this list 2026-09-05, when this control ' +
-    'went red on the migration landing — which is the control working rather than a chore. It is ' +
-    'OMITTED and not applied because no AZ2 suite reads or writes the column: login resolves ' +
-    'principals, sessions, memberships and credentials, and none of those statements names it. ' +
-    'THE TRIPWIRE SHAPE IS THE POINT, exactly as for 0011 and 0012 — the column is nullable, so ' +
-    'an AZ2 statement that started selecting `organization.*` would go red HERE, on a missing ' +
-    'column, rather than silently reading a NULL in production. The platform fixture applies it, ' +
-    'because there the onboarding write is the subject.',
-  '0012_template.sql':
-    'The Template table. `template-v1` is accepted and unimplemented, nothing on the authenticated ' +
-    'path reads it, and no AZ2 suite touches Templates. Same tripwire shape as 0011: if login ever ' +
-    'begins consulting it, the AZ2 suites go red and this entry is where the reader is told why.',
-  '0011_confirmation.sql':
-    'The confirmation table. Nothing on the authenticated path reads it TODAY — the pipeline gate ' +
-    'is being built and does not exist yet. THIS ENTRY IS A TRIPWIRE, and the narrow fixture is ' +
-    'deliberate rather than lazy: when the gate lands and login begins consulting confirmation, ' +
-    'the AZ2 suites go red, exactly as they did for 0008. That is how the deployment hazard ' +
-    '"a control plane without this migration cannot authenticate" was found the first time, and ' +
-    'it is worth finding again. Applying it pre-emptively would hide the coupling instead.',
-  '0009_platform_operator_action.sql':
-    'The platform-operator action log. No AZ2 suite reads or writes it, and nothing on the ' +
-    'authenticated path touches it — unlike 0008, which findPrincipal now reads on every ' +
-    'request. If any Core read path ever names platform_operator_action, this moves to the ' +
-    'applied list and this entry is deleted.',
-  '0010_platform_operator_mutual_exclusion.sql':
-    'Four triggers over tables 0003 and 0008 create. They constrain WRITES to ' +
-    'organization_membership and platform_operator; no AZ2 suite performs either write, and the ' +
-    'platform fixture applies them where they are the subject. Applying them here would add a ' +
-    'constraint no case exercises.',
-});
+interface DeliberateOmission {
+  /** Why the fixture does not need this migration. A statement about the present. */
+  readonly reason: string;
+  /**
+   * WHICH LATER MIGRATIONS THIS OMISSION FORECLOSES, or an explicit statement that none are known
+   * and how that was checked. A migration that creates a table forecloses every later migration
+   * that indexes, alters or references it — and that is not visible from the omitted file alone.
+   */
+  readonly forecloses: string;
+}
+
+const CONTROL_PLANE_DELIBERATE_OMISSIONS: Readonly<Record<string, DeliberateOmission>> =
+  Object.freeze({});
+
+/**
+ * THE RETIRED ENTRIES, KEPT AS PROSE RATHER THAN AS DATA — `workflow.md` §12's rule that a struck
+ * ruling stays visible when it was right on its own terms. They are OUT of the map above because
+ * that map is consumed by two live assertions: an entry here that is also applied fails
+ * `none of them is applied`, so leaving them in would have been a red suite rather than a record.
+ *
+ *   `0009` — the action log. "No AZ2 suite reads or writes it, and nothing on the authenticated
+ *     path touches it." True, and `0016` still broke five login cases by indexing it.
+ *   `0010` — four triggers over tables `0003` and `0008` create. "Applying them here would add a
+ *     constraint no case exercises." True, and harmless to apply.
+ *   `0011`, `0012`, `0013`, `0014` — confirmation, Templates, the Organization-Template reference,
+ *     and the action log's Organization column. Each omitted as a tripwire for the day login began
+ *     consulting it.
+ *   `0016` — omitted for ONE DAY, on a dependency: it indexes a table `0009` did not create here.
+ *     That omission is what made the argument for abandoning the whole partial set.
+ */
 
 export function buildSqliteDoubleSuite(): Suite {
   const suite = new Suite('Harness — the D1 double reports what the statement returned');
@@ -271,22 +308,101 @@ export function buildControlPlaneMigrationCoverageSuite(): Suite {
     );
   });
 
-  suite.test('each deliberate omission carries a reason, and none of them is applied', () => {
-    for (const [name, reason] of Object.entries(CONTROL_PLANE_DELIBERATE_OMISSIONS)) {
+  suite.test('each deliberate omission carries a reason AND a consequence, and none is applied', () => {
+    const defects = omissionDefects(CONTROL_PLANE_DELIBERATE_OMISSIONS);
+    assertEqual(
+      'every deliberate omission is fully argued',
+      defects.join(' · '),
+      '',
+    );
+  });
+
+  suite.test('THE CONSTRUCTED FAILING INPUT: the omission check reports each way an entry can be thin', () => {
+    // =====================================================================================
+    // *** THE MAP IS EMPTY, SO THE CASE ABOVE PASSES WITHOUT EXECUTING A SINGLE PREDICATE. ***
+    // =====================================================================================
+    //
+    // That is `workflow.md` §11a exactly: "no findings" and "no input" render identically, and the
+    // second is the answer that ends the task. The `forecloses` requirement added on 2026-09-07
+    // would therefore have been an unexecuted rule from the day it was written — a constraint
+    // stated, expressed in a type, and never once evaluated.
+    //
+    // So the check is fed a map it must reject, one defect at a time. Each row names ONE thin
+    // entry and expects exactly one complaint about it, which is stronger than expecting "some
+    // complaint": a predicate that rejected everything would satisfy the weaker form.
+    const sound: DeliberateOmission = {
+      reason: 'the AZ2 login path never reads this table, and no seed in this fixture writes it',
+      forecloses: 'nothing later indexes, alters or references the table it creates — checked by ' +
+        'grepping the remaining migrations for its table name',
+    };
+
+    assertEqual(
+      'a fully argued entry is accepted, so the rejections below are about what is missing',
+      omissionDefects({ '0099_example.sql': sound }).join(' · '),
+      '',
+    );
+
+    const thin: readonly { readonly why: string; readonly entry: DeliberateOmission }[] = [
+      { why: 'no reason', entry: { ...sound, reason: 'not needed' } },
+      { why: 'NO CONSEQUENCE — the 0016 case', entry: { ...sound, forecloses: 'none' } },
+      { why: 'neither', entry: { reason: '', forecloses: '' } },
+    ];
+    for (const row of thin) {
+      const found = omissionDefects({ '0099_example.sql': row.entry });
       assertTrue(
-        `${name} states why it is omitted`,
-        reason.length > 40,
-        'an omission with no reason is the same silent drift with an extra step',
-      );
-      assertTrue(
-        `${name} is not also in the applied list`,
-        !APPLIED_MIGRATIONS.includes(name),
-        'a migration cannot be both applied and deliberately omitted',
+        `${ISOLATION} an entry with ${row.why} is reported`,
+        found.length > 0,
+        `the check accepted an entry with ${row.why}, so it is not enforcing what it documents`,
       );
     }
+    assertEqual(
+      'an entry with neither draws BOTH complaints, not one',
+      omissionDefects({ '0099_example.sql': { reason: '', forecloses: '' } }).length,
+      2,
+    );
+
+    // AND THE THIRD PREDICATE, which has nothing to do with thinness: a migration cannot be both
+    // applied and deliberately omitted.
+    assertTrue(
+      'an omission that is ALSO in the applied list is reported',
+      omissionDefects({ [APPLIED_MIGRATIONS[0]!]: sound }).some((defect) =>
+        defect.includes('also applied'),
+      ),
+      'a migration listed as omitted while being applied is a list that has stopped describing ' +
+        'the fixture, which is the drift this whole census exists to catch',
+    );
   });
 
   return suite;
+}
+
+/**
+ * Every way the omission list fails its own rules, as a list of complaints.
+ *
+ * A PURE FUNCTION SO IT CAN BE FED A BROKEN LIST. The live list is empty and is expected to stay
+ * that way, so the only way to know these predicates work is to hand them something that must be
+ * refused.
+ */
+function omissionDefects(map: Readonly<Record<string, DeliberateOmission>>): string[] {
+  const defects: string[] = [];
+  for (const [name, omission] of Object.entries(map)) {
+    if (omission.reason.length <= 40) {
+      defects.push(`${name}: no reason stated — silent drift with an extra step`);
+    }
+    // THE `0016` LESSON. The reason says why the fixture does not need the migration today;
+    // `forecloses` says what it makes unappliable tomorrow. The second is the one nobody writes
+    // unprompted, and the one that cost thirty-nine cases.
+    if (omission.forecloses.length <= 40) {
+      defects.push(
+        `${name}: does not state what it FORECLOSES — a table that is never created cannot be ` +
+          'indexed, altered or referenced by any later migration',
+      );
+    }
+    if (APPLIED_MIGRATIONS.includes(name)) {
+      defects.push(`${name}: listed as deliberately omitted and also applied`);
+    }
+  }
+  return defects;
 }
 
 export function buildPlatformMigrationCoverageSuite(): Suite {

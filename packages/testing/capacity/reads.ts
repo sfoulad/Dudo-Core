@@ -82,10 +82,31 @@ export function classify(harness: SqliteHarness, sql: string, parameters: readon
   const plan = details.join(' | ');
   const scans: string[] = [];
   let searches = 0;
+  // ===========================================================================================
+  // *** `SCAN t USING INDEX i` IS NOT A TABLE SCAN, AND TREATING IT AS ONE UNDER-REPORTS A FIX. ***
+  // ===========================================================================================
+  //
+  // SQLite says `SCAN` whenever there is no search key — including when it walks an INDEX in
+  // order. With the index supplying the `ORDER BY` and a `LIMIT` on the query, the engine reads
+  // as many entries as the limit and stops. **That is bounded**, and the tell is the ABSENCE of
+  // `USE TEMP B-TREE FOR ORDER BY`: a plan that sorts into a temp B-tree must first materialise
+  // every row, so the limit saves nothing.
+  //
+  // THIS CLASSIFIER FIRST KEYED ON THE WORD `SCAN` ALONE. When `0016` added the ordering index,
+  // the platform feed went from `SCAN … | USE TEMP B-TREE` to `SCAN … USING INDEX …` — a real
+  // fix — and the classifier **would have reported it as still unbounded.** I would have told the
+  // Team Lead a correct migration had not worked.
+  const sortsInTemporaryBTree = /USE TEMP B-TREE/.test(plan);
   for (const detail of details) {
-    const scan = /^SCAN (\w+)/.exec(detail);
+    const scan = /^SCAN (\w+)(?: USING (?:COVERING )?INDEX)?/.exec(detail);
     if (scan !== null) {
-      scans.push(scan[1]!);
+      const walksAnIndex = /USING (?:COVERING )?INDEX/.test(detail);
+      // An index walk is unbounded ONLY if something forces every row to be visited anyway.
+      if (!walksAnIndex || sortsInTemporaryBTree) {
+        scans.push(scan[1]!);
+      } else {
+        searches += 1;
+      }
       continue;
     }
     if (/^SEARCH /.test(detail)) {

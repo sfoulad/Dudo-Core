@@ -400,6 +400,12 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       async revokeOperator() {
         return ok(null);
       },
+      async findOrganizationIdentity() {
+        return ok(null);
+      },
+      async updateOrganizationIdentity(_organizationId, identity) {
+        return ok(identity);
+      },
       async recordAction() {
         return ok(undefined);
       },

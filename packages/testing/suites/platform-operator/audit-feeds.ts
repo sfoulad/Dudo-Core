@@ -122,21 +122,42 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
    * missing dimension is exactly what an aggregate control cannot see — the other four would still
    * refuse, and the aggregate would stay green while one filter silently stopped binding.
    */
-  const DIMENSIONS: readonly { readonly name: string; readonly a: string; readonly b: string }[] =
-    Object.freeze([
-      {
-        name: 'actor_principal_id',
-        a: `actor_principal_id=${PRN_ADMIN}`,
-        b: `actor_principal_id=${PRN_MODERATOR}`,
-      },
-      {
-        name: 'action_id',
-        a: 'action_id=platform.organizations.list',
-        b: 'action_id=platform.templates.list',
-      },
-      { name: 'since', a: 'since=2026-09-01T00:00:00.000Z', b: 'since=2026-09-02T00:00:00.000Z' },
-      { name: 'until', a: 'until=2026-09-30T00:00:00.000Z', b: 'until=2026-09-29T00:00:00.000Z' },
-    ]);
+  /**
+   * *** `carries` IS NOT DECORATION: TWO OF THESE FOUR REQUESTS ARE ILLEGAL WITHOUT IT. ***
+   *
+   * The bounded time window landed in Core on 2026-09-07, and it is required on any request
+   * carrying `actor_principal_id` or `action_id`. Those two rows went red immediately — not
+   * because the property they assert changed, but because the request they used to make it can
+   * no longer be sent. **Each row therefore carries the smallest legal request that still varies
+   * exactly one dimension**, and the window is held IDENTICAL across `a` and `b` so it is the
+   * named dimension, and nothing else, that differs.
+   *
+   * THE `since`/`until` ROWS DELIBERATELY CARRY NO EXTRA WINDOW. They vary the bound itself, and
+   * with no unserved filter present a lone bound is legal — so windowing them uniformly for
+   * tidiness would change what they test and would quietly delete the only rows that exercise a
+   * bound in isolation.
+   */
+  const DIMENSIONS: readonly {
+    readonly name: string;
+    readonly a: string;
+    readonly b: string;
+    readonly carries?: string;
+  }[] = Object.freeze([
+    {
+      name: 'actor_principal_id',
+      a: `actor_principal_id=${PRN_ADMIN}`,
+      b: `actor_principal_id=${PRN_MODERATOR}`,
+      carries: 'since=2026-09-01T00:00:00.000Z&until=2026-09-30T00:00:00.000Z',
+    },
+    {
+      name: 'action_id',
+      a: 'action_id=platform.organizations.list',
+      b: 'action_id=platform.templates.list',
+      carries: 'since=2026-09-01T00:00:00.000Z&until=2026-09-30T00:00:00.000Z',
+    },
+    { name: 'since', a: 'since=2026-09-01T00:00:00.000Z', b: 'since=2026-09-02T00:00:00.000Z' },
+    { name: 'until', a: 'until=2026-09-30T00:00:00.000Z', b: 'until=2026-09-29T00:00:00.000Z' },
+  ]);
 
   for (const dimension of DIMENSIONS) {
     suite.test(
@@ -146,8 +167,14 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
         try {
           seedFeed(world);
 
+          // The window this dimension needs in order to be a legal request at all, held IDENTICAL
+          // across A and B so the named dimension remains the only difference between them.
+          const window = dimension.carries === undefined ? '' : `&${dimension.carries}`;
+          const queryA = `page_size=1&${dimension.a}${window}`;
+          const queryB = `page_size=1&${dimension.b}${window}`;
+
           // Page 1 under filter set A. `page_size=1` guarantees a cursor.
-          const first = await feed(world, { query: `page_size=1&${dimension.a}` });
+          const first = await feed(world, { query: queryA });
           assertTrue(
             'page one issued a cursor, so there is something to resume',
             typeof first.next_cursor === 'string' && first.next_cursor.length > 0,
@@ -161,14 +188,14 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
             `the cursor resumes the SAME query under ${dimension.name}`,
             await world.call('platform.audit.list', {
               sessionId: SESSION_ADMIN,
-              queryString: `page_size=1&${dimension.a}&cursor=${cursor}`,
+              queryString: `${queryA}&cursor=${cursor}`,
             }),
           );
 
           // ---- THE CASE. One dimension changed, everything else identical.
           const answer = await world.call('platform.audit.list', {
             sessionId: SESSION_ADMIN,
-            queryString: `page_size=1&${dimension.b}&cursor=${cursor}`,
+            queryString: `${queryB}&cursor=${cursor}`,
           });
           assertTrue(
             `${ISOLATION} the cursor is refused when \`${dimension.name}\` changes`,
@@ -189,7 +216,8 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
   // THE ROUND TRIP. A REGRESSION REACHED `main` THROUGH THIS GAP AND IT IS WORTH BEING EXACT.
   // ===========================================================================================
   //
-  // `7254f4b` changed `decodeAuditAnchor` to split on the LITERAL six-character string ` `
+  // `7254f4b` changed `decodeAuditAnchor` to split on a LITERAL six-character string — a
+  // DOUBLED backslash followed by `u0000`, which JavaScript reads as six characters, not one NUL
   // while `encodeAuditAnchor` kept joining with a real NUL. **Page 1 worked and page 2 was
   // unreachable on every request, on both feeds.** `typecheck` was exit 0 and the platform suite
   // was green; the only thing that caught it was a probe asking for page 2.
@@ -316,7 +344,8 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
           }),
         );
 
-        // ---- THE CASE. The literal six-character string ` `, which is exactly what the
+        // ---- THE CASE. A DOUBLED backslash followed by `u0000` — six characters, written as an
+        // escape rather than as a raw byte. It is exactly what the
         // broken decode split on and what an encode written the same way would emit.
         const mismatched = await codec.encode(
           `${occurredAt}\\u0000${recordId}`,
@@ -438,14 +467,21 @@ export function buildAuditCursorScopeSuite(make: MakePlatformWorld = createPlatf
       assertEqual('and resumes from the same anchor', spent.ok ? spent.value : null, 'anchor-value-0001');
 
       // The fixed world: the same two requests, with the filters in the scope. Now refused.
+      //
+      // THE SEPARATOR IS BUILT FROM A CHARACTER CODE RATHER THAN TYPED. It is a NUL — the byte
+      // Core joins scope components with — and until 2026-09-07 the two lines below held it RAW,
+      // which made `file(1)` classify this suite as `data` and made plain `grep` answer every
+      // search in it with silence and exit 1. **A test file nobody can grep is one where the next
+      // person's search for a defect returns clean.** The value is unchanged; only the notation is.
+      const NUL = String.fromCharCode(0);
       const withFilters = await codec.encode(
         'anchor-value-0001',
-        preFixBinding(`platform.audit.list ${PRN_ADMIN}`),
+        preFixBinding(`platform.audit.list${NUL}${PRN_ADMIN}`),
         nowMs,
       );
       const refused = await codec.decode(
         withFilters,
-        preFixBinding(`platform.audit.list ${PRN_MODERATOR}`),
+        preFixBinding(`platform.audit.list${NUL}${PRN_MODERATOR}`),
         nowMs,
       );
       assertTrue(
@@ -516,14 +552,20 @@ export function buildAuditPrincipalOmissionSuite(
       seedFeed(world);
       seedPrincipalTargetRow(world, ORG_ALPHA);
 
+      // THE FIRST TWO CARRY NO WINDOW ON PURPOSE AND MUST STAY THAT WAY. Since 2026-09-07 a
+      // window is required on any request carrying `actor_principal_id` or `action_id`, so the
+      // last three gained one — but the unfiltered entries are EXEMPT, and they are the only rows
+      // here that exercise the projection on the unwindowed path. Windowing all seven for
+      // uniformity would silently narrow this case to the windowed builder.
+      const WINDOW = 'since=2026-09-01T00:00:00.000Z&until=2026-09-30T00:00:00.000Z';
       const queries = [
         'page_size=1',
         'page_size=25',
-        `actor_principal_id=${PRN_ADMIN}`,
-        'action_id=platform.organizations.members.resolve',
         'since=2026-09-01T00:00:00.000Z',
         'until=2026-09-30T00:00:00.000Z',
-        `actor_principal_id=${PRN_ADMIN}&action_id=platform.organizations.members.resolve`,
+        `actor_principal_id=${PRN_ADMIN}&${WINDOW}`,
+        `action_id=platform.organizations.members.resolve&${WINDOW}`,
+        `actor_principal_id=${PRN_ADMIN}&action_id=platform.organizations.members.resolve&${WINDOW}`,
       ];
       let sawTheRow = false;
       for (const query of queries) {

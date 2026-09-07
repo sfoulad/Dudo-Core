@@ -166,6 +166,38 @@ function sensitivityByPermission(source: string): ReadonlyMap<string, string | n
   return found;
 }
 
+/**
+ * `permissionId -> declared scopes`, for the platform-role check.
+ *
+ * THE SCOPES LINE IS AN INLINE FLOW SEQUENCE in this file — `scopes: [platform]` — which is the
+ * form the role reader had to learn about the hard way. Read as written rather than assumed.
+ */
+function permissionScopes(source: string): ReadonlyMap<string, readonly string[]> {
+  const found = new Map<string, readonly string[]>();
+  let current: string | null = null;
+  for (const line of sectionLines(source, 'permissions')) {
+    const entry = /^ {2}- id: (\S+)\s*$/.exec(line);
+    if (entry !== null) {
+      current = entry[1]!;
+      continue;
+    }
+    if (current === null) {
+      continue;
+    }
+    const scopes = /^ {4}scopes: \[([^\]]*)\]\s*$/.exec(line);
+    if (scopes !== null) {
+      found.set(
+        current,
+        scopes[1]!
+          .split(',')
+          .map((value) => value.trim())
+          .filter((value) => value !== ''),
+      );
+    }
+  }
+  return found;
+}
+
 /** The catalog's critical permissions, read through the map above. */
 function criticalPermissionsInCatalog(source: string): readonly string[] {
   return [...sensitivityByPermission(source)]
@@ -227,6 +259,8 @@ const OPERATION_CONTRACTS: readonly string[] = Object.freeze([
   'platform-operators-v1.contract.yaml',
   // ADDED 2026-09-05 with `platform.credentials.reset`.
   'credential-reset-v1.contract.yaml',
+  // ADDED 2026-09-07 with `platform.organizations.identity.update`.
+  'organization-identity-v1.contract.yaml',
 ]);
 
 /**
@@ -419,6 +453,83 @@ export function buildRegistryCoherenceSuite(): Suite {
       sortedJoin(fromCatalog),
     );
   });
+
+  suite.test(
+    'EVERY permission a platform-scope role names resolves here AND is declared platform-scope',
+    () => {
+      // =====================================================================================
+      // OWED BY `permission-catalog.yaml` TO `qa-agent` BY NAME, and built here rather than
+      // left as a sentence in a comment.
+      // =====================================================================================
+      //
+      // The catalog's words: *"a hand-maintained assertion about this file is the kind this
+      // repository spent 2026-09-05 learning not to trust."*
+      //
+      // TWO PROPERTIES, AND THE SECOND IS THE ONE WITH TEETH. A platform role naming a permission
+      // that does not exist is a typo. A platform role naming a permission declared
+      // `scopes: [organization]` is **a tenant-scoped permission held by a principal with no
+      // tenant** — the shape `0024` exists to forbid, arriving through the role list rather than
+      // through a membership row.
+      const roleSection = sectionLines(source, 'defaultRoles');
+      const platformRoles = entryIds(roleSection).filter((roleId) => {
+        // A role's own `scope:` line, at four spaces, before the next entry.
+        let inRole = false;
+        for (const line of roleSection) {
+          const entry = /^ {2}- id: (\S+)\s*$/.exec(line);
+          if (entry !== null) {
+            inRole = entry[1] === roleId;
+            continue;
+          }
+          if (inRole && /^ {4}scope: platform\s*$/.test(line)) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      const scopesByPermission = permissionScopes(source);
+
+      // ---- THE POPULATION, REPORTED AND FLOORED. The catalog asks for exactly this: **fail when
+      // either is zero**, because a renamed key or a changed shape makes this check examine
+      // nothing and report success.
+      let permissionsChecked = 0;
+      const offences: string[] = [];
+      for (const roleId of platformRoles) {
+        for (const permissionId of roleGrantsInCatalog(source, roleId)) {
+          permissionsChecked += 1;
+          const scopes = scopesByPermission.get(permissionId);
+          if (scopes === undefined) {
+            offences.push(`${roleId} names '${permissionId}', which this catalog does not declare`);
+            continue;
+          }
+          if (!scopes.includes('platform')) {
+            offences.push(
+              `${roleId} names '${permissionId}', declared scopes: [${scopes.join(', ')}] — a ` +
+                'platform-scope role holding a permission that is not platform-scope',
+            );
+          }
+        }
+      }
+
+      assertTrue(
+        `the check examined platform roles — found ${String(platformRoles.length)}`,
+        platformRoles.length > 0,
+        'NO platform-scope role was parsed. This check is examining nothing and would report ' +
+          'success; the catalog asks it to fail loudly instead.',
+      );
+      assertTrue(
+        `and permissions — examined ${String(permissionsChecked)}`,
+        permissionsChecked > 0,
+        `${String(platformRoles.length)} platform roles parsed but ZERO permissions between ` +
+          'them. The role reader has stopped seeing permission lists.',
+      );
+      assertEqual(
+        `${ISOLATION} every platform role's permissions resolve and are platform-scope`,
+        offences.join(' · '),
+        '',
+      );
+    },
+  );
 
   suite.test('`marketplace-moderator` holds exactly what the catalog grants it', () => {
     const fromCatalog = roleGrantsInCatalog(source, 'marketplace-moderator');

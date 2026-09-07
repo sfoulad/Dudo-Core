@@ -127,6 +127,12 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
         'platform-audit-read-v1, 0028 Decision 3, added 2026-09-05. One Organization\'s feed, ' +
         'which DOES disclose principals, and which writes a record into that Organization\'s own ' +
         'trail on every call — "it keeps the back door the same size as the front one"',
+      'platform.organizations.identity.update':
+        '`0031` and organization-identity-v1, added 2026-09-07. **THE FIRST PATCH IN THIS CLASS** ' +
+        'and the first route with object fields beside a flat one — `commercial_registration` and ' +
+        '`vat_registration` are nested because each carries a state plus a conditional number, ' +
+        'and flattening them would let a number arrive without the state that makes it meaningful. ' +
+        'NOT confirmation-gated: `core.platform-organization.update` is `sensitive`, not critical',
       'platform.credentials.reset':
         'credential-reset-v1, added 2026-09-05. **THE MOST DANGEROUS OPERATION IN THE PLATFORM** — ' +
         'holding core.credential.reset is the ability to take over any account. Gated, and unlike ' +

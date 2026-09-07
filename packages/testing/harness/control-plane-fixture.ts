@@ -67,6 +67,59 @@ export const APPLIED_MIGRATIONS: readonly string[] = [
   '0006_principal_credential.sql',
   '0007_membership_role.sql',
   '0008_platform_operator.sql',
+  // ===========================================================================================
+  // *** THE FULL SET, AS OF 2026-09-07. THE PARTIAL SET IS ABANDONED AND HERE IS WHAT IT COST. ***
+  // ===========================================================================================
+  //
+  // The Team Lead asked whether there was a reason this fixture was deliberately partial, because
+  // that reason would be worth knowing. **There was, it is stated in this file's header, and it
+  // has now failed three times in the same fixture.**
+  //
+  // THE REASON: *"applying a migration a suite does not need would hide a missing dependency
+  // rather than reveal one."* Each omission was a TRIPWIRE — if login ever began consulting the
+  // omitted table, these suites would go red and say so. It is a real property and it paid once,
+  // when `findPrincipal` started reading `platform_operator` and five cases went red.
+  //
+  // WHY IT IS ABANDONED ANYWAY, and the sharper argument is the Team Lead's: **a partial
+  // migration set is not a smaller version of production, it is a DIFFERENT SCHEMA.** A later
+  // migration written against production's schema can fail against it for reasons that have
+  // nothing to do with what the suite tests. `0016` creates two indexes ON `platform_operator_action`
+  // — a table `0009` creates and this fixture omitted — so `CREATE INDEX` failed, and **five login
+  // cases went red because of an index on a table logins never touch.** `IF NOT EXISTS` guards
+  // the index, not the table.
+  //
+  // WHAT IS LOST, STATED RATHER THAN GLOSSED: the tripwire. If a future login path starts reading
+  // `template` or `confirmation`, these suites will no longer go red to announce it.
+  //
+  // WHY THAT IS AN ACCEPTABLE TRADE: the tripwire never fired as a clean signal. Both times it
+  // fired it was an unrelated crash — `unavailable` from a failed statement, then `no such table`
+  // — that had to be diagnosed before it meant anything. And the migration census in
+  // `suites/harness/harness-fidelity.ts` already forces the question on EVERY migration, by name,
+  // at the moment it lands. **The census is the tripwire, and it is the one that reports rather
+  // than crashes.**
+  //
+  // ===========================================================================================
+  // *** THE THIRTY-NINE RED CASES WERE THE GOOD OUTCOME. DO NOT "FIX" THIS BY SKIPPING. ***
+  // ===========================================================================================
+  //
+  // When `0016` could not be applied over a partial set, thirty-nine cases went red immediately,
+  // at the point of the mistake, naming the failing statement. **That is the behaviour this list
+  // is supposed to have**, and it is worth saying so explicitly because the obvious repair is the
+  // wrong one: wrapping the loop in a `try`/`catch`, or teaching it to skip a migration whose
+  // dependency is absent, would turn a loud immediate failure into a fixture that quietly runs
+  // against a schema nobody chose.
+  //
+  // **A suite passing against a silently-reduced schema is the failure mode; a suite that will not
+  // start is not.** If a migration in this list cannot be applied, the answer is to apply what it
+  // depends on — never to make the failure quieter.
+  '0009_platform_operator_action.sql',
+  '0010_platform_operator_mutual_exclusion.sql',
+  '0011_confirmation.sql',
+  '0012_template.sql',
+  '0013_organization_template.sql',
+  '0014_platform_operator_action_organization.sql',
+  '0015_organization_identity.sql',
+  '0016_platform_operator_action_indexes.sql',
 ];
 
 export function readMigration(fileName: string): string {

@@ -266,8 +266,61 @@ async function main(): Promise<void> {
     );
   }
 
+  // ===========================================================================================
+  // *** EVERYTHING BELOW BRANCHES ON WHAT WAS MEASURED. NONE OF IT IS PROSE WRITTEN IN ADVANCE. ***
+  // ===========================================================================================
+  //
+  // This section first carried a fixed paragraph describing an unbounded scan. `0016` added the
+  // ordering index, the scan went away, and the paragraph was still there — asserting a
+  // denial-of-service shape that had just been fixed, with the table above it printing 14 rows
+  // read at every log size.
+  //
+  // **THAT IS THE SAME ERROR I MADE THIS MORNING**, when I wrote "comfortable" before the numbers
+  // existed, one paragraph from the evidence. A measurement program whose conclusions do not
+  // track its measurements is a document that will eventually be confidently wrong in whichever
+  // direction it was written.
   if (scanning.length === 0) {
-    console.log('\n  NO OPERATION SCANS A TABLE. Read cost is bounded and does not grow with history.');
+    console.log(
+      [
+        '',
+        '  *** NO OPERATION SCANS A TABLE. Read cost is bounded and does not grow with history. ***',
+        '',
+        '  THIS WAS NOT TRUE ON 2026-09-07 AT 09:00. Both audit feeds emitted',
+        '  `SCAN platform_operator_action | USE TEMP B-TREE FOR ORDER BY`, so a feed request read',
+        '  the whole log twice: 100,012 rows at a 50,000-row log, and 49 such requests exhausted',
+        '  D1\'s account-wide 5,000,000/day — which stops every query including the session lookup',
+        '  behind every login.',
+        '',
+        '  `0016` added `platform_operator_action_by_time (occurred_at, action_record_id)` and',
+        '  `..._by_organization (target_organization_id, occurred_at, action_record_id)`. The plans',
+        '  are now index walks with the ORDER BY satisfied and the LIMIT honoured, so a feed',
+        '  request reads about as many rows as it returns.',
+        '',
+        '  MEASURED AFTER THE FIX, NOT ASSUMED FROM IT. The classifier had to be corrected first:',
+        '  SQLite still says SCAN when it walks an index in order, and the first version read that',
+        '  as unbounded — it would have reported a correct migration as ineffective. The signal',
+        '  that distinguishes them is USE TEMP B-TREE, which forces every row to be materialised',
+        '  and makes the LIMIT worthless.',
+        '',
+        '  *** THIS NOW DESCRIBES THE DEPLOYED SYSTEM AND NOT ONLY THIS HARNESS — WITH THE',
+        '  ATTRIBUTION STATED, BECAUSE THE TWO HALVES WERE ESTABLISHED BY DIFFERENT PARTIES. ***',
+        '',
+        '  Until 2026-09-07 this was a property of a fixture: the migrations existed and had been',
+        '  applied locally, and "local D1 accepted it" was quietly doing the work of "it works".',
+        '  The user approved 0015 and 0016 and the Team Lead applied them to the REMOTE control',
+        '  plane, then verified against the database rather than the tool\'s success glyph — which',
+        '  mattered, because `${PIPESTATUS[1]}` came back empty under zsh and the checkmark was the',
+        '  only other signal. Confirmed present: both indexes on `platform_operator_action`, all 13',
+        '  identity columns on `organization`, no migrations pending.',
+        '',
+        '  WHAT THIS PROGRAM ESTABLISHES, PRECISELY: the plans above are SQLite\'s, over a schema',
+        '  built from the same migration files that are now applied remotely. So the ACCESS PATH is',
+        '  a property of production. **The row COUNTS are not** — D1 does its own `rows_read`',
+        '  accounting, and whether a temp-B-tree sort is billed once or twice per row is not',
+        '  something a local engine can answer. That factor of two is neither confirmed nor',
+        '  contradicted here, and nothing above depends on it.',
+      ].join('\n'),
+    );
   } else {
     console.log(
       [
@@ -286,17 +339,35 @@ async function main(): Promise<void> {
     );
   }
 
+  // THE WRITE COST OF THE INDEXES, from the live schema. `0016` traded read growth for a
+  // per-record write cost, and the trade is only assessable if both halves are measured.
+  const actionLogWriteCost = feed.controlBreakdown.billed['platform_operator_action'] ?? 0;
+
   const feedReads = feed.controlReads;
   const perFeedRead = (logRows: number, perSearch: number): number =>
     rowsRead(feedReads, (table) => (table === 'platform_operator_action' ? logRows : 0), perSearch);
 
-  console.log('\n  Rows read per feed request, against the action log\'s size:');
-  console.log('    action log rows      rows read   feed reads/day to reach 5,000,000');
-  for (const logRows of [1_000, 10_000, 50_000, 100_000, 500_000]) {
-    const perRead = perFeedRead(logRows, 2);
+  // THE SENSITIVITY TABLE ONLY MEANS SOMETHING WHEN COST GROWS WITH LOG SIZE. With every plan
+  // bounded, every row of it reads the same number and printing it would invite a reader to draw
+  // a trend from a constant.
+  const growsWithLog = perFeedRead(500_000, SEARCH_ROWS) > perFeedRead(1_000, SEARCH_ROWS);
+  if (growsWithLog) {
+    console.log('\n  Rows read per feed request, against the action log\'s size:');
+    console.log('    action log rows      rows read   feed reads/day to reach 5,000,000');
+    for (const logRows of [1_000, 10_000, 50_000, 100_000, 500_000]) {
+      const perRead = perFeedRead(logRows, SEARCH_ROWS);
+      console.log(
+        `    ${String(logRows).padStart(15)}${String(perRead).padStart(12)}` +
+          `${String(Math.floor(5_000_000 / Math.max(perRead, 1))).padStart(36)}`,
+      );
+    }
+  } else {
+    const flat = perFeedRead(500_000, SEARCH_ROWS);
     console.log(
-      `    ${String(logRows).padStart(15)}${String(perRead).padStart(12)}` +
-        `${String(Math.floor(5_000_000 / Math.max(perRead, 1))).padStart(36)}`,
+      `\n  A feed request reads ~${String(flat)} rows AT EVERY LOG SIZE — 1,000 rows or 500,000.` +
+        `\n  That flatness IS the property: read cost no longer has a time axis.` +
+        `\n  ${String(Math.floor(5_000_000 / Math.max(flat, 1)))} feed requests/day against the ` +
+        '5,000,000 allowance, independent of history.',
     );
   }
 
@@ -304,10 +375,19 @@ async function main(): Promise<void> {
   // moved with it, the guess would be load-bearing and the model would be worth less.
   const low = perFeedRead(50_000, 1);
   const high = perFeedRead(50_000, 10);
+  const spread = ((high - low) / low) * 100;
   console.log(
-    `\n  The per-lookup charge is a guess (${String(SEARCH_ROWS)}). At a 50,000-row log, charging 1` +
-      ` gives ${String(low)}\n  and charging 10 gives ${String(high)} — a ` +
-      `${(((high - low) / low) * 100).toFixed(2)}% difference. The scan dominates,\n  so the answer does not turn on the guess.`,
+    growsWithLog
+      ? `\n  The per-lookup charge is a guess (${String(SEARCH_ROWS)}). At a 50,000-row log, ` +
+          `charging 1 gives ${String(low)}\n  and charging 10 gives ${String(high)} — a ` +
+          `${spread.toFixed(2)}% difference. The scan dominates,\n  so the answer does not turn ` +
+          'on the guess.'
+      : `\n  *** THE PER-LOOKUP CHARGE IS NOW LOAD-BEARING, AND WAS NOT BEFORE. *** Charging 1 ` +
+          `gives ${String(low)}\n  and charging 10 gives ${String(high)} — a ${spread.toFixed(0)}% ` +
+          'spread. With no scan to dominate it,\n  the estimate IS the answer. That does not ' +
+          'matter at these magnitudes — every figure is\n  four orders below the allowance — but ' +
+          'it would matter the moment one approached it, and\n  a reader must not carry forward ' +
+          'the old "insensitive to the guess" claim.',
   );
 
   // ===========================================================================================
@@ -318,35 +398,46 @@ async function main(): Promise<void> {
   // I wrote "a few tens of thousands of feed reads per day — comfortable". The measurement says
   // FORTY-NINE at a 50,000-row log. That is the mistake this whole model exists to stop, made by
   // the person making the model, one paragraph away from the evidence.
-  const pageSize = 25;
-  const atFifty = perFeedRead(50_000, SEARCH_ROWS);
-  const pagesAtFifty = Math.floor(5_000_000 / Math.max(atFifty, 1));
-  console.log(
-    [
-      '',
-      '  *** THIS IS A DENIAL-OF-SERVICE SHAPE, NOT A CAPACITY HEADROOM NOTE. ***',
-      '',
-      `  At a 50,000-row action log one feed request reads ${String(atFifty)} rows, so`,
-      `  ${String(pagesAtFifty)} FEED REQUESTS EXHAUST THE ACCOUNT'S ENTIRE DAILY READ ALLOWANCE.`,
-      `  At ${String(pageSize)} records a page that is ${String(pagesAtFifty * pageSize)} records —`,
-      '  an ordinary afternoon for one operator investigating one incident.',
-      '',
-      '  And exceeding it stops D1 ACCOUNT-WIDE. Not the feed: every query, including the session',
-      '  lookup every login performs. **One operator doing their job correctly takes the platform',
-      '  down for every tenant**, with no malice and no bug — the same shape the register already',
-      '  records for D2, arriving through a different door.',
-      '',
-      '  IT DOES NOT BIND ON BUSINESS COUNT, which is why the section-3 numbers do not move. It',
-      '  binds on LOG SIZE, so it arrives with time rather than with customers: at 50 operator',
-      '  requests/day the log reaches 50,000 rows in under three years, and every feed read makes',
-      '  it worse because P4 records the read itself.',
-      '',
-      '  THE FIX IS AN INDEX ON (occurred_at, action_record_id) — configuration, not schema shape,',
-      '  so it is available without a 0030 violation. `0014` names the trade the other way round',
-      '  ("what degrades first is not this feed") and that reading is about LATENCY; this is the',
-      '  read ALLOWANCE, which is account-wide and is a different failure.',
-    ].join('\n'),
-  );
+  if (growsWithLog) {
+    const pageSize = 25;
+    const atFifty = perFeedRead(50_000, SEARCH_ROWS);
+    const pagesAtFifty = Math.floor(5_000_000 / Math.max(atFifty, 1));
+    console.log(
+      [
+        '',
+        '  *** THIS IS A DENIAL-OF-SERVICE SHAPE, NOT A CAPACITY HEADROOM NOTE. ***',
+        '',
+        `  At a 50,000-row action log one feed request reads ${String(atFifty)} rows, so`,
+        `  ${String(pagesAtFifty)} FEED REQUESTS EXHAUST THE ACCOUNT'S ENTIRE DAILY READ ALLOWANCE.`,
+        `  At ${String(pageSize)} records a page that is ${String(pagesAtFifty * pageSize)} records —`,
+        '  an ordinary afternoon for one operator investigating one incident.',
+        '',
+        '  And exceeding it stops D1 ACCOUNT-WIDE. Not the feed: every query, including the session',
+        '  lookup every login performs. **One operator doing their job correctly takes the platform',
+        '  down for every tenant**, with no malice and no bug — the same shape the register already',
+        '  records for D2, arriving through a different door.',
+        '',
+        '  THE FIX IS AN INDEX ON (occurred_at, action_record_id) — configuration, not schema',
+        '  shape, so it is available without a 0030 violation.',
+      ].join('\n'),
+    );
+  } else {
+    console.log(
+      [
+        '',
+        '  WHAT THE INDEXES COST, WHICH IS THE HALF A FIX REPORT USUALLY OMITS.',
+        '',
+        `  \`platform_operator_action\` now costs ${String(actionLogWriteCost)} row-writes per`,
+        '  record instead of 2 — one row plus its indexes — and P4 writes one record on EVERY',
+        '  platform request, so every operator action got proportionally more expensive against',
+        '  the 80,000/day admitted ceiling. That is the trade, measured from the live schema',
+        '  rather than predicted: read cost stopped growing with history, write cost rose once.',
+        '',
+        '  IT IS OBVIOUSLY WORTH IT AND THE NUMBER IS STILL WORTH STATING, because the last',
+        '  unexamined write cost on this exact table is what produced the read finding.',
+      ].join('\n'),
+    );
+  }
 
   // -----------------------------------------------------------------------------------------
   rule('4. WHAT THIS DOES NOT MEASURE');

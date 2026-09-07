@@ -61,6 +61,11 @@ export function withMutualExclusionProbeRemoved(store: PlatformOperatorStore): P
     // DELEGATED. This control breaks the membership PROBE, not the revocation write.
     revokeOperator: (principalId, isSelfRevocation, reservation) =>
       store.revokeOperator(principalId, isSelfRevocation, reservation),
+    // ADDED 2026-09-07 with the organization-identity slice. Delegated for the same reason as
+    // every other method this control does not break.
+    findOrganizationIdentity: (organizationId) => store.findOrganizationIdentity(organizationId),
+    updateOrganizationIdentity: (organizationId, identity, reservation) =>
+      store.updateOrganizationIdentity(organizationId, identity, reservation),
   };
 }
 
@@ -196,5 +201,9 @@ export function withFailingActionLog(store: PlatformOperatorStore): PlatformOper
     // broke both could not show that the action-log failure is what fails the operation.
     revokeOperator: (principalId, isSelfRevocation, reservation) =>
       store.revokeOperator(principalId, isSelfRevocation, reservation),
+    // Same reasoning for the identity pair: this control breaks the action-log WRITE only.
+    findOrganizationIdentity: (organizationId) => store.findOrganizationIdentity(organizationId),
+    updateOrganizationIdentity: (organizationId, identity, reservation) =>
+      store.updateOrganizationIdentity(organizationId, identity, reservation),
   };
 }

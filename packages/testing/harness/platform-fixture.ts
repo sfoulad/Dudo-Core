@@ -325,6 +325,20 @@ export async function successfulCallFor(
   if (routeId === 'platform.templates.create') {
     return { bodyText: templateCreateRequest(), pathParams: {} };
   }
+  if (routeId === 'platform.organizations.identity.update') {
+    // THE FIRST PATCH IN THIS CLASS, and the first route whose body is mostly OBJECT fields.
+    // `not_recorded` is the only registration state needing no companion value, which makes it
+    // the right shape for a helper whose job is to reach the handler rather than to exercise the
+    // state machine — the states with conditional fields belong in cases that name them.
+    return {
+      bodyText: JSON.stringify({
+        display_name: 'Alpha Trading Company',
+        commercial_registration: { state: 'not_recorded' },
+        vat_registration: { state: 'not_recorded' },
+      }),
+      pathParams: { organization_id: ORG_ALPHA },
+    };
+  }
   if (routeId === 'platform.organizations.audit.list') {
     return { bodyText: '', pathParams: { organization_id: ORG_ALPHA } };
   }
@@ -389,6 +403,19 @@ export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
   // chore: without it every audit write fails on a missing column, which surfaces as
   // `unavailable` on EVERY platform route and reads like a Core regression.
   '0014_platform_operator_action_organization.sql',
+  // ADDED 2026-09-07. `0031` and `organization-identity-v1` — THIRTEEN columns on `organization`,
+  // plus four coherence triggers. I wrote "five" here from the first `ADD COLUMN` statements I
+  // read rather than from the finished table; `core-agent` caught it. A count in a comment is an
+  // assertion, and this one was wrong the moment it was written.
+  // THE CENSUS FIRED FOR THE THIRD TIME and the answer was decided by a principle rather than by
+  // inspection: **a fixture matches production unless there is a stated reason it should not.**
+  '0015_organization_identity.sql',
+  // ADDED 2026-09-07. THE INDEXES THAT ANSWER THE READ FINDING — two on
+  // `platform_operator_action`, for the feeds' ordering and for the scoped feed's filter. Applied
+  // rather than omitted, and applied HERE especially: the capacity model's read section measures
+  // the query plans of exactly these feeds, so a fixture without the indexes would keep reporting
+  // the SCAN after it had been fixed.
+  '0016_platform_operator_action_indexes.sql',
 ]);
 
 export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';
