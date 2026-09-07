@@ -88,7 +88,24 @@
   --color-ink: #191b22;
   --color-ink-soft: #40444f;
   --color-ink-muted: #5e6472;
-  --color-ink-faint: #8a8f9c;
+  /* -------------------------------------------------------------------------
+     DARKENED 2026-09-07 FOR CONTRAST. It was #8a8f9c, which is 3.24:1 on white
+     — below WCAG AA's 4.5:1 for normal text.
+
+     IT IS NOT A "FAINT DECORATION" COLOUR IN PRACTICE. It renders the uppercase
+     <dt> labels on every record card, panel and detail list, at 12px — which is
+     normal text by every threshold, not large text. Those labels are the only
+     thing naming what each value IS, so an operator who cannot read them is left
+     with a column of identifiers and no headings.
+
+     #676c79 is the LIGHTEST value that clears 4.5:1 against BOTH backgrounds it
+     appears on — white (5.25:1) and the sunk panel (4.66:1) — so it keeps the
+     visual hierarchy against ink-muted (#5e6472) while being readable.
+
+     Found by `scripts/verify-css.mjs`, which computes the ratio from the emitted
+     token rather than from a value copied into a comment.
+     ------------------------------------------------------------------------- */
+  --color-ink-faint: #676c79;
 
   /* Type */
   --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",

@@ -24,9 +24,18 @@
  * ===========================================================================
  *
  * ADR 0010 requires full RTL, not an RTL afterthought, with "logical Tailwind
- * properties — start/end, never left/right". So: `start-0` not `left-0`,
- * `border-e` not `border-r`, `ps-*`/`pe-*` not `pl-*`/`pr-*`, `ms-auto` not
- * `ml-auto`, and `text-start` not `text-left`. In an RTL document the sidebar
+ * properties — start/end, never left/right". So inline-start rather than left,
+ * inline-end rather than right, and the logical margin, padding, border and
+ * text-align utilities rather than their physical twins.
+ *
+ * THE PHYSICAL CLASS NAMES ARE NOT WRITTEN OUT HERE, and that is not fussiness.
+ * Tailwind v4 scans raw file text, so naming one in prose COMPILES IT INTO THE
+ * BUNDLE — and `scripts/verify-css.mjs` now fails on any physical inline-axis
+ * property in the artifact, because it cannot tell a rule nothing uses from one
+ * something does. This comment previously named four of them and put a real
+ * physical border rule into the stylesheet — and the first attempt at THIS
+ * paragraph did it again, by naming the class while explaining that naming the
+ * class compiles it. The check caught both. In an RTL document the sidebar
  * moves to the right edge and the drawer slides from the right with no
  * stylesheet change. A component written with `left`/`right` has to be rebuilt,
  * not translated.

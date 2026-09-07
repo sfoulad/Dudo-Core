@@ -113,8 +113,8 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 345 checks against the shapes Core actually returns
-npm run verify:css       # 10 checks against the BUILT stylesheet (needs a build first)
+npm run verify:platform  # 382 checks — Core's shapes, plus accessibility structure
+npm run verify:css       # 13 checks against the BUILT stylesheet (needs a build first)
 ```
 
 `verify` runs the build before `verify:css` on purpose, so the artifact being checked can
@@ -546,6 +546,50 @@ scripts/verify-kdf.mjs                   normative checks + the cross-client dri
 scripts/verify-platform.mjs              the platform client against Core's real shapes
 scripts/node-resolve-*.mjs               dev-only ESM hooks so the scripts import real modules
 ```
+
+## The accessibility pass — what is asserted, and what is not
+
+**This is a pass bounded to what a source-and-artifact check can see. It is not an audit.** There
+is no browser here and no assistive technology, so everything below asserts that the *structure*
+exists — roles, labels, associations, focus moves, logical properties, contrast ratios. **None of
+it asserts that a screen reader announces any of it well.** That distinction is the difference
+between an accessibility pass and an accessibility claim.
+
+### What was found and fixed
+
+| | |
+|---|---|
+| **An untyped `<button>` inside a form submits it.** `ConfirmationGate`'s **Cancel** had no `type`, so clicking it fired `onCancel` *and* `onSubmit` — with both re-auth fields filled it would have **carried out the destructive action the operator had just declined.** Same shape in two filter forms. | `Button` now defaults to `type="button"`; submitting controls must say so. |
+| **`ink-faint` was 3.24:1 on white**, below WCAG AA's 4.5:1. It renders the uppercase `<dt>` labels at 12px — normal text, and the only thing naming what each value *is*. | Darkened to `#676c79`, the lightest value clearing 4.5:1 on **both** backgrounds it appears on. |
+| **A literal `←` does not flip.** In RTL "back" points right, so the arrow aimed away from where the reader came from. | An inline SVG that mirrors with `rtl:-scale-x-100`, `aria-hidden` because the link already says "Back". |
+| **The statement could be skipped.** A paragraph is not in the tab order, so someone tabbing to the password field heard nothing about what they were approving. | The statement is the accessible description of both its region **and the approve control**, and focus moves to it when the challenge arrives. |
+| **Field errors were announced only on arrival.** `aria-describedby` is read when a user reaches the input — but these errors are set on *submit*, with focus on the button, so nothing was said. | `role="alert"` on the error, safe because every form sets errors on submit and clears them on change. |
+| **The reset outcome panels replaced the form silently.** | Both take focus; success is `role="status"`, the uncertain outcome is `role="alert"`. |
+| **Duplicate literal ids** in a component used by two screens — `aria-describedby` resolves to the *first* match, so the wrong statement could be announced. | `useId()`. |
+
+### RTL
+
+**No physical inline-axis property survives into the built stylesheet** — asserted across all 250
+rules this console's classes produce, and negative-controlled with a probe using `ml-4`/`text-left`.
+`left`, `right`, `margin-left`, `padding-right`, `border-left-*`, `text-align: left` and `float` are
+all red; block-axis properties are not, because they do not mirror.
+
+**To exercise it, set `dir="rtl"` on `<html>`** (in `index.html` or devtools). There is deliberately
+no in-app language switch: the console is English-only by ruling, and a switch would imply an Arabic
+UI that does not exist.
+
+### What I could NOT verify
+
+- **That anything is actually announced well.** No screen reader was run. Roles and associations are
+  present; whether NVDA, JAWS or VoiceOver reads them in a sensible order is untested.
+- **Rendered RTL layout.** The stylesheet is direction-agnostic and asserted so; nobody has looked
+  at the console with `dir="rtl"`.
+- **Real keyboard traversal.** Focus order follows DOM order and the moves are asserted in source;
+  no one has tabbed through it.
+- **A real automated audit.** `axe-core` needs a DOM — `jsdom` or a browser — and both are new
+  dependencies. Contrast is the one part that is arithmetic, so it is checked here; the rest is not.
+- **Anything on `Organizations`, `OrganizationDetail` or `OnboardOrganization`**, which were out of
+  scope for this pass.
 
 ## Accessibility and internationalisation
 

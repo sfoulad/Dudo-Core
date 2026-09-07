@@ -67,7 +67,15 @@
  * operators to retry, which is the habit this mechanism exists to interrupt.
  */
 
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/field';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
@@ -115,6 +123,33 @@ export function ConfirmationGate({
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+
+  /*
+   * GENERATED IDS, NOT LITERALS. This component is used by two screens and could
+   * one day appear twice on one; a hardcoded `id` would then be a duplicate, and
+   * `aria-labelledby`/`aria-describedby` resolve to the FIRST match — so the
+   * wrong statement would be announced for the wrong action. `useId` makes that
+   * impossible rather than unlikely.
+   */
+  const headingId = useId();
+  const statementId = useId();
+  const statementRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * FOCUS MOVES TO THE STATEMENT WHEN THE CHALLENGE ARRIVES.
+   *
+   * The panel replaces a button that a person just pressed, so without this a
+   * screen-reader user is left focused on a control that no longer exists and
+   * hears nothing. Moving focus to the statement region means the first thing
+   * announced is what is about to happen.
+   *
+   * It targets the STATEMENT rather than the heading, because the heading is
+   * this console's wording and the statement is Core's — and the statement is
+   * the thing being approved.
+   */
+  useEffect(() => {
+    if (phase.kind === 'challenged') statementRef.current?.focus();
+  }, [phase.kind]);
 
   /*
    * ONE CHALLENGE, REQUESTED WHEN THIS GATE OPENS — which happens only because
@@ -200,7 +235,7 @@ export function ConfirmationGate({
 
   if (phase.kind === 'requesting') {
     return (
-      <Panel title={title}>
+      <Panel title={title} headingId={headingId}>
         <LoadingBlock label="Asking Core what this will do…" />
       </Panel>
     );
@@ -208,7 +243,7 @@ export function ConfirmationGate({
 
   if (phase.kind === 'failed') {
     return (
-      <Panel title={title}>
+      <Panel title={title} headingId={headingId}>
         {isCeilingCode(phase.error.code) ? (
           <CeilingNotice error={phase.error} scope="platform" />
         ) : (
@@ -232,17 +267,46 @@ export function ConfirmationGate({
   const busy = phase.kind === 'deriving' || phase.kind === 'submitting';
 
   return (
-    <Panel title={title}>
+    <Panel title={title} headingId={headingId}>
       {/*
         THE STATEMENT. Rendered as-is, inside this console's chrome but not
         altered by it. No quotation marks are added around it either — they would
         be this component editing the sentence.
+
+        ===================================================================
+        IT IS ANNOUNCED, NOT MERELY DISPLAYED, AND THAT IS A SECURITY
+        REQUIREMENT RATHER THAN A COURTESY
+        ===================================================================
+
+        A STATEMENT A SCREEN READER SKIPS IS A STATEMENT NOBODY APPROVED. A
+        sighted operator cannot miss this block; someone tabbing through the
+        form can, because a paragraph is not in the tab order — they would land
+        on the email field having heard nothing about what they are approving.
+
+        THREE MECHANISMS, BECAUSE ONE IS NOT ENOUGH:
+
+          - `role="group"` with `aria-labelledby`/`aria-describedby` makes the
+            statement the accessible DESCRIPTION of the region, so entering it
+            announces the sentence.
+          - The same `statementId` is the `aria-describedby` of the APPROVE
+            BUTTON, so the statement is read again at the moment of decision —
+            which is the moment that matters, and the one a user who tabbed
+            past the region would otherwise reach uninformed.
+          - Focus moves to this region when the challenge arrives, so the
+            statement is encountered before anything else in the panel.
       */}
-      <div className="rounded-[7px] border-2 border-navy-600 bg-navy-50 p-4 sm:p-5">
+      <div
+        ref={statementRef}
+        tabIndex={-1}
+        role="group"
+        aria-labelledby={headingId}
+        aria-describedby={statementId}
+        className="rounded-[7px] border-2 border-navy-600 bg-navy-50 p-4 sm:p-5"
+      >
         <p className="text-xs font-bold tracking-[0.06em] uppercase text-navy-700">
           What will happen
         </p>
-        <p className="mt-2 text-[0.9375rem] leading-relaxed font-semibold text-ink">
+        <p id={statementId} className="mt-2 text-[0.9375rem] leading-relaxed font-semibold text-ink">
           {challenge.statement}
         </p>
       </div>
@@ -321,7 +385,19 @@ export function ConfirmationGate({
           </Field>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" variant="primary" disabled={busy} busy={busy}>
+            {/*
+              THE STATEMENT IS THE BUTTON'S DESCRIPTION. A screen reader
+              announces it when this control is focused — so the sentence is
+              read at the moment of decision, even by someone who tabbed
+              straight here.
+            */}
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy}
+              busy={busy}
+              aria-describedby={statementId}
+            >
               {phase.kind === 'deriving'
                 ? 'Checking your password…'
                 : phase.kind === 'submitting'
@@ -346,13 +422,28 @@ export function ConfirmationGate({
   );
 }
 
-function Panel({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * `headingId` is passed in rather than generated here, so that the statement
+ * region's `aria-labelledby` and this heading's `id` are the same value. A
+ * literal would be a duplicate the moment two gates coexisted, and
+ * `aria-labelledby` resolves to the FIRST match — announcing the wrong action's
+ * title.
+ */
+function Panel({
+  title,
+  headingId,
+  children,
+}: {
+  title: string;
+  headingId: string;
+  children: ReactNode;
+}) {
   return (
     <section
-      aria-labelledby="confirmation-heading"
+      aria-labelledby={headingId}
       className="rounded-[12px] border-2 border-navy-600 bg-surface p-5 sm:p-6"
     >
-      <h2 id="confirmation-heading" className="text-lg font-bold text-ink">
+      <h2 id={headingId} className="text-lg font-bold text-ink">
         {title}
       </h2>
       <div className="mt-4">{children}</div>

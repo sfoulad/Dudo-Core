@@ -84,9 +84,32 @@ export function Field({ id, label, hint, error, className, children }: FieldProp
         </p>
       ) : null}
 
+      {/*
+        `role="alert"` SO THE ERROR IS ANNOUNCED WHEN IT APPEARS, not only when
+        the field is next focused.
+        ===================================================================
+        `aria-describedby` alone is not enough. It makes the message part of the
+        field's description — read when a screen-reader user ARRIVES at the
+        input. But these errors are set on SUBMIT, at which point focus is on the
+        submit button, and the user hears nothing: the form simply does not
+        proceed, with no stated reason.
+
+        THAT MATTERS MOST ON THE MEMBER LOOKUP, where the local refusal ("this
+        console cannot send that address") must be distinguishable from the
+        server's collapsed refusal ("no member matches"). Those two are
+        deliberately different in colour, position and wording — and colour and
+        position do not survive being read aloud. This makes the local one
+        announce itself; the server one is already a live region.
+
+        SAFE HERE BECAUSE THESE ERRORS ARE NOT LIVE-VALIDATED. Every form in this
+        console sets them on submit and CLEARS them on change, so `alert` fires
+        once per attempt rather than on every keystroke — which is what makes an
+        assertive role appropriate rather than hostile.
+      */}
       {error ? (
         <p
           id={errorId}
+          role="alert"
           className="flex items-start gap-2 text-[0.8125rem] font-semibold text-scarlet-700"
         >
           <span

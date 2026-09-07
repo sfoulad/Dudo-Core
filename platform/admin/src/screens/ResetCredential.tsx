@@ -78,7 +78,7 @@
  * completed.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { LoadingBlock } from '@/components/StateBlock';
 import { ConfirmationGate } from '@/components/ConfirmationGate';
@@ -360,9 +360,23 @@ function ResetUncertain({
 }) {
   const certainlyNotWritten = writeIsCertainlyAbsent(error);
 
+  /*
+   * FOCUSED AS WELL AS ANNOUNCED. Both branches carry `role="alert"`, which is
+   * assertive and correct here — but an alert announces the text and leaves
+   * focus where it was, and where it was is a control that no longer exists.
+   * On the uncertain branch the panel holds a password the operator must record
+   * before leaving, so arriving there is not optional.
+   */
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
   if (certainlyNotWritten) {
     return (
       <section
+        ref={panelRef}
+        tabIndex={-1}
         role="alert"
         className="mt-4 rounded-[12px] border-2 border-scarlet-600 bg-scarlet-50 p-5"
       >
@@ -386,6 +400,8 @@ function ResetUncertain({
 
   return (
     <section
+      ref={panelRef}
+      tabIndex={-1}
       role="alert"
       className="mt-4 rounded-[12px] border-2 border-gold-500 bg-gold-50 p-5"
     >
@@ -456,8 +472,34 @@ function ResetResult({
   credential: NewCredential;
   result: ResetCredentialOutput;
 }) {
+  /*
+   * ANNOUNCED AND FOCUSED, because this panel REPLACES the form the operator was
+   * using. Without either, a screen-reader user presses Approve and hears
+   * nothing at all — the control they were on is gone and the outcome is
+   * elsewhere on the page.
+   *
+   * `role="status"` (polite) rather than `alert`: this is a success, and an
+   * assertive interruption would talk over the operator mid-sentence. The focus
+   * move is what guarantees arrival; the live region is what covers the case
+   * where focus was already elsewhere.
+   *
+   * `tabIndex={-1}` makes it programmatically focusable without adding it to the
+   * tab order — a heading a keyboard user must tab THROUGH on every subsequent
+   * pass would be its own nuisance.
+   */
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
   return (
-    <section className="mt-4 rounded-[12px] border-2 border-green-500 bg-surface p-5">
+    <section
+      ref={panelRef}
+      tabIndex={-1}
+      role="status"
+      aria-live="polite"
+      className="mt-4 rounded-[12px] border-2 border-green-500 bg-surface p-5"
+    >
       <h3 className="text-base font-bold text-green-700">The password was reset</h3>
 
       {result.warnings.length > 0 ? (

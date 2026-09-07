@@ -2006,6 +2006,172 @@ checkTrue(
   ),
 );
 
+/* =========================================================================
+   12. ACCESSIBILITY — structure, roles and focus, asserted from the source
+   =========================================================================
+   WHAT THESE CAN AND CANNOT DO, STATED HERE SO THE COUNT IS NOT MISREAD.
+   They assert that the STRUCTURE exists: roles, labels, associations, focus
+   moves, explicit button types. **They cannot assert that a screen reader
+   announces any of it well.** There is no browser and no assistive technology
+   here. This is an accessibility PASS bounded to what a source check can see,
+   not an accessibility CLAIM.
+   ========================================================================= */
+
+console.log('\n=== Buttons: an untyped button inside a form SUBMITS it ===\n');
+
+/*
+ * HTML's default is `type="submit"`. `ConfirmationGate`'s Cancel sat inside the
+ * approval form untyped, so clicking it fired `onCancel` AND `onSubmit` — with
+ * both re-auth fields filled it would have carried out the destructive action
+ * the operator had just declined.
+ */
+const buttonSource = readFileSync(
+  join(import.meta.dirname, '..', 'src', 'components', 'ui', 'button.tsx'),
+  'utf8',
+);
+checkTrue(
+  'Button defaults to type="button", so a control must ASK to submit',
+  /type\s*=\s*'button'/.test(strip(buttonSource)),
+);
+checkTrue(
+  'and the default is actually applied to the element',
+  /<button\s+type=\{type\}/.test(strip(buttonSource)),
+);
+
+console.log('\n=== The confirmation flow ===\n');
+
+/*
+ * A STATEMENT A SCREEN READER SKIPS IS A STATEMENT NOBODY APPROVED. A paragraph
+ * is not in the tab order, so someone tabbing to the password field would
+ * otherwise hear nothing about what they are approving.
+ */
+checkTrue('the statement has an id that can be referenced', /id=\{statementId\}/.test(gate));
+checkTrue(
+  'the statement is the accessible description of its region',
+  /aria-describedby=\{statementId\}[\s\S]{0,400}id=\{statementId\}/.test(gate),
+);
+checkTrue(
+  'and of the approve control, so it is announced at the moment of decision',
+  (gate.match(/aria-describedby=\{statementId\}/g) ?? []).length >= 2,
+);
+checkTrue(
+  'focus moves to the statement when the challenge arrives',
+  /statementRef\.current\?\.focus\(\)/.test(gate),
+);
+/*
+ * GENERATED IDS. This component is used by two screens; a literal `id` would be
+ * a duplicate if two ever coexisted, and `aria-describedby` resolves to the
+ * FIRST match — announcing the wrong action's statement.
+ */
+checkTrue('the ids are generated, not literal', /useId\(\)/.test(gate));
+check(
+  'no hardcoded confirmation id remains',
+  /id="confirmation-heading"/.test(gate),
+  false,
+);
+
+console.log('\n=== The reset outcome panels are announced and focused ===\n');
+
+for (const [label, pattern] of [
+  ['the success panel is a live region', /role="status"[\s\S]{0,200}aria-live="polite"/],
+  ['both outcome panels take focus', /panelRef\.current\?\.focus\(\)/],
+  ['the uncertain panel is assertive', /role="alert"/],
+]) {
+  checkTrue(label, pattern.test(resetScreen));
+}
+checkTrue(
+  'the possibly-live password is labelled as such for a screen reader',
+  /Possibly-live password/.test(readScreen('ResetCredential.tsx')),
+);
+
+console.log('\n=== RTL: direction-dependent content ===\n');
+
+/*
+ * A LITERAL ARROW DOES NOT FLIP. In RTL "back" points right, and `&larr;` keeps
+ * pointing left — aiming away from where the reader came from.
+ */
+for (const name of ['OrganizationAudit.tsx', 'PlatformAudit.tsx', 'Operators.tsx', 'Templates.tsx', 'SignIn.tsx', 'ResetCredential.tsx']) {
+  const source = readScreen(name);
+  check(
+    `${name}: no hard-coded directional arrow`,
+    /&larr;|&rarr;|←|→/.test(strip(source)),
+    false,
+  );
+}
+checkTrue(
+  'the back control uses a mirroring icon instead',
+  /rtl:-scale-x-100/.test(readScreen('OrganizationAudit.tsx')),
+);
+
+console.log('\n=== Landmarks, labels and focus order ===\n');
+
+const shell = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'AdminShell.tsx'), 'utf8'),
+);
+checkTrue('the navigation is a labelled landmark', /<nav[\s\S]{0,200}aria-label="Sections"/.test(shell));
+checkTrue('the main region is addressable by the skip link', /id="main"/.test(shell));
+checkTrue('the skip link exists', /skip-link/.test(shell));
+checkTrue('the drawer toggle reports its state', /aria-expanded=\{drawerOpen\}/.test(shell));
+checkTrue('and what it controls', /aria-controls=\{drawerId\}/.test(shell));
+checkTrue('the open section is marked for a screen reader', /aria-current=/.test(shell));
+checkTrue('Escape closes the drawer', /key === 'Escape'/.test(shell));
+checkTrue('focus returns to the toggle on close', /menuButtonRef\.current\?\.focus\(\)/.test(shell));
+
+/*
+ * DECORATIVE GRAPHICS MUST NOT BE ANNOUNCED. Every inline SVG in this console is
+ * decorative — the control it sits in always carries its own text.
+ */
+{
+  const withSvg = ['AdminShell.tsx'].map((n) =>
+    readFileSync(join(import.meta.dirname, '..', 'src', 'components', n), 'utf8'),
+  );
+  withSvg.push(readScreen('OrganizationAudit.tsx'));
+  let svgCount = 0;
+  let hiddenCount = 0;
+  for (const source of withSvg) {
+    for (const tag of source.matchAll(/<svg[\s\S]*?>/g)) {
+      svgCount += 1;
+      if (/aria-hidden="true"/.test(tag[0])) hiddenCount += 1;
+    }
+  }
+  check(`all ${String(svgCount)} inline SVGs are aria-hidden`, hiddenCount, svgCount);
+}
+
+/*
+ * THE SPINNER IS DECORATIVE TOO — `busy` already changes the button's text, so
+ * announcing the spinner would repeat it.
+ */
+checkTrue('the button spinner is aria-hidden', /aria-hidden="true"[\s\S]{0,120}animate-spin/.test(strip(buttonSource)));
+
+console.log('\n=== Every form control has a programmatic label ===\n');
+
+/*
+ * `Field` wires `<label for>`, `aria-describedby` and `aria-invalid` together,
+ * so a control rendered through it cannot be unlabelled. The check is that
+ * nothing bypasses it.
+ */
+const fieldSource = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'ui', 'field.tsx'), 'utf8'),
+);
+checkTrue('Field renders a real <label for>', /<label\s+htmlFor=\{id\}/.test(fieldSource));
+checkTrue('Field joins hint and error into aria-describedby', /aria-describedby/.test(fieldSource));
+checkTrue('Field sets aria-invalid only when there is an error', /'aria-invalid':\s*error\s*\?/.test(fieldSource));
+
+for (const name of ['SignIn.tsx', 'Templates.tsx', 'PlatformAudit.tsx', 'OrganizationAudit.tsx', 'ResetCredential.tsx']) {
+  const source = strip(readScreen(name));
+  const inputs = (source.match(/<Input\b/g) ?? []).length;
+  const selects = (source.match(/<select\b/g) ?? []).length;
+  const fields = (source.match(/<Field\b/g) ?? []).length;
+  if (inputs + selects === 0) {
+    console.log(`PASS  ${name}: no bare form controls`);
+    continue;
+  }
+  checkTrue(
+    `${name}: ${String(inputs + selects)} control(s) are wrapped by ${String(fields)} Field(s)`,
+    fields >= inputs + selects,
+  );
+}
+
 console.log('');
 if (failures > 0) {
   console.error(`${String(failures)} check(s) FAILED.`);

@@ -160,7 +160,29 @@ export function OrganizationAudit({
         href={buildHash(organizationDetailPath(organizationId))}
         className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
       >
-        &larr; Back to this Organization
+        {/*
+          A LITERAL ← DOES NOT FLIP. In an RTL layout "back" points RIGHT, and a
+          hard-coded arrow character keeps pointing left — so it would aim away
+          from where the reader came from, which is worse than no arrow at all.
+
+          An inline SVG with `rtl:-scale-x-100` mirrors with the direction, and
+          `aria-hidden` keeps it out of the accessible name: the link already
+          says "Back to this Organization", and a screen reader announcing a
+          decorative glyph adds nothing.
+        */}
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 16 16"
+          className="me-1 inline-block size-3.5 align-[-0.15em] rtl:-scale-x-100"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M10 3L5 8l5 5" />
+        </svg>
+        Back to this Organization
       </a>
 
       <h1 id="section-heading" className="mt-3 text-xl font-bold text-ink sm:text-2xl">

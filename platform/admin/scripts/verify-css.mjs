@@ -54,6 +54,15 @@ function fail(name, detail) {
   console.log(`FAIL  ${name}${detail ? `\n${detail}` : ''}`);
 }
 
+function checkAtLeast(name, actual, minimum) {
+  const ok = actual >= minimum;
+  if (!ok) failures += 1;
+  console.log(
+    `${ok ? 'PASS' : 'FAIL'}  ${name} (${String(actual)})` +
+      (ok ? '' : `\n        expected at least ${String(minimum)}`),
+  );
+}
+
 /* -------------------------------------------------------------------------
    Locate the stylesheet
    ------------------------------------------------------------------------- */
@@ -322,24 +331,51 @@ function stripComparisonOperands(source) {
 function classCandidates(input) {
   const source = stripComparisonOperands(stripComments(input));
   const found = new Set();
-  const regions = [];
+
+  const addTokens = (text) => {
+    for (const token of text.split(/\s+/)) {
+      if (token !== '') found.add(token);
+    }
+  };
+
+  /*
+   * TWO KINDS OF REGION, AND CONFLATING THEM WAS A REAL BLIND SPOT.
+   *
+   * `className="a b c"` yields the class text DIRECTLY — there are no quotes
+   * left inside it once the attribute's own quotes are stripped.
+   * `className={cn('a', cond && 'b')}` yields CODE, in which the classes are
+   * quoted string literals that still have to be extracted.
+   *
+   * THE FIRST VERSION PUSHED BOTH INTO ONE LIST AND THEN SEARCHED EVERY REGION
+   * FOR QUOTED LITERALS. So a plain `className="…"` contributed NOTHING: the
+   * quotes it was found by had already been removed, and there was nothing left
+   * to match. Every plain-string className in this project was invisible to the
+   * existence check — which is most of them.
+   *
+   * IT WAS FOUND BY A NEGATIVE CONTROL, NOT BY READING. A probe with
+   * `className="ml-4 text-left"` compiled two physical rules into the stylesheet
+   * and the RTL check passed anyway, because the tokens never reached `used`.
+   * The check had been reporting on a subset it never disclosed.
+   */
   const marker = /\bclassName\s*=\s*|(?<![\w$])cn\s*\(|(?<![\w$])cva\s*\(/g;
   let match;
   while ((match = marker.exec(source)) !== null) {
     let index = match.index + match[0].length;
-    // Skip whitespace to the opening delimiter.
     while (index < source.length && /\s/.test(source[index])) index += 1;
     const opener = source[index];
+
     if (opener === '"' || opener === "'") {
+      // A quoted attribute: the contents ARE the class list.
       const end = source.indexOf(opener, index + 1);
-      if (end > index) regions.push(source.slice(index + 1, end));
+      if (end > index) addTokens(source.slice(index + 1, end));
       continue;
     }
+
     // `{` for a JSX expression, `(` because the marker consumed `cn(`/`cva(`.
     const open = opener === '{' ? '{' : '(';
     const close = open === '{' ? '}' : ')';
     let depth = opener === '{' ? 0 : 1;
-    let scan = opener === '{' ? index : index;
+    let scan = index;
     while (scan < source.length) {
       if (source[scan] === open) depth += 1;
       else if (source[scan] === close) {
@@ -348,18 +384,13 @@ function classCandidates(input) {
       }
       scan += 1;
     }
-    regions.push(source.slice(index, scan));
-  }
-
-  for (const region of regions) {
+    // Code: the classes are the quoted literals inside it.
+    const region = source.slice(index, scan);
     for (const literal of region.matchAll(/'([^'\\]*)'|"([^"\\]*)"|`([^`$\\]*)`/g)) {
-      const text = literal[1] ?? literal[2] ?? literal[3] ?? '';
-      for (const token of text.split(/\s+/)) {
-        if (token === '') continue;
-        found.add(token);
-      }
+      addTokens(literal[1] ?? literal[2] ?? literal[3] ?? '');
     }
   }
+
   return found;
 }
 
@@ -483,6 +514,261 @@ if (used.has('max-lg:inset-y-0') || used.has('inset-y-0')) {
   );
 } else {
   pass('no full-height vertical pin on the drawer (top:0 would occlude the first row)');
+}
+
+/* -------------------------------------------------------------------------
+   CHECK 3d — NO PHYSICAL INLINE-AXIS PROPERTY SURVIVES INTO THE ARTIFACT
+   -------------------------------------------------------------------------
+   RTL IS NOT A POLISH ITEM HERE. Dudo is built for Bahrain, Arabic is
+   right-to-left, and a physical `left`/`right` is the difference between a
+   layout that flips with `dir="rtl"` and one that has to be rebuilt.
+
+   THIS CHECKS THE BUILT STYLESHEET, NOT THE SOURCE, and the distinction is the
+   whole point: a `className` grep proves what was written, and this proves what
+   COMPILED. A utility that looks logical and emits a physical property — or one
+   introduced by a variant, a plugin or an arbitrary value — is invisible to the
+   first and caught by the second.
+
+   ONLY THE INLINE AXIS COUNTS. `top`/`bottom`/`margin-top`/`border-top` do not
+   mirror in a horizontal writing mode and are correct as written; `left`,
+   `right`, `margin-left`, `padding-right`, `border-left-*`, `text-align: left`
+   and `float` do.
+
+   THE SCAN IS SCOPED TO RULES THIS CONSOLE'S OWN CLASSES PRODUCE. Tailwind's
+   preflight legitimately emits physical properties on element selectors, and
+   flagging those would be noise that trains people to ignore the check.
+   ------------------------------------------------------------------------- */
+
+const PHYSICAL_INLINE_PROPERTIES = [
+  'left',
+  'right',
+  'margin-left',
+  'margin-right',
+  'padding-left',
+  'padding-right',
+  'border-left',
+  'border-left-width',
+  'border-left-color',
+  'border-left-style',
+  'border-right',
+  'border-right-width',
+  'border-right-color',
+  'border-right-style',
+  'border-top-left-radius',
+  'border-top-right-radius',
+  'border-bottom-left-radius',
+  'border-bottom-right-radius',
+  'float',
+  'clear',
+];
+
+/**
+ * `text-align` is only physical when its VALUE is `left` or `right`;
+ * `start`/`end`/`center` are fine. Checked by value rather than by property.
+ */
+function physicalDeclarations(body) {
+  const found = [];
+  for (const part of body.split(';')) {
+    const colon = part.indexOf(':');
+    if (colon <= 0) continue;
+    const name = part.slice(0, colon).trim();
+    const value = part.slice(colon + 1).trim();
+    if (name.startsWith('--')) continue;
+    if (PHYSICAL_INLINE_PROPERTIES.includes(name)) {
+      found.push(`${name}: ${value}`);
+    } else if (name === 'text-align' && (value === 'left' || value === 'right')) {
+      found.push(`${name}: ${value}`);
+    }
+  }
+  return found;
+}
+
+/** Selectors generated from a class this console uses, rather than preflight. */
+const ownClassRules = rules.filter((rule) => {
+  if (!rule.selector.includes('.')) return false;
+  for (const token of used) {
+    if (rule.selector.includes(`.${escapeClass(token)}`)) return true;
+  }
+  return false;
+});
+
+{
+  const offenders = [];
+  for (const rule of ownClassRules) {
+    const physical = physicalDeclarations(rule.body);
+    if (physical.length > 0) {
+      offenders.push({ selector: rule.selector, physical });
+    }
+  }
+  if (offenders.length === 0) {
+    pass(
+      `no physical inline-axis property in any of the ${String(ownClassRules.length)} rules this console's classes produce`,
+    );
+  } else {
+    fail(
+      `${String(offenders.length)} rule(s) emit a physical inline-axis property`,
+      offenders
+        .slice(0, 8)
+        .map(
+          ({ selector, physical }) =>
+            `        ${selector}\n          ${physical.join('; ')}\n` +
+            '          Use the logical form — ms/me, ps/pe, start/end, border-s/border-e,\n' +
+            '          text-start/text-end. This will not flip under dir="rtl".',
+        )
+        .join('\n'),
+    );
+  }
+}
+
+/*
+ * AND THE DIRECTION-AWARE VARIANTS MUST STILL WORK. `ltr:`/`rtl:` are the
+ * correct tool where a value genuinely differs by direction — the drawer's
+ * transform and the back-arrow mirror — so their absence would mean the flip was
+ * removed rather than made logical.
+ */
+{
+  const directional = rules.filter((rule) => /\.(ltr|rtl)\\:/.test(rule.selector));
+  checkAtLeast(
+    'direction-aware variants are still emitted where a value must flip',
+    directional.length,
+    1,
+  );
+}
+
+/* -------------------------------------------------------------------------
+   CHECK 3e — WCAG CONTRAST, COMPUTED FROM THE EMITTED TOKENS
+   -------------------------------------------------------------------------
+   THE ONE AUTOMATED ACCESSIBILITY CHECK THAT NEEDS NO DEPENDENCY. A real audit
+   engine (axe-core) needs a DOM, which needs jsdom or a browser — neither is
+   installed and both are new dependencies requiring approval. Contrast is
+   arithmetic: parse the token, compute relative luminance, take the ratio.
+
+   IT READS THE VALUES OUT OF THE BUILT STYLESHEET rather than a copy, so a token
+   that changes is checked at its new value rather than at the one someone typed
+   here.
+
+   THE PAIRS ARE THE ONES THIS CONSOLE ACTUALLY RENDERS. A palette-wide matrix
+   would flag combinations nobody uses and train people to ignore the output.
+
+   WHAT IT CANNOT DO: it does not know font size, so every pair is held to the
+   4.5:1 NORMAL-TEXT threshold rather than the 3:1 large-text one. That is the
+   strict direction — a pair that passes here passes at any size.
+   ------------------------------------------------------------------------- */
+
+/**
+ * `#rrggbb` from the `@theme` block, as emitted.
+ *
+ * THREE-DIGIT SHORTHAND IS EXPANDED, because the minifier writes `#ffffff` as
+ * `#fff`. The first version of this accepted only six digits and reported
+ * `surface` as "token not found" — which is the floor doing its job: it refused
+ * to compare rather than quietly passing a pair it could not read. A checker
+ * that renders "nothing examined" as "nothing wrong" is the most confident wrong
+ * answer available.
+ */
+function tokenColour(name) {
+  const match = new RegExp(`--color-${name}:\\s*(#[0-9a-fA-F]{3,6})\\b`).exec(css);
+  const raw = match?.[1];
+  if (raw === undefined) return null;
+  if (raw.length === 7) return raw.toLowerCase();
+  if (raw.length === 4) {
+    const [, r, g, b] = raw;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return null;
+}
+
+function relativeLuminance(hex) {
+  const channel = (value) => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const r = channel(Number.parseInt(hex.slice(1, 3), 16));
+  const g = channel(Number.parseInt(hex.slice(3, 5), 16));
+  const b = channel(Number.parseInt(hex.slice(5, 7), 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(foreground, background) {
+  const a = relativeLuminance(foreground);
+  const b = relativeLuminance(background);
+  const lighter = Math.max(a, b);
+  const darker = Math.min(a, b);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** [foreground token, background token, where it is used]. `#ffffff` literal for white. */
+const CONTRAST_PAIRS = [
+  ['ink', 'paper', 'body text on the page'],
+  ['ink', 'surface', 'body text on a card'],
+  ['ink-soft', 'surface', 'secondary text'],
+  ['ink-muted', 'surface', 'hint and helper text'],
+  ['ink-faint', 'surface', 'uppercase field labels'],
+  /*
+   * `ink-faint` ON SUNK TOO — the bound-parameters block and the not-built
+   * panels put those same labels on a sunk background. Checking only the white
+   * case would have passed a value that fails where it is also used.
+   */
+  ['ink-faint', 'sunk', 'uppercase labels on a sunk panel'],
+  ['ink-muted', 'sunk', 'text on a sunk panel'],
+  ['navy-700', 'navy-50', 'the confirmation statement heading'],
+  ['ink', 'navy-50', 'the confirmation statement itself'],
+  ['scarlet-700', 'scarlet-50', 'error headings'],
+  ['green-700', 'green-50', 'success headings'],
+  ['gold-700', 'gold-50', 'the ceiling and uncertain-outcome panels'],
+  ['azure-700', 'azure-50', 'the quota panel'],
+];
+
+/** White foreground pairs, written separately because white is not a token. */
+const WHITE_ON = [
+  ['navy-800', 'the header and sidebar'],
+  ['navy-600', 'the "You" badge and primary focus'],
+  ['scarlet-600', 'the primary button'],
+];
+
+{
+  const AA_NORMAL = 4.5;
+  const failuresHere = [];
+  let checked = 0;
+
+  for (const [fg, bg, where] of CONTRAST_PAIRS) {
+    const f = tokenColour(fg);
+    const b = tokenColour(bg);
+    if (f === null || b === null) {
+      failuresHere.push(`${fg} on ${bg}: token not found in the stylesheet`);
+      continue;
+    }
+    checked += 1;
+    const ratio = contrastRatio(f, b);
+    if (ratio < AA_NORMAL) {
+      failuresHere.push(
+        `${fg} (${f}) on ${bg} (${b}) = ${ratio.toFixed(2)}:1 — below ${String(AA_NORMAL)}:1 — ${where}`,
+      );
+    }
+  }
+
+  for (const [bg, where] of WHITE_ON) {
+    const b = tokenColour(bg);
+    if (b === null) {
+      failuresHere.push(`white on ${bg}: token not found`);
+      continue;
+    }
+    checked += 1;
+    const ratio = contrastRatio('#ffffff', b);
+    if (ratio < AA_NORMAL) {
+      failuresHere.push(
+        `white on ${bg} (${b}) = ${ratio.toFixed(2)}:1 — below ${String(AA_NORMAL)}:1 — ${where}`,
+      );
+    }
+  }
+
+  if (failuresHere.length === 0) {
+    pass(`all ${String(checked)} rendered colour pairs meet WCAG AA (4.5:1) for normal text`);
+  } else {
+    fail(
+      `${String(failuresHere.length)} colour pair(s) below WCAG AA`,
+      failuresHere.map((line) => `        ${line}`).join('\n'),
+    );
+  }
 }
 
 /* -------------------------------------------------------------------------

@@ -15,8 +15,11 @@
  * a cosmetic difference, not a cross-client outage, and freezing presentation
  * would stop either console from evolving its own surface.
  *
- * Every spacing and radius utility here is LOGICAL — no left/right, `border-e`
- * rather than `border-r` — so an RTL document needs no stylesheet change.
+ * Every spacing and radius utility here is LOGICAL — inline-start and inline-end
+ * rather than left and right — so an RTL document needs no stylesheet change.
+ * The physical class names are deliberately not spelled out: Tailwind scans raw
+ * text, so naming one in prose compiles it into the bundle, and the CSS check
+ * fails on any physical inline-axis property in the artifact.
  *
  * Upstream: shadcn/ui and satnaing/shadcn-admin, both MIT. See NOTICE.md.
  */
@@ -69,9 +72,43 @@ export interface ButtonProps
   ref?: Ref<HTMLButtonElement>;
 }
 
-export function Button({ className, variant, size, busy, children, ...props }: ButtonProps) {
+/**
+ * ===========================================================================
+ * IT DEFAULTS TO `type="button"`, AND THAT DEFAULT IS A DEFECT FIX
+ * ===========================================================================
+ *
+ * HTML's default for a `<button>` inside a `<form>` is **`submit`**. So every
+ * untyped button in a form submits it — including the ones whose entire purpose
+ * is not to.
+ *
+ * THAT WAS NOT HYPOTHETICAL HERE. `ConfirmationGate`'s **Cancel** sat inside the
+ * approval form with no `type`, so clicking it fired `onCancel` **and** the
+ * form's `onSubmit`. With both re-authentication fields filled, `approve` would
+ * pass its identifier check and **carry out the destructive action the operator
+ * had just declined.** The same shape was in `PlatformAudit`'s "Clear" and
+ * `Templates`' secondary controls, where the cost is a stray request rather than
+ * a revoked operator.
+ *
+ * FIXED HERE RATHER THAN AT EACH CALL SITE, because per-site `type="button"` is
+ * a discipline that a new button silently escapes — and the failure is invisible
+ * until someone clicks the safe-looking control. A submitting button must now
+ * say so, which is the direction the risk should point.
+ *
+ * `type="submit"` is explicit on the seven controls that genuinely submit, and
+ * `scripts/verify-platform.mjs` asserts that every `<Button>` inside a `<form>`
+ * either says `type="submit"` or is not meant to submit.
+ */
+export function Button({
+  className,
+  variant,
+  size,
+  busy,
+  type = 'button',
+  children,
+  ...props
+}: ButtonProps) {
   return (
-    <button className={cn(buttonVariants({ variant, size }), className)} {...props}>
+    <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props}>
       {busy ? <Spinner /> : null}
       {children}
     </button>
