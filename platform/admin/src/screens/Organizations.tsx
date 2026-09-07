@@ -20,21 +20,42 @@
  * CLIENTS.
  * ===========================================================================
  *
- * `display_name` is always `null` today: `control-plane/0002_organization.sql`
- * declined a name column because the organization-structure slice owns it. So
- * this screen is a list of 22-character opaque identifiers, which the contract
- * itself calls "not a usable administrative interface" (PO-3) — and it is stated
- * as a product dependency rather than something to paper over here.
+ * `display_name` STOPPED BEING ALWAYS-NULL ON 2026-09-07. This comment used to
+ * say it was null forever because `control-plane/0002_organization.sql` declined
+ * a name column and the organization-structure slice owned it — a sentence that
+ * pointed a reader at a slice that never happened.
+ * `organization-identity-v1` owns the field now and there is a route that sets
+ * it. Null is what is left: businesses onboarded before the field existed, and
+ * — while the name is optional on the onboarding write path — businesses whose
+ * operator did not have one to hand.
  *
- * `platform-route-handlers.ts` makes the rendering rule explicit and binding:
+ * `platform-route-handlers.ts` makes the rendering rule explicit and binding,
+ * and it is UNCHANGED by names arriving:
  *
  *   "BOTH CLIENTS MUST RENDER THE IDENTIFIER VERBATIM when it is null — not a
  *    blank, not a dash, not 'Unnamed Organization'."
  *
  * SO THERE IS NO PLACEHOLDER IN THIS FILE. Inventing "Organization 1" here and
  * something else on iPhone is precisely the divergence the one-contract rule
- * exists to prevent, and it would also be fabricated data on the one surface ADR
- * 0010 forbids it hardest.
+ * exists to prevent, and an invented name is indistinguishable from a typed one
+ * forever.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE IDENTIFIER STAYS ON SCREEN EVEN WHEN THERE IS A NAME
+ * ---------------------------------------------------------------------------
+ *
+ * *** `display_name` IS NOT UNIQUE AND NOTHING IN DUDO ENFORCES UNIQUENESS ON
+ * IT. *** The contract is explicit: "two Organizations legitimately share a name
+ * in one market, and a platform-wide constraint would make one customer's choice
+ * refuse another's."
+ *
+ * So a list showing names alone would render two different businesses
+ * identically, on the screen an operator uses to choose which customer to act
+ * on. The name is the label; the identifier is the identity, and both are shown.
+ *
+ * THE REGISTRATIONS ARE DELIBERATELY NOT COLUMNS HERE. "Two objects per row
+ * inflate every page of a listing that needs a label, and the detail route is
+ * one click away."
  *
  * ===========================================================================
  * PAGINATION IS FORWARD-ONLY, AND THE CURSOR IS OPAQUE
@@ -133,9 +154,10 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
           Organizations
         </h1>
         <p className="mt-2 max-w-prose leading-relaxed text-ink-muted">
-          Every Organization on the platform, from the control plane. Identifiers and status only
+          Every Organization on the platform, from the control plane. Name, identifier and status
           — no customer records, no counts and no activity: each of those is a tenant read, and an
-          operator is structurally incapable of making one.
+          operator is structurally incapable of making one. A business with no name recorded shows
+          its identifier, and names are not unique, so the identifier is shown either way.
         </p>
       </header>
 
@@ -231,7 +253,8 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
     <div className="overflow-hidden rounded-[12px] border border-line bg-surface">
       <table className="w-full border-collapse">
         <caption className="sr-only">
-          Organizations on the platform, with their identifier, status and creation date.
+          Organizations on the platform, with their name where one is recorded, their identifier,
+          status and creation date.
         </caption>
         <thead>
           <tr>
@@ -245,11 +268,15 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
             <tr key={organization.organization_id} className="border-t border-line align-top">
               <td className="px-4 py-3">
                 {/*
-                  VERBATIM. `display_name` is always null today, and the handler
-                  binds both clients to render the identifier itself rather than
-                  a placeholder. `break-all` because a 22-character opaque token
-                  is one unbreakable word and would otherwise widen the page on a
-                  phone.
+                  THE NAME IS THE LINK WHEN THERE IS ONE; THE IDENTIFIER IS THE
+                  LINK WHEN THERE IS NOT — verbatim, never a placeholder. And
+                  the identifier is shown either way, because names are not
+                  unique: two businesses may legitimately share one, and this is
+                  the screen where an operator picks which customer to act on.
+
+                  `break-all` because a 22-character opaque token is one
+                  unbreakable word and would otherwise widen the page on a phone;
+                  a name is ordinary text and breaks on words.
 
                   A REAL ANCHOR, NOT A CLICKABLE ROW. It can be opened in a new
                   tab, copied, and reached by keyboard in the ordinary way — a
@@ -258,10 +285,20 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                 */}
                 <a
                   href={buildHash(organizationDetailPath(organization.organization_id))}
-                  className="font-mono text-[0.8125rem] font-semibold break-all text-navy-600 no-underline hover:underline"
+                  className={cn(
+                    'text-[0.8125rem] font-semibold text-navy-600 no-underline hover:underline',
+                    organization.display_name === null
+                      ? 'font-mono break-all'
+                      : 'text-[0.9375rem] break-words',
+                  )}
                 >
                   {organization.display_name ?? organization.organization_id}
                 </a>
+                {organization.display_name !== null ? (
+                  <span className="mt-0.5 block font-mono text-xs break-all text-ink-muted">
+                    {organization.organization_id}
+                  </span>
+                ) : null}
                 {/* The date, on phones, where its own column is hidden. */}
                 <span className="mt-1 block text-xs text-ink-muted sm:hidden">
                   Created <CreatedAt value={organization.created_at} />

@@ -82,12 +82,20 @@
  * this class: at 2 row-writes per call a thirty-second refresh loop exhausts an
  * operator's daily ceiling in about two and a half hours and then answers 503.
  * No interval, no refetch on focus, no refetch on reconnect.
+ *
+ * AND SAVING THE IDENTITY DOES NOT RE-READ. The update route returns the whole
+ * identity block after the change — "a console applying a partial response to
+ * local state has to guess what the server did with the fields it omitted; a
+ * whole block cannot be guessed wrong" — so the saved value is merged into the
+ * loaded detail rather than fetched again. A re-read would double the cost of
+ * every edit for information already in hand.
  */
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/field';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import { OrganizationIdentityPanel } from '@/components/OrganizationIdentity';
 import { ResetCredential } from '@/screens/ResetCredential';
 import { cn } from '@/lib/cn';
 import { buildHash, organizationAuditPath, ROUTES } from '@/lib/router';
@@ -283,20 +291,38 @@ export function OrganizationDetail({
         &larr; All Organizations
       </a>
 
-      <h1
-        id="section-heading"
-        className="mt-3 font-mono text-lg font-bold break-all text-ink sm:text-xl"
-      >
-        {/*
-          VERBATIM WHEN `display_name` IS NULL, which is always today. The
-          contract binds every client: "A client renders organization_id verbatim
-          when this is null and MUST NOT substitute a placeholder of its own, or
-          two consoles will invent two different ones."
-        */}
-        {load.kind === 'loaded'
-          ? (load.detail.display_name ?? load.detail.organization_id)
-          : organizationId}
-      </h1>
+      {/*
+        THE NAME IS THE HEADING WHEN THERE IS ONE, AND THE IDENTIFIER IS
+        VERBATIM WHEN THERE IS NOT. The contract binds every client: "A client
+        renders organization_id verbatim when this is null and MUST NOT
+        substitute a placeholder of its own, or two consoles will invent two
+        different ones." Null is no longer the only state — it is the state of
+        businesses that predate the field.
+
+        THE IDENTIFIER STAYS ON SCREEN EVEN WHEN A NAME EXISTS, and that is not
+        redundancy: `display_name` IS NOT UNIQUE AND NOTHING IN DUDO ENFORCES
+        UNIQUENESS ON IT — "two Organizations legitimately share a name in one
+        market". A console that showed only the name would make two different
+        businesses look like one, on the screen where an operator decides which
+        customer they are acting on.
+      */}
+      {load.kind === 'loaded' && load.detail.display_name !== null ? (
+        <>
+          <h1 id="section-heading" className="mt-3 text-lg font-bold break-words text-ink sm:text-xl">
+            {load.detail.display_name}
+          </h1>
+          <p className="mt-1 font-mono text-[0.8125rem] break-all select-all text-ink-muted">
+            {load.detail.organization_id}
+          </p>
+        </>
+      ) : (
+        <h1
+          id="section-heading"
+          className="mt-3 font-mono text-lg font-bold break-all text-ink sm:text-xl"
+        >
+          {load.kind === 'loaded' ? load.detail.organization_id : organizationId}
+        </h1>
+      )}
 
       {load.kind === 'loading' ? (
         <div className="mt-5">
@@ -324,6 +350,25 @@ export function OrganizationDetail({
 
       {load.kind === 'loaded' ? (
         <>
+          <OrganizationIdentityPanel
+            platform={platform}
+            organizationId={load.detail.organization_id}
+            identity={{
+              display_name: load.detail.display_name,
+              commercial_registration: load.detail.commercial_registration,
+              vat_registration: load.detail.vat_registration,
+            }}
+            /*
+             * THE SAVED BLOCK IS MERGED, NOT RE-FETCHED. Core returns the whole
+             * identity after the change, so there is nothing to guess and
+             * nothing to ask for again. `member_count`, `status`, `template`
+             * and `created_at` are untouched by this route and keep their
+             * loaded values.
+             */
+            onSaved={(identity) => {
+              setLoad({ kind: 'loaded', detail: { ...load.detail, ...identity } });
+            }}
+          />
           <DetailCard detail={load.detail} />
           <MemberLookup platform={platform} organizationId={load.detail.organization_id} />
         </>

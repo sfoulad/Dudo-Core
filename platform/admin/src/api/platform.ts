@@ -126,14 +126,28 @@ export interface OrganizationSummary {
    */
   readonly created_at: string;
   /**
-   * ALWAYS NULL TODAY. Present in the shape so that adding names later is
-   * additive rather than a new field appearing in a published response.
+   * THE ORGANIZATION'S NAME, OR NULL WHEN NONE HAS EVER BEEN RECORDED.
+   *
+   * THIS SAID "ALWAYS NULL TODAY" AND THAT STOPPED BEING TRUE ON 2026-09-07,
+   * when `organization-identity-v1` gave the field a route that sets it. Null is
+   * now a real and shrinking state rather than the only state — reachable for
+   * Organizations that predate the field, and while `display_name` is optional
+   * on the onboarding write path, reachable for new ones too.
+   *
+   * ALSO: IT WAS MOVED INTO `required` IN THE SCHEMA ON THE SAME DAY. It had
+   * been in `properties` and not in `required` under `additionalProperties:
+   * false` — a permitted optional field, latent only while the value was always
+   * null. This parser has always required it, so the fix changed nothing here.
    *
    * WHEN IT IS NULL THE IDENTIFIER IS RENDERED VERBATIM. `platform-route-handlers.ts`
    * states it as a rule binding both clients: "not a blank, not a dash, not
    * 'Unnamed Organization'." A placeholder invented here and a different one
    * invented on iPhone is exactly the divergence the one-contract rule exists to
    * prevent.
+   *
+   * THE REGISTRATIONS ARE DELIBERATELY NOT ON THIS ROW. "Two objects per row
+   * inflate every page of a listing that needs a label, and the detail route is
+   * one click away."
    */
   readonly display_name: string | null;
 }
@@ -646,12 +660,273 @@ export interface EmbeddedTemplate {
   readonly level_labels: Readonly<Record<TemplateLevel, string>>;
 }
 
+/* -------------------------------------------------------------------------
+   Organization identity — `organization-identity-v1`
+   -------------------------------------------------------------------------
+   THREE FIELDS: a display name, a commercial registration and a VAT
+   registration. THE TWO REGISTRATIONS SHARE ONE SHAPE, deliberately — they are
+   two instances of one category (a government-issued identifier recorded about
+   an Organization), and the shared shape is what makes a third instance a
+   decision rather than a default.
+
+   EVERY REGISTRATION HAS THREE STATES, NOT TWO, AND THIS CONSOLE MUST NOT
+   COLLAPSE THE FIRST TWO:
+
+     not_recorded    NOBODY HAS ASKED. The default for every Organization.
+     not_registered  THE CUSTOMER STATED THEY HAVE NONE — a legitimate,
+                     permanent, positive fact. Bahrain VAT registration is
+                     mandatory above a threshold and voluntary below it.
+     registered      A number is recorded, verified or not.
+
+   "Merged, you cannot tell 'they told us they are not registered' from 'we
+   never asked', so you cannot decide whether to prompt and cannot defend the
+   record afterwards." A console that renders `not_registered` as missing data
+   keeps prompting a customer who has already answered.
+
+   IT IS MODELLED AS A DISCRIMINATED UNION RATHER THAN A NULLABLE NUMBER BESIDE
+   A FLAG, so `{ state: 'not_registered', number: '123' }` cannot be
+   constructed. The contract chose that shape for something read once, years
+   later, by someone who cannot ask; this client keeps it rather than flattening
+   it into optional fields at the parse boundary.
+   ------------------------------------------------------------------------- */
+
+/**
+ * WHO CHECKED THIS NUMBER AGAINST THE ISSUING REGISTRY, AND WHEN.
+ *
+ * EVERY FIELD IS SERVER-STAMPED AND NONE IS CALLER-SUPPLIED — the operator from
+ * the authenticated platform context, the instant from Core's clock. There is
+ * no input shape for this type anywhere in this file, and there must not be: a
+ * caller-supplied provenance value is not provenance.
+ */
+export interface RegistrationVerification {
+  readonly verified_by_principal_id: string;
+  /** RFC 3339 UTC, exactly three fractional digits. */
+  readonly verified_at: string;
+}
+
+/** One government-issued registration, as returned. */
+export type RegistrationRecord =
+  | { readonly state: 'not_recorded' }
+  | { readonly state: 'not_registered'; readonly declared_at: string }
+  | {
+      readonly state: 'registered';
+      readonly number: string;
+      readonly recorded_at: string;
+      /**
+       * NULL MEANS RECORDED BUT UNVERIFIED, and it is a state this console
+       * renders DISTINCTLY. "A number an operator typed" and "a number an
+       * operator checked against the registry" are the two things the whole
+       * design exists to keep apart.
+       */
+      readonly verification: RegistrationVerification | null;
+    }
+  /**
+   * A STATE THIS BUILD DOES NOT KNOW. Kept rather than refused, so that a
+   * fourth state added to the contract renders as an honest "this console does
+   * not understand this" instead of failing the whole detail page — and so it
+   * can never be mistaken for one of the three above.
+   */
+  | { readonly state: 'unrecognised'; readonly raw: string };
+
+/** One registration, as submitted. NONE of the server-stamped fields. */
+export type RegistrationInput =
+  | { readonly state: 'not_recorded' }
+  | { readonly state: 'not_registered' }
+  | {
+      readonly state: 'registered';
+      readonly number: string;
+      /**
+       * TRUE MEANS: *I have just checked this number against the issuing
+       * registry.* Core stamps the acting operator and the current instant.
+       *
+       * IT IS REQUIRED RATHER THAN DEFAULTING TO FALSE, so the operator makes
+       * the claim or declines it explicitly and no code path here produces a
+       * verification by omission.
+       */
+      readonly verified: boolean;
+    };
+
+/** The three fields, as returned. The whole block, after any change. */
+export interface OrganizationIdentity {
+  /** NULL means no name has ever been recorded. Render the identifier verbatim. */
+  readonly display_name: string | null;
+  readonly commercial_registration: RegistrationRecord;
+  readonly vat_registration: RegistrationRecord;
+}
+
+/**
+ * PARTIAL. An omitted field is UNCHANGED; a present field is REPLACED WHOLE.
+ *
+ * THERE IS NO MERGE INSIDE A REGISTRATION. Sending
+ * `{ state: 'registered', number, verified }` replaces the entire record, which
+ * is what keeps a verification from surviving a number it does not attest to.
+ *
+ * `display_name` CANNOT BE SET TO NULL — renaming is permitted, un-naming is
+ * not, because null is a legacy state rather than a choice. There is no
+ * `| null` on this property and that is the enforcement.
+ */
+export interface UpdateOrganizationIdentityInput {
+  readonly display_name?: string;
+  readonly commercial_registration?: RegistrationInput;
+  readonly vat_registration?: RegistrationInput;
+}
+
+/**
+ * The two bounds, transcribed from `organization-identity-v1.schema.json`.
+ *
+ * ASSERTED AGAINST THE SCHEMA FILE by `verify-platform.mjs` rather than trusted
+ * — the same treatment `MAX_WINDOW_DAYS` gets, and for the same reason: a
+ * number copied out of a document is a claim that was true when it was copied.
+ */
+export const MAX_DISPLAY_NAME_LENGTH = 200;
+export const MAX_REGISTRATION_NUMBER_LENGTH = 32;
+
+/**
+ * The registration-number hygiene bound.
+ *
+ * *** THERE IS DELIBERATELY NO DIGIT COUNT AND NO PER-JURISDICTION FORMAT, AND
+ * THE ABSENCE IS A RULING RATHER THAN AN OMISSION. *** Bahrain VAT account
+ * numbers are widely reported as fifteen digits; that figure comes from
+ * secondary sources and is NOT in this pattern. **A pattern is a refusal** — an
+ * at-count pattern that is wrong REFUSES A LEGAL REGISTRATION, and the failure
+ * lands on a customer who cannot be onboarded and an operator whose only remedy
+ * is to invent a value.
+ *
+ * SO DO NOT NARROW THIS HERE. Narrowing it is BREAKING under `API_STANDARD.md`
+ * §6 and requires a decision record citing the issuing authority's published
+ * specification by document and date. A console that narrowed it locally would
+ * produce exactly that refusal with none of that record.
+ */
+const REGISTRATION_NUMBER_PATTERN = /^[A-Za-z0-9]([A-Za-z0-9 -]*[A-Za-z0-9])?$/;
+
+/** `displayName`'s pattern: no leading or trailing whitespace. */
+const DISPLAY_NAME_PATTERN = /^[^\s].*[^\s]$|^[^\s]$/s;
+
+/**
+ * Local shape refusal for a display name. Returns a sentence, or `null`.
+ *
+ * IT REFUSES RATHER THAN TRIMS, matching `templateNameRefusal` — the pattern is
+ * `templateName`'s, transcribed by the contract so the two human-entered names
+ * in the platform class agree. Trimming silently would store a value the
+ * operator did not type.
+ *
+ * EVERY CONDITION IS ABOUT WHAT THE OPERATOR JUST TYPED and none is a fact
+ * about data, so refusing locally discloses nothing — the same line the window
+ * pre-check and the member-lookup identifier check sit on.
+ */
+export function displayNameRefusal(value: string): string | null {
+  if (value === '') return 'A name cannot be empty.';
+  if (!DISPLAY_NAME_PATTERN.test(value)) {
+    return 'A name cannot start or end with a space. Type it without the padding rather than relying on Dudo to trim it.';
+  }
+  if (value.length > MAX_DISPLAY_NAME_LENGTH) {
+    return `A name can be at most ${String(MAX_DISPLAY_NAME_LENGTH)} characters. This one is ${String(value.length)}.`;
+  }
+  return null;
+}
+
+/** Local shape refusal for a registration number. Returns a sentence, or `null`. */
+export function registrationNumberRefusal(value: string): string | null {
+  if (value === '') return 'Type the number, or choose one of the other two states.';
+  if (value.length > MAX_REGISTRATION_NUMBER_LENGTH) {
+    return `A registration number can be at most ${String(MAX_REGISTRATION_NUMBER_LENGTH)} characters. This one is ${String(value.length)}.`;
+  }
+  if (!REGISTRATION_NUMBER_PATTERN.test(value)) {
+    return 'Use letters, digits, spaces and hyphens only, and do not start or end with a space or a hyphen. Dudo records the number as the registry issues it and checks nothing else about its shape.';
+  }
+  return null;
+}
+
+export const REGISTRATION_STATES = ['not_recorded', 'not_registered', 'registered'] as const;
+export type RegistrationState = (typeof REGISTRATION_STATES)[number];
+
+export function isKnownRegistrationState(value: string): value is RegistrationState {
+  return (REGISTRATION_STATES as readonly string[]).includes(value);
+}
+
+export function parseRegistrationRecord(payload: unknown, what: string): RegistrationRecord {
+  const body = requireObject(payload, what);
+  const state = requireString(body, 'state', what);
+
+  if (state === 'not_recorded') return { state: 'not_recorded' };
+
+  if (state === 'not_registered') {
+    /*
+     * `declared_at` IS REQUIRED HERE AND IS WHAT SEPARATES THIS FROM
+     * `not_recorded` IN SUBSTANCE. "An assertion with a date is a fact somebody
+     * can be held to, and one without is indistinguishable from a default." So
+     * a missing one is refused rather than rendered as an undated declaration.
+     */
+    return { state: 'not_registered', declared_at: requireString(body, 'declared_at', what) };
+  }
+
+  if (state === 'registered') {
+    if (!('verification' in body)) {
+      throw new ShapeError(`${what} is missing the required field "verification".`);
+    }
+    const rawVerification = body.verification;
+    let verification: RegistrationVerification | null = null;
+    if (rawVerification !== null) {
+      const nested = requireObject(rawVerification, `${what} field "verification"`);
+      verification = {
+        verified_by_principal_id: requireString(
+          nested,
+          'verified_by_principal_id',
+          `${what} field "verification"`,
+        ),
+        verified_at: requireString(nested, 'verified_at', `${what} field "verification"`),
+      };
+    }
+    return {
+      state: 'registered',
+      number: requireString(body, 'number', what),
+      recorded_at: requireString(body, 'recorded_at', what),
+      verification,
+    };
+  }
+
+  /*
+   * A STATE THIS BUILD HAS NEVER HEARD OF. Carried through rather than thrown,
+   * so one unknown registration does not take down a detail page whose other
+   * six fields are fine — and rendered as unrecognised rather than silently
+   * mapped onto `not_recorded`, which would tell an operator nobody had asked
+   * when the truth is that this console cannot read the answer.
+   */
+  return { state: 'unrecognised', raw: state };
+}
+
+export function parseOrganizationIdentity(payload: unknown, what: string): OrganizationIdentity {
+  const body = requireObject(payload, what);
+  if (!('commercial_registration' in body) || !('vat_registration' in body)) {
+    throw new ShapeError(
+      `${what} is missing "commercial_registration" or "vat_registration". Both are required.`,
+    );
+  }
+  return {
+    display_name: requireNullableString(body, 'display_name', what),
+    commercial_registration: parseRegistrationRecord(
+      body.commercial_registration,
+      `${what} field "commercial_registration"`,
+    ),
+    vat_registration: parseRegistrationRecord(
+      body.vat_registration,
+      `${what} field "vat_registration"`,
+    ),
+  };
+}
+
 export interface OrganizationDetail {
   readonly organization_id: string;
   readonly status: string;
   readonly created_at: string;
-  /** ALWAYS null today. Render `organization_id` verbatim — never a placeholder. */
+  /**
+   * NULL MEANS NO NAME HAS EVER BEEN RECORDED — reachable only for
+   * Organizations created before this field existed. Render `organization_id`
+   * verbatim: "not a blank, not a dash, not 'Unnamed Organization'."
+   */
   readonly display_name: string | null;
+  readonly commercial_registration: RegistrationRecord;
+  readonly vat_registration: RegistrationRecord;
   /** Null when no Template was recorded, which today is every Organization. */
   readonly template: EmbeddedTemplate | null;
   /**
@@ -716,11 +991,21 @@ export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
     throw new ShapeError(`${what} field "member_count" was not a non-negative integer.`);
   }
 
+  /*
+   * THE IDENTITY BLOCK IS PARSED BY THE SAME FUNCTION THE UPDATE RESPONSE USES,
+   * so the detail page and the post-save state cannot disagree about a shape.
+   * `organization-identity-v1` is what makes these three fields carry values;
+   * `organization-detail-v1` embeds the block rather than defining a second one.
+   */
+  const identity = parseOrganizationIdentity(body, what);
+
   return {
     organization_id: requireString(body, 'organization_id', what),
     status: requireString(body, 'status', what),
     created_at: requireString(body, 'created_at', what),
-    display_name: requireNullableString(body, 'display_name', what),
+    display_name: identity.display_name,
+    commercial_registration: identity.commercial_registration,
+    vat_registration: identity.vat_registration,
     template,
     member_count: memberCount,
   };
@@ -783,6 +1068,49 @@ export interface OnboardOrganizationInput {
   readonly template_id: string;
   /** Exactly 43 base64url characters. The password itself is never sent. */
   readonly derived_value: string;
+  /**
+   * ACCEPTED BY CORE SINCE 2026-09-07. It is sent when the operator typed one.
+   * ===========================================================================
+   *
+   * *** IT WAS BRIEFLY UNSENDABLE, AND THE REASON IS WORTH KEEPING. *** The
+   * contract published this field while `platform.organizations.create`
+   * declared only four — `admin_identifier`, `template_id`,
+   * `first_workspace_name`, `derived_value`. **The platform class refuses
+   * undeclared fields BEFORE AUTHENTICATION**, so a client that trusted the
+   * contract would have failed the first request carrying it and every one
+   * after it, on the route that creates customers.
+   *
+   * SO READING THE CONTRACT WAS NOT EVIDENCE THAT CORE ACCEPTED THE FIELD.
+   * Core landed it the same day — declared, parsed optionally with the same
+   * check the update route uses, persisted as NULL when absent, nothing
+   * synthesised — and the divergence is closed.
+   *
+   * IT IS THE MIRROR OF THE RULING BELOW, AND THE RULING ONLY COVERED ONE
+   * DIRECTION. `0031` makes the field optional so that a server requiring what
+   * a client does not send cannot cause an outage. The opposite — a client
+   * sending what a server does not accept — was open, and it was open *because
+   * the contract said the field was there*.
+   *
+   * ---------------------------------------------------------------------------
+   *
+   * OPTIONAL IN THIS VERSION, AND IT SHOULD NOT BE — Team Lead ruling,
+   * 2026-09-07, on sequencing rather than design.
+   *
+   * "A SERVER REQUIRING A FIELD THE DEPLOYED CONSOLE DOES NOT YET SEND IS AN
+   * ONBOARDING OUTAGE. A client sending a field the server ignores is harmless;
+   * the reverse is not." So the console ships first and Core tightens
+   * afterwards.
+   *
+   * OMITTED MEANS NO NAME IS RECORDED — null, not a placeholder. Core must not
+   * synthesise one from the identifier, the Template or the Workspace name, and
+   * neither may this console: an invented name is indistinguishable from one an
+   * operator typed, forever.
+   *
+   * NOT TO BE CONFUSED WITH `first_workspace_name`, which this client also
+   * sends as a fixed placeholder for an unrelated reason. Different field,
+   * different object, and this change does not fix that one.
+   */
+  readonly display_name?: string;
 }
 
 export function isKnownOnboardingWarning(value: string): value is OnboardingWarning {
@@ -949,7 +1277,7 @@ function codeForStatus(status: number): ErrorCode {
 
 async function platformRequest(
   path: string,
-  init: { method: 'GET' | 'POST'; body?: unknown },
+  init: { method: 'GET' | 'POST' | 'PATCH'; body?: unknown },
   fetchImpl?: typeof fetch,
 ): Promise<unknown> {
   const doFetch = fetchImpl ?? globalThis.fetch.bind(globalThis);
@@ -1236,6 +1564,22 @@ export interface PlatformClient {
   createTemplate(input: CreateTemplateInput): Promise<Template>;
   onboardOrganization(input: OnboardOrganizationInput): Promise<OnboardOrganizationOutput>;
   readOrganization(organizationId: string): Promise<OrganizationDetail>;
+  /**
+   * Set a name, a commercial registration, a VAT registration, or any subset.
+   *
+   * PARTIAL, AND IT RETURNS THE WHOLE IDENTITY BLOCK — "a console applying a
+   * partial response to local state has to guess what the server did with the
+   * fields it omitted; a whole block cannot be guessed wrong."
+   *
+   * NOT CONFIRMATION-GATED. The route is `sensitive`, not `critical`, and this
+   * console must not invent a gate the ladder did not put there: making a VAT
+   * field critical generalises to every field and the rung stops sorting
+   * anything. Verification acts at the point of harm instead.
+   */
+  updateOrganizationIdentity(
+    organizationId: string,
+    input: UpdateOrganizationIdentityInput,
+  ): Promise<OrganizationIdentity>;
   resolveMember(organizationId: string, identifier: string): Promise<ResolveMemberOutput>;
   /** The oversight view. No principal-level target, and no filter for one. */
   listPlatformAudit(options?: {
@@ -1573,13 +1917,92 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
       }
     },
 
+    async updateOrganizationIdentity(organizationId, input) {
+      /*
+       * =====================================================================
+       * EXACTLY THE FIELDS THE OPERATOR CHANGED, AND NEVER AN EMPTY BODY
+       * =====================================================================
+       *
+       * The input object is `minProperties: 1` and an empty body is
+       * `invalid_argument` — because "a no-op here still writes a platform
+       * audit record and FIVE ROW-WRITES INTO THE CUSTOMER'S OWN DAILY
+       * ALLOCATION, and a request that spends a customer's budget to change
+       * nothing is a request that should not have been accepted."
+       *
+       * So this refuses to send one rather than earning that refusal. THE
+       * CONDITION IS ABOUT THE SHAPE OF THE REQUEST — how many properties the
+       * caller supplied — and not about any fact stored anywhere, so deciding
+       * it here discloses nothing. Same line as the window pre-check.
+       *
+       * AN OMITTED FIELD IS UNCHANGED AND A PRESENT ONE IS REPLACED WHOLE.
+       * There is no merge inside a registration, so a caller that wants to keep
+       * a verification must omit the whole registration rather than re-send it
+       * — re-sending re-stamps it with today's operator and today's date.
+       */
+      const body: Record<string, unknown> = {};
+      if (input.display_name !== undefined) body.display_name = input.display_name;
+      if (input.commercial_registration !== undefined) {
+        body.commercial_registration = input.commercial_registration;
+      }
+      if (input.vat_registration !== undefined) body.vat_registration = input.vat_registration;
+
+      if (Object.keys(body).length === 0) {
+        throw new ApiError({
+          code: 'invalid_argument',
+          message:
+            'Nothing was changed, so nothing was sent. Editing a field and saving it unchanged ' +
+            'would still spend five of this business’s daily writes.',
+        });
+      }
+
+      try {
+        return parseOrganizationIdentity(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}/identity`,
+            { method: 'PATCH', body },
+            options.fetchImpl,
+          ),
+          'The identity update response',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
     async resolveMember(organizationId, identifier) {
       /*
        * =====================================================================
-       * EXACTLY ONE FIELD. NO CONFIRMATION TOKEN, AND THAT IS DELIBERATE.
+       * EXACTLY ONE FIELD, AND IT IS `target_identifier` SINCE 2026-09-07.
        * =====================================================================
        *
-       * `resolveMemberInput` is `required: ['identifier']` with
+       * *** THE FIELD IS `target_identifier`. IT IS NOT `identifier`, AND BOTH
+       * MUST NEVER BE SENT TOGETHER. *** Core refuses both-present with
+       * `must_not_send_both_names`, deliberately: if the two values differ,
+       * choosing between them silently is choosing WHICH PRINCIPAL TO RESOLVE.
+       *
+       * WHY THE NAME MOVED, because the reason is a rule and not a rename.
+       * `architecture.md` §1a: a field name defined by a cross-cutting mechanism
+       * is reserved platform-wide with exactly one meaning. `confirmation-v1`
+       * injects `reauth_identifier` — the CALLER'S own — into request shapes it
+       * does not own, and a bare `identifier` beside it is one word two
+       * contracts can each use correctly while meaning different people. Here it
+       * is the TARGET'S, so it says whose.
+       *
+       * THIS CLIENT SENT `identifier` UNTIL TODAY AND THAT WAS CORRECT, WHICH IS
+       * THE UNCOMFORTABLE PART. The contract published `target_identifier` while
+       * Core's route declared `identifier`; the resolve worked because this file
+       * was written against the running code rather than the document. **A
+       * contract that has stopped describing the code has stopped being the
+       * source of truth**, and noticing that is the last line of defence rather
+       * than a control.
+       *
+       * THE SWITCH IS PHASE 2 OF THREE AND THE ORDER IS NOT NEGOTIABLE: Core
+       * accepts both names (done), this client moves (here), then Core and the
+       * contract drop the old name in one change (`0034`, `OD-5`, not ours).
+       * Moving before Core accepted both would have been an outage; Core
+       * dropping `identifier` before this landed would have been the other one.
+       *
+       * NO CONFIRMATION TOKEN, AND THAT IS DELIBERATE. `resolveMemberInput` is
        * `additionalProperties: false`, so any extra field is a validation
        * failure rather than a courtesy — including a confirmation token.
        *
@@ -1610,11 +2033,25 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
        * operator submit and at no other time: no resolve-as-you-type, no
        * prefetch, no retry-on-blur, no automatic retry of any kind.
        */
+      /*
+       * ONE FIELD, BUILT UNCONDITIONALLY, AND THE UNCONDITIONALITY IS THE
+       * GUARD.
+       *
+       * There is no branch here that could put `identifier` back, and no
+       * spread that could add it — so "never send both" is a property of the
+       * literal rather than a rule someone remembers. Core's own implementation
+       * carries the matching hazard on the reading side: `target_identifier ??
+       * identifier` treats an EXPLICIT NULL as absent, so a body with
+       * `target_identifier: null` slips past a both-present check and quietly
+       * resolves the legacy value. **A conditionally-built body is where that
+       * bug would arrive on this side**, which is why this one is not built
+       * conditionally.
+       */
       try {
         return parseResolveMember(
           await platformRequest(
             `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}/members/resolve`,
-            { method: 'POST', body: { identifier } },
+            { method: 'POST', body: { target_identifier: identifier } },
             options.fetchImpl,
           ),
         );
@@ -1642,13 +2079,27 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
        * widen a bounded bootstrap exception to `0007` D11 into a general grant
        * mechanism — which `0025` names as the bound most likely to erode.
        */
-      const body = {
+      const body: Record<string, unknown> = {
         admin_identifier: input.admin_identifier,
         template_id: input.template_id,
         // Required, validated, discarded. See the constant.
         first_workspace_name: DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
         derived_value: input.derived_value,
       };
+      /*
+       * `display_name` IS SENT ONLY WHEN THE OPERATOR TYPED ONE, and ABSENT
+       * rather than empty otherwise. "Absent" and "present and empty" are
+       * different requests and the class accepts only one of them — an empty
+       * string would be `out_of_range` against `minLength: 1`, turning a blank
+       * optional field into a validation error.
+       *
+       * OMITTED MEANS NULL, WHICH MEANS NO NAME WAS RECORDED. Nothing here
+       * substitutes the identifier, the Template name or the Workspace
+       * placeholder for a name the operator did not give.
+       */
+      if (input.display_name !== undefined && input.display_name !== '') {
+        body.display_name = input.display_name;
+      }
       try {
         return parseOnboardOrganization(
           await platformRequest(

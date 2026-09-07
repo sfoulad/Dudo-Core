@@ -38,8 +38,15 @@ import {
   parsePlatformFeed,
   parseListOperators,
   parseResolveMember,
+  parseOrganizationIdentity,
+  parseRegistrationRecord,
   isKnownAuditOutcome,
   isKnownPlatformRole,
+  isKnownRegistrationState,
+  displayNameRefusal,
+  registrationNumberRefusal,
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_REGISTRATION_NUMBER_LENGTH,
   toUtcExclusiveDayEnd,
   toUtcDayStart,
   parseTemplate,
@@ -940,11 +947,19 @@ for (const [code, note] of [
 
 console.log('\n=== Organization detail: the real shape ===\n');
 
+/*
+ * `commercial_registration` AND `vat_registration` WERE ADDED TO THIS RESPONSE
+ * ON 2026-09-07 by `organization-identity-v1`, and both are in `required`. They
+ * are `not_recorded` here, which is the state every existing Organization is in
+ * — "nobody has asked", which is a different fact from "they have none".
+ */
 const DETAIL_BODY = {
   organization_id: 'og_synthetic_0000000001',
   status: 'active',
   created_at: '2026-09-05T09:00:00Z',
   display_name: null,
+  commercial_registration: { state: 'not_recorded' },
+  vat_registration: { state: 'not_recorded' },
   template: {
     template_id: 'tp_synthetic_0000000001',
     name: 'School',
@@ -980,6 +995,15 @@ for (const [label, body] of [
   ['member_count a string', { ...DETAIL_BODY, member_count: '3' }],
   ['an enveloped detail body', { data: DETAIL_BODY }],
   ['a template missing a level label', { ...DETAIL_BODY, template: { template_id: 'tp_x', name: 'S', level_labels: { organization: 'G', workspace: 'C' } } }],
+  /*
+   * BOTH REGISTRATIONS ARE REQUIRED. A response missing one is refused rather
+   * than rendered as `not_recorded` — "nobody has asked" and "this response is
+   * not the shape it claims" are different facts, and only one is safe to show
+   * an operator about a customer.
+   */
+  ['commercial_registration ABSENT', (() => { const b = { ...DETAIL_BODY }; delete b.commercial_registration; return b; })()],
+  ['vat_registration ABSENT', (() => { const b = { ...DETAIL_BODY }; delete b.vat_registration; return b; })()],
+  ['a registration with no state', { ...DETAIL_BODY, vat_registration: {} }],
 ]) {
   try {
     parseOrganizationDetail(body);
@@ -1038,16 +1062,46 @@ check('an invented role is NOT claimed as known', isKnownMembershipRole('admin')
   check('resolve is a POST', calls[0].init.method, 'POST');
   const sent = JSON.parse(calls[0].init.body);
   /*
-   * `resolveMemberInput` IS `required: ['identifier']` WITH
-   * `additionalProperties: false`. A confirmation token here would be a
-   * validation failure, not a courtesy — AND gating the resolve would deadlock
-   * the credential reset, because the principal_id this route returns is
-   * precisely what the reset's confirmation must name.
+   * `resolveMemberInput` IS ONE FIELD WITH `additionalProperties: false`. A
+   * confirmation token here would be a validation failure, not a courtesy — AND
+   * gating the resolve would deadlock the credential reset, because the
+   * principal_id this route returns is precisely what the reset's confirmation
+   * must name.
+   *
+   * *** THE FIELD IS `target_identifier` SINCE 2026-09-07, AND `identifier` IS
+   * NOW FORBIDDEN RATHER THAN MERELY UNUSED. *** `architecture.md` §1a: a bare
+   * `identifier` is one word two contracts can each use correctly while meaning
+   * different people — `confirmation-v1` injects `reauth_identifier`, the
+   * CALLER'S own, into request shapes it does not own. This one is the
+   * TARGET'S, so it says whose.
+   *
+   * SENDING BOTH IS REFUSED BY CORE with `must_not_send_both_names`, because if
+   * the two values differ, choosing silently is choosing which principal to
+   * resolve. The check below asserts the legacy name is absent, not merely that
+   * the new one is present — those are different assertions and only the first
+   * catches a body that carries both.
    */
-  check('exactly one field is sent', Object.keys(sent).join(','), 'identifier');
-  for (const forbidden of ['confirmation', 'confirmation_token', 'organization_id', 'principal_id', 'role']) {
+  check('exactly one field is sent', Object.keys(sent).join(','), 'target_identifier');
+  check('the value is the identifier the operator typed', sent.target_identifier, 'someone@example.com');
+  /*
+   * `identifier` IS IN THIS LIST DELIBERATELY. Phase 3 has Core and the
+   * contract drop the legacy name in one change; until then Core accepts both,
+   * so a client that sent both would be refused and a client that sent only the
+   * old one would still work — which is exactly the state in which a
+   * half-finished revert goes unnoticed.
+   */
+  for (const forbidden of ['identifier', 'confirmation', 'confirmation_token', 'organization_id', 'principal_id', 'role']) {
     check(`"${forbidden}" is NOT sent`, forbidden in sent, false);
   }
+  /*
+   * AN EXPLICIT NULL IS NOT AN OMITTED FIELD. Core's reading side had this
+   * hazard — `target_identifier ?? identifier` treats an explicit null as
+   * absent, so `{target_identifier: null, identifier: 'x'}` slips past a
+   * both-present check and quietly resolves the legacy value. The client's
+   * mirror image is a conditionally-built body; this asserts the value is a
+   * real string, so a body that ever sent `null` turns red here.
+   */
+  check('and it is a string, never null', typeof sent.target_identifier, 'string');
   check('resolve costs exactly ONE call', calls.length, 1);
 }
 
@@ -1072,7 +1126,7 @@ const REFUSAL_ENVELOPES = [
         code: 'not_found',
         message: 'x',
         request_id: 'rq_3',
-        details: [{ field: 'identifier', issue: 'principal_is_platform_operator' }],
+        details: [{ field: 'target_identifier', issue: 'principal_is_platform_operator' }],
       },
     },
   ],
@@ -2606,6 +2660,637 @@ check(
   evaluateContract(movedBoundary, MAX_WINDOW_DAYS)[3].status,
   'mismatch',
 );
+
+/* =========================================================================
+   15. ORGANIZATION IDENTITY — organization-identity-v1
+   ========================================================================= */
+
+console.log('\n=== The three registration states stay three ===\n');
+
+/*
+ * THE STATE THAT MUST NOT COLLAPSE. `not_recorded` and `not_registered` are
+ * different facts — "we never asked" versus "they told us they have none" —
+ * and merging them destroys the ability to decide whether to prompt, and to
+ * defend the record afterwards.
+ */
+const NOT_RECORDED = { state: 'not_recorded' };
+const NOT_REGISTERED = { state: 'not_registered', declared_at: '2026-09-07T09:00:00.000Z' };
+const REGISTERED_UNVERIFIED = {
+  state: 'registered',
+  number: 'CR-1234567',
+  recorded_at: '2026-09-07T09:00:00.000Z',
+  verification: null,
+};
+const REGISTERED_VERIFIED = {
+  ...REGISTERED_UNVERIFIED,
+  verification: {
+    verified_by_principal_id: 'pr_synthetic_00000001',
+    verified_at: '2026-09-07T09:30:00.000Z',
+  },
+};
+
+check('not_recorded parses', parseRegistrationRecord(NOT_RECORDED, 'x').state, 'not_recorded');
+
+const declared = parseRegistrationRecord(NOT_REGISTERED, 'x');
+check('not_registered parses', declared.state, 'not_registered');
+check(
+  'and carries declared_at, which is what separates it from not_recorded',
+  declared.state === 'not_registered' ? declared.declared_at : null,
+  '2026-09-07T09:00:00.000Z',
+);
+checkTrue(
+  'a not_registered WITHOUT declared_at is REFUSED, not read as an undated declaration',
+  (() => {
+    try {
+      parseRegistrationRecord({ state: 'not_registered' }, 'x');
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+);
+
+const unverified = parseRegistrationRecord(REGISTERED_UNVERIFIED, 'x');
+check('registered parses', unverified.state, 'registered');
+check(
+  'a null verification stays NULL — recorded but unchecked is its own state',
+  unverified.state === 'registered' ? unverified.verification : 'wrong',
+  null,
+);
+
+const verified = parseRegistrationRecord(REGISTERED_VERIFIED, 'x');
+check(
+  'a verification carries WHO',
+  verified.state === 'registered' ? verified.verification?.verified_by_principal_id : null,
+  'pr_synthetic_00000001',
+);
+check(
+  'and WHEN',
+  verified.state === 'registered' ? verified.verification?.verified_at : null,
+  '2026-09-07T09:30:00.000Z',
+);
+
+/*
+ * `verification` IS REQUIRED AND NULLABLE, NOT OPTIONAL. An absent key is a
+ * contract violation and is refused rather than read as null, because "recorded
+ * but unverified" and "this response is not the shape it claims" are different
+ * facts and only one of them is safe to render.
+ */
+checkTrue(
+  'a registered record with NO verification key is refused, not defaulted to null',
+  (() => {
+    try {
+      parseRegistrationRecord(
+        { state: 'registered', number: 'X1', recorded_at: '2026-09-07T09:00:00.000Z' },
+        'x',
+      );
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+);
+
+/*
+ * AN UNKNOWN STATE IS CARRIED, NOT MAPPED ONTO `not_recorded`. Telling an
+ * operator nobody had asked, when the truth is that this build cannot read the
+ * answer, is a false statement about a customer.
+ */
+const unknownState = parseRegistrationRecord({ state: 'provisional' }, 'x');
+check('an unknown state is reported as unrecognised', unknownState.state, 'unrecognised');
+check(
+  'and keeps the raw value so it can be shown verbatim',
+  unknownState.state === 'unrecognised' ? unknownState.raw : null,
+  'provisional',
+);
+check('not_recorded is a known state', isKnownRegistrationState('not_recorded'), true);
+check('an invented state is NOT claimed as known', isKnownRegistrationState('provisional'), false);
+
+console.log('\n=== The identity block, and the detail response that embeds it ===\n');
+
+const IDENTITY_BODY = {
+  display_name: 'Al Noor Trading',
+  commercial_registration: REGISTERED_VERIFIED,
+  vat_registration: NOT_REGISTERED,
+};
+
+const identity = parseOrganizationIdentity(IDENTITY_BODY, 'x');
+check('display_name is read', identity.display_name, 'Al Noor Trading');
+check('a null display_name stays null', parseOrganizationIdentity({ ...IDENTITY_BODY, display_name: null }, 'x').display_name, null);
+check('the CR is read', identity.commercial_registration.state, 'registered');
+check('the VAT is read', identity.vat_registration.state, 'not_registered');
+checkTrue(
+  'an identity block missing a registration is REFUSED — both are required',
+  (() => {
+    try {
+      parseOrganizationIdentity({ display_name: null, commercial_registration: NOT_RECORDED }, 'x');
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+);
+
+const DETAIL_WITH_IDENTITY = {
+  organization_id: 'og_synthetic_0000000001',
+  status: 'active',
+  created_at: '2026-09-01T00:00:00.000Z',
+  display_name: 'Al Noor Trading',
+  commercial_registration: REGISTERED_UNVERIFIED,
+  vat_registration: NOT_RECORDED,
+  template: null,
+  member_count: 3,
+};
+const detailWithIdentity = parseOrganizationDetail(DETAIL_WITH_IDENTITY);
+check('the detail response carries the name', detailWithIdentity.display_name, 'Al Noor Trading');
+check('and the CR', detailWithIdentity.commercial_registration.state, 'registered');
+check('and the VAT', detailWithIdentity.vat_registration.state, 'not_recorded');
+
+console.log('\n=== Local shape refusals — every one is about what was just typed ===\n');
+
+check('a plain name is accepted', displayNameRefusal('Al Noor Trading'), null);
+checkTrue('an empty name is refused', displayNameRefusal('') !== null);
+checkTrue('a padded name is refused, not trimmed', displayNameRefusal(' Al Noor ') !== null);
+checkTrue('a trailing-space name is refused', displayNameRefusal('Al Noor ') !== null);
+check('a name at the bound is accepted', displayNameRefusal('A'.repeat(MAX_DISPLAY_NAME_LENGTH)), null);
+checkTrue(
+  'one character over the bound is refused',
+  displayNameRefusal('A'.repeat(MAX_DISPLAY_NAME_LENGTH + 1)) !== null,
+);
+
+check('a plain registration number is accepted', registrationNumberRefusal('1234567'), null);
+check('interior spaces are accepted', registrationNumberRefusal('CR 123 456'), null);
+check('interior hyphens are accepted', registrationNumberRefusal('CR-123-456'), null);
+checkTrue('a leading space is refused', registrationNumberRefusal(' 123') !== null);
+checkTrue('a trailing hyphen is refused', registrationNumberRefusal('123-') !== null);
+checkTrue('an empty number is refused', registrationNumberRefusal('') !== null);
+check(
+  'a number at the bound is accepted',
+  registrationNumberRefusal('1'.repeat(MAX_REGISTRATION_NUMBER_LENGTH)),
+  null,
+);
+checkTrue(
+  'one character over the bound is refused',
+  registrationNumberRefusal('1'.repeat(MAX_REGISTRATION_NUMBER_LENGTH + 1)) !== null,
+);
+
+/*
+ * *** THERE IS NO DIGIT COUNT, AND THE ABSENCE IS A RULING RATHER THAN AN
+ * OMISSION. *** Bahrain VAT account numbers are widely reported as fifteen
+ * digits; that figure comes from secondary sources and is deliberately NOT in
+ * the pattern. A PATTERN IS A REFUSAL — an at-count pattern that is wrong
+ * refuses a LEGAL registration, and the failure lands on a customer who cannot
+ * be onboarded and an operator whose only remedy is to invent a value.
+ *
+ * THIS CHECK EXISTS TO FAIL IF SOMEBODY NARROWS IT. Narrowing is BREAKING under
+ * API_STANDARD.md §6 and requires a decision record citing the issuing
+ * authority by document and date; a console that narrowed it locally would
+ * produce exactly that refusal with none of that record.
+ */
+for (const plausible of ['1', '12', '123456789012345', '1234567890123456', 'A1', 'GB-99-X']) {
+  check(`no digit count is imposed: ${plausible} is accepted`, registrationNumberRefusal(plausible), null);
+}
+
+console.log('\n=== The update sends a DIFF, and never an empty body ===\n');
+
+{
+  const sent = [];
+  const { impl, calls } = stubFetch(jsonResponse(IDENTITY_BODY));
+  const client = createPlatformClient({ fetchImpl: impl });
+  await client.updateOrganizationIdentity('og_synthetic_0000000001', {
+    display_name: 'Al Noor Trading',
+  });
+  const request = calls[0];
+  sent.push(request);
+  check(
+    'the path carries the Organization and ends in /identity',
+    request.url,
+    '/api/v1/platform/organizations/og_synthetic_0000000001/identity',
+  );
+  check('the method is PATCH', request.init.method, 'PATCH');
+  check(
+    'only the changed field is sent',
+    Object.keys(JSON.parse(request.init.body)).join(','),
+    'display_name',
+  );
+}
+
+{
+  const { impl } = stubFetch(jsonResponse(IDENTITY_BODY));
+  const client = createPlatformClient({ fetchImpl: impl });
+  const both = await (async () => {
+    const { impl: impl2, calls } = stubFetch(jsonResponse(IDENTITY_BODY));
+    const c2 = createPlatformClient({ fetchImpl: impl2 });
+    await c2.updateOrganizationIdentity('og_a', {
+      commercial_registration: { state: 'registered', number: 'CR1', verified: false },
+      vat_registration: { state: 'not_registered' },
+    });
+    return JSON.parse(calls[0].init.body);
+  })();
+  check(
+    'two registrations send exactly two fields',
+    Object.keys(both).sort().join(','),
+    'commercial_registration,vat_registration',
+  );
+  check('the registration input carries no server-stamped field', Object.keys(both.commercial_registration).sort().join(','), 'number,state,verified');
+  check('and not_registered carries only its state', Object.keys(both.vat_registration).join(','), 'state');
+  /* Keeps `client` referenced so the stub above is not mistaken for dead code. */
+  checkTrue('the client exposes the update method', typeof client.updateOrganizationIdentity === 'function');
+}
+
+/*
+ * AN EMPTY BODY IS NEVER SENT. `minProperties: 1` — "a no-op here still writes a
+ * platform audit record and FIVE ROW-WRITES INTO THE CUSTOMER'S OWN DAILY
+ * ALLOCATION, and a request that spends a customer's budget to change nothing is
+ * a request that should not have been accepted." So this refuses locally rather
+ * than earning the refusal, and the condition is about the SHAPE of the request
+ * rather than any fact about data.
+ */
+{
+  const { impl, calls } = stubFetch(jsonResponse(IDENTITY_BODY));
+  const client = createPlatformClient({ fetchImpl: impl });
+  await checkThrows(
+    'an empty update is refused locally',
+    () => client.updateOrganizationIdentity('og_a', {}),
+    'invalid_argument',
+  );
+  check('and no request was made at all', calls.length, 0);
+}
+
+console.log('\n=== The bounds, asserted against the schema file ===\n');
+
+/*
+ * THE SAME TREATMENT `MAX_WINDOW_DAYS` GETS, FOR THE SAME REASON: a number
+ * copied out of a document is a claim that was true when it was copied. Here the
+ * source is JSON, so the anchors are property paths rather than sentences.
+ *
+ * IT READS THE `.schema.json` AND NOT THE `.contract.yaml`. The YAML was being
+ * edited by another agent while this was written; the schema is committed and
+ * clean, and the field shapes are what it carries.
+ *
+ * WHAT THIS DOES NOT CLOSE: it binds the console to the CONTRACT, not to Core's
+ * validator. If Core's code and Core's contract disagree, these checks stay
+ * green.
+ */
+const IDENTITY_SCHEMA_PATH = join(
+  import.meta.dirname,
+  '..',
+  '..',
+  '..',
+  'packages',
+  'contracts',
+  'core',
+  'platform',
+  'organization-identity-v1.schema.json',
+);
+
+let identitySchema = null;
+try {
+  identitySchema = JSON.parse(readFileSync(IDENTITY_SCHEMA_PATH, 'utf8'));
+} catch {
+  identitySchema = null;
+}
+checkTrue('the identity schema is readable at the path this check assumes', identitySchema !== null);
+
+/**
+ * Reads one constraint, distinguishing MISSING from a value.
+ *
+ * "No findings" must not render as "no input": a renamed `$defs` entry returns
+ * the string `missing`, which fails loudly, rather than `undefined`, which
+ * compares equal to nothing and would pass against a constant that was also
+ * undefined.
+ */
+function schemaConstraint(defName, keyword) {
+  const def = identitySchema?.$defs?.[defName];
+  if (def === undefined) return `missing $defs.${defName}`;
+  if (!(keyword in def)) return `missing $defs.${defName}.${keyword}`;
+  return def[keyword];
+}
+
+check(
+  'MAX_DISPLAY_NAME_LENGTH matches displayName.maxLength',
+  schemaConstraint('displayName', 'maxLength'),
+  MAX_DISPLAY_NAME_LENGTH,
+);
+check(
+  'MAX_REGISTRATION_NUMBER_LENGTH matches registrationNumber.maxLength',
+  schemaConstraint('registrationNumber', 'maxLength'),
+  MAX_REGISTRATION_NUMBER_LENGTH,
+);
+check(
+  'the registration-number pattern is the schema’s, character for character',
+  schemaConstraint('registrationNumber', 'pattern'),
+  '^[A-Za-z0-9]([A-Za-z0-9 -]*[A-Za-z0-9])?$',
+);
+check(
+  'the display-name pattern is the schema’s, character for character',
+  schemaConstraint('displayName', 'pattern'),
+  '^[^\\s].*[^\\s]$|^[^\\s]$',
+);
+check('a display name of zero characters is refused by the schema too', schemaConstraint('displayName', 'minLength'), 1);
+
+/*
+ * THE THREE STATES ARE THE SCHEMA'S THREE, ENUMERATED FROM IT RATHER THAN
+ * ASSERTED FROM MEMORY. A fourth arriving in the contract turns this red, which
+ * is the signal to teach the console about it — rather than the console
+ * silently rendering it as `unrecognised` forever.
+ */
+const schemaStates = (identitySchema?.$defs?.registrationRecord?.oneOf ?? []).map(
+  (branch) => branch?.properties?.state?.const ?? 'missing',
+);
+check(
+  'the record states are exactly the three this console knows',
+  schemaStates.join(','),
+  'not_recorded,not_registered,registered',
+);
+const schemaInputStates = (identitySchema?.$defs?.registrationInput?.oneOf ?? []).map(
+  (branch) => branch?.properties?.state?.const ?? 'missing',
+);
+check(
+  'and the INPUT states are the same three',
+  schemaInputStates.join(','),
+  'not_recorded,not_registered,registered',
+);
+
+/*
+ * NO SERVER-STAMPED FIELD IS SENDABLE. `declared_at`, `recorded_at`,
+ * `verified_by_principal_id` and `verified_at` are all set by Core — "provenance
+ * a caller supplies is not provenance". This asserts the SCHEMA forbids them,
+ * and the request-shape check above asserts this client does not send them.
+ */
+const inputProperties = new Set(
+  (identitySchema?.$defs?.registrationInput?.oneOf ?? []).flatMap((branch) =>
+    Object.keys(branch?.properties ?? {}),
+  ),
+);
+for (const stamped of ['declared_at', 'recorded_at', 'verified_by_principal_id', 'verified_at']) {
+  check(`the input shape has no ${stamped}`, inputProperties.has(stamped), false);
+}
+check(
+  'the input properties are exactly state, number and verified',
+  [...inputProperties].sort().join(','),
+  'number,state,verified',
+);
+
+/*
+ * NEGATIVE CONTROLS. Without a known-failing input this section is observed
+ * rather than verified — and both of these would have gone green against a
+ * broken reader.
+ */
+check(
+  'NEGATIVE CONTROL: a renamed $defs entry reads as MISSING, not as undefined',
+  schemaConstraint('displayNameXX', 'maxLength'),
+  'missing $defs.displayNameXX',
+);
+check(
+  'NEGATIVE CONTROL: an absent keyword reads as MISSING',
+  schemaConstraint('displayName', 'maxItems'),
+  'missing $defs.displayName.maxItems',
+);
+checkTrue(
+  'NEGATIVE CONTROL: the bound check would fail against a wrong constant',
+  schemaConstraint('displayName', 'maxLength') !== MAX_DISPLAY_NAME_LENGTH + 1,
+);
+
+console.log('\n=== display_name: no placeholder is ever invented ===\n');
+
+/*
+ * *** AN INVENTED NAME IS INDISTINGUISHABLE FROM A TYPED ONE, FOREVER. *** The
+ * contract binds both clients: render `organization_id` verbatim when
+ * `display_name` is null — "not a blank, not a dash, not 'Unnamed
+ * Organization'." Two consoles inventing two different placeholders is the
+ * divergence the one-contract rule exists to prevent.
+ */
+/*
+ * COMMENTS ARE STRIPPED FIRST, AND THAT IS NOT A LOOPHOLE — IT IS THE POINT.
+ * The check is about what is RENDERED. Every one of these files QUOTES the
+ * prohibition in a comment ("not a blank, not a dash, not 'Unnamed
+ * Organization'"), so a check over raw source fails against a file that is
+ * correct precisely because it explains the rule. That happened on the first
+ * run of this check, and reading the raw source is what made it a false
+ * positive rather than a finding.
+ */
+for (const name of ['Organizations.tsx', 'OrganizationDetail.tsx', 'OnboardOrganization.tsx']) {
+  const rendered = strip(readScreen(name)).replace(/\s+/g, ' ');
+  for (const placeholder of ['Unnamed Organization', 'Unnamed business', 'No name)', '(unnamed']) {
+    check(`${name}: never renders "${placeholder}"`, rendered.includes(placeholder), false);
+  }
+}
+
+/*
+ * THE NEGATIVE CONTROL FOR THE ABOVE, because a check that strips comments
+ * could strip everything and then find nothing wrong with an empty string.
+ * These assert the detector fires on the thing it is looking for and that the
+ * stripped source is not empty.
+ */
+checkTrue(
+  'NEGATIVE CONTROL: the placeholder detector fires on a screen that DOES invent one',
+  strip('<p>Unnamed Organization</p>').replace(/\s+/g, ' ').includes('Unnamed Organization'),
+);
+for (const name of ['Organizations.tsx', 'OrganizationDetail.tsx', 'OnboardOrganization.tsx']) {
+  checkTrue(
+    `NEGATIVE CONTROL: ${name} still has renderable source after stripping comments`,
+    strip(readScreen(name)).replace(/\s+/g, ' ').length > 500,
+  );
+}
+
+const identityPanel = readFileSync(
+  join(import.meta.dirname, '..', 'src', 'components', 'OrganizationIdentity.tsx'),
+  'utf8',
+);
+/*
+ * COMMENTS STRIPPED BEFORE EVERY ASSERTION BELOW, INCLUDING THE POSITIVE ONES.
+ * This file explains each rule at length in prose, so a check over raw source
+ * could be satisfied by a COMMENT DESCRIBING the sentence rather than by the
+ * sentence being on screen — green because the code is well documented, not
+ * because it is right. Whitespace is collapsed after, because JSX wraps text at
+ * arbitrary points.
+ */
+const identityCode = strip(identityPanel);
+const identityProse = identityCode.replace(/\s+/g, ' ');
+checkTrue(
+  'FLOOR: the identity panel has renderable source after stripping comments',
+  identityProse.length > 2000,
+);
+
+checkTrue(
+  'the identity panel renders the no-name case as a real state',
+  /No name recorded\./.test(identityProse),
+);
+checkTrue(
+  'and says it is normal rather than an error',
+  /it is not an error and nothing is missing/.test(identityProse),
+);
+
+/*
+ * *** THE VERIFICATION RECORD IS THE POINT, SO IT IS RENDERED. *** The whole
+ * argument for this route not being confirmation-gated is that verification
+ * acts at the point of harm instead. A screen that shows the number and hides
+ * whether anyone checked it destroys that argument.
+ */
+checkTrue(
+  'an unverified number is visibly unverified',
+  /Not verified/.test(identityProse),
+);
+checkTrue(
+  'and says nobody has confirmed it against the registry',
+  /Nobody has confirmed it against/.test(identityProse),
+);
+checkTrue(
+  'a verified number names WHO checked it',
+  /verification\.verified_by_principal_id/.test(identityProse),
+);
+checkTrue('and WHEN', /verification\.verified_at/.test(identityProse));
+
+/*
+ * NOT CONFIRMATION-GATED, AND THE CONSOLE MUST NOT INVENT A GATE THE LADDER DID
+ * NOT PUT THERE. The route is `sensitive`, not `critical`: making a VAT field
+ * critical generalises to every field and the rung stops sorting anything.
+ */
+for (const symbol of ['requestConfirmation', 'ConfirmationGate', 'confirmation_id']) {
+  check(`the identity panel does not reach for ${symbol}`, identityCode.includes(symbol), false);
+}
+
+/*
+ * THE THREE STATES ARE DISTINCT ON SCREEN. `not_registered` is an ANSWER, not a
+ * gap — Bahrain VAT registration is voluntary below a threshold — and a console
+ * that rendered it as missing data would keep prompting a customer who has
+ * already replied.
+ */
+checkTrue(
+  'not_recorded says Dudo does not know, rather than that they have none',
+  /This does not mean they have no .* — it means Dudo does not know/.test(identityProse),
+);
+checkTrue(
+  'not_registered is rendered as an answer',
+  /This is an answer, not a gap/.test(identityProse),
+);
+checkTrue(
+  'and its date is Dudo’s record of the statement, not their circumstances',
+  /it makes it stale/.test(identityProse),
+);
+
+/*
+ * EDITING A NUMBER CLEARS ITS VERIFICATION, AND THE FORM SAYS SO BEFORE THE
+ * PRESS. A box left ticked from the previous value is an operator claiming to
+ * have checked a number they have just replaced — "worse than an unverified
+ * number because it defends itself."
+ */
+checkTrue(
+  'the form warns that changing the number clears the verification',
+  /Changing the number clears the existing verification\./.test(identityProse),
+);
+checkTrue(
+  'and the tick is actually withdrawn in code, not merely described',
+  /verified: currentNumber !== null && value !== currentNumber \? false : draft\.verified/.test(
+    identityCode.replace(/\s+/g, ' '),
+  ),
+);
+checkTrue(
+  'the verified control is worded as a first-person claim, not a status',
+  /I have checked this number against/.test(identityProse),
+);
+checkTrue(
+  'and says nothing checks it for the operator',
+  /Nothing checks this for you\./.test(identityProse),
+);
+
+console.log('\n=== Onboarding: no field is offered that would be discarded ===\n');
+
+const onboardSource = readScreen('OnboardOrganization.tsx');
+const onboardCode = strip(onboardSource);
+
+/*
+ * THE CONTRACT HAS NO CR AND NO VAT AT ONBOARDING. `onboardOrganizationInput`
+ * is `additionalProperties: false` over five fields, and every Organization
+ * starts `not_recorded`. A form that collected them would be collecting values
+ * it cannot send.
+ */
+for (const field of ['commercial_registration', 'vat_registration']) {
+  check(`onboarding never sends ${field}`, onboardCode.includes(field), false);
+}
+
+/*
+ * `display_name` IS OFFERED AND IS OPTIONAL. It was briefly unsendable —
+ * `platform.organizations.create` declared four fields and `display_name` was
+ * not among them, while `organization-onboarding-v1.schema.json` published it,
+ * and the class refuses undeclared fields BEFORE AUTHENTICATION. Core landed
+ * the field on 2026-09-07 and the divergence is closed.
+ *
+ * THE GATE THAT HELD IT SHUT IS DELETED RATHER THAN PINNED TO `true`, and so
+ * are the checks that guarded it. A flag that can no longer move keeps an
+ * unreachable branch alive, and the unreachable half here was a paragraph
+ * telling operators the name is recorded elsewhere — which is now FALSE. Dead
+ * prose in a client is a stale assertion waiting for somebody to re-enable it.
+ */
+checkTrue(
+  'the name field is offered, and labelled optional',
+  /label="Business name — optional"/.test(onboardCode),
+);
+check(
+  'no gate remains that could hide it',
+  /CONSOLE_MAY_SEND_DISPLAY_NAME/.test(onboardSource),
+  false,
+);
+check(
+  'and the paragraph saying the name is recorded elsewhere is gone with it',
+  /The business is named on its own page, not here/.test(onboardSource.replace(/\s+/g, ' ')),
+  false,
+);
+
+/*
+ * THE CLIENT OMITS AN EMPTY NAME RATHER THAN SENDING `''`. "Absent" and
+ * "present and empty" are different requests and `minLength: 1` accepts only
+ * one of them — an empty string would turn a blank optional field into a
+ * validation error.
+ */
+{
+  const { impl, calls } = stubFetch(
+    jsonResponse({
+      organization_id: 'og_a',
+      admin_principal_id: 'pr_a',
+      workspace_id: 'ws_a',
+      warnings: [],
+    }),
+  );
+  const client = createPlatformClient({ fetchImpl: impl });
+  await client.onboardOrganization({
+    admin_identifier: 'admin@example.com',
+    template_id: 'tp_a',
+    derived_value: 'a'.repeat(43),
+    display_name: '',
+  });
+  check(
+    'an empty display_name is OMITTED, not sent as an empty string',
+    Object.keys(JSON.parse(calls[0].init.body)).sort().join(','),
+    'admin_identifier,derived_value,first_workspace_name,template_id',
+  );
+}
+
+{
+  const { impl, calls } = stubFetch(
+    jsonResponse({
+      organization_id: 'og_a',
+      admin_principal_id: 'pr_a',
+      workspace_id: 'ws_a',
+      warnings: [],
+    }),
+  );
+  const client = createPlatformClient({ fetchImpl: impl });
+  await client.onboardOrganization({
+    admin_identifier: 'admin@example.com',
+    template_id: 'tp_a',
+    derived_value: 'a'.repeat(43),
+    display_name: 'Al Noor Trading',
+  });
+  const body = JSON.parse(calls[0].init.body);
+  check('a typed display_name IS sent', body.display_name, 'Al Noor Trading');
+  check(
+    'and the workspace placeholder is still a separate field',
+    body.first_workspace_name,
+    DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
+  );
+}
 
 console.log('');
 if (failures > 0) {

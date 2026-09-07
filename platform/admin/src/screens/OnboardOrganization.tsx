@@ -34,6 +34,23 @@
  * been lied to by the form, and nothing is preserved for later.
  *
  * ===========================================================================
+ * THE NAME IS OPTIONAL HERE, AND THE REGISTRATIONS ARE NOT ASKED FOR AT ALL
+ * ===========================================================================
+ *
+ * `display_name` is OPTIONAL on this write path — Team Lead ruling, 2026-09-07,
+ * on sequencing rather than design: "a server requiring a field the deployed
+ * console does not yet send is an onboarding outage." So this form accepts a
+ * name and never requires one, and an operator who does not have it yet can
+ * onboard now and record it on the Organization's own page afterwards.
+ *
+ * THE CR AND THE VAT REGISTRATION ARE NOT ON THIS FORM, AND THAT IS THE
+ * CONTRACT RATHER THAN A CHOICE. `onboardOrganizationInput` accepts
+ * `admin_identifier`, `display_name`, `template_id`, `first_workspace_name` and
+ * `derived_value`, with `additionalProperties: false` — there is no field for
+ * either registration, and every Organization starts `not_recorded` by design.
+ * They are recorded on the detail page, which the success panel links to.
+ *
+ * ===========================================================================
  * A 201 WITH WARNINGS IS A SUCCESS
  * ===========================================================================
  *
@@ -49,17 +66,51 @@ import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/field';
 import { LoadingBlock } from '@/components/StateBlock';
 import { cn } from '@/lib/cn';
+import { buildHash, organizationDetailPath } from '@/lib/router';
 import { identifierRefusal } from '@/api/kdf';
 import type { DerivationProgress } from '@/api/kdf-client';
 import { createOnboardingCredential } from '@/api/onboarding-credential';
 import {
+  MAX_DISPLAY_NAME_LENGTH,
   PLATFORM_MAX_PAGE_SIZE,
+  displayNameRefusal,
   isKnownOnboardingWarning,
   type OnboardOrganizationOutput,
   type PlatformClient,
   type Template,
 } from '@/api/platform';
 import { toApiError, type ApiError } from '@/api/errors';
+
+/**
+ * ===========================================================================
+ * THE NAME FIELD WAS BRIEFLY UNSENDABLE, AND THE REASON OUTLIVES THE GATE.
+ * ===========================================================================
+ *
+ * `organization-onboarding-v1.schema.json` published `display_name` while
+ * `platform.organizations.create` declared only four fields —
+ * `admin_identifier`, `template_id`, `first_workspace_name`, `derived_value`.
+ * **The platform class refuses any undeclared field BEFORE AUTHENTICATION**, so
+ * a client that trusted the contract would have failed the first onboarding
+ * carrying the field and every one after it, on the route that creates
+ * customers.
+ *
+ * *** SO READING THE CONTRACT WAS NOT EVIDENCE THAT CORE ACCEPTED THE FIELD. ***
+ * That is the sentence worth keeping. Core landed it on 2026-09-07 — declared,
+ * parsed optionally with the same check the update route uses, persisted as
+ * NULL when absent, nothing synthesised — and the field is sent normally below.
+ *
+ * IT IS THE MIRROR OF THE RULING THAT GOVERNS THE FIELD. `0031` makes
+ * `display_name` optional so that a server requiring what the client does not
+ * send cannot cause an outage; the opposite direction — a client sending what
+ * the server does not accept — was open, and it was open *because the contract
+ * said the field was there*.
+ *
+ * THE GATE THAT HELD THIS SHUT IS GONE, AND ITS ABSENCE IS DELIBERATE. A flag
+ * pinned to `true` keeps a branch nobody reaches, and the unreachable half here
+ * was a paragraph telling operators the name is recorded somewhere else — which
+ * is now false. **Dead prose in a client is a stale assertion waiting for
+ * someone to re-enable it**, so the branch went with the gate.
+ */
 
 /** What the operator must record. Held only while this screen is mounted. */
 interface Outcome {
@@ -84,6 +135,8 @@ export function OnboardOrganization({
   const [templates, setTemplates] = useState<readonly Template[] | null>(null);
   const [templatesError, setTemplatesError] = useState<ApiError | null>(null);
   const [identifier, setIdentifier] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
   const [templateId, setTemplateId] = useState('');
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [localError, setLocalError] = useState<string | null>(null);
@@ -127,11 +180,23 @@ export function OnboardOrganization({
         setLocalError(refusal);
         return;
       }
+      /*
+       * THE NAME IS OPTIONAL, SO ONLY A NAME THE OPERATOR ACTUALLY TYPED IS
+       * CHECKED. An empty field is omitted from the request and means "no name
+       * recorded" — it is not an error, and treating it as one would make an
+       * optional field required in the client while the contract says otherwise.
+       */
+      const nameRefusal = displayName === '' ? null : displayNameRefusal(displayName);
+      if (nameRefusal !== null) {
+        setNameError(nameRefusal);
+        return;
+      }
       if (templateId === '') {
         setLocalError('Choose a business type.');
         return;
       }
       setLocalError(null);
+      setNameError(null);
       setFailure(null);
 
       const chosen = templates?.find((template) => template.template_id === templateId);
@@ -155,6 +220,15 @@ export function OnboardOrganization({
             admin_identifier: credential.identifier,
             template_id: templateId,
             derived_value: credential.derivedValue,
+            /*
+             * OMITTED, NOT EMPTY, WHEN THERE IS NO NAME. "Absent" and "present
+             * and empty" are different requests and `minLength: 1` accepts only
+             * one of them, so a blank optional field would become a validation
+             * error. Omitted means NULL, which means no name was recorded —
+             * nothing here substitutes the identifier, the Template name or the
+             * Workspace placeholder for a name the operator did not give.
+             */
+            ...(displayName === '' ? {} : { display_name: displayName }),
           });
           /*
            * THE CREDENTIAL IS PUT ON SCREEN ONLY HERE — after a 201. Everything
@@ -169,6 +243,7 @@ export function OnboardOrganization({
           });
           setPhase({ kind: 'idle' });
           setIdentifier('');
+          setDisplayName('');
           setTemplateId('');
           onOnboarded();
         })
@@ -177,7 +252,7 @@ export function OnboardOrganization({
           setFailure(toApiError(thrown));
         });
     },
-    [busy, identifier, onOnboarded, platform, templateId, templates],
+    [busy, displayName, identifier, onOnboarded, platform, templateId, templates],
   );
 
   if (outcome !== null) {
@@ -229,6 +304,42 @@ export function OnboardOrganization({
             inputMode="email"
             disabled={busy}
             required
+          />
+        )}
+      </Field>
+
+      {/*
+        OPTIONAL, AND LABELLED AS OPTIONAL. `0031` makes it optional on the write
+        path so the console can ship ahead of Core tightening it, and a form that
+        required it would make an outage of the field's whole purpose. Blank is a
+        legitimate answer meaning "no name recorded" — not an error, and not a
+        placeholder this console invents.
+
+        THE CR AND THE VAT REGISTRATION ARE NOT HERE, and that is the contract
+        rather than a choice: `onboardOrganizationInput` is
+        `additionalProperties: false` over five fields and has no room for
+        either. The hint points at the page that does, which the success panel
+        also links to.
+      */}
+      <Field
+        id="organization-display-name"
+        label="Business name — optional"
+        error={nameError}
+        hint={`What operators will see instead of the identifier. Leave it blank if you do not have it yet — it, the CR and the VAT registration are all recorded on the business's own page. At most ${String(MAX_DISPLAY_NAME_LENGTH)} characters, and names are not unique in Dudo.`}
+      >
+        {(aria) => (
+          <Input
+            {...aria}
+            type="text"
+            value={displayName}
+            onChange={(event) => {
+              setDisplayName(event.target.value);
+              if (nameError !== null) setNameError(null);
+            }}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={busy}
+            maxLength={MAX_DISPLAY_NAME_LENGTH}
           />
         )}
       </Field>
@@ -464,6 +575,27 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
         has no self-service password change yet, so the administrator cannot replace it themselves
         — an operator must reset the credential. Send it over a channel you would trust with a
         password, and treat it as shared until then.
+      </p>
+
+      {/*
+        WHERE THE REST OF THE RECORD GOES. Onboarding cannot accept a CR or a
+        VAT registration — the contract has no field for either and every
+        Organization starts `not_recorded` — so the next step is named here
+        rather than left to be discovered. THIS IS A LINK AND NOT A REDIRECT:
+        the password is on this screen and navigating away from it destroys the
+        only copy in existence.
+      */}
+      <p className="mt-5 rounded-[7px] border border-line bg-sunk/60 p-3 text-[0.8125rem] leading-relaxed text-ink-soft">
+        <span className="font-semibold">Record the password before you follow this.</span> The
+        business has no name, no CR and no VAT registration recorded yet — nobody has asked, which
+        is a different fact from having none.{' '}
+        <a
+          href={buildHash(organizationDetailPath(outcome.result.organization_id))}
+          className="font-semibold text-navy-600 no-underline hover:underline"
+        >
+          Open this business to record them
+        </a>
+        . Leaving this screen loses the password.
       </p>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">

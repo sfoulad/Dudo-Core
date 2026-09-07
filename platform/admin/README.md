@@ -113,7 +113,7 @@ npm run typecheck    # tsc --noEmit
 npm run build        # typecheck, then a production build into dist/
 npm run verify       # typecheck -> KDF -> platform client -> build -> CSS cascade
 npm run verify:kdf       # 56 checks, including byte-identity with platform/web
-npm run verify:platform  # 458 checks — Core's shapes, accessibility, time windows
+npm run verify:platform  # 571 checks — Core's shapes, accessibility, time windows, identity
 npm run verify:css       # 13 checks against the BUILT stylesheet (needs a build first)
 ```
 
@@ -146,13 +146,14 @@ absent and a menu missing only its first row both look unremarkable.
 | Route | What it does |
 |---|---|
 | `GET /api/v1/platform/whoami` | The session probe. Returns the operator's own principal id, platform role and reachable permissions. |
-| `GET /api/v1/platform/organizations` | The Organization list. Identifiers, status and creation date, keyset-paginated. |
+| `GET /api/v1/platform/organizations` | The Organization list. Name where one is recorded, identifier, status and creation date, keyset-paginated. |
 | `GET /api/v1/platform/templates` | The Template list, keyset-paginated. |
 | `GET /api/v1/platform/templates/{template_id}` | One Template. **The first route in this class with a path parameter.** |
 | `POST /api/v1/platform/templates` | Create a Template. Sends `name` and optionally `level_labels`. |
 | `POST /api/v1/platform/organizations` | **Onboard a business.** Creates the Organization, its first admin, that admin's credential and one `owner` membership. |
-| `GET /api/v1/platform/organizations/{id}` | **Organization detail.** Everything the page needs in one request — the Template is embedded. |
-| `POST /api/v1/platform/organizations/{id}/members/resolve` | **Resolve one member** by an identifier the operator already holds. |
+| `GET /api/v1/platform/organizations/{id}` | **Organization detail.** Everything the page needs in one request — the Template and the identity block are embedded. |
+| `PATCH /api/v1/platform/organizations/{id}/identity` | **Name, CR and VAT registration.** Partial; returns the whole block. `sensitive`, **not confirmation-gated**. |
+| `POST /api/v1/platform/organizations/{id}/members/resolve` | **Resolve one member** by a `target_identifier` the operator already holds. |
 | `GET /api/v1/platform/audit` | **The platform feed.** Every operator action, **without** the principal-level target. |
 | `GET /api/v1/platform/organizations/{id}/audit` | **The Organization feed.** One customer's trail, **with** the principal target. |
 | `GET /api/v1/platform/operators` | Who holds platform authority. **List only — no revoke.** |
@@ -333,6 +334,31 @@ unknown Organization, identifier belonging to nobody, identifier belonging to a 
 suspended membership, and **the principal is a platform operator**. The fifth is the one that
 matters: without it the route is an oracle for who holds platform authority.
 
+> #### The request field is `target_identifier`, and it moved because a bare name says nothing about *whose*
+>
+> `architecture.md` §1a: a field name defined by a cross-cutting mechanism is reserved
+> platform-wide with one meaning. `confirmation-v1` injects `reauth_identifier` — **the caller's
+> own** — into request shapes it does not own, and a bare `identifier` beside it is one word two
+> contracts can each use correctly while meaning **different people**. This one is the target's.
+>
+> **This client sent `identifier` until 2026-09-07 and that was correct**, which is the
+> uncomfortable part: the contract published `target_identifier` while Core's route declared
+> `identifier`, and the resolve worked because this file was written against the running code
+> rather than the document. **A contract that has stopped describing the code has stopped being the
+> source of truth**, and a client noticing it is the last line of defence rather than a control.
+>
+> **Sending both is refused** with `must_not_send_both_names` — if the two values differ, choosing
+> silently is choosing *which principal to resolve*. The body is a single unconditional literal, so
+> "never both" is a property of the code rather than a rule someone remembers, and `verify:platform`
+> asserts the legacy name is **absent** rather than only that the new one is present. It also
+> asserts the value is a string: Core's reading side carried the mirror hazard, where
+> `target_identifier ?? identifier` treats an **explicit null** as absent and quietly resolves the
+> legacy value.
+>
+> The order was Core accepts both → this client moves → Core and the contract drop the old name in
+> one change (`0034`, `OD-5`). Moving before the first would have been an outage; dropping before
+> the second would have been the other one.
+
 **Core enforces that. `OrganizationDetail.tsx` could destroy it, and is written so it cannot:**
 
 - **One refusal string** — a module constant, no parameters, no interpolation, referenced once.
@@ -394,6 +420,120 @@ retry-on-blur, no automatic retry. **And the detail read is never polled** — a
 call, a thirty-second refresh loop exhausts an operator's daily ceiling in about two and a half
 hours and then answers 503.
 
+### Organization identity — a name, a CR and a VAT registration
+
+`organization-identity-v1`, `PATCH /platform/organizations/{id}/identity`. The block is embedded in
+the detail response and returned whole by the update, so **saving does not re-read** — a partial
+response would have to be guessed at, a whole block cannot.
+
+> #### There is deliberately no "this cannot be saved yet" banner
+>
+> **`0015_organization_identity.sql` and `0016` are applied** (approved and verified against the
+> database on 2026-09-07), and **`core.platform-organization.update` is granted to `platform-admin`**
+> — `reachablePlatformPermissions('platform-admin')` returns nine, including it. An operator with
+> that role can save.
+>
+> > **Both of those sentences read the opposite way in an earlier draft of this file, and the
+> > correction is worth keeping.** The permission's *declaring* commit said it was held by no role;
+> > a later commit granted it, and the held-by-nobody state lasted one day. **A commit message is a
+> > claim about the moment it was written and never updates** — `architecture.md` §3c with a commit
+> > message in the citation's place. The stale premise had already reached a release note before it
+> > was caught.
+>
+> The `403` copy is kept, because it is correct for a role that genuinely lacks the permission —
+> what was wrong was only the expectation that every save hits it.
+>
+> **No banner is added, and that is the decision rather than an omission.** A "this cannot be saved
+> yet" banner would be a *deployment fact transcribed into a client*, with nothing to turn it off
+> when the state changes — the stale-assertion shape `workflow.md` §12 exists for, in a place an
+> operator reads rather than an engineer. The above is the worked example: the fact moved within a
+> day. The honest failure paths already say what happened and that nothing was changed.
+
+#### The verification record is the point, so it is rendered
+
+The route is **`sensitive`, not `critical`, so there is no confirmation gate on it** — and that was
+argued rather than defaulted: making a VAT field critical generalises to every field and the rung
+stops sorting anything. **The whole argument for skipping the gate is that verification acts at the
+point of harm instead** — a future surface that prints a VAT number onto a document must be able to
+refuse to print an unverified one.
+
+> **A screen that shows the number and hides whether anyone checked it destroys that argument.** So
+> an unverified number is *visibly* unverified, and a verified one names the operator and the date.
+> There is no state in which a number appears without its provenance beside it, and the console
+> does not reach for `requestConfirmation`, `ConfirmationGate` or `confirmation_id` anywhere on this
+> path — asserted, not intended.
+
+#### Three states, and collapsing the first two is the defect
+
+| | |
+|---|---|
+| `not_recorded` | **Nobody has asked.** The state every existing Organization is in. |
+| `not_registered` | **The customer stated they have none** — legitimate, permanent, positive. Bahrain VAT registration is mandatory above a threshold and voluntary below it. |
+| `registered` | A number is recorded, **verified or not**. |
+
+Merged, you cannot tell "they told us" from "we never asked", so you cannot decide whether to prompt
+and cannot defend the record afterwards. **`not_registered` is rendered as an answer, not as a
+gap** — a console that showed it as missing data would keep prompting a customer who has already
+replied. A fourth state this build has never heard of renders as *unrecognised*, verbatim, rather
+than being mapped onto `not_recorded`: telling an operator nobody had asked, when the truth is that
+the console cannot read the answer, is a false statement about a customer.
+
+#### Editing a number clears its verification, and the form shows that before the press
+
+A verification attests to **one specific value**. Carrying it across an edited number would say an
+operator checked a number nobody ever checked, with a real name and a real date attached — **worse
+than an unverified number, because it defends itself.** Core discards the verification on any change
+to `number`; **this form mirrors that in the UI** by unticking the box the moment the number differs,
+and saying why. A box left ticked from the previous value is an operator claiming to have checked a
+number they have just replaced.
+
+The tick is worded as a first-person claim — *"I have checked this number against Sijilat"* — and
+not as a status, because **Dudo cannot confirm a check happened**: there is no Sijilat API and no NBR
+API. What makes it worth having is that the claim is attributed and dated.
+
+#### Nothing is sent that did not change
+
+The update is partial, and **re-sending an unchanged field is not a no-op** — it re-stamps
+`declared_at`, or the verifying operator and date, destroying the original provenance. So the body is
+a **diff** against what was loaded, the count of fields that will be sent is shown before the press,
+and a save with nothing changed is refused locally: an empty body is `invalid_argument`, and *"a
+no-op here still writes a platform audit record and five row-writes into the customer's own daily
+allocation."*
+
+Re-dating an existing `not_registered` declaration is possible and is an **explicit tick** ("the
+customer has told me this again today"), never a side effect of pressing Save.
+
+#### No digit count, deliberately
+
+Bahrain VAT account numbers are widely reported as fifteen digits. **That figure is not in the
+pattern**, and its absence is a ruling: **a pattern is a refusal**, and an at-count pattern that is
+wrong refuses a *legal* registration — the failure landing on a customer who cannot be onboarded and
+an operator whose only remedy is to invent a value. The console enforces the contract's hygiene bound
+and nothing more, and `verify:platform` asserts six plausible shapes are accepted so that narrowing
+it locally turns red.
+
+#### The name is not unique, so the identifier stays on screen
+
+Nothing in Dudo enforces uniqueness on `display_name` — *"two Organizations legitimately share a name
+in one market."* A list showing names alone would render two different businesses identically, on the
+screen an operator uses to choose which customer to act on. **The name is the label; the identifier
+is the identity, and both are shown.**
+
+`display_name: null` means **no name has ever been recorded** and is rendered as a real state, not a
+blank, not a dash, and never *"Unnamed Organization"* — an invented name is indistinguishable from a
+typed one forever. `verify:platform` asserts no screen renders a placeholder, over source with
+comments stripped, because all three screens *quote* the prohibition and a check over raw source
+fails against a file that is correct precisely because it explains the rule.
+
+#### The two bounds are asserted against the schema file
+
+`MAX_DISPLAY_NAME_LENGTH` and `MAX_REGISTRATION_NUMBER_LENGTH`, both patterns, both `oneOf` state
+lists, and the absence of every server-stamped field from the input shape are compared against
+`organization-identity-v1.schema.json` on every run — the same treatment `MAX_WINDOW_DAYS` gets, for
+the same reason. It reads the **`.schema.json`** and not the `.contract.yaml`, which was being edited
+by another agent while this was written. **It binds the console to the contract, not to Core's
+validator.**
+
 ### Onboarding: this browser holds the only copy of the password
 
 `0026` option B — **the console generates the password and derives from it**, and
@@ -431,6 +571,42 @@ a credential reset.
   confirmation, because a mis-click there destroys the only copy.
 - The screen states `0026`'s accepted cost plainly: **there is no self-service password change**,
   so whoever onboards a business knows that admin's password until an operator resets it.
+
+#### The name at onboarding, and the two registrations that are not asked for
+
+`display_name` is **optional** on this write path — Team Lead ruling, 2026-09-07, on sequencing
+rather than design: *"a server requiring a field the deployed console does not yet send is an
+onboarding outage."* So the form accepts a name and never requires one.
+
+> **It was briefly unsendable, and the reason outlives the gate that held it shut.** The contract
+> published the field while `platform.organizations.create` declared only four —
+> `admin_identifier`, `template_id`, `first_workspace_name`, `derived_value`. The platform class
+> refuses any **undeclared** field *before authentication*, so a client that trusted the contract
+> would have failed the first request carrying it and **every one after it**, on the route that
+> creates customers.
+>
+> **So reading the contract was not evidence that Core accepted the field.** That is the sentence
+> worth keeping. Core landed it the same day — declared, parsed optionally with the same check the
+> update route uses, persisted as NULL when absent, nothing synthesised.
+>
+> This is the **mirror of the ruling that governs the field**. `0031` makes `display_name` optional
+> so that a server requiring what the client does not send cannot cause an outage; the opposite
+> direction was open, and it was open *because the contract said the field was there*.
+>
+> **The gate is deleted rather than pinned to `true`, and so are the checks that guarded it.** A
+> flag that can no longer move keeps an unreachable branch alive — and the unreachable half here was
+> a paragraph telling operators the name is recorded somewhere else, which is now **false**. Dead
+> prose in a client is a stale assertion waiting for someone to re-enable it, so the branch went
+> with the gate. `verify:platform` asserts the gate is gone and that the paragraph went with it.
+
+**The CR and the VAT registration are not on this form, and that is the contract rather than a
+choice.** `onboardOrganizationInput` is `additionalProperties: false` over five fields and has no
+field for either; every Organization starts `not_recorded`. They are recorded on the detail page,
+which the success panel links to — **a link and not a redirect**, since navigating away from that
+screen destroys the only copy of the password.
+
+An empty name is **omitted, never sent as `''`**: "absent" and "present and empty" are different
+requests, and `minLength: 1` would turn a blank optional field into a validation error.
 
 **The Workspace name is not asked for.** `first_workspace_name` is required by the contract,
 validated by Core, and **discarded** — `business` has exactly two columns and naming belongs to the
