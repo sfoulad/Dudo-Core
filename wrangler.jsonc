@@ -126,7 +126,7 @@
   // only; it does not recurse. Our two sets are therefore separated by nesting:
   //
   //   platform/core/migrations/*.sql                 -> DB_TENANT   (3 files)
-  //   platform/core/migrations/control-plane/*.sql   -> DB_CONTROL  (5 files)
+  //   platform/core/migrations/control-plane/*.sql   -> DB_CONTROL  (every file in it)
   //
   // This works, but it is fragile in one specific and dangerous way: a control-plane
   // migration saved one directory too high lands at the top level and is applied to the

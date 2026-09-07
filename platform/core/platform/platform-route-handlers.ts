@@ -626,6 +626,11 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
       organizationId,
       identifier,
       actorPrincipalId: context.authority.principalId,
+      // THE PERMISSION THIS ROUTE DECLARES. It is `core.credential.reset` because the resolve
+      // BORROWS it without performing a reset — `BORROWS_WITHOUT_PERFORMING` in
+      // `critical-permissions.ts` is the same fact seen from the confirmation gate. Supplied
+      // rather than derived: see `recordProbe`.
+      permissionId: 'core.credential.reset',
       // THE OPERATOR'S CHARGE, WITHOUT WHICH THIS CALL DOES NOT COMPILE. Step 4b took it before
       // this handler ran, which is what stops an exhausted operator from continuing to spend a
       // customer's write allocation.
@@ -819,6 +824,9 @@ function listAuditFeed(dependencies: {
         organizationId: organizationId as string,
         actionId: context.routeId,
         actorPrincipalId: context.authority.principalId,
+        // BOTH AUDIT FEEDS DECLARE THIS PERMISSION, and only the scoped feed reaches this line.
+        // Supplied rather than derived: see `recordProbe`.
+        permissionId: 'core.platform-audit.read',
         // REQUIRED. Step 4b charged the operator before this handler ran.
         charge: context.charge,
         requestId: context.requestId,

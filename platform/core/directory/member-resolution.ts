@@ -86,6 +86,26 @@ import { consumeOperatorCharge } from '../platform/platform-audit.ts';
  */
 export const RESOLVE_TENANT_ROW_WRITES = 5;
 
+/**
+ * ===========================================================================================
+ * WHICH PERMISSION A TENANT-SIDE PLATFORM RECORD MAY NAME. A CLOSED LIST, AND ADDING TO IT IS
+ * MEANT TO BE A STOP RATHER THAN A COPY-PASTE.
+ * ===========================================================================================
+ *
+ * *** IT IS NOT A SECURITY CHECK AND MUST NOT BE READ AS ONE. *** Nothing here compares this value
+ * against the permission the dispatcher actually authorized; a caller passing the wrong member of
+ * this union writes a wrong-but-well-formed record and nothing notices. See the residual named at
+ * `recordProbe`.
+ *
+ * WHAT IT DOES BUY: a typo does not compile, and a new caller cannot inherit a value by accident —
+ * it has to add its permission here, in a file it would otherwise never open, next to this comment.
+ * That is the same device `organization-identity-v1` uses for the third registration type: make the
+ * default a stop.
+ */
+export type TenantRecordedPlatformPermission =
+  | 'core.credential.reset'
+  | 'core.platform-audit.read';
+
 export type MemberResolutionService = {
   /**
    * Resolves an identifier within one Organization, and records the attempt in that Organization's
@@ -109,6 +129,12 @@ export type MemberResolutionService = {
      */
     readonly identifier: CheckedIdentifier;
     readonly actorPrincipalId: string;
+    /**
+     * *** THE PERMISSION THE CALLER EXERCISED. REQUIRED, AND NOT DERIVED HERE. ***
+     *
+     * See `recordProbe` for the defect this closes and for what it does NOT close.
+     */
+    readonly permissionId: TenantRecordedPlatformPermission;
     readonly requestId: string;
     readonly correlationId: string;
     /**
@@ -151,6 +177,12 @@ export type MemberResolutionService = {
     readonly organizationId: string;
     readonly actionId: string;
     readonly actorPrincipalId: string;
+    /**
+     * *** THE PERMISSION THE CALLER EXERCISED. REQUIRED, AND NOT DERIVED HERE. ***
+     *
+     * See `recordProbe` for the defect this closes and for what it does NOT close.
+     */
+    readonly permissionId: TenantRecordedPlatformPermission;
     readonly requestId: string;
     readonly correlationId: string;
     /**
@@ -227,6 +259,7 @@ export function createMemberResolutionService(
         organizationId: input.organizationId,
         actionId: 'platform.organizations.members.resolve',
         actorPrincipalId: input.actorPrincipalId,
+        permissionId: input.permissionId,
         charge: input.charge,
         requestId: input.requestId,
         correlationId: input.correlationId,
@@ -249,6 +282,7 @@ export function createMemberResolutionService(
         organizationId: input.organizationId,
         actionId: input.actionId,
         actorPrincipalId: input.actorPrincipalId,
+        permissionId: input.permissionId,
         charge: input.charge,
         requestId: input.requestId,
         correlationId: input.correlationId,
@@ -283,6 +317,43 @@ async function recordProbe(
     readonly organizationId: string;
     /** WHICH platform read this was. A resolve and a feed read are different disclosures. */
     readonly actionId: string;
+    /**
+     * *** UNDER WHAT AUTHORITY. A PARAMETER, NOT A MAPPING THIS FUNCTION REMEMBERS. ***
+     *
+     * ===========================================================================================
+     * THE DEFECT IT CLOSES, AND IT WAS FOUND BEFORE IT SHIPPED RATHER THAN AFTER
+     * ===========================================================================================
+     *
+     * This was a two-value ternary on `actionId`: the resolve got `core.credential.reset` and
+     * **EVERYTHING ELSE FELL INTO THE ELSE BRANCH AND CLAIMED `core.platform-audit.read`.** With two
+     * callers that was correct and looked stable. The third caller —
+     * `platform.organizations.identity.update`, which EDITS A CUSTOMER'S LEGAL IDENTIFIERS — would
+     * have written a record into that customer's own trail saying the platform READ THEIR AUDIT LOG.
+     *
+     * **A WRONG AUDIT VALUE IS WORSE THAN A MISSING ONE BECAUSE IT DEFENDS ITSELF**, and
+     * `audit-read-v1`'s platform feed renders this field to the customer as *"under what
+     * authority"* — so the customer would have been shown a confident false answer to the one
+     * question the field exists to answer. Reported by `architecture-agent` in
+     * `organization-identity-v1` (theHAZARDINTHEEXISTINGWRITER), which ruled that the route must
+     * not be implemented against the old signature. It was not.
+     *
+     * THE SHAPE IS `architecture.md` §3a: a value the write REQUIRES, so a new caller cannot
+     * inherit one by falling through. Omitting it does not compile.
+     *
+     * ===========================================================================================
+     * *** WHAT IT DOES NOT CLOSE, STATED HERE SO NOBODY CONCLUDES IT DID. ***
+     * ===========================================================================================
+     *
+     * **Nothing compares this against the permission the dispatcher actually authorized.** A caller
+     * passing the wrong member of `TenantRecordedPlatformPermission` writes a wrong-but-well-formed
+     * record, and no layer notices — the type refuses a typo, not a mistake.
+     *
+     * THE STRUCTURAL CLOSE IS TO CARRY THE AUTHORIZED PERMISSION ON `PlatformRouteContext` and pass
+     * THAT, which makes the recorded value and the evaluated value **the same value** rather than
+     * two that agree. It is not done here because it changes a type this work did not flag, and an
+     * unflagged shared-type change is the failure this team had last week. Owed, not forgotten.
+     */
+    readonly permissionId: TenantRecordedPlatformPermission;
     readonly charge: OperatorWriteCharged;
     readonly actorPrincipalId: string;
     readonly requestId: string;
@@ -386,13 +457,11 @@ async function recordProbe(
       principalId: context.actorPrincipalId,
       principalType: 'user',
       onBehalfOfPrincipalId: null,
-      // THE PERMISSION THE CALLER EXERCISED, derived from the operation rather than fixed, so the
-      // tenant's own trail says which grant was used. A resolve is `core.credential.reset`; a feed
-      // read is `core.platform-audit.read`, and a customer can tell the two apart.
-      permissionId:
-        context.actionId === 'platform.organizations.members.resolve'
-          ? 'core.credential.reset'
-          : 'core.platform-audit.read',
+      // THE PERMISSION THE CALLER EXERCISED, SUPPLIED BY THE CALLER. It was a ternary on
+      // `actionId` until 2026-09-07 and the else branch would have mislabelled the third caller —
+      // see the field's own documentation above, which records what that would have told a
+      // customer and what this parameter still does not check.
+      permissionId: context.permissionId,
       scope: 'platform',
       // ALWAYS `allowed`. See the header: the record is of the probe, not of its result.
       decision: 'allowed',
