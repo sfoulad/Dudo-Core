@@ -424,7 +424,7 @@ operations:
     response: { schemaRef: "urn:dudo:schema:organization-identity:1#/$defs/updateOrganizationIdentityOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 5
+    maxRowWrites: 7
     audit: required
     confirmation: not-required
 
@@ -463,13 +463,38 @@ operations:
         discipline (list from read, export from read, grant from revoke), applied before rather
         than after.
 
-    theWRITECOST: >-
-      5 CONTROL-PLANE ROW-WRITES: the `organization` row (1 — the table carries NO SECONDARY
-      INDEX, per `0002_organization.sql`, so an update of these columns maintains none), the
-      platform-operator audit record (2), and the reservation for the tenant-side write (2), which
-      is the convention `organization-detail-v1` and `platform-audit-read-v1` both use. THE TENANT
-      `audit_event` IS A FURTHER 5 ROW-WRITES FROM THE ORGANIZATION'S OWN `business` ALLOCATION.
-      TWO LEDGERS, BOTH RESERVED.
+    theWRITECOST:
+      # =====================================================================================
+      # *** WRITTEN AS A SHAPE OVER NAMED CONSTANTS FIRST AND A FIGURE SECOND. CORRECTED
+      # 2026-09-07, AND THE CORRECTION IS THE ARGUMENT FOR THE FORM. ***
+      #
+      # This said 5, composed as "the organization row (1), the platform-operator audit record
+      # (2), and the reservation for the tenant-side write (2)". Migration `0016` added two
+      # indexes to `platform_operator_action` and `PLATFORM_OPERATOR_ACTION_ROW_WRITES` moved
+      # from 2 to 4 in the same change, so the figure was wrong the moment a migration in
+      # another directory landed. NOTHING COMPARED THE TWO AND NOTHING COULD: the contract
+      # cannot see the constant, and the failure is silent in the dangerous direction —
+      # under-reserving is an outage (`0014` §A.12).
+      # =====================================================================================
+      shape: >-
+        ORGANIZATION_UPDATE_ROW_WRITES + PLATFORM_OPERATOR_ACTION_ROW_WRITES + the tenant-write
+        reservation. ALL THREE ARE CORE'S, IN `identity/control-plane-admission.ts`, AND THE
+        SHAPE IS WHAT THIS CONTRACT BINDS. The figure below is a transcription of it on one day.
+      theComponents:
+        - "ORGANIZATION_UPDATE_ROW_WRITES — the `organization` row. ONE, not two: it is an UPDATE of thirteen non-key columns on an existing row, and `0002_organization.sql` gives that table no secondary index, so nothing else is maintained."
+        - "PLATFORM_OPERATOR_ACTION_ROW_WRITES — the platform-operator audit record. P4 makes every route in this class write one, including the reads."
+        - "The tenant-write reservation, counted as 2, which is the convention `organization-detail-v1` and `platform-audit-read-v1` both use for a route that also writes tenant-side."
+      figureOn_2026_09_07: >-
+        1 + 4 + 2 = **7** CONTROL-PLANE ROW-WRITES. Read from
+        `identity/control-plane-admission.ts` on the day of writing rather than remembered.
+      theTenantSide: >-
+        A FURTHER 5 ROW-WRITES INTO THE ORGANIZATION'S OWN `business` ALLOCATION for the
+        `audit_event` row. TWO LEDGERS, BOTH RESERVED, and `0016` did not touch the second one.
+      ifTheyDISAGREE: >-
+        *** THE CONSTANTS ARE RIGHT AND THIS FIGURE IS WRONG. *** Core is the source; this is the
+        transcription. An implementer finding a mismatch reserves from the constants and reports
+        the contract, which is what `core-agent` did on 2026-09-07 rather than implementing to a
+        number it knew was stale.
 
     theTENANTSIDERECORD:
       ruling: >-
@@ -719,9 +744,17 @@ mcp:
 freeTierImpact:
   allowancesConsumed: [d1-rows-read, d1-rows-written, d1-storage]
   writes: >-
-    5 control-plane row-writes plus 5 tenant row-writes per call. Against the 600/day
-    per-principal control-plane ceiling that is ~120 identity updates per operator per UTC day,
+    7 control-plane row-writes plus 5 tenant row-writes per call — the shape and the constants
+    are in the operation's theWRITECOST, and this paragraph is the second place the same figure
+    is written, which is exactly the duplication that made it wrong. Against the 600/day
+    per-principal control-plane ceiling that is ~85 identity updates per operator per UTC day,
     shared with every other platform action.
+    CORRECTED 2026-09-07 FROM "5 ... ~120". `0016` added two indexes to
+    `platform_operator_action`, taking `PLATFORM_OPERATOR_ACTION_ROW_WRITES` from 2 to 4, and
+    every stated cost that includes an audit record moved by exactly 2 across the whole contract
+    set. THE DIVISION MOVED FURTHER THAN THE ADDITION: 600/5 is 120 and 600/7 is 85, so a derived
+    figure drifts faster than the number it derives from — which is why a per-operator-per-day
+    rate is the worst thing to write down and the easiest to believe.
   reads: "One point read of `organization` before the update. Not a measurable term against 5,000,000 rows/day."
   storage: >-
     THREE COLUMNS ON A TABLE HOLDING AT MOST TEN ROWS IN THE CLOSED BETA. `0002_organization.sql`

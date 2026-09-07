@@ -353,6 +353,59 @@ operations:
       this surface.
       THE SAME WORK MUST HAPPEN ON ALL FIVE PATHS, not merely the same code — the property
       organization-selection-v1's theHintRuling establishes, applied here.
+    theRENAMEISINPHASEONE:
+      ruling: >-
+        *** THE ROUTE ACCEPTS `target_identifier` AND `identifier`. `target_identifier` IS THE
+        NAME A CLIENT SHOULD SEND. `identifier` IS DEPRECATED. IF BOTH ARE PRESENT THE REQUEST IS
+        REFUSED WITH `invalid_argument`. *** Team Lead ruling, 2026-09-07.
+      theDIVERGENCETHATCAUSEDIT: >-
+        `core-agent`'s route-field checker found it on its first run and CORRECTLY REFUSED TO FIX
+        IT ON ITS OWN INITIATIVE. Core's route table declared `identifier`; this contract published
+        exactly one property, `target_identifier`. BOTH DIRECTIONS FIRED — a client sending what
+        the contract published was refused before authorization, and the route accepted a name no
+        contract published.
+        IT IS `architecture.md` §1a's RENAME HALF-LANDED. That ruling renamed both sides so neither
+        meaning holds the bare word: `reauth_identifier` for the caller's own,
+        `target_identifier` for the target's. `platform.credentials.reset` got it; THIS ROUTE DID
+        NOT.
+        AND THE DEPLOYED CONSOLE SENDS `identifier`, so member resolve works in production BECAUSE
+        THE CLIENT READ THE CODE RATHER THAN THE CONTRACT — which `workflow.md` §12 names exactly:
+        once one client has done that successfully, the contract has stopped being the source of
+        truth for everyone.
+      theSEQUENCE: "Core accepts both → the console switches → Core drops `identifier`. Phases 1, 2, 3."
+      whyNOTJUSTRENAMECORE: >-
+        A SERVER REFUSING A FIELD THE DEPLOYED CLIENT SENDS. The same outage `0031` sequenced
+        `display_name` to avoid, in the same direction. THIS CONTRACT SET HAS NOW MET THAT SHAPE
+        THREE TIMES IN ONE DAY and the answer has been the same each time.
+      whyNOTCHANGETHECONTRACTTOidentifier_WHICHWOULDBEONELINE: >-
+        *** IT WOULD RE-OPEN THE EXACT DEFECT §1a CLOSED. *** The bare word does not say WHOSE, and
+        §1a's finding is that a name which does not say whose is a name two contracts can both use
+        correctly and mean different things by — a union no reading of either document could catch.
+        THE CHEAP FIX SPENDS A RULE THAT WAS WRITTEN AFTER A DEFECT THAT COST A DAY TO FIND.
+      theOBJECTIONANDWHYITISOVERRULED: >-
+        `core-agent` OBJECTED THAT PHASE 1 BRIEFLY PUTS TWO NAMES ON ONE FIELD, WHICH IS THE
+        AMBIGUITY §1a EXISTS TO PREVENT. IT IS A FAIR OBJECTION AND THE DISTINCTION IS EXACT:
+        §1a's collision was ONE NAME MEANING TWO DIFFERENT PARTIES; this is TWO NAMES MEANING THE
+        SAME PARTY. A deprecation alias, not a namespace with two owners. RECORDED RATHER THAN
+        ASSUMED, because the next reader will otherwise apply §1a to it and conclude we broke our
+        own rule.
+      theBOTHPRESENTREFUSALISNOTAPREFERENCE: >-
+        DO NOT IMPLEMENT "prefer `target_identifier`". A route that silently prefers one lets a
+        client send the wrong name forever and never learn — and IF THE TWO VALUES DIFFER,
+        SILENTLY CHOOSING IS CHOOSING WHICH PRINCIPAL TO RESOLVE. Refusing is testable and has a
+        known-failing input; preferring is a behaviour nobody will ever write a case for.
+        IT IS EXPRESSED IN THE SCHEMA AS WELL AS DESCRIBED HERE: `resolveMemberInput`'s `oneOf`
+        has two branches requiring one name each, so both-present matches both branches and fails.
+        *** AND EXPRESSED IS NOT ENFORCED. CORE MUST IMPLEMENT THIS REFUSAL. *** Nothing in this
+        repository executes JSON Schema, so the `oneOf` is a machine-readable statement of the rule
+        and NOT the rule running. THREE STATES: STATED (this paragraph), EXPRESSED (the `oneOf`),
+        EXECUTED (Core, on the live path, and nowhere else).
+        DO NOT READ THE `oneOf` AS DOING THE WORK. An earlier version of the schema comment said
+        exactly-one "falls out of the schema instead of being a sentence someone implements", which
+        was false in the way `workflow.md` §12 records — expressed and enforced are independent
+        axes, and a reader who trusts such a sentence concludes the rule is handled and never
+        checks that anyone implemented it.
+
     notes: >-
       THE IDENTIFIER IS NEVER RETURNED, ECHOED OR CONFIRMED IN THE RESPONSE. The caller sent it and
       already knows it; echoing it would put an email address in a response body for no purpose, and
@@ -449,6 +502,30 @@ openQuestions:
       the operator population grows beyond a handful, because every control here is proportionate to
       "one or two operators" and none of them is proportionate to twenty.
     blocks: "Nothing at current scale."
+  - id: OD-5
+    status: "OPEN, OWNED, AND TRIGGERED BY AN EVENT RATHER THAN BY A DATE."
+    question: >-
+      PHASE 3 OF THE `identifier` → `target_identifier` RENAME: `identifier` must be dropped from
+      `resolveMemberInput` and from Core's route table. Until then the route accepts a deprecated
+      alias and this contract publishes two names for one field.
+    theTRIGGER: >-
+      *** IT LANDS IN THE CHANGE THAT FOLLOWS THE CONSOLE'S SWITCH TO `target_identifier`. NOT A
+      DATE, NOT A BACKLOG ITEM, AND NOT A CONDITIONAL FOR SOMEBODY TO NOTICE. *** `workflow.md`
+      §12 is explicit that a clause of the form "when X happens this file is wrong" creates an
+      obligation nobody is assigned to collect, and THIS CONTRACT SET ALREADY CARRIES ONE OF THOSE
+      IN `ON-7`. Named here the way `ON-7` is named so that it is greppable from either end.
+    whatDISCHARGINGITLOOKSLIKE: >-
+      Remove the `identifier` property and its `oneOf` branch from `resolveMemberInput`, leaving
+      `required: ["target_identifier"]`; Core removes it from the route table's `fields`. BOTH IN
+      ONE CHANGE — `core-agent`'s route-field checker compares the two and will go red if they are
+      split across two commits, which is the check working rather than a problem.
+    whyITMUSTACTUALLYHAPPEN: >-
+      A DEPRECATED ALIAS THAT IS NEVER REMOVED IS JUST A SECOND NAME. The reservation
+      `architecture.md` §1a creates is that `identifier` says nothing about WHOSE it is; every day
+      the alias survives is a day a new client can adopt the name the rule exists to retire, and
+      the argument for removing it gets weaker as more code sends it.
+    blocks: "Nothing. It bounds what may truthfully be said about the §1a rename being complete."
+
   - id: OD-4
     status: "ANSWERED 2026-09-07 by organization-identity-v1 and docs/decisions/0031. NOT YET CLOSED — see below."
     question: >-

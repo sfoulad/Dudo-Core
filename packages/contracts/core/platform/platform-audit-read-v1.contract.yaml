@@ -229,12 +229,64 @@ theTimeWindow:
       *** A BOUNDED TIME WINDOW IS REQUIRED ON ANY REQUEST CARRYING A FILTER THAT NO INDEX PREFIX
       SERVES, AND IS NOT REQUIRED OTHERWISE. *** Both `since` AND `until` must be present and the
       span must not exceed THIRTY-ONE DAYS.
-        `platform.audit.list`                  window REQUIRED when `actor_principal_id` or
-                                               `action_id` is present. NOT required otherwise.
-        `platform.organizations.audit.list`    window REQUIRED when `action_id` is present. NOT
-                                               required otherwise — `organization_id` is a PATH
-                                               parameter served by an index prefix, not a filter
-                                               tested row by row.
+      *** THE RULE IS THE PROPERTY. THE LIST BELOW IS DERIVED FROM IT ON A DATE AND IS NOT THE
+      RULE. *** Amended 2026-09-07 from an enumeration of filter names to the property plus a
+      derived list, for the reason `architecture.md` §1a gives about scoping a reservation to
+      "contracts that compose with the mechanism today": A LIST OF NAMES IS CORRECT THE DAY IT IS
+      WRITTEN AND SILENTLY WRONG THE FIRST TIME A FILTER IS ADDED. A new filter is covered by the
+      property the moment it exists, with no contract change and no window to be exempt through.
+      DERIVED ON 2026-09-07, against the index set `0016` leaves in place. *** THE TWO ROUTES
+      ACCEPT DIFFERENT FILTER SETS AND THE DIFFERENCE IS THE WHOLE OF THE DERIVATION, SO BOTH SETS
+      ARE STATED HERE RATHER THAN LEFT TO BE LOOKED UP: ***
+        `platform.audit.list`
+            ACCEPTS  page_size, cursor, actor_principal_id, action_id, since, until.
+            WINDOW REQUIRED when `actor_principal_id` OR `action_id` is present — neither is in an
+            index prefix, so each is tested row by row. NOT required otherwise.
+        `platform.organizations.audit.list`
+            ACCEPTS  page_size, cursor, action_id, since, until. *** NO `actor_principal_id`. ***
+            WINDOW REQUIRED when `action_id` is present. NOT required otherwise — `organization_id`
+            is a PATH parameter served by an index prefix, so it is a seek and not a per-row test.
+      *** SO EVERY FILTER EITHER ROUTE ACCEPTS TODAY REQUIRES A WINDOW. The only exempt shapes are
+      the UNFILTERED ones, and each is bounded by an index prefix rather than by looking cheap. ***
+    whyTHEACTORFILTERSPLITISEASYTOMISREAD: >-
+      STATED BECAUSE IT HAS ALREADY CAUSED TWO MISREADINGS — one by this author, and one by a
+      reviewer who went to the source to check it and QUOTED THE RIGHT LINES OFF THE WRONG ROUTE.
+      *** THE SECOND IS THE MORE DANGEROUS AND IT IS WORTH SAYING WHY, BECAUSE THE INTUITION RUNS
+      THE OTHER WAY. *** Not checking produces a HEDGED claim. Checking and landing in the wrong
+      block of two produces an UNHEDGED one, carrying exactly the evidence a reader looks for — so
+      it DISPLACED the correct finding, and the correct finding did not displace it. Every fact in
+      the overruling was true; only the attribution was wrong. It is `architecture.md` §3c's family
+      with a twist: THE CITATION WAS VERIFIABLE, AND VERIFYING IT WOULD HAVE CONFIRMED IT. Opening
+      the quoted line shows exactly the quoted array. What it does not show is which route owns it,
+      and nothing about the quote reveals that the question is open.
+      *** THE RULE THAT FOLLOWS: WHEN A FILE CONTAINS ADJACENT BLOCKS OF THE SAME SHAPE, A LINE
+      NUMBER IS NOT AN IDENTIFIER. ANCHOR A QUOTATION TO THE BLOCK'S OWN `id` AND QUOTE THAT TOO.
+      *** Here that is `id: 'platform.audit.list'` versus `id: 'platform.organizations.audit.list'`,
+      and either one settles in a word what twenty lines of context does not.
+      `platform-routes.ts` carries the two arrays about twenty lines apart, and the comment
+      immediately above the PLATFORM feed's says *"`actor_principal_id` IS PERMITTED. Filtering by
+      the OPERATOR is not a disclosure."* THAT SENTENCE IS TRUE OF THE ROUTE IT SITS ABOVE AND
+      FALSE OF THE NEXT ONE DOWN, whose own comment says *"NO `actor_principal_id` HERE ... adding
+      an actor filter would let a caller ask 'which of our operators touched this customer'."*
+      BOTH COMMENTS ARE CORRECT IN PLACE; READ OUT OF CONTEXT, THE FIRST ANSWERS A QUESTION ABOUT
+      THE SECOND ROUTE WRONGLY. That is why the parameter sets are transcribed above — a reader
+      checking this rule should not have to land in the right one of two adjacent blocks.
+    ifTHEACTORFILTERISEVERADDEDTOTHEORGANIZATIONFEED: >-
+      IT REQUIRES A WINDOW BY THE PROPERTY, WITH NO AMENDMENT TO THIS CONTRACT. That is the point
+      of stating the rule as a property rather than as the list above: the list is dated and
+      derived, and a filter added tomorrow is covered the moment it exists.
+    whatANEXEMPTSHAPEACTUALLYCOSTS: >-
+      *** AN EXEMPTION IS A BOUND BY AN INDEX, NEVER AN ABSENCE OF COST, AND THE DIFFERENCE IS
+      INVISIBLE FROM THE RESPONSE. *** Measured by `core-agent` against a 50,000-row log with
+      `0016` applied: a filtered feed shape that no index prefix serves walks A CONSTANT FRACTION
+      OF THE LOG — thousands of rows — and that fraction GROWS LINEARLY WITH THE TABLE. It is not
+      a different class from the unbounded case; it is the same class with a smaller constant.
+      *** THE SHARP END IS THE EMPTY PAGE. *** Such a request can walk thousands of rows and
+      return NOTHING, so A CALLER MEASURING COST BY ROWS RETURNED SEES A FREE REQUEST. That is the
+      same trap this contract already names one section down as "the shape that looks safest and
+      is least guarded", arriving through a filter rather than through a missing index.
+      SO AN EXEMPT SHAPE MUST BE EXEMPT BECAUSE AN INDEX PREFIX BOUNDS IT, and never because it
+      looks cheap or usually returns little.
 
     whyNOTMANDATORYONEVERYTHING: >-
       BECAUSE IT WOULD BUY NOTHING AND COST SOMETHING. `core-agent` measured the unfiltered feed
@@ -258,6 +310,23 @@ theTimeWindow:
       shape and never recovered.
 
     theARITHMETIC_STATEDINROWSRATHERTHANINADJECTIVES:
+      theARITHMETICHOLDSONLYIFTHESERVERENFORCESTHEWINDOW: >-
+        *** THE FIGURES BELOW ARE A CONSEQUENCE OF THE REQUIREMENT, NOT A MEASUREMENT OF THE
+        SYSTEM. They hold for a caller the SERVER bounds and for no other. *** A window enforced
+        only in a client is not a bound: it holds for that client and for no script, no second
+        client and no direct request — the same shape as `0017`'s in-process limiter, which
+        `platform-operator-v1` records must not be reported as rate limiting.
+        THIS SENTENCE IS DELIBERATELY ABOUT THE CONTRACT'S REQUIREMENT RATHER THAN ABOUT WHAT CORE
+        CURRENTLY DOES, AND THAT IS A CORRECTION OF FORM MADE ON 2026-09-07. The previous wording
+        reported Core's state — "Core enforces neither token, only `since >= until`" — and WENT
+        STALE WITHIN THE HOUR when the enforcement landed. Nothing turned red. A claim about
+        another module's behaviour has a half-life; a statement of what this contract requires does
+        not, and the second kind is the only kind a contract should be making about code it does
+        not own.
+        HOW TO CHECK IT RATHER THAN BELIEVE IT: the requirement is discharged when the server
+        refuses `time_window_required`, `time_window_too_wide` and `time_window_inverted`, asserted
+        at the boundary — 31 days exactly, ±1 ms, and 32 days. That is a test's answer, not a
+        contract's, and `testRequirements.theMandatoryWindow` is where it is owed.
       theBOUNDISDERIVEDANDNOTESTIMATED: >-
         A WINDOW'S ROW COUNT IS BOUNDED BY THE WRITE CEILING THAT PRODUCED IT. The per-principal
         control-plane allowance is 600 estimated row-writes a day and a record costs 2, so ONE
@@ -279,6 +348,22 @@ theTimeWindow:
         FOR TEN. Recorded as `PA-4`, with the derivation above so that the next person can
         re-derive rather than re-measure.
 
+    theSPANLIMITAPPLIESONLYWHERETHEWINDOWISREQUIRED:
+      ruling: >-
+        *** THE 31-DAY MAXIMUM BINDS ONLY A WINDOW THE RULE REQUIRES. A CALLER MAY SUPPLY A WIDER
+        WINDOW ON AN EXEMPT SHAPE, AND A 90-DAY UNFILTERED FEED QUERY IS ACCEPTED. *** Team Lead
+        ruling, 2026-09-07, confirming `core-agent`'s reading so that it stops being a reading.
+      why: >-
+        REFUSING A WIDE WINDOW ON AN EXEMPT SHAPE WOULD REFUSE SOMETHING STRICTLY CHEAPER THAN THE
+        NO-WINDOW REQUEST THIS CONTRACT ALREADY PERMITS. An unfiltered feed with no window at all
+        is served from the ordering index and stops after one page; adding `since` and `until`
+        narrows it further. A LIMIT THAT REFUSED THE NARROWER REQUEST AND ALLOWED THE WIDER ONE IS
+        NOT A LIMIT, IT IS A RULE APPLIED WHERE IT DOES NO WORK.
+      itISWRITTENDOWNBECAUSEITISWHATATIDYINGPASSDESTROYS: >-
+        A LATER READER WILL SEE "the span must not exceed 31 days" BESIDE "a window is required
+        when a filter is present" AND HARMONISE THE FIRST INTO A UNIVERSAL RULE. It reads like an
+        inconsistency and it is not one: the span exists to bound A WALK, and an exempt shape has
+        no walk to bound. The conditional scope is the whole of its meaning.
     omissionAndExcess:
       ruling: >-
         *** REFUSE. NEVER DEFAULT, NEVER TRUNCATE, NEVER NARROW SILENTLY. *** A request that

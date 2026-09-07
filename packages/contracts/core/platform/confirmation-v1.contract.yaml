@@ -27,7 +27,7 @@ apiVersion: 1
 namespace: core
 domain: platform
 status: accepted
-acceptedBy: "Dudo Team Lead, 2026-09-05, recorded as docs/decisions/0027, with the CF-4 locale amendment applied."
+acceptedBy: "Dudo Team Lead, 2026-09-05, recorded as docs/decisions/0027, with the CF-4 locale amendment applied. AMENDED 2026-09-06 by docs/decisions/0029, WHICH SUPERSEDES 0027's DEFINITION OF THE BOUND PARAMETER SET — the binding is body-minus-three UNION the route's declared path parameters. A reader arriving at 0027 for that definition has the superseded one; see theSUBMITTEDPARAMETERSAREDEFINED.recordedAs."
 updated: "2026-09-05"
 documentsExistingImplementation: false
 
@@ -300,8 +300,22 @@ operations:
     response: { schemaRef: "urn:dudo:schema:confirmation:1#/$defs/confirmationChallenge" }
     successStatus: 201
     errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 4
+    maxRowWrites: 6
     audit: required
+    theWRITECOST:
+      shape: "CONFIRMATION_ROW_WRITES + PLATFORM_OPERATOR_ACTION_ROW_WRITES, both in `identity/control-plane-admission.ts`."
+      figureOn_2026_09_07: "2 + 4 = **6**, read from the constants rather than remembered."
+      correctedFrom4: >-
+        *** IT SAID 4, AND 4 WAS NEVER RIGHT — NOT MERELY STALE. *** The old figure carried 2 for
+        the confirmation row and 2 for the audit record; `0016` took the audit record to 4. BUT
+        THE PROSE UNDER `freeTierImpact` WAS WORSE: it counted the challenge at 2 ROW-WRITES,
+        omitting the audit record entirely, so the hazard it describes — an unbounded loop of
+        challenge requests — was understated BY A FACTOR OF THREE rather than by two.
+        A UNIFORM "+2" SWEEP WOULD HAVE LANDED ON 4 AND BEEN WRONG IN THE SAME DIRECTION. That is
+        the correction the Team Lead made to this author's sweep on 2026-09-07, and it is recorded
+        here rather than only in a message because the next person to renumber these will reach
+        for the same rule.
+
     notes: >-
       IT RUNS THE FULL AUTHORIZATION OF THE TARGET OPERATION, including its not_found/forbidden
       collapse. A caller who could not perform the operation cannot obtain a challenge for it, and
@@ -326,6 +340,21 @@ operations:
     errors: [invalid_argument, unauthenticated, forbidden, not_found, organization_not_selected, rate_limited, quota_exceeded, unavailable]
     maxRowWrites: 4
     audit: required
+    theWRITECOST:
+      shape: "CONFIRMATION_ROW_WRITES + the spend, both control-plane. NO `PLATFORM_OPERATOR_ACTION_ROW_WRITES` TERM."
+      figureOn_2026_09_07: "4, UNCHANGED BY `0016`."
+      whyITDIDNOTMOVEWHENITSNEIGHBOURDID: >-
+        *** THIS IS AN ACTION-CLASS ROUTE AND WRITES NO PLATFORM-OPERATOR RECORD. *** `0016`
+        added indexes to `platform_operator_action`, which this route never touches; its audit
+        record is a TENANT `audit_event` on the Organization's own ledger, and that table was not
+        touched. THE FIGURE IS UNCHANGED BECAUSE THE COST HAS NO TERM THAT MOVED.
+        *** IT SITS TWENTY LINES BELOW A ROUTE THAT DID MOVE, IN THE SAME FILE, WITH THE SAME
+        FORMER NUMBER. *** A sweep applying "+2 to every audit-bearing figure" corrupts this one
+        while correcting that one, and the two are indistinguishable by their `maxRowWrites` line
+        alone — the class is decided by the ROUTE CLASS, which is three fields higher up.
+        STATED BECAUSE A FIGURE LEFT ALONE IS OTHERWISE INDISTINGUISHABLE FROM A FIGURE NOBODY
+        LOOKED AT.
+
     notes: >-
       BEING AN ORDINARY ACTION IS WHAT MAKES IT SAFE. It resolves a tenant, narrows to the
       authorized business set, and answers not_found for a record in another tenant exactly as
@@ -512,11 +541,26 @@ theConfirmedRequest:
       the wrong-password case has not tested this at all.
 
   theSUBMITTEDPARAMETERSAREDEFINED:
+    recordedAs: >-
+      *** docs/decisions/0029, WHICH SUPERSEDES `0027`'s DEFINITION OF THE BOUND PARAMETER SET.
+      THE CITATION WAS ADDED 2026-09-07 AND ITS ABSENCE WAS THE DEFECT. ***
+      This contract cited `0027` three times and `0029` not once, so a reader asking WHY the
+      binding covers path parameters followed the only pointers offered, landed on the SUPERSEDED
+      definition, and received a coherent answer that is no longer operative. A CITATION TO A
+      SUPERSEDED RECORD IS WORSE THAN NO CITATION: it answers the question with the wrong answer
+      and stops the reader looking.
+      IT MATTERS MORE HERE THAN ON AN ORDINARY STALE LINK. `0029` exists because the bound set was
+      THE EMPTY OBJECT on the route that revokes platform authority — a confirmation minted to
+      revoke operator A was spendable on operator B — and that is precisely the reasoning a future
+      editor of this binding most needs to reach.
+      A LINK CHECK CANNOT FIND THIS. `0027` resolves to a real file and reads correctly on its own
+      terms; what is wrong is that a later record replaced part of it. The check that finds it
+      compares citations against `Supersedes:` headers.
     amendedOn20260905: >-
       *** THE RULING BELOW REPLACES AN EARLIER ONE THAT SAID "BODY MINUS THE THREE FIELDS, EXACTLY,
-      NOTHING ADDED". THAT SENTENCE IS STRUCK. *** It was false in the only way that matters: it
-      excluded the target. See theBINDINGCOVERSTHEPATHPARAMETERSTOO for what it cost and why it is
-      being changed now rather than later.
+      NOTHING ADDED". THAT SENTENCE IS STRUCK BY `0029`. *** It was false in the only way that
+      matters: it excluded the target. See theBINDINGCOVERSTHEPATHPARAMETERSTOO for what it cost
+      and why it is being changed now rather than later.
     ruling: >-
       THE `parameters` THE BINDING IS RECOMPUTED OVER ARE:
         (1) THE SUBMITTED REQUEST BODY, MINUS THE THREE CONFIRMATION FIELDS — `confirmation_id`,
@@ -697,9 +741,20 @@ storage:
 freeTierImpact:
   allowancesConsumed: [d1-rows-written, d1-rows-read, d1-storage]
   writes: >-
-    2 to issue (1 row + primary-key index) + 2 to spend (a conditional UPDATE, charged
-    conservatively) + 2 for each route's audit record. A CRITICAL OPERATION THEREFORE COSTS ABOUT 4
-    MORE CONTROL-PLANE ROW-WRITES THAN IT DID.
+    STATED AS A SHAPE OVER NAMED CONSTANTS, WITH THE FIGURE SECOND AND MARKED AS DERIVED.
+    CONFIRMATION_ROW_WRITES to issue (1 row + primary-key index) + the same again to spend
+    (a conditional UPDATE, charged conservatively) + ONE AUDIT RECORD PER ROUTE — and WHICH audit
+    record depends on the ROUTE CLASS, which is the term a uniform correction gets wrong:
+      PLATFORM CLASS   PLATFORM_OPERATOR_ACTION_ROW_WRITES, control-plane.
+      ACTION CLASS     a tenant `audit_event`, AUDIT_EVENT_ROW_WRITES, on the ORGANIZATION'S
+                       ledger — a different allocation, and untouched by `0016`.
+    ON 2026-09-07: 2 + 2 + 4 = **6** control-plane row-writes for the platform challenge, and a
+    CRITICAL PLATFORM OPERATION COSTS ABOUT 8 MORE CONTROL-PLANE ROW-WRITES THAN AN UNGATED ONE
+    (the challenge's 6 plus the extra audit weight on the confirmed call).
+    *** CORRECTED 2026-09-07 FROM "2 to issue + 2 to spend + 2 for each route's audit record …
+    ABOUT 4 MORE". *** The audit term was 2 and is 4, and the sentence quoting an unbounded loop
+    of challenge requests at "2 row-writes each" HAD OMITTED THE AUDIT RECORD ALTOGETHER — so the
+    hazard was understated threefold, not twofold. See the platform challenge's theWRITECOST.
   theCEILING: >-
     Against the 3,000/day control-plane sub-ceiling that is roughly 750 confirmations a day
     platform-wide. IT IS AFFORDABLE FOR A REASON THAT IS STRUCTURAL RATHER THAN LUCKY: a critical
