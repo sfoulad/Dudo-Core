@@ -302,6 +302,19 @@ export type NewOrganization = {
    * is validated against the catalogue before any capacity is reserved.
    */
   readonly templateId: string | null;
+  /**
+   * The Organization's name. `0015_organization_identity.sql`.
+   *
+   * **REQUIRED IN THE TYPE AND NULLABLE IN THE COLUMN**, for exactly the reason `templateId` above
+   * gives and it is worth having twice: the column is nullable because Organizations created before
+   * `0015` have no name, and **the field is required here so a future writer must decide** rather
+   * than omitting it and producing a `null` nobody chose.
+   *
+   * ONBOARDING SUPPLIES `null` WHEN THE OPERATOR DID NOT TYPE ONE, and that is a decision rather
+   * than a gap — `0031`: *"a default would invent a name, and an invented name is indistinguishable
+   * from one an operator typed, forever."* There is no synthesis anywhere on this path.
+   */
+  readonly displayName: string | null;
 };
 
 export type NewPrincipal = {

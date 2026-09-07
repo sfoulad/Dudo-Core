@@ -606,13 +606,22 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
           // the service's validating read and this write. That aborts the whole batch and answers
           // `unavailable` — nothing is half-created, and the window needs no lock because no route
           // deletes a Template (`TM-2`).
+          // `display_name` IS ON THIS INSERT AS OF `0015`. The route now accepts it — it was in
+          // the contract and not in the route's declared field list until 2026-09-07, which made
+          // every onboarding that trusted the contract fail before authentication.
+          //
+          // THE OTHER TWELVE `0015` COLUMNS ARE NOT LISTED AND MUST NOT BE. Both registrations
+          // default to `not_recorded` with every other column NULL, which is the coherent
+          // `not-recorded` state and what `0016`'s triggers require — and it is TRUE of a new
+          // Organization: nobody has asked for its CR or VAT number at the moment it is created.
           sql:
-            'INSERT INTO organization (organization_id, status, template_id, created_at) ' +
-            'VALUES (?, ?, ?, ?)',
+            'INSERT INTO organization (organization_id, status, template_id, display_name, ' +
+            'created_at) VALUES (?, ?, ?, ?, ?)',
           parameters: [
             rows.organization.organizationId,
             rows.organization.status,
             rows.organization.templateId,
+            rows.organization.displayName,
             rows.membership.createdAt,
           ],
         },

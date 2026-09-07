@@ -295,6 +295,10 @@ export function createOnboardingService(
             organizationId,
             status: 'active',
             templateId: template.value.templateId,
+            // `undefined` BECOMES `null`, AND NOTHING IS INVENTED IN BETWEEN. The operator either
+            // typed a name or did not; `0031` is explicit that a synthesised one is
+            // indistinguishable from a typed one forever, and the update route is the backfill.
+            displayName: request.displayName ?? null,
           },
           directory: {
             organizationId,

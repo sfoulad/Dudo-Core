@@ -117,6 +117,7 @@ const CREDENTIAL_RESET = 'core.credential.reset';
 const PLATFORM_AUDIT_READ = 'core.platform-audit.read';
 /** `platform-operators-v1`. The revoke route, and the challenge that confirms it. */
 const PRINCIPAL_REVOKE_PLATFORM_SCOPE = 'core.principal.revoke-platform-scope';
+const PLATFORM_ORGANIZATION_UPDATE = 'core.platform-organization.update';
 
 /**
  * `core.organization.list`, exported because the two routes in this slice declare it.
@@ -169,6 +170,7 @@ export const PLATFORM_PERMISSION_ENVELOPE: AppPermissionEnvelope = Object.freeze
     Object.freeze({ permissionId: CREDENTIAL_RESET, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: PLATFORM_AUDIT_READ, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: PRINCIPAL_REVOKE_PLATFORM_SCOPE, scope: PLATFORM_SCOPE }),
+    Object.freeze({ permissionId: PLATFORM_ORGANIZATION_UPDATE, scope: PLATFORM_SCOPE }),
   ]),
 });
 
@@ -234,7 +236,12 @@ const HELD_BUT_UNREACHABLE: readonly string[] = Object.freeze([
   // and `assertEveryRoutePermissionIsReachable` fails it if no role holds it. **Getting the order
   // wrong is a build failure rather than a subtle defect**, which is exactly what the two mistakes
   // recorded above bought.
-  'core.platform-organization.update',
+  //
+  // *** IT LEFT THIS LIST THE SAME DAY, when `platform.organizations.identity.update` was
+  // registered — which is what the entry above said would happen, and the third time this list has
+  // done the job it was built for. Removing it from here also removes it from the ROLE, because
+  // that list spreads this constant, so `PLATFORM_ADMIN_PERMISSIONS` names it explicitly now. That
+  // is the exact trap recorded at the role's own comment, avoided by having been recorded. ***
 ]);
 
 function platformGrant(permissionId: string): PermissionGrant {
@@ -327,6 +334,15 @@ const PLATFORM_ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
   // is why `assertEveryRoutePermissionIsReachable` now checks the whole chain rather than the
   // ceiling alone.
   PRINCIPAL_REVOKE_PLATFORM_SCOPE,
+  // ---- AND `core.platform-organization.update`, 2026-09-07, MOVED OUT OF `HELD_BUT_UNREACHABLE`
+  // IN THE SAME CHANGE THAT REGISTERED ITS ROUTE.
+  //
+  // **Named here explicitly for the reason recorded twice above**: this list SPREADS
+  // `HELD_BUT_UNREACHABLE`, so taking a permission out of that constant silently takes it out of
+  // the role as well, leaving it in the ceiling and in no floor — `forbidden` to every operator.
+  // Two agents made that mistake on one day; this line is the third occasion and the first where
+  // the record was read before the edit rather than after it.
+  PLATFORM_ORGANIZATION_UPDATE,
 ]);
 
 /**
@@ -446,8 +462,42 @@ export function reachablePlatformPermissions(role: PlatformRole | null): readonl
  * property the catalog states and which is true only because all of this holds together.
  *
  * **A NINTH NEEDS ITS OWN.**
+ *
+ * ===========================================================================================
+ * THE NINTH'S ARGUMENT — `core.platform-organization.update`, 2026-09-07
+ * ===========================================================================================
+ *
+ * **`organization-identity-v1` is accepted, `docs/decisions/0031` records the design, and the
+ * permission was granted to `platform-admin` by THE USER on 2026-09-07** — relayed by the Team
+ * Lead, who does not approve (`security.md` §8). It sat in `HELD_BUT_UNREACHABLE` from the moment
+ * it was transcribed until `platform.organizations.identity.update` was registered, which is the
+ * ordering this file's two recorded mistakes bought.
+ *
+ * **WHY THE CLASS SHOULD WIDEN FOR IT.** Organizations had no name, so the operator console's
+ * list, its detail header and the Organization picker were 22-character opaque identifiers —
+ * `0002_organization.sql` predicted exactly that consequence rather than discovering it. **The
+ * party best placed to supply these values cannot: `organization` is a control-plane table and no
+ * Action can reach it**, so a Dudo operator transcribes a customer's own legal identifiers on
+ * their word. That asymmetry is what the route exists to serve and it is also its cost (`OI-1`).
+ *
+ * **IT IS NOT `core.organization.update` WIDENED, AND THAT MATTERS.** That permission is declared
+ * `[organization]` and is a TENANT principal editing its own record; adding `platform` to its
+ * scopes is the `AZ8` escalation the catalog names — *"widening a tenant-scoped permission above
+ * the tenant boundary is an escalation, not a convenience."* Two permissions, not one widened one.
+ *
+ * **WHAT IT DOES NOT COVER, STATED SO IT NEVER COMES TO IMPLY IT: not suspension, not deletion,
+ * not `status` of any kind.** No shape in `organization-identity-v1` carries `status`. A suspend
+ * route, when it exists, is a separate permission and a separate argument.
+ *
+ * *** AND IT AUTHORISES A WRITE INTO THE CUSTOMER'S OWN TENANT DATABASE — five row-writes from
+ * that Organization's daily allocation — WHICH THE APPROVAL DESCRIPTION DID NOT SAY. *** Recorded
+ * here rather than left in the catalog's margin. It is *for* the customer rather than at their
+ * expense: `0028` requires the tenant to see what the platform did to them, and this is the
+ * clearest instance the surface has, because they cannot see the field any other way.
+ *
+ * **A TENTH NEEDS ITS OWN.**
  */
-const PLATFORM_ROUTE_PERMISSION_COUNT = 8;
+const PLATFORM_ROUTE_PERMISSION_COUNT = 9;
 
 export class PlatformPermissionModelIncoherentError extends Error {
   constructor(message: string) {

@@ -95,6 +95,30 @@ export type OnboardingInput = {
    * the order `account-identifier-v1`'s case-folding argument requires.
    */
   readonly adminIdentifier: CheckedIdentifier;
+  /**
+   * ===========================================================================================
+   * THE ORGANIZATION'S NAME. **OPTIONAL, AND `undefined` IS RECORDED AS NULL RATHER THAN FILLED.**
+   * ===========================================================================================
+   *
+   * *** IT WAS ADVERTISED BY THE CONTRACT AND REFUSED BY THE ROUTE, WHICH IS AN OUTAGE ON THE ONE
+   * OPERATION THAT CREATES CUSTOMERS. *** `organization-onboarding-v1` has `display_name` in
+   * `onboardOrganizationInput.properties`; the route declared four fields and not this one; and the
+   * platform class refuses an undeclared field BEFORE authentication. So a client that trusted the
+   * contract and sent the field failed **every** onboarding. Found by `web-agent` reading the
+   * committed schema against its own client, and it did not send the field pending this landing.
+   *
+   * **`0031` WAS WRITTEN AGAINST THE OPPOSITE DIRECTION AND LEFT THIS ONE OPEN.** It made the field
+   * optional because *a server requiring a field the deployed console does not send is an outage*.
+   * This is that outage mirrored — **a client sending a field the server does not accept** — and it
+   * was reachable precisely BECAUSE the contract advertised the field. **Optional never meant
+   * unaccepted: an optional field the server rejects is not optional, it is forbidden.**
+   *
+   * NOTHING SYNTHESISES A NAME WHEN THIS IS ABSENT. `0031`: *"a default would invent a name, and an
+   * invented name is indistinguishable from one an operator typed, forever."* Absent means the row
+   * is created with `display_name` NULL, which is the same state the three pre-`0015` Organizations
+   * are in, and the update route is how it stops being null.
+   */
+  readonly displayName?: string;
   readonly templateId: string;
   /**
    * The first Workspace's name.

@@ -136,6 +136,22 @@ export const PRINCIPAL_ROW_WRITES = 2;
 export const ORGANIZATION_ROW_WRITES = 2;
 
 /**
+ * *** UPDATING AN `organization` ROW COSTS ONE, NOT TWO, AND THE DIFFERENCE IS THE PRIMARY KEY. ***
+ *
+ * `ORGANIZATION_ROW_WRITES` is an INSERT: a table row plus the implicit primary-key index entry.
+ * `platform.organizations.identity.update` writes thirteen columns on an EXISTING row and touches
+ * no key, and `0002_organization.sql` gives that table **no secondary index** — so there is nothing
+ * else to maintain. One row, one write.
+ *
+ * A SEPARATE CONSTANT RATHER THAN REUSING THE INSERT'S, because reusing it would over-reserve by
+ * one on every identity update and, worse, would make a future reader think an update maintains an
+ * index. **If a secondary index is ever added to `organization`, this number moves and the insert's
+ * does too** — the same instruction `PLATFORM_OPERATOR_ACTION_ROW_WRITES` carries, which `0016` is
+ * the worked example of honouring.
+ */
+export const ORGANIZATION_UPDATE_ROW_WRITES = 1;
+
+/**
  * `organization_membership` (`0003`): 1 table row + 1 implicit primary-key index.
  *
  * Also unwritten here — membership administration is the organization-structure slice. Note for

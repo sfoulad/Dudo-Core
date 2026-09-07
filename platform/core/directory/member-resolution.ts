@@ -176,6 +176,12 @@ export type MemberResolutionService = {
    *
    * IT TAKES `actionId` because the record must say WHICH read happened. A feed read and a resolve
    * are different disclosures and a customer reading their trail must be able to tell them apart.
+   *
+   * *** THE NAME SAYS "ACCESS" AND SINCE 2026-09-07 IT ALSO APPENDS FOR A MUTATION —
+   * `platform.organizations.identity.update`. *** The name is now slightly wrong and is left alone
+   * deliberately: renaming it is a fifth change to a shared port for a word, and `changedFieldNames`
+   * already distinguishes the two cases at every call site. **Recorded rather than tidied, so the
+   * next reader knows it is a known imprecision and not an oversight.**
    */
   recordOrganizationAccess(input: {
     readonly organizationId: string;
@@ -187,6 +193,21 @@ export type MemberResolutionService = {
      * See `recordProbe` for the defect this closes and for what it does NOT close.
      */
     readonly permissionId: TenantRecordedPlatformPermission;
+    /**
+     * *** WHICH FIELDS CHANGED. REQUIRED, AND EMPTY IS A STATEMENT RATHER THAN A DEFAULT. ***
+     *
+     * FIELD NAMES ONLY — `audit.ts`'s pattern is *"deliberately too narrow to admit a value"*, so
+     * the record says `vat_registration` changed and never says from what. For a field whose point
+     * is legal provenance that is a real limit (`OI-2`); it is not repaired by widening the audit
+     * record, which would make the trail a second copy of the data.
+     *
+     * **IT IS REQUIRED RATHER THAN DEFAULTING TO `[]` FOR THE REASON `organization-identity-v1`
+     * GIVES ONE OBJECT OVER** — *"`verified` IS REQUIRED RATHER THAN DEFAULTING TO FALSE, so no
+     * code path produces a verification by omission."* A mutation that silently recorded "nothing
+     * changed" because an argument was omitted is that defect, in the customer's own trail, on the
+     * one record `0028` makes the control rather than a by-product.
+     */
+    readonly changedFieldNames: readonly string[];
     readonly requestId: string;
     readonly correlationId: string;
     /**
@@ -264,6 +285,10 @@ export function createMemberResolutionService(
         actionId: 'platform.organizations.members.resolve',
         actorPrincipalId: input.actorPrincipalId,
         permissionId: input.permissionId,
+        // EMPTY, AND IT IS A STATEMENT: **a resolve changes nothing.** It reads. Naming a field
+        // here would be describing a mutation that did not happen. This is the reason that used to
+        // live inside `recordProbe`, moved to where a new caller will actually read it.
+        changedFieldNames: [],
         charge: input.charge,
         requestId: input.requestId,
         correlationId: input.correlationId,
@@ -287,6 +312,10 @@ export function createMemberResolutionService(
         actionId: input.actionId,
         actorPrincipalId: input.actorPrincipalId,
         permissionId: input.permissionId,
+        // PASSED THROUGH, NOT DECIDED HERE. The feed read supplies `[]`; the identity update
+        // supplies the fields it replaced. This function no longer knows which of those it is
+        // serving, which is the point.
+        changedFieldNames: input.changedFieldNames,
         charge: input.charge,
         requestId: input.requestId,
         correlationId: input.correlationId,
@@ -358,6 +387,17 @@ async function recordProbe(
      * unflagged shared-type change is the failure this team had last week. Owed, not forgotten.
      */
     readonly permissionId: TenantRecordedPlatformPermission;
+    /**
+     * *** REQUIRED, AND THE REASON A CALLER PASSES `[]` NOW LIVES AT THAT CALLER RATHER THAN HERE.
+     * ***
+     *
+     * It was hardcoded empty in the body below, with a correct explanation: *"a probe records that
+     * a read happened and nothing about whom it was for"*. **That reason explains why the CURRENT
+     * callers pass nothing; it does not tell a NEW caller what to pass, and it was one mutation
+     * away from becoming the justification for a wrong default.** A reason at the call site is what
+     * the next author reads before deciding.
+     */
+    readonly changedFieldNames: readonly string[];
     readonly charge: OperatorWriteCharged;
     readonly actorPrincipalId: string;
     readonly requestId: string;
@@ -475,7 +515,10 @@ async function recordProbe(
       targetUnresolved: false,
       relatedBusinessIds: [],
       actorBusinessIds: derivePlatformOperatorActorContext(),
-      changedFieldNames: [],
+      // SUPPLIED BY THE CALLER SINCE 2026-09-07, not hardcoded empty here. FIELD NAMES ONLY — the
+      // shape is deliberately too narrow to admit a value, so this can never become a second copy
+      // of the data it describes.
+      changedFieldNames: context.changedFieldNames,
       requestId: context.requestId,
       correlationId: context.correlationId,
       occurredAt: context.occurredAt,

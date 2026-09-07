@@ -281,6 +281,154 @@ export function applyRegistration(
   };
 }
 
+/**
+ * ONE SUBMITTED REGISTRATION, out of a validated object field.
+ *
+ * *** THE CLASS HAS ALREADY REFUSED NESTING, NUMBERS, OVERSIZED BODIES AND ANY UNDECLARED OBJECT
+ * FIELD. *** What is left is the per-field semantic layer: the discriminant, the keys each branch
+ * permits, and the value shapes. `field` is the wire name so every refusal names what the caller
+ * sent.
+ *
+ * **AN UNDECLARED KEY IS REFUSED RATHER THAN IGNORED**, which is `additionalProperties: false`
+ * enforced instead of documented. An ignored key is a key a client believes it set — and here that
+ * would mean an operator believing they recorded a verification that was silently dropped.
+ */
+function parseRegistrationInput(
+  value: Readonly<Record<string, string | boolean | null>>,
+  field: string,
+): Result<RegistrationInput> {
+  const state = value.state;
+  const keys = Object.keys(value);
+
+  if (state === 'not_recorded' || state === 'not_registered') {
+    if (keys.length !== 1) {
+      // NEITHER BRANCH TAKES ANYTHING ELSE. `declared_at` is server-stamped and cannot be sent; a
+      // `number` here is the exact row `0015`'s triggers refuse, caught at the boundary instead.
+      return err(invalidArgument([detail(field, 'must_carry_only_state')]));
+    }
+    return ok({ state: state === 'not_recorded' ? 'not-recorded' : 'not-registered' });
+  }
+
+  if (state !== 'registered') {
+    return err(invalidArgument([detail(`${field}.state`, 'must_be_a_registration_state')]));
+  }
+
+  if (keys.length !== 3 || !keys.includes('number') || !keys.includes('verified')) {
+    // EXACTLY `state`, `number`, `verified`. `recorded_at`, `verification`,
+    // `verified_by_principal_id` and `verified_at` are SERVER-STAMPED and a request carrying one
+    // is refused — **provenance a caller supplies is not provenance.**
+    return err(invalidArgument([detail(field, 'must_carry_state_number_and_verified')]));
+  }
+
+  const number = checkRegistrationNumber(value.number, `${field}.number`);
+  if (!number.ok) {
+    return err(number.error);
+  }
+  if (typeof value.verified !== 'boolean') {
+    // NOT COERCED, AND NOT DEFAULTED. `verified` is a claim an operator makes with their own
+    // principal id attached; "" or "false" or absent must not become one by interpretation.
+    return err(invalidArgument([detail(`${field}.verified`, 'must_be_a_boolean')]));
+  }
+  return ok({ state: 'registered', number: number.value, verified: value.verified });
+}
+
+/**
+ * The whole request.
+ *
+ * *** AN EMPTY UPDATE IS `invalid_argument`, NOT AN ACCEPTED NO-OP. *** A request changing nothing
+ * still writes a platform audit record and **five row-writes into the CUSTOMER'S own daily
+ * allocation**. Spending a customer's budget to change nothing is not a request that should be
+ * accepted, and `0028`'s amendment measured what happens when platform-originated tenant writes
+ * are cheap to produce.
+ *
+ * `display_name` CANNOT BE SET TO NULL — renaming is permitted, un-naming is not — so a null here
+ * is refused as a shape error rather than honoured as a clear.
+ */
+export function parseOrganizationIdentityUpdate(input: {
+  readonly displayName: unknown;
+  readonly commercialRegistration: Readonly<Record<string, string | boolean | null>> | undefined;
+  readonly vatRegistration: Readonly<Record<string, string | boolean | null>> | undefined;
+}): Result<OrganizationIdentityUpdate> {
+  const update: {
+    displayName?: string;
+    commercialRegistration?: RegistrationInput;
+    vatRegistration?: RegistrationInput;
+  } = {};
+
+  if (input.displayName !== undefined) {
+    const name = checkDisplayName(input.displayName, 'display_name');
+    if (!name.ok) {
+      return err(name.error);
+    }
+    update.displayName = name.value;
+  }
+
+  if (input.commercialRegistration !== undefined) {
+    const parsed = parseRegistrationInput(input.commercialRegistration, 'commercial_registration');
+    if (!parsed.ok) {
+      return err(parsed.error);
+    }
+    update.commercialRegistration = parsed.value;
+  }
+
+  if (input.vatRegistration !== undefined) {
+    const parsed = parseRegistrationInput(input.vatRegistration, 'vat_registration');
+    if (!parsed.ok) {
+      return err(parsed.error);
+    }
+    update.vatRegistration = parsed.value;
+  }
+
+  if (Object.keys(update).length === 0) {
+    // `minProperties: 1`. See the header for why this is a refusal rather than a cheap success.
+    return err(invalidArgument([detail('', 'must_change_at_least_one_field')]));
+  }
+  return ok(update);
+}
+
+/**
+ * Which wire field names an update replaced, for the tenant's own audit record.
+ *
+ * *** IT REPORTS WHAT WAS SUBMITTED, NOT WHAT DIFFERED, AND THAT IS DELIBERATE. *** Re-submitting
+ * an identical VAT number is still an operator asserting that value today — and with
+ * `verified: true` it records a NEW verification by a NEW operator, which is a real change to the
+ * record's provenance even though the number is unchanged. **Diffing values would have to reach
+ * into the verification to be correct, and the audit shape holds field names only.**
+ *
+ * SO A NO-OP-LOOKING CALL STILL NAMES ITS FIELDS. The alternative — an empty list on a call that
+ * wrote a row — would tell a customer "the platform touched your record and changed nothing",
+ * which is false whenever a verification was re-stamped.
+ */
+export function changedIdentityFieldNames(
+  update: OrganizationIdentityUpdate,
+): readonly string[] {
+  const names: string[] = [];
+  if (update.displayName !== undefined) names.push('display_name');
+  if (update.commercialRegistration !== undefined) names.push('commercial_registration');
+  if (update.vatRegistration !== undefined) names.push('vat_registration');
+  return Object.freeze(names);
+}
+
+/** What the record becomes: the stored block with the submitted fields replaced whole. */
+export function applyIdentityUpdate(
+  existing: OrganizationIdentity,
+  update: OrganizationIdentityUpdate,
+  context: { readonly nowIso: string; readonly actorPrincipalId: string },
+): OrganizationIdentity {
+  return {
+    // AN ABSENT FIELD IS UNCHANGED. There is no path here that writes `null` over a name.
+    displayName: update.displayName ?? existing.displayName,
+    commercialRegistration:
+      update.commercialRegistration === undefined
+        ? existing.commercialRegistration
+        : applyRegistration(existing.commercialRegistration, update.commercialRegistration, context),
+    vatRegistration:
+      update.vatRegistration === undefined
+        ? existing.vatRegistration
+        : applyRegistration(existing.vatRegistration, update.vatRegistration, context),
+  };
+}
+
 // =============================================================================================
 // The wire edge. `toTemplateOutput`'s pattern: the mapper lives beside the type it maps.
 // =============================================================================================

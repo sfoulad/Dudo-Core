@@ -60,12 +60,19 @@ import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
 import {
+  ORGANIZATION_UPDATE_ROW_WRITES,
   PLATFORM_OPERATOR_ROW_WRITES,
   TEMPLATE_ROW_WRITES,
 } from '../identity/control-plane-admission.ts';
 import type { TemplateStore } from './template-store.ts';
 import { normalizeTemplateName, parseTemplateCreate, toTemplateOutput } from './templates.ts';
-import { toIdentityOutput } from './organization-identity.ts';
+import {
+  applyIdentityUpdate,
+  changedIdentityFieldNames,
+  checkDisplayName,
+  parseOrganizationIdentityUpdate,
+  toIdentityOutput,
+} from './organization-identity.ts';
 import type { PreAuthBody } from '../identity/pre-auth-admission.ts';
 import type { ConfirmationParameters } from '../confirmation/binding.ts';
 import type { ConfirmationService } from '../confirmation/confirmation-service.ts';
@@ -616,10 +623,38 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
     if (organizationId === undefined) {
       return err(internal());
     }
+    // =========================================================================================
+    // *** EXACTLY ONE OF `target_identifier` AND `identifier`. PHASE 1 OF A TWO-PHASE RENAME. ***
+    // =========================================================================================
+    //
+    // `target_identifier` is the destination; `identifier` is deprecated and its removal is `OD-5`.
+    // Both are declared on the route because the class refuses an undeclared field before
+    // authentication, so publishing only the new name would refuse the field the deployed console
+    // sends.
+    //
+    // **BOTH PRESENT IS REFUSED. NEITHER PRESENT IS REFUSED. NEITHER IS SILENTLY PREFERRED.**
+    // A route that quietly prefers one lets a client send the wrong name forever and never learn —
+    // and **if the two values differ, choosing silently is choosing which principal to resolve**,
+    // on the route that leads to a credential reset. Refusing has a known-failing input; preferring
+    // is a behaviour nobody would ever write a case for.
+    //
+    // THE CONTRACT'S `oneOf` EXPRESSES THIS AND DOES NOT ENFORCE IT — nothing here executes JSON
+    // Schema (`packages/contracts/README.md`). It is mechanical and diffable where prose is
+    // neither, **and it is still a rule this function has to be.**
+    const target = body.target_identifier;
+    const legacy = body.identifier;
+    if (target !== undefined && legacy !== undefined) {
+      return err(invalidArgument([detail('target_identifier', 'must_not_send_both_names')]));
+    }
+    // `??` WOULD BE WRONG HERE AND THE DIFFERENCE IS NOT COSMETIC: it treats an explicit `null` as
+    // absent, which would let `{"target_identifier": null, "identifier": "x"}` past the both-present
+    // refusal and then resolve the legacy value. `undefined` is the only absence this route accepts,
+    // and a present-but-null field falls through to the shape check below and is refused there.
+    const submitted = target !== undefined ? target : legacy;
+
     // `checkIdentifier` RATHER THAN `isSubmittableIdentifier`, because the service now REQUIRES the
     // brand and a boolean cannot produce one. The check and the value it licenses are one
     // expression, so this handler cannot check and then pass something else.
-    const submitted = body.identifier;
     const identifier = typeof submitted === 'string' ? checkIdentifier(submitted) : null;
     if (identifier === null) {
       // A SHAPE ERROR, REFUSED BEFORE THE LOOKUP AND BEFORE THE AUDIT WRITE. It is not one of the
@@ -745,11 +780,16 @@ function listAuditFeed(dependencies: {
     if (!until.ok) {
       return err(until.error);
     }
-    if (since.value !== null && until.value !== null && since.value >= until.value) {
-      // AN EMPTY WINDOW IS REFUSED RATHER THAN RETURNING NOTHING. `since >= until` selects no
-      // records, and "no records" on an audit feed is a statement a caller may act on — it must
-      // mean "nothing happened", never "you asked incoherently".
-      return err(invalidArgument([detail('until', 'must_be_after_since')]));
+    // NO `routeId`. The rule is route-independent because no query filter on either feed is served
+    // by an index prefix — see `auditWindowIsRequired`, where passing the route was the defect.
+    const window = enforceAuditWindow({
+      actorPrincipalId: actorPrincipalId.value,
+      actionId: actionId.value,
+      since: since.value,
+      until: until.value,
+    });
+    if (!window.ok) {
+      return err(window.error);
     }
 
     const filters = {
@@ -837,6 +877,10 @@ function listAuditFeed(dependencies: {
         // BOTH AUDIT FEEDS DECLARE THIS PERMISSION, and only the scoped feed reaches this line.
         // Supplied rather than derived: see `recordProbe`.
         permissionId: 'core.platform-audit.read',
+        // EMPTY, AND IT IS A STATEMENT: **reading a feed changes nothing.** The customer's trail
+        // says the platform read their log, which is the disclosure, and names no field because
+        // none moved.
+        changedFieldNames: [],
         // REQUIRED. Step 4b charged the operator before this handler ran.
         charge: context.charge,
         requestId: context.requestId,
@@ -935,6 +979,168 @@ export function decodeAuditAnchor(anchor: string): PlatformAuditAnchor | null {
  */
 const ACTION_ID_PATTERN = /^[a-z][a-z0-9]*(?:\.[a-z][a-zA-Z0-9]*)+$/u;
 
+// =============================================================================================
+// THE BOUNDED TIME WINDOW. `platform-audit-read-v1`, and it is a COST control before it is a
+// conformance one.
+// =============================================================================================
+
+/**
+ * *** DERIVED HERE, NOT COPIED FROM THE CONSOLE. ***
+ *
+ * The console enforces the same span and holds its own constant. **The number exists in two
+ * places by necessity — a client cannot refuse what it cannot measure — and the two are bound by
+ * `qa-agent` rather than by one importing the other**, because Core must not depend on a client
+ * and a client must not be the authority on a server-side limit.
+ *
+ * ===========================================================================================
+ * THE DERIVATION, SO THE NEXT PERSON CAN RE-DERIVE RATHER THAN RE-MEASURE
+ * ===========================================================================================
+ *
+ * **A WINDOW'S ROW COUNT IS BOUNDED BY THE WRITE CEILING THAT PRODUCED IT.**
+ * `PER_PRINCIPAL_DAILY_ROW_WRITES` is 600 and a record costs `PLATFORM_OPERATOR_ACTION_ROW_WRITES`,
+ * so one operator cannot produce more than `600 / cost` records in a UTC day. A D-day window
+ * therefore contains at most `operators × that × D` records, **whatever the table's total size.**
+ *
+ * At two operators and 31 days that is ~18,600 rows per request against 5,000,000 rows-read/day —
+ * about 268 such requests a day in the worst case, where the UNBOUNDED form measured 49 and caused
+ * an account-wide outage.
+ *
+ * *** THE SPAN SCALES WITH THE OPERATOR POPULATION AND THIS NUMBER MUST MOVE WITH IT. *** At ten
+ * operators, 31 days is ~93,000 rows and ~53 requests a day — **worse than the figure that produced
+ * the original finding.** Thirty-one days is correct for one or two operators and WRONG FOR TEN.
+ * Contract `PA-4`.
+ *
+ * **NOTE THAT `0016` HALVED THE DERIVED CAP WITHOUT ANYONE EDITING THIS NUMBER**: a record cost 2
+ * row-writes when the arithmetic above was written and costs 4 now, so one operator's ceiling fell
+ * from 300 records a day to 150 and the 31-day worst case with it. The constant is unchanged and
+ * the bound it buys got safer — which is why the derivation is written down instead of the answer.
+ */
+const AUDIT_WINDOW_MAX_DAYS = 31;
+const AUDIT_WINDOW_MAX_MS = AUDIT_WINDOW_MAX_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * ===========================================================================================
+ * IS A WINDOW REQUIRED FOR THIS REQUEST? THE RULE IS PER-FILTER, NOT PER-ROUTE.
+ * ===========================================================================================
+ *
+ * *** "FILTERED VERSUS UNFILTERED" IS THE WRONG AXIS AND IT IS THE OBVIOUS ONE. *** The question
+ * is whether a filter is **served by an index prefix** or **tested row by row**:
+ *
+ *   A FILTER SERVED BY AN INDEX PREFIX IS A SEEK.
+ *   A FILTER NOT SERVED BY ONE IS A TEST APPLIED TO EVERY ROW THE WALK PASSES.
+ *
+ * Only the second needs a bound on how many rows are walked. `0016` gave the log two indexes —
+ * `(occurred_at, action_record_id)` and `(target_organization_id, occurred_at, action_record_id)` —
+ * so `organization_id` is a seek and everything else is a test.
+ *
+ * `0016` gave the log two indexes, and **`organization_id` is a PATH parameter served by the second
+ * one's prefix — a seek.** Every QUERY filter on either feed is a test: neither
+ * `actor_principal_id` nor `action_id` appears in either index's prefix.
+ *
+ * *** SO THE RULE IS ROUTE-INDEPENDENT: A WINDOW IS REQUIRED WHENEVER `actor_principal_id` OR
+ * `action_id` IS PRESENT, ON EITHER FEED. *** Not otherwise — an unfiltered walk in index order
+ * stops after one page whatever the log's size, so a window there removes no reads and removes an
+ * operator's ability to ask *"what happened, ever"*.
+ *
+ * ===========================================================================================
+ * THIS FUNCTION TOOK A `routeId` UNTIL 2026-09-07, AND REMOVING IT CHANGED NO BEHAVIOUR
+ * ===========================================================================================
+ *
+ * *** SAID PLAINLY BECAUSE THE FIRST VERSION OF THIS COMMENT CLAIMED OTHERWISE. *** It said the
+ * per-route branch had exempted the Organization feed filtered by an operator, and that the shape
+ * was live. **It is not: `actor_principal_id` is not among that route's declared query parameters**
+ * — checked against `platformRoutes()` rather than by reading the file, after a chain of three
+ * agents disagreed about it and the two who read source were both wrong.
+ *
+ * So on that feed `actorPrincipalId` is always `null`, the term below is unreachable there, and the
+ * simplification is a simplification rather than a fix.
+ *
+ * **THE REASON TO STATE THE RULE AS A PROPERTY SURVIVES ANYWAY, AND IS THE POINT.** A route name in
+ * this conditional is a claim about which filters an index prefix serves, written in the one place
+ * that cannot see either. Quantifying over FILTERS puts the rule where the facts are: if a future
+ * migration adds an index whose prefix serves one of these columns, or a route gains a parameter,
+ * the answer follows without editing this function — and **a route acquiring `actor_principal_id`
+ * tomorrow is already covered instead of silently exempt.**
+ *
+ * WHAT THE EPISODE ACTUALLY DEMONSTRATED, since the original claim did not hold: **an enumeration
+ * has to be re-derived every time the route table moves, and nobody is assigned to do that.** The
+ * property does not.
+ *
+ * **THE SPAN LIMIT APPLIES ONLY WHERE THE WINDOW IS REQUIRED**, confirmed as a ruling by the Team
+ * Lead: refusing a 90-day UNFILTERED window would refuse something cheaper than the no-window
+ * request the contract explicitly permits.
+ */
+function auditWindowIsRequired(input: {
+  readonly actorPrincipalId: string | null;
+  readonly actionId: string | null;
+}): boolean {
+  return input.actionId !== null || input.actorPrincipalId !== null;
+}
+
+/**
+ * *** REFUSE. NEVER DEFAULT, NEVER TRUNCATE, NEVER NARROW SILENTLY. ***
+ *
+ * On an evidence surface a quietly narrowed window is a feed that HIDES RECORDS: an investigator
+ * asking *"has this operator touched anything"* over what they believe is all time would receive an
+ * empty page and conclude nothing happened. **A refusal is visible and an omission is not**, and
+ * that asymmetry decides it — the cost of refusing is an operator typing two dates, and the cost of
+ * defaulting is a false negative in an investigation.
+ *
+ * THE THREE TOKENS ARE THE CONTRACT'S, and the console already switches on all three
+ * (`platform/admin/src/api/audit-window.ts`). `time_window_inverted` REPLACED Core's own
+ * `must_be_after_since`, which no contract published — the divergence direction where a client can
+ * only learn the token by reading the code.
+ */
+function enforceAuditWindow(input: {
+  readonly actorPrincipalId: string | null;
+  readonly actionId: string | null;
+  readonly since: string | null;
+  readonly until: string | null;
+}): Result<void> {
+  const { since, until } = input;
+
+  // ---- INVERTED, CHECKED WHENEVER BOTH BOUNDS ARE PRESENT, required or not.
+  //
+  // An incoherent question is refused rather than answered with an empty page. "No records" on an
+  // audit feed is a statement a caller may act on: it must mean "nothing happened", never "you
+  // asked incoherently".
+  if (since !== null && until !== null && since >= until) {
+    return err(invalidArgument([detail('until', 'time_window_inverted')]));
+  }
+
+  if (!auditWindowIsRequired(input)) {
+    return ok(undefined);
+  }
+
+  // ---- BOTH BOUNDS OR NEITHER. **HALF A WINDOW IS AN UNBOUNDED WALK IN ONE DIRECTION**, which is
+  // the thing being bounded, so `since` alone is refused exactly as no window at all is.
+  const missing: ErrorDetail[] = [];
+  if (since === null) missing.push(detail('since', 'time_window_required'));
+  if (until === null) missing.push(detail('until', 'time_window_required'));
+  if (missing.length > 0) {
+    return err(invalidArgument(missing));
+  }
+
+  // ---- THE SPAN. `since` and `until` are already validated as fixed-width RFC 3339 UTC by
+  // `readInstantParameter`, so `Date.parse` cannot return NaN here — and the guard below is
+  // written anyway rather than asserted, because a future change to that reader would otherwise
+  // turn a malformed bound into an accepted unbounded window.
+  const sinceMs = Date.parse(since as string);
+  const untilMs = Date.parse(until as string);
+  if (!Number.isFinite(sinceMs) || !Number.isFinite(untilMs)) {
+    return err(invalidArgument([detail('since', 'time_window_required')]));
+  }
+
+  // AT MOST, NOT LESS THAN. **31 days exactly is accepted and 32 is refused** — the boundary is
+  // the assertion the contract's QA list asks for, so it is the comparison written here rather
+  // than a strict inequality that would refuse the documented maximum.
+  if (untilMs - sinceMs > AUDIT_WINDOW_MAX_MS) {
+    return err(invalidArgument([detail('until', 'time_window_too_wide')]));
+  }
+
+  return ok(undefined);
+}
+
 function readActionIdParameter(query: ReadonlyMap<string, string>): Result<string | null> {
   const raw = query.get('action_id');
   if (raw === undefined) {
@@ -1000,6 +1206,31 @@ function parseOnboardingInput(body: PreAuthBody): Result<OnboardingInput> {
   // the return — which is precisely what a brand exists to remove. **Stating the invariant is
   // cheaper than asserting it**, and if a future edit ever stops pushing that detail, this line
   // keeps the function honest instead of shipping an unchecked identifier.
+  // ---- `display_name`: OPTIONAL, AND ABSENT IS NOT THE SAME AS EMPTY.
+  //
+  // *** THE ROUTE DID NOT DECLARE THIS FIELD UNTIL 2026-09-07 WHILE THE CONTRACT PUBLISHED IT, SO A
+  // CLIENT THAT TRUSTED THE CONTRACT FAILED EVERY ONBOARDING BEFORE AUTHENTICATION. *** See the
+  // route entry. **Optional never meant unaccepted.**
+  //
+  // WHEN PRESENT IT IS CHECKED BY THE SAME FUNCTION THE UPDATE ROUTE USES, imported rather than
+  // restated — two definitions of "an acceptable Organization name" would agree until one was
+  // touched, and the divergence would be a name that can be set and cannot be re-set.
+  //
+  // WHEN ABSENT NOTHING IS SYNTHESISED. The row is created with NULL, which is the state the
+  // Organizations predating `0015` are in, and the update route is how it stops being null. `0031`:
+  // an invented name is indistinguishable from an operator's, forever.
+  let displayName: string | undefined;
+  if (body.display_name !== undefined) {
+    const checked = checkDisplayName(body.display_name, 'display_name');
+    if (!checked.ok) {
+      // ITS DETAIL JOINS THE OTHERS RATHER THAN RETURNING EARLY, so a request with two bad fields
+      // is told about both — the property every other field on this route already has.
+      details.push(detail('display_name', 'must_be_a_display_name'));
+    } else {
+      displayName = checked.value;
+    }
+  }
+
   if (details.length > 0 || checkedIdentifier === null) {
     return err(invalidArgument(details));
   }
@@ -1009,6 +1240,9 @@ function parseOnboardingInput(body: PreAuthBody): Result<OnboardingInput> {
     // checks are still predicates — **and that contrast is the argument for the brand**: three
     // fields where the type says "trust me" and one where it does not have to.
     adminIdentifier: checkedIdentifier,
+    // ABSENT STAYS ABSENT. `displayName` is `undefined` when the caller omitted the field, and the
+    // service writes NULL rather than a value it made up.
+    displayName,
     templateId: templateId as string,
     firstWorkspaceName: firstWorkspaceName as string,
     derivedValue: derivedValue as string,
@@ -1148,6 +1382,155 @@ function listOperators(dependencies: {
  * an operator. **A client must not treat that as an error worth retrying** — the desired state has
  * been reached, and a console should say so rather than reporting a failure.
  */
+/**
+ * ===========================================================================================
+ * SET AN ORGANIZATION'S NAME AND ITS TWO REGISTRATIONS. `organization-identity-v1`, `0031`.
+ * ===========================================================================================
+ *
+ * *** IT IS THE FIRST ROUTE IN THIS CLASS THAT WRITES INTO A CUSTOMER'S TENANT DATABASE FOR A
+ * MUTATION RATHER THAN FOR A PROBE, AND THAT WRITE IS PART OF WHAT THE PERMISSION AUTHORISES. ***
+ *
+ * The user granted `core.platform-organization.update` having been told it adds *"no new tenant
+ * reach, no new data access"*. **That is exactly true of reads and it is not the whole story**: on
+ * every successful call this appends one `audit_event` to the named Organization, five row-writes
+ * from that Organization's own daily allocation. Said here because the approval did not say it.
+ *
+ * IT IS *FOR* THE CUSTOMER RATHER THAN AT THEIR EXPENSE. `0028` requires a tenant to be able to
+ * see what the platform did to them, and this is the clearest case the surface has: **a platform
+ * operator editing a customer's legal identifiers, which the customer cannot see any other way**,
+ * because `organization` is a control-plane table and no Action can reach it (`OI-1`).
+ *
+ * ---------------------------------------------------------------------------------------------
+ * THE ORDER OF THE FIVE STEPS, AND WHY IT IS THIS ORDER
+ * ---------------------------------------------------------------------------------------------
+ *
+ *   1. PARSE — nothing is read from storage for a request that cannot be satisfied.
+ *   2. READ the stored block. `null` is the 404, and it is what establishes existence for step 4.
+ *   3. RESERVE the control-plane write. An exhausted operator is refused BEFORE anything is
+ *      written, in either database.
+ *   4. WRITE the thirteen columns, from one union value.
+ *   5. APPEND the tenant record. **LAST, and its failure fails the request.**
+ *
+ * *** STEP 5 IS AFTER STEP 4 AND THE OPPOSITE OF THE AUDIT-FEED ORDER, DELIBERATELY. *** The feed
+ * writes its tenant record BEFORE serving, because there an unwritable record must refuse the read
+ * — `0013` D2, inability to record the evidence is not a reason to proceed without it. Here the
+ * evidence is of a change that has already happened, and a record written before the write would
+ * claim an edit that might not land. **So the two orders are opposite and both are right, which is
+ * exactly the kind of thing that gets "tidied" into consistency by someone who has not read this.**
+ *
+ * THE COST OF THAT CHOICE, STATED: if the tenant append fails, the columns are already changed and
+ * the caller is told the operation failed. The customer's trail then lacks a record of a change
+ * that happened — which is the same exposure `revokeOperator` carries and is reported the same way.
+ * Closing it needs one transaction across two databases, which D1 does not offer.
+ */
+function updateOrganizationIdentity(dependencies: {
+  readonly store: PlatformOperatorStore;
+  readonly members: MemberResolutionService | undefined;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly clock: Clock;
+}) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const organizationId = context.pathParams.organization_id;
+    if (organizationId === undefined) {
+      return err(internal());
+    }
+    if (dependencies.members === undefined) {
+      // ABSENT MEANS REFUSED, exactly as the scoped feed does. A deployment that cannot write the
+      // tenant-side record must not serve this route, because that record is the control rather
+      // than a by-product.
+      return err(unavailable());
+    }
+
+    // ---- 1. PARSE.
+    const update = parseOrganizationIdentityUpdate({
+      displayName: body.display_name,
+      commercialRegistration: context.objects.commercial_registration,
+      vatRegistration: context.objects.vat_registration,
+    });
+    if (!update.ok) {
+      return err(update.error);
+    }
+
+    // ---- 2. READ. `null` is the argument-free 404.
+    //
+    // THE 404 IS ARGUMENT-FREE AND THAT IS SCOPED TO THIS CLASS: every caller who can reach this
+    // route can already enumerate every Organization, so distinguishing "no such Organization"
+    // discloses nothing they could not obtain from `platform.organizations.list`. **Do not copy
+    // this reasoning to a route a tenant principal can reach.**
+    const stored = await dependencies.store.findOrganizationIdentity(organizationId);
+    if (!stored.ok) {
+      return err(stored.error);
+    }
+    if (stored.value === null) {
+      return err(notFound());
+    }
+
+    const nowMs = dependencies.clock.nowMs();
+    const next = applyIdentityUpdate(stored.value, update.value, {
+      nowIso: toRfc3339Utc(nowMs),
+      // SERVER-DERIVED. A verification names the AUTHENTICATED operator; there is no body field
+      // that could influence it, which is what makes the provenance provenance.
+      actorPrincipalId: context.authority.principalId,
+    });
+
+    // ---- 3. RESERVE, before either write.
+    const admitted = await dependencies.admission.reserve({
+      principalId: context.authority.principalId,
+      estimatedRowWrites: ORGANIZATION_UPDATE_ROW_WRITES,
+      nowMs,
+    });
+    if (!admitted.ok) {
+      return err(admitted.error);
+    }
+    if (admitted.value.kind === 'deferred') {
+      return err(quotaExceeded());
+    }
+
+    // ---- 4. WRITE.
+    const written = await dependencies.store.updateOrganizationIdentity(
+      organizationId,
+      next,
+      admitted.value.reservation,
+    );
+    if (!written.ok) {
+      return err(written.error);
+    }
+
+    // ---- 5. APPEND THE TENANT RECORD. See the header for why this is last.
+    const recorded = await dependencies.members.recordOrganizationAccess({
+      organizationId,
+      actionId: 'platform.organizations.identity.update',
+      actorPrincipalId: context.authority.principalId,
+      permissionId: 'core.platform-organization.update',
+      // THE FIELDS, NEVER THE VALUES. `audit.ts` has nowhere to put a value and must not acquire
+      // one: the record says `vat_registration` changed and never says from what. For a field
+      // whose point is legal provenance that is a real limit (`OI-2`), and the answer if it is
+      // ever needed is value history on the record rather than a wider audit row.
+      changedFieldNames: changedIdentityFieldNames(update.value),
+      // REQUIRED. Step 4b charged the operator before this handler ran, so an exhausted operator
+      // cannot keep spending a customer's allocation.
+      charge: context.charge,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+    });
+    if (!recorded.ok) {
+      return err(recorded.error);
+    }
+
+    return ok({
+      // THE WHOLE BLOCK, NOT THE FIELDS THAT WERE SENT. A console applying a partial response to
+      // local state has to guess what the server did with the fields it omitted; a whole block
+      // cannot be guessed wrong. **It also shows the operator the consequence they are least
+      // likely to expect — that editing a number cleared its verification.**
+      body: toIdentityOutput(written.value),
+      target: { kind: 'organization', organizationId },
+    });
+  };
+}
+
 function revokeOperator(dependencies: {
   readonly store: PlatformOperatorStore;
   readonly admission: ControlPlaneWriteAdmission;
@@ -1439,6 +1822,12 @@ export function createPlatformRouteHandlers(dependencies: {
       members: dependencies.members,
     }),
     'platform.credentials.reset': resetCredential({ reset: dependencies.reset }),
+    'platform.organizations.identity.update': updateOrganizationIdentity({
+      store: dependencies.store,
+      members: dependencies.members,
+      admission: dependencies.admission,
+      clock: dependencies.clock,
+    }),
     'platform.operators.revoke': revokeOperator({
       store: dependencies.store,
       admission: dependencies.admission,

@@ -186,9 +186,22 @@ export type PlatformRouteId =
   | 'platform.confirmations.request'
   | 'platform.templates.create'
   | 'platform.templates.list'
-  | 'platform.templates.read';
+  | 'platform.templates.read'
+  | 'platform.organizations.identity.update';
 
-export type PlatformRouteMethod = 'GET' | 'POST';
+/**
+ * *** `PATCH` ARRIVED 2026-09-07 WITH `platform.organizations.identity.update`, AND IT NEEDED NO
+ * CHANGE OUTSIDE THIS FILE — WHICH IS WORTH RECORDING BECAUSE IT WAS NOT OBVIOUS. ***
+ *
+ * `http/api.ts`'s `METHODS_WITH_BODY` already carried `'PATCH'`, so the body is read for a platform
+ * route without touching the HTTP layer, and `worker.ts` never inspects a method at all. **Checked
+ * rather than assumed**, because a route class that matched a method the transport would not carry
+ * a body for would fail as "the field is missing" rather than as "the method is unsupported".
+ *
+ * WIDENING THIS UNION IS ADDITIVE FOR PRODUCERS AND NOT FOR EXHAUSTIVE CONSUMERS. Nothing switches
+ * on it today; `matchPlatformRoute` compares it as a string.
+ */
+export type PlatformRouteMethod = 'GET' | 'POST' | 'PATCH';
 
 /**
  * A registered platform route.
@@ -435,8 +448,26 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // structural assertion: there is no field through which an existing Organization could be
     // named, so the membership-write step cannot be reached with an identifier from anywhere but
     // this operation's own generator.
+    //
+    // *** `display_name` WAS MISSING FROM THIS LIST UNTIL 2026-09-07 AND THE CONTRACT ADVERTISED
+    // IT, WHICH IS AN OUTAGE ON THE ONE OPERATION THAT CREATES CUSTOMERS. ***
+    // `organization-onboarding-v1.schema.json` carries `display_name` in
+    // `onboardOrganizationInput.properties`; this list had four entries; and **the class refuses an
+    // undeclared field before authentication.** So a client that trusted the contract and sent the
+    // field failed EVERY onboarding, pre-auth, on the widest-blast-radius route in the system.
+    //
+    // **`0031` PROTECTED THE OPPOSITE DIRECTION AND LEFT THIS ONE OPEN.** It made the field optional
+    // because *a server requiring a field the deployed console does not send is an outage*. This is
+    // the mirror — **a client sending a field the server does not accept** — and it was reachable
+    // precisely BECAUSE the contract advertised it. **Optional never meant unaccepted; an optional
+    // field the server rejects is not optional, it is forbidden.**
+    //
+    // Found by `web-agent` reading the committed schema against its own client rather than by any
+    // check here. `scripts/check-route-fields.mjs` now compares this list against the contract's
+    // input properties on every run, which is what would have caught it.
     fields: Object.freeze([
       'admin_identifier',
+      'display_name',
       'template_id',
       'first_workspace_name',
       'derived_value',
@@ -497,9 +528,34 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // It is the same device the confirmation challenge uses: a caller cannot obtain a step toward
     // something it may not do.
     permission: fixedPermission('core.credential.reset'),
-    // ONE FIELD. The identifier the operator was given. THERE IS NO `principal_id` — that is what
-    // this route produces, not what it takes — and no `role`, no `status`, no `q`.
-    fields: Object.freeze(['identifier']),
+    // THE IDENTIFIER THE OPERATOR WAS GIVEN, UNDER EITHER OF TWO NAMES. THERE IS NO
+    // `principal_id` — that is what this route produces, not what it takes — and no `role`, no
+    // `status`, no `q`.
+    //
+    // ===========================================================================================
+    // *** PHASE 1 OF A TWO-PHASE RENAME. EXACTLY ONE OF THE TWO, ENFORCED IN THE HANDLER. ***
+    // ===========================================================================================
+    //
+    // `target_identifier` IS THE DESTINATION; `identifier` is deprecated and its removal is owed as
+    // `OD-5`. Both are declared here because **the class refuses an undeclared field before
+    // authentication**, so declaring only the new name would refuse the field the deployed console
+    // sends — the outage direction, hit twice already today.
+    //
+    // THE SEQUENCE IS: Core accepts both -> the console switches -> Core drops `identifier`.
+    //
+    // *** DECLARING A FIELD HERE IS NOT ACCEPTING BOTH AT ONCE. *** This list is the class's
+    // pre-auth allow-list and nothing more. **Exactly-one is `resolveMember`'s job**, and both-
+    // present is refused there rather than silently preferred — if the two values differ, choosing
+    // silently is choosing which principal to resolve.
+    //
+    // THE `oneOf` IN THE CONTRACT EXPRESSES THAT RULE AND DOES NOT ENFORCE IT: nothing in this
+    // repository executes JSON Schema. It is mechanical and diffable where prose is neither, and it
+    // is still a rule Core has to write.
+    //
+    // **WHEN `OD-5` IS DISCHARGED, THE CONTRACT PROPERTY AND THIS ENTRY COME OUT IN ONE CHANGE.**
+    // `scripts/check-route-fields.mjs` compares them and goes red if they are split — which is the
+    // check working rather than an obstacle to route around.
+    fields: Object.freeze(['identifier', 'target_identifier']),
     objectFields: Object.freeze([]),
     queryParameters: Object.freeze([]),
     successStatus: 200 as const,
@@ -706,6 +762,44 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     objectFields: Object.freeze([]),
     // NONE, so any query string at all is refused. The identifier is in the path.
     queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  // ===========================================================================================
+  // ORGANIZATION IDENTITY. `organization-identity-v1`, `docs/decisions/0031`.
+  //
+  // THE FIRST `PATCH` IN THIS CLASS, and the first route whose path carries a parameter that is
+  // NOT the last segment — `{organization_id}/identity`. `matchPlatformRoute` compares segment by
+  // segment against `route.path`, so a literal after a parameter needs nothing special; checked
+  // against the matcher rather than assumed, because "it is the last segment" would have been an
+  // easy accidental dependency.
+  //
+  // `sensitive`, NOT `critical`, SO THERE IS NO CONFIRMATION GATE. The argument for `critical` is
+  // good and loses to a better one: if a VAT number is critical BECAUSE THE VALUE MAY LATER APPEAR
+  // ON A DOCUMENT, so is the commercial registration, and so is the display name on an invoice
+  // header — the justification generalises to every field and the rung stops sorting anything.
+  // What replaces it acts at the point of harm rather than the point of entry: the VERIFICATION
+  // RECORD says who checked this specific value against the issuing registry and when, so a future
+  // surface that renders it onto a document can refuse to render an unverified one. A confirmation
+  // prompt asks an operator to press a second button while looking at the same number they just
+  // mistyped; it proves intent and presence and says nothing about correctness.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.organizations.identity.update' as const,
+    method: 'PATCH' as const,
+    path: `${PLATFORM_BASE_PATH}/organizations/{organization_id}/identity`,
+    permission: fixedPermission('core.platform-organization.update'),
+    // `display_name` is flat; the two registrations are declared object fields — each a flat
+    // primitive map of `state`, `number`, `verified`, which is what this class permits.
+    //
+    // THEY SHARE ONE SHAPE ON PURPOSE. `organization-identity-v1`'s theCategoryRuling: CR and VAT
+    // are two instances of one category, so a future generic table is a TRANSPOSITION of a shape
+    // that already exists rather than a reconciliation of two that disagree. **A third
+    // registration is a DECISION, not a third entry here.**
+    fields: Object.freeze(['display_name']),
+    objectFields: Object.freeze(['commercial_registration', 'vat_registration']),
+    queryParameters: Object.freeze([]),
+    // 200. `organization-identity-v1.contract.yaml:413`, opened and read — not inferred from the
+    // prose, which is how two of these were wrong on 2026-09-05.
     successStatus: 200 as const,
   }),
 ]);
