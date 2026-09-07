@@ -106,6 +106,40 @@ it.**
 
 ---
 
+## ⚠ PHASE 3 HAS A HARD PRECONDITION THAT DID NOT EXIST WHEN THIS RECORD WAS WRITTEN
+
+**Added 2026-09-07 by `qa-agent`, building the phase-1 cases. `OD-5` MUST NOT BE DISCHARGED UNTIL
+THIS IS CLOSED.**
+
+**`resolveMember` collapses the two names into one local value before it does anything else, and
+nothing downstream records which spelling arrived** — not the action log, not the response, not a
+counter. Read end to end to confirm it.
+
+**So the question *"is any client still sending `identifier`"* has no answer in this system.** And
+phase 3 is precisely the change that breaks whichever client still is.
+
+**The console is not the only possible caller.** The Apple client and any script are exactly the
+ones nobody would remember to check — and the console's own history is the argument: it sent
+`identifier` for weeks *because it had read the code rather than the contract*, and nobody knew
+until a checker was written.
+
+> **PRECONDITION: Core records which spelling arrived, on the action record. Phase 3 then cuts over
+> on evidence — "no request has carried the deprecated name in N days" — rather than on the
+> assumption that the only client anyone remembered has switched.**
+
+**Why this is stated as a precondition rather than a suggestion.** The original phase-3 trigger below
+is *"the change that follows the console's switch"*. **That trigger is now satisfiable while the
+question is still unanswerable**, which would make `OD-5` a blind removal wearing a checkable
+condition. `workflow.md` §12's warning is about obligations nobody is assigned to collect; this is
+the narrower case of **a trigger that fires before the evidence it implies exists.**
+
+**`qa-agent` built the accepting half and could not build the evidence half**, and said so rather
+than reporting the case as covered: *"a test cannot assert a fact the system does not keep."* The
+tripwire it left goes red the day `OD-5` is discharged and names everything that must move together
+— the contract's `oneOf`, the console, **and `harness/platform-fixture.ts`'s `successfulCallFor`,
+which sends the deprecated name today.** The test fixture is itself built on the spelling that is
+going away.
+
 ## Phase 3 has an owner and an event trigger, not a date
 
 **`OD-5`**, greppable in `organization-detail-v1`, triggered by *the change that follows the
