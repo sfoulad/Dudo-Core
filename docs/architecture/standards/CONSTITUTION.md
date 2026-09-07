@@ -4,6 +4,12 @@
 - **Authored by:** `architecture-agent`. **Accepted by:** Team Lead only.
 - **Applies to:** every agent, every human contributor, every change in `Dudo-Core`.
 - **Depends on:** `docs/decisions/0003`, `0004`, `0005`.
+- **Reconciled against the built system 2026-09-06.** This document was authored before any
+  code existed. Every open question in §7 now carries a status, and the two rules that the
+  implementation has overtaken — Rule 9's path claim and Rule 12's approved list — say so
+  where they are stated rather than only in the table. **Nothing here has been rewritten to
+  match the code**; where a standard and the system disagree the disagreement is recorded and
+  routed to the Team Lead (`.claude/rules/workflow.md` §12).
 
 This is the highest architectural authority in the repository. Every other standard in
 `docs/architecture/standards/` elaborates it and may not contradict it.
@@ -123,6 +129,27 @@ Public APIs are served under `/api/v1/...`. A breaking change requires a new ver
 - **Check:** the breaking-change definition in `API_STANDARD.md` §6 is applied on every
   contract change, and the change is labelled additive or breaking in the PR.
 
+> **CONTRADICTED, 2026-09-06 — seven deployed public routes are not under `/api/v1`, and they
+> are unversioned.** `platform/core/identity/pre-auth-registry.ts:259–323` serves
+> `/auth/login/start`, `/auth/login/complete`, `/auth/session/refresh`,
+> `/auth/session/revoke` and `/health`; `platform/core/identity/session-routes.ts:103,110`
+> serves `/auth/session/organizations` and `/auth/session/organization`. Only the platform
+> route class (`/api/v1/platform/**`) and the Action routes (`/api/v1/...`) satisfy the rule
+> as written.
+>
+> **The placement is deliberate and correct** — `wrangler.jsonc:97–99` records the reason:
+> *"`/api/` is the namespace Apps mount into and login must not sit where an App could
+> collide with it."* **What is missing is the versioning half.** These are public shapes two
+> clients ship against, and the rule that would force a new version on a breaking change is
+> carried entirely by the `/api/v1` prefix that these paths do not have. `0018` already
+> amended the revocation route's carrier set and its outcome set after both clients had been
+> written against it; nothing in the path said so.
+>
+> **This is the Team Lead's to route.** The standard is not silently widened to admit
+> `/auth/**`, because doing so would remove the only versioning obligation these routes have.
+> The choices are a version segment on the reserved prefixes, an explicit carve-out that names
+> its own versioning rule, or leaving them unversioned as a recorded and accepted cost.
+
 ### Rule 10 — Every operation is tenant aware
 
 No database query, API action, event, workflow, cache entry, queue message, scheduled job,
@@ -163,9 +190,34 @@ Explicitly **not** approved: Workers AI, AI Gateway, Agents SDK, Workers for Pla
 Analytics Engine, KV, Hyperdrive, Vectorize, and every npm package including test
 frameworks and web frameworks.
 
+> **CONTRADICTED, 2026-09-06 — the npm clause is out of date, and it is the sentence a
+> reviewer would check a dependency against.** `docs/decisions/0016` (**Accepted**,
+> 2026-09-04) approves **React 19 · TypeScript · Vite · Tailwind CSS v4 · shadcn/ui** and
+> states in terms: *"It is the first decision in this project to approve npm dependencies,
+> which the user had previously reserved to themselves."* Twelve packages are declared —
+> `package.json:25–29` (`@types/node`, `typescript`, `wrangler`) and
+> `platform/web/package.json:18–33` (React, React DOM, Vite, `@vitejs/plugin-react`,
+> Tailwind, `@tailwindcss/vite`, `@types/react`, `@types/react-dom`,
+> `class-variance-authority`, `clsx`, `tailwind-merge`).
+>
+> **The rule itself is unchanged and still holds** — nothing enters without a record, and
+> `0016` is that record. What is false is the *list*, and Rule 12's list is what an agent
+> reads. **The testing framework remains unselected (`TS1`)**, and no Cloudflare product
+> beyond `0003`'s six has been added: `wrangler.jsonc` binds only D1 and one Durable Object
+> class, and lists no Queue, no R2 bucket and no KV namespace.
+>
+> **Three packages are not named by any decision and are owed one:** `wrangler` and
+> `@types/node` (entailed by `0003`'s stack but never recorded as dependencies), and the
+> shadcn/ui runtime trio `class-variance-authority` / `clsx` / `tailwind-merge` — `0016`
+> approved shadcn/ui as **copy-in source, not a runtime dependency**, and these three are
+> exactly the runtime dependencies that copy-in brought with it. Team Lead to record or
+> remove them.
+
 - **Check:** the dependency manifest and the Worker configuration name nothing outside the
-  approved list. Every standard in this directory is written so that it does **not**
-  depend on an unapproved product; where one is needed, the standard says so and stops.
+  approved list — which is now `0003`'s six Cloudflare services plus `0016`'s npm set, and
+  **the list in this rule is not the list to check against until the Team Lead updates it.**
+  Every standard in this directory is written so that it does **not** depend on an unapproved
+  product; where one is needed, the standard says so and stops.
 
 ---
 
@@ -200,11 +252,44 @@ and a rollback path. Partial completion is reported as partial.
 
 ### 4.5 Which gate applies
 
-- **Phases 0–3:** the Foundation Gate (`0005`), seven conditions ending in user approval.
-- **From the first runnable vertical feature (in practice Phase 4):** the full seven-step
-  delivery gate (`docs/product/mvp-delivery-policy.md` §4).
+> **STALE, 2026-09-06 — the second bullet was withdrawn.** `docs/decisions/0030`
+> (**Accepted**, 2026-09-06) supersedes the MVP framing in `CLAUDE.md`,
+> `.claude/rules/architecture.md` §7, `.claude/rules/workflow.md` §10–§11 **and
+> `docs/product/mvp-delivery-policy.md`** — the document the second bullet cites. Its
+> decision 2: *"Milestone acceptance replaces the seven-step per-feature gate."* This entry
+> is corrected rather than deleted, because a paragraph naming a withdrawn gate is precisely
+> the residue `.claude/rules/workflow.md` §12 exists to catch, and it instructed.
 
-The Team Lead states which gate applies when assigning work.
+- **The Foundation Gate (`0005`) — seven conditions ending in user approval.** Its
+  *conditions* are unaffected by `0030`, which supersedes the MVP delivery policy and not
+  `0005`. **Its return clause is not**, and that clause is where this section went wrong —
+  see below.
+- ~~**From the first runnable vertical feature (in practice Phase 4):** the full seven-step
+  delivery gate (`docs/product/mvp-delivery-policy.md` §4).~~ **Withdrawn by `0030`.** Work
+  proceeds continuously and stops at named milestones for the user to test and accept.
+- **What `0030` did NOT withdraw, stated here because it is the half that gets dropped:**
+  **production actions — migrations, deploys, credential changes, any spend — still require
+  explicit user approval, each time.** `0030`: *"That control is not MVP overhead."*
+
+> **The trigger had already fired, which is worth recording rather than tidying away.**
+> `0005`'s return clause — struck at `docs/decisions/0005-foundation-gate-for-phases-0-3.md`
+> lines 94–117 by an amendment dated 2026-09-06 — fired on *"any Phase 0–3 work that produces
+> something a user can actually open."* **The admin console is deployed at `admin.dudo.work`
+> and is something a user can open.** So the condition was met, then the gate it summoned was
+> withdrawn, and **for a few hours this document required a gate that no longer existed,
+> triggered by a condition that had already been satisfied.** Nothing went red at either
+> moment, which is the whole of `.claude/rules/workflow.md` §12's subject.
+>
+> **No approval point is lost in the supersession, and this is the mapping to carry forward.**
+> `0005` required **user approval per phase** — four approval points before the first App
+> (`0005` Consequences). `0030` requires **milestone acceptance**. **The phases ARE the
+> milestones**; it is the same mechanism under a different name, not a relaxation.
+
+**There is now ONE gate, and this sentence used to say otherwise.** ~~The Team Lead states
+which gate applies when assigning work.~~ That instruction assumed a choice between two gates
+and survived the first correction of this section by three lines — struck on a second pass,
+not the first. The Foundation Gate's conditions are what apply; the Team Lead states the
+**milestone**, not the gate.
 
 ### 4.6 Amending this Constitution
 
@@ -261,10 +346,17 @@ Each needs a decision record before work builds on it. Recommendations are
 record and is no longer open — its right-hand column states the decision, not a
 recommendation.
 
-| # | Question | Recommendation |
+**Classified 2026-09-06 against the built system.** Every row carries one of three states.
+**CLOSED** cites the file and line, decision record, or contract that closes it — a citation
+and not an assertion, because *"a comment that cites a contract is a claim about that
+contract"* (`.claude/rules/architecture.md` §3c). **STILL OPEN** names the decision needed and
+who can make it. **CONTRADICTED** means the implementation went a different way; those are
+reported to the Team Lead and are **not** resolved by rewriting this document to match.
+
+| # | Question | State, and the recommendation or citation |
 |---|---|---|
-| C1 | **What is a "tenant"?** The event envelope carries both `tenant_id` and `business_id` (`EVENT_STANDARD.md` §3) but neither is defined as the isolation boundary. | Tenant = **Organization**. `business_id` is a sub-scope inside it, never an isolation boundary of its own. See `MULTITENANCY_STANDARD.md` §2. |
-| C2 | ~~**The tenancy implementation model.**~~ **DECIDED — `0006`, Status Accepted, by the user.** Retained here because other documents cite C2. | **Option A — one shared production D1 database — with mandatory indirection** through a Core-owned `TenantStoreResolver`: no App, plugin, Connector, or client selects a database or binding; an unknown Organization mapping fails closed; only Core-configured bindings are returned. **MVP-scoped:** decided for the Zero-Cost MVP only, while `0008` remains active. **Option B is excluded** for that period. **Option C (hybrid routing) is the approved migration candidate, not the current model, and moving to it requires user approval and a new decision record.** The earlier "hybrid routing recommended" recommendation is **superseded** — see `MULTITENANCY_STANDARD.md` §7.1 for the decided model and §7.9 for the superseded comparison. Nothing in this repository may treat the model as open. |
-| C3 | **Search, Notifications, and Files are Core services *and* capability domains** (`CORE_BOUNDARIES.md` §3, `CAPABILITY_STANDARD.md` §3). Those two claims conflict. | Core owns the primitive service; the Capability is the vendor-neutral interface Apps call; Core is the default provider. `CORE_BOUNDARIES.md` §4. |
-| C4 | **Public API path namespacing.** A flat path such as `/api/v1/customers` assumes a global resource namespace, which cannot survive arbitrary third-party Apps. | Reserved flat paths for Core and registered official Apps; `/api/v1/apps/<app_id>/...` for everything else. `API_STANDARD.md` §5. |
-| C5 | **Phase 1's admin portal is runnable**, so `0005`'s trigger ("the first runnable vertical feature") fires before Phase 4. | Team Lead to state explicitly which gate the admin portal falls under, before Phase 1 planning. |
+| C1 | **What is a "tenant"?** The event envelope carries both `tenant_id` and `business_id` (`EVENT_STANDARD.md` §3) but neither is defined as the isolation boundary. | **CLOSED — decided.** `docs/decisions/0006` (**Accepted**, user, 2026-09-01) §1.1 records it as already settled: *"The tenant is the Organization … The Team Lead reports this as confirmed by the user. This record takes it as given and does not re-open it. `business_id` is an authorization scope inside a tenant, never an isolation boundary."* Built that way: `platform/core/storage/adapters/sql/sql-compiler.ts:141` emits `tenant_id = ?` from a single `whereWithTenant`, and `platform/core/tenancy/tenant-context.ts:63` carries `organizationId` as the value behind it. The decision arrived as a settled premise in `0006` rather than as a record of its own — **acceptable, and worth the Team Lead noting**, because a load-bearing definition recorded in another decision's assumptions table is one nobody would think to grep for. |
+| C2 | ~~**The tenancy implementation model.**~~ **DECIDED — `0006`, Status Accepted, by the user.** Retained here because other documents cite C2. | **Option A — one shared production D1 database — with mandatory indirection** through a Core-owned `TenantStoreResolver`: no App, plugin, Connector, or client selects a database or binding; an unknown Organization mapping fails closed; only Core-configured bindings are returned. **MVP-scoped:** decided for the Zero-Cost MVP only, while `0008` remains active. **Option B is excluded** for that period. **Option C (hybrid routing) is the approved migration candidate, not the current model, and moving to it requires user approval and a new decision record.** The earlier "hybrid routing recommended" recommendation is **superseded** — see `MULTITENANCY_STANDARD.md` §7.1 for the decided model and §7.9 for the superseded comparison. Nothing in this repository may treat the model as open. **Amended 2026-09-06: the words "MVP-scoped" above have lost their referent.** `docs/decisions/0030` withdrew the MVP framing and names `0006` as *"the pinch point"* by name: *"it chose one shared database 'for the Zero-Cost MVP' and that premise is gone."* `0030` deliberately does **not** reverse `0006` — one shared database remains correct at current scale — but it replaces the scoping clause with a requirement: **the choice must stay reversible**, and the single emission point in `sql-compiler.ts` is what makes it so. Read "MVP-scoped" as "scoped to the current scale, revisited on `0030`'s expandability constraint", not as a period that has ended. |
+| C3 | **Search, Notifications, and Files are Core services *and* capability domains** (`CORE_BOUNDARIES.md` §3, `CAPABILITY_STANDARD.md` §3). Those two claims conflict. | **STILL OPEN — needs an architecture decision from the Team Lead**, and nothing since has touched it. None of the three exists: `platform/core/**` has no search, notification or file module, and `wrangler.jsonc` binds no R2 bucket. Recommendation unchanged — Core owns the primitive service; the Capability is the vendor-neutral interface Apps call; Core is the default provider (`CORE_BOUNDARIES.md` §4). **Not blocked on anything**; it is cheap to record now and expensive to discover when the first Capability is built. Same question as `ARCHITECTURE.md` A2 and `CORE_BOUNDARIES.md` §4 — one decision closes all three. |
+| C4 | **Public API path namespacing.** A flat path such as `/api/v1/customers` assumes a global resource namespace, which cannot survive arbitrary third-party Apps. | **CLOSED IN PRACTICE, UNRECORDED — needs the Team Lead to ratify what is already deployed.** The split is built exactly as recommended: Core serves the flat namespace at `/api/v1` (`platform/core/http/core-routes.ts:67,98,109` — `/businesses`, `/businesses/names`) and the one App is mounted at `/api/v1/apps/customers` (`platform/core/http/api.ts:386–407`). A third reserved segment was added that this row did not anticipate — `/api/v1/platform/**` (`0025`), reserved structurally by `pre-auth-registry.ts:371–375` so no App route table can resolve onto it. **What is missing is the registry, not the rule:** `API_STANDARD.md` §5 requires that *"the flat namespace is allocated in a registry Core owns"*, and no such allocation list exists — `reservedApiPathSegments` in `core-object-registry.yaml` is named as owed by `pre-auth-registry.ts:366–369` and is still owed. Ratifying C4 is one line; the allocation registry is AS4. |
+| C5 | **Phase 1's admin portal is runnable**, so `0005`'s trigger ("the first runnable vertical feature") fires before Phase 4. | **CLOSED — the question no longer arises.** `docs/decisions/0030` (**Accepted**, 2026-09-06) withdrew the seven-step delivery gate this row asked to choose between: *"Milestone acceptance replaces the seven-step per-feature gate."* There is no second gate for the admin portal to fall under. The Foundation Gate (`0005`) is untouched by `0030` and continues to apply to Phase 0–3 work. **Do not read this as the admin portal being ungated** — production actions still require explicit user approval every time (`0030`, decision 2; `SECURITY_STANDARD.md` §10). See §4.5, which carried the same stale reasoning and is corrected there. |

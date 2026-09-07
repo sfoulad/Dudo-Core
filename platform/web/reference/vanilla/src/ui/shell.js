@@ -19,7 +19,7 @@ export function createShell(root) {
 
   const brandMark = el('img', {
     class: 'brand__mark',
-    src: 'assets/dudo-mark.svg',
+    src: 'assets/dudo-mark.png',
     alt: '',
     width: '28',
     height: '28',

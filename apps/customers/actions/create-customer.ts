@@ -43,18 +43,44 @@ import { displayNameKey, emailKey, phoneKey } from '../domain/search.ts';
 import { insertOperation } from '../data/customer-repository.ts';
 import { APP_ID, PERMISSION } from './common.ts';
 
+/**
+ * THE PARSED INPUT, WHICH IS NOT THE WIRE INPUT, AND THE DIFFERENCE IS THE POINT.
+ *
+ * The five nullable fields are `string | null` and NOT `string | null | undefined`. On the wire
+ * they are genuinely optional — the caller may omit them or send `null`, and
+ * `CREATE_CUSTOMER_RULE` accepts both — but this type describes the value AFTER `parseInput`, and
+ * `parseInput` produces every one of them through `optional()`, which collapses "omitted" and
+ * "null" into `null` before anything downstream sees them.
+ *
+ * MARKING THEM `?` HERE DESCRIBED A STATE THE CODE CANNOT PRODUCE, and it cost twelve type errors
+ * at once: `handle` assigns them straight into `Customer` and into `insertOperation`, both of
+ * which say `string | null`, so every use had to account for an `undefined` that no code path
+ * creates. The fix is at this declaration rather than at the twelve call sites — `?? null`
+ * repeated twelve times would have silenced the checker while leaving the type still claiming a
+ * value that cannot occur, and the thirteenth use would have had to remember.
+ *
+ * NOTHING CHANGES AT RUNTIME. `optional()` already normalised omitted to `null`; this makes the
+ * type say so. The normalisation itself is load-bearing and stays: "absent" and "explicitly
+ * cleared" must be one stored value, or the column would need to distinguish two kinds of empty.
+ */
 type CreateCustomerInput = {
   readonly business_id: string;
   readonly display_name: string;
   readonly customer_type: CustomerType;
-  readonly email?: string | null;
-  readonly phone?: string | null;
-  readonly country?: string | null;
-  readonly address?: string | null;
-  readonly notes?: string | null;
+  readonly email: string | null;
+  readonly phone: string | null;
+  readonly country: string | null;
+  readonly address: string | null;
+  readonly notes: string | null;
 };
 
-/** An optional field may be omitted or supplied as null; both mean "not recorded". */
+/**
+ * An optional field may be omitted or supplied as null; both mean "not recorded".
+ *
+ * IT RETURNS `string | null` AND NEVER `undefined`, which is what makes the declaration above
+ * honest. It is also the one place the two absences are merged, so a later field added to the
+ * type gets the same treatment by using it.
+ */
 function optional(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }

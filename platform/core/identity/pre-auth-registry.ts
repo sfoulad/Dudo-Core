@@ -110,7 +110,33 @@ export type PreAuthHttpMethod = 'GET' | 'POST';
  * structural for the two entry points where any variation at all would be a signal — see
  * `disclosure` below.
  */
-export type PreAuthOutcomeKind = 'acknowledged' | 'issued' | 'refused' | 'unavailable';
+export type PreAuthOutcomeKind =
+  | 'acknowledged'
+  | 'issued'
+  /**
+   * `cleared` — REVOCATION. `docs/decisions/0018` §B, amending `0014` §B.
+   *
+   * It renders the acknowledgement body plus a CONSTANT, ARGUMENT-FREE CLEARING COOKIE, and the
+   * two adjectives are the whole security argument. The handler supplies nothing: no name, no
+   * value, no lifetime. `http/pre-auth-http.ts` emits one fixed `Set-Cookie` that is byte-
+   * identical for a valid session, a forged credential, an unknown session, a replay, and a
+   * request that presented no credential at all.
+   *
+   * WHY IT IS NOT `issued` WEARING A DIFFERENT NAME, which is the objection it has to survive.
+   * `issued` carries `credentials` the handler chose, so it can vary per request and can convey a
+   * capability — which is why `outcomeOfKind` refuses to let any entry point COLLAPSE to it: a
+   * failure path that issued a credential would be an authentication bypass built out of an error
+   * handler. `cleared` has no payload to vary and REMOVES a credential rather than granting one,
+   * so collapsing to it is safe in the one direction that matters. A caller cannot learn anything
+   * from a response that is the same bytes in every case.
+   *
+   * IT REPLACES `acknowledged` FOR REVOCATION RATHER THAN JOINING IT, so
+   * `assertRegistryIsCoherent`'s rule that a `collapsed` entry point declares exactly one outcome
+   * still holds — one answer, one branch, nothing to tell apart.
+   */
+  | 'cleared'
+  | 'refused'
+  | 'unavailable';
 
 /**
  * ===========================================================================================
@@ -279,8 +305,13 @@ const ENTRY_POINTS: readonly PreAuthEntryPoint[] = Object.freeze([
     // holding a stolen or guessed token learns whether it is live without using it. So revocation
     // always answers the same thing, whether it revoked something, revoked nothing, or failed.
     disclosure: 'collapsed',
-    outcomes: ['acknowledged'],
-    collapseTo: 'acknowledged',
+    // `cleared` RATHER THAN `acknowledged`, per docs/decisions/0018 §B. The session cookie is
+    // HttpOnly, so no client can clear it; a logout that did not clear it left a dead credential
+    // in the browser for the session's full lifetime. Still exactly ONE outcome, so the collapsed
+    // rule is unchanged — the answer is a constant, it is simply a constant that includes a fixed
+    // `Set-Cookie`.
+    outcomes: ['cleared'],
+    collapseTo: 'cleared',
     kind: 'delegated',
     sourceLimitPerWindow: 60,
     writes: true,
@@ -306,10 +337,41 @@ const BY_ID: ReadonlyMap<PreAuthEntryPointId, PreAuthEntryPoint> = new Map(
   ENTRY_POINTS.map((point) => [point.id, point]),
 );
 
-/** The reserved prefixes. A path under one of these belongs to Core and to nothing else. */
+/**
+ * The reserved prefixes. A path under one of these belongs to Core and to nothing else.
+ *
+ * ===========================================================================================
+ * THE LIST IS WIDER THAN ITS NAME. `/api/v1/platform/` IS NOT A PRE-AUTHENTICATION PREFIX.
+ * ===========================================================================================
+ *
+ * `docs/decisions/0025` adds the platform route class at `/api/v1/platform`, and
+ * `platform-operator-v1` requires that no App route table be able to resolve onto it: "An App
+ * that could serve a path under /api/v1/platform could present itself as the admin console."
+ *
+ * `isReservedPreAuthPath` and `assertNoReservedPathCollision` are the platform's only
+ * reservation mechanism, and both read this constant, so the prefix belongs here. THE EXPORTED
+ * NAME IS DELIBERATELY NOT CHANGED — it is referenced by `qa-agent`'s suites and by
+ * `assertRegistryIsCoherent`'s error message, and a rename would be a wide edit for a comment's
+ * worth of accuracy. Read it as "paths reserved to Core", of which the pre-authentication entry
+ * points are the majority.
+ *
+ * `assertRegistryIsCoherent` is unaffected: it checks that every ENTRY POINT sits under one of
+ * these prefixes, not that every prefix has an entry point under it.
+ *
+ * THE TRAILING SLASH ON `/api/v1/platform/` IS LOAD-BEARING, exactly as it is on `/auth/`.
+ * `isReservedPreAuthPath` also matches the prefix with its trailing slash trimmed, so
+ * `/api/v1/platform` itself is reserved while `/api/v1/platforms` — a plausible future App path
+ * — is not. Without the slash, `startsWith` would reserve it.
+ *
+ * THIS IS THE CODE HALF OF THE RESERVATION. The contract also requires `platform` to be added to
+ * `reservedApiPathSegments` in `packages/contracts/registries/core-object-registry.yaml`, which
+ * is `architecture-agent`'s file and is NOT changed by this work — requested through the Team
+ * Lead.
+ */
 export const RESERVED_PRE_AUTH_PATH_PREFIXES: readonly string[] = Object.freeze([
   '/auth/',
   '/health',
+  '/api/v1/platform/',
 ]);
 
 /**

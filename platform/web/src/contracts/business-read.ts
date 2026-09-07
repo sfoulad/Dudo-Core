@@ -59,9 +59,31 @@ export const RESOLVE_BATCH_MAX = 25;
 
 export type CoreAction = 'core.ListAuthorizedBusinesses' | 'core.ResolveBusinessReferences';
 
+/**
+ * Transcribed from `business-read-v1.contract.yaml -> httpBinding`.
+ *
+ * `ResolveBusinessReferences` IS A POST, AND IT IS STILL A READ. Revised in the
+ * contract on 2026-09-04. As first authored it was
+ * `GET /businesses/names?business_ids=a&business_ids=b`, and
+ * `platform/core/http/api.ts:253-266` rejects every repeated query parameter with
+ * `invalid_argument / repeated_parameter` — so the Action could not succeed over
+ * HTTP for more than one identifier. Core's refusal was correct and stayed; the
+ * wire form is what changed. The batch now travels as a JSON body:
+ *
+ *   POST /api/v1/businesses/names
+ *   { "business_ids": ["<id>", "<id>", ...] }
+ *
+ * THE SHAPE DID NOT CHANGE — `business_ids` was always an array, and a JSON body
+ * carries one natively, so no delimiter, splitting rule or coercion sits between
+ * this client and the schema. The batch maximum is still 25.
+ *
+ * A CLIENT MUST NOT READ THE POST AS A MUTATION. The contract declares
+ * `sensitivity: read`, `maxRowWrites: 0`, `audit: false`, no event, and no
+ * free-tier write consumption. It is safe to call on render and safe to retry.
+ */
 export const CORE_ROUTES: Record<CoreAction, { method: string; path: string }> = {
   'core.ListAuthorizedBusinesses': { method: 'GET', path: '/businesses' },
-  'core.ResolveBusinessReferences': { method: 'GET', path: '/businesses/names' },
+  'core.ResolveBusinessReferences': { method: 'POST', path: '/businesses/names' },
 };
 
 export const CORE_BASE_PATH = '/api/v1';

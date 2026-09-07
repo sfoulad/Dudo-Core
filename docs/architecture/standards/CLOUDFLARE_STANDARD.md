@@ -3,8 +3,17 @@
 - **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance.
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every use of a Cloudflare service in `Dudo-Core`.
-- **Depends on:** `docs/decisions/0003` (the approval and its two constraints), `docs/decisions/0006` (tenancy model, Accepted), `docs/decisions/0008` (zero-cost MVP — the Free tier is binding), `CONSTITUTION.md` Rules 11 and 12.
-- **Source:** `docs/decisions/0003`, `0006`, `0008`.
+- **Depends on:** `docs/decisions/0003` (the approval and its two constraints), `docs/decisions/0006` (tenancy model, Accepted), `docs/decisions/0008` (zero cost — the Free tier is binding), `docs/decisions/0030` (the MVP framing withdrawn; **expandability now binding beside zero cost**), `CONSTITUTION.md` Rules 11 and 12.
+- **Source:** `docs/decisions/0003`, `0006`, `0008`, `0030`.
+
+> **`0030`, accepted 2026-09-06, adds a constraint this document is the main place to enforce:**
+> **the free tier may cost us CONFIGURATION, never SCHEMA.** A limit worked around by a setting, a
+> ceiling constant or a deployment topology is reversible by changing that thing; **a limit worked
+> around by changing the shape of the data is paid for once and then forever.** §4 rules 9 and 11
+> were already written this way — refuse at the ceiling rather than degrade data, and design the
+> migration runner for **N** databases even though N is 1 — and they are now binding for a second
+> reason rather than as prudence. **`0008` is unchanged and `0006` is not reversed; what `0030`
+> requires is that `0006` stay reversible**, which is what §4 rule 2's indirection buys.
 
 `0003` chose Cloudflare and accepted real vendor concentration. This document is how that
 concentration is kept survivable.
@@ -62,6 +71,28 @@ domain logic  ──>  port (Core-owned interface)  ──>  adapter (Cloudflare
 type names above. The result must be empty. This should become a CI check once CI exists;
 until then it is a review item on every change.
 
+> **THE CHECK AS WRITTEN IS WRONG, and the code is right — corrected 2026-09-06 after running it.**
+> The grep over `apps/**` is empty, as required. The grep over `platform/core/**` is **not**, and
+> the reason is not a violation: **`D1Database` in this repository is Dudo's own type, not
+> Cloudflare's.** `platform/core/storage/adapters/d1/d1-store.ts:50–60` declares it — *"the subset
+> of the D1 binding surface this adapter uses"* — as a structural type with two methods. No
+> Cloudflare type package is installed; the root `package.json` carries `@types/node`, `typescript`
+> and `wrangler` and nothing else.
+>
+> **So a name-based grep cannot distinguish a leaked vendor type from a Core-owned port that names
+> the thing it abstracts**, and the four non-adapter files it flags —
+> `identity/control-plane-store.ts`, `platform/platform-operator-store.ts`, and the two composition
+> roots — are ports and wiring, which is where such a name belongs.
+> `platform/core/platform/platform-operator-store.ts:37` states the distinction deliberately: the
+> one import from `storage/` in that tree is *"`d1-store.ts`'s `D1Database` TYPE, which is a
+> structural interface with two methods and confers no binding."*
+>
+> **The check that would actually catch the defect is an import check, not a name check:** no module
+> outside `**/adapters/**` may import from `@cloudflare/*`, and no domain module may receive `env`
+> or a binding. **State it that way before it becomes a CI job**, because the name-based form
+> would either fail permanently on correct code or be relaxed until it caught nothing — and a check
+> relaxed to stay green is `workflow.md` §11a's subject exactly.
+
 **Why now rather than later:** `0003` says this "only works if it is enforced in review
 from the first commit rather than retrofitted." An abstraction added after Phase 4 is an
 abstraction added to code already shaped by the thing it was meant to hide.
@@ -75,6 +106,17 @@ abstraction added to code already shaped by the thing it was meant to hide.
 - **Worker-to-Worker communication uses Service Bindings/RPC**, never public HTTP
   (`CONSTITUTION.md` Rule 4). Public HTTP between our own services adds latency, adds an
   authentication problem, and exposes an internal surface to the internet.
+
+  > **Status 2026-09-06: two Workers exist and there is no Service Binding between them, because
+  > there is nothing to call.** `dudo-core` and `dudo-admin` (`wrangler.jsonc`,
+  > `wrangler.admin.jsonc`) declare the **same `main: "worker.ts"`** and the same D1 bindings; they
+  > differ in which asset collection and which hostname they serve, and `wrangler.admin.jsonc:24–26`
+  > says so — *"Same `main`, same bindings, same secrets. The two deployments differ in what they
+  > serve to a browser, not in what they are."*
+  > **That is one codebase deployed twice, not a service topology**, and this rule is therefore
+  > unexercised rather than satisfied. The one cross-Worker reference that does exist is the
+  > Durable Object namespace, bound by `script_name: "dudo-core"` so the two do not each create a
+  > class of the same name and silently split `0013`'s daily budget. See CF1.
 - A Service Binding is a network property, not a trust property: **the callee still
   authenticates, resolves tenant, and authorizes** (`API_STANDARD.md` §2).
 - Workers have a CPU-time budget and no long-running process model. Anything that might
@@ -290,10 +332,16 @@ worse than no number, because it will be trusted.
 
 ## 12. Open questions
 
-| # | Question | Recommendation |
-|---|---|---|
-| CF1 | **Service topology** — one Worker, or a Worker per domain service. `0003` does not decide it, and it changes what a Service Binding is *for*. | Start with a small number of Workers split along the boundaries that already exist (edge/API, core domain, App runtime). Splitting later is easier than merging. Needs an ADR before Phase 1 implementation. |
-| CF2 | **KV is not approved**, so the plan's configuration and cache layer has no home. | Read configuration from Core storage with in-request caching only. If measurement later shows a real need, record a KV decision then — not preemptively. |
-| CF3 | **Analytics Engine is not approved**, so §34's observability requirements rest on Workers logs and traces alone. | Sufficient for Phases 0–3. Revisit when there is a real analytics requirement. |
-| CF4 | **Workers for Platforms availability** — `0003` records this as unverified. `docs/operations/free-tier-register.md` lists it as **paid-only and prohibited outright** while `0008` is active. | Unavailable during the Zero-Cost MVP regardless of the Enterprise question. It gates third-party App and Connector isolation, so Phase 7 planning must assume it is not there unless the user approves a paid plan. Do not design against it in the meantime. |
-| CF5 | **Migration tooling** — no package is approved, so migrations have no runner. | Needs an ADR with TS1. Blocks the first schema. The tenancy model is no longer a blocker here (`0006` is Accepted): the runner targets one shared database today and must still handle N (§4 rule 11). |
+**Reconciled against the deployed system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would — those
+are reported, never resolved by editing the standard to agree).
+
+| # | State | Question | Recommendation |
+|---|---|---|---|
+| CF1 | **CONTRADICTED**, then narrowed | **Service topology.** This row said it *"needs an ADR before Phase 1 implementation."* **Phase 1 shipped without one.** Two Workers are deployed — `dudo-core` (`app.dudo.work`, `api.dudo.work`) and `dudo-admin` (`admin.dudo.work`), versions recorded at `docs/product/superadmin-test-checklist.md:23–24`. **But the split is not the one this row recommended.** It recommended a split along existing boundaries — edge/API, core domain, App runtime. What exists is **the same `main` deployed twice**, forced by a Cloudflare constraint rather than chosen: *"Only one collection of static assets can be configured in each Worker"* (`wrangler.admin.jsonc:10`), so a second SPA needs a second Worker. `0022`'s 2026-09-05 amendment records that decision. **The domain-service topology question is untouched, and the App runtime — the boundary that motivated this row — is still one process:** `apps/customers/app.ts:28–30` imports `platform/core/**` directly. | **Re-ask it as one question, now that `0030` has made it cheap to answer well:** should a first-party App be a separate Worker reached by Service Binding? `0030` records that this is **free** — Workers is free; it is Workers for *Platforms* that is paid — and that it is *"a real isolation boundary, not a pretend one."* **That makes CF1 and AP2's first-party half the same decision**, and it is the highest-value architecture decision left in this document. Needs an ADR **before a second App exists**, which is the point at which in-process composition stops being one import and becomes a pattern. |
+| CF2 | **OPEN** — Cloudflare product record; blocks nothing | **KV is not approved**, so the plan's configuration and cache layer has no home. | Unchanged, and **the recommendation was followed**: configuration is read from Core storage, and `0006` §4.13's review confirms no option cached the tenant directory in KV. Record a KV decision only if measurement shows a real need. Same root as CF3, CF4 and `AI_STANDARD.md` AI1/AI2: **a Cloudflare product outside `0003`'s six needs its own record, and under `0008` it must also be free.** |
+| CF3 | **OPEN** — Cloudflare product record; blocks nothing | **Analytics Engine is not approved**, so the observability requirements rest on Workers logs and traces alone. | ~~Sufficient for Phases 0–3.~~ **Struck 2026-09-06:** `0030` withdrew the phase-scoped MVP framing, and in any case the premise is now weaker than it reads — **Workers Logs is not enabled either.** See CF6. Revisit when there is a real analytics requirement. |
+| CF4 | **CLOSED as to scope; OPEN only as a budget question the user owns** | **Workers for Platforms.** `0003` recorded availability as unverified and the free-tier register lists it as paid-only. | **`0030` settles what it gates, and it is much less than the name suggests:** *"Workers is free. Workers for Platforms is a different product and is paid-only. The similarity of the names is the whole confusion."* It gates **only untrusted third-party code execution** — **not tenancy, not Apps as a concept, not the capability model**, which `0006` §4.13 had already recorded: *"Workers for Platforms concerns executing untrusted code (Phase 7); this decision concerns where data sits. They are independent."* **What follows for this directory: first-party Apps as separate Workers behind Service Bindings cost nothing and are available today** (CF1), and the only thing genuinely blocked is an open marketplace where third parties upload and execute code — whose non-technical prerequisites (review process, trust tiers, distribution) are undecided anyway. **Do not design against it**, and do not cite it as a blocker for anything narrower than third-party code execution. |
+| CF5 | **CLOSED** | ~~**Migration tooling** — no package is approved, so migrations have no runner.~~ | **`wrangler d1 migrations apply` is the runner, it is wired, and it has run against production.** The four scripts are `package.json:18–21`, deliberately split local/remote with the note that *"REMOTE variants act on the deployed database and are a production-class action requiring explicit user approval each time"*; `migrations_dir` is declared per database in `wrangler.jsonc:137–150`. **Executed:** `docs/product/superadmin-test-checklist.md:25` — *"`0011`–`0014` applied to the remote control plane, in order. `wrangler d1 migrations list` reports no migrations to apply."* No ADR was needed and no package was added: `wrangler` was already inside `0003`. **§4 rule 11 stands and is now `0030` business** — the runner targets one database today and must still handle N, because *"anything that assumes exactly one database exists"* is a named violation of `0030`. **One structural gap survives CF5's closure and is not the same question:** `migrations_dir` is one directory per database, but a tenant database is written by Core **and by every installed App**, and `wrangler` does not recurse. `apps/customers/data/migrations/0001_customer.sql` was therefore never applied by the runner, and every Customer Directory read returned `503` on a system that authenticated perfectly — `docs/operations/deployment-runbook.md` §3. **That is an App-migration composition problem, it will recur for every App, and it needs its own answer** (`APP_STANDARD.md` §6). |
+| CF6 | **OPEN** — free-tier impact check owed; **added 2026-09-06** | **Workers Logs is deliberately disabled, so the deployed system has no log retention.** `wrangler.jsonc` leaves `observability` off and states why: `architecture.md` §6a requires a free-tier impact check **before** a feature is built, and that check has not been done. The file calls it *"a live open item, not an oversight"*, and the runbook agrees that *"debugging a deployed Worker without it will hurt."* | **Do the §6a check rather than either enabling it quietly or leaving it indefinitely.** It needs the same three answers every new consumer now needs: which allowance it consumes, expected usage, and what happens at the limit — plus, per the free-tier register's Durable Object warning, **which other consumer it shares with.** Team Lead owns `wrangler.jsonc`. Recorded here because §10 requires every limit a design relies on to be verified before it is relied upon, and a system with no logs relies on that limit by omission. |

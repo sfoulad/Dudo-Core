@@ -104,6 +104,7 @@ import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { Result } from '../kernel/result.ts';
 import { err, ok } from '../kernel/result.ts';
+import type { CoreError } from '../kernel/errors.ts';
 import { internal, notFound, quotaExceeded, unauthenticated, unavailable } from '../kernel/errors.ts';
 import type { AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
 import { sealAuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
@@ -180,6 +181,37 @@ export type SessionResolver = {
   resolve(sessionId: string): Promise<Result<SessionResolution>>;
 
   /**
+   * §C.5 steps 1 and 2 ONLY: the principal behind a live session, and nothing else.
+   *
+   * ===========================================================================================
+   * ADDED FOR THE PLATFORM ROUTE CLASS (`docs/decisions/0025`), AND ITS RETURN TYPE IS THE POINT.
+   * ===========================================================================================
+   *
+   * A platform route is authenticated AT PRINCIPAL LEVEL and has NO TENANT. `resolve` above is
+   * the wrong tool for it three times over:
+   *
+   *   - it CONSTRUCTS AN `AuthenticatedPrincipal`, which carries an `organizationId` and is the
+   *     value `TenantStoreResolver` consumes. Handing one to the platform class would put a tenant
+   *     identifier inside a class whose binding property P1 is that it can reach none;
+   *   - it reads membership and calls the authorization source, which is work a platform route
+   *     needs none of; and
+   *   - for a principal that HAS selected an Organization it can answer `unavailable()` when that
+   *     Organization is suspended, which would make a platform request's outcome depend on the
+   *     state of a tenant it has nothing to do with — and would give a principal wrongly present
+   *     in both tables a THIRD observable answer, breaking the mutual exclusion's collapse.
+   *
+   * SO THIS RETURNS A STRING. There is no organization, no membership list, no grant set and no
+   * principal object in the return value, and therefore nothing for a caller to extract a tenant
+   * from. `liveSession` is reused rather than reimplemented, so the expiry rule, the suspended-
+   * principal rule and the single argument-free `unauthenticated()` collapse are identical to
+   * every other authenticated path — two authentication floors that were meant to be identical
+   * are two floors that will differ.
+   *
+   * IT PERFORMS NO WRITE, like everything else on this path (ruling 3).
+   */
+  resolvePrincipalId(sessionId: string): Promise<Result<string>>;
+
+  /**
    * The Organizations this principal may enter, for an Organization picker.
    *
    * Returns identifiers only, because the control plane holds no Organization name — see
@@ -224,6 +256,35 @@ export type SessionResolver = {
     /** A HINT, or `null` for a session with no Organization selected yet. */
     readonly requestedOrganizationId: string | null;
   }): Promise<Result<SessionRecord>>;
+
+  /**
+   * Ends a session. Logout.
+   *
+   * ===========================================================================================
+   * IT ANSWERS THE SAME THING WHETHER IT REVOKED SOMETHING OR NOTHING, AND THAT IS THE POINT.
+   * ===========================================================================================
+   *
+   * `pre-auth-registry.ts` makes `identity.session.revoke` `disclosure: 'collapsed'` for a reason
+   * that is easy to miss and is restated here because this is the function that could break it:
+   *
+   *   *"A logout that answered 'no such session' for an unknown token and 'done' for a real one
+   *   is a TOKEN-VALIDITY ORACLE: an attacker holding a stolen or guessed token learns whether it
+   *   is live without using it."*
+   *
+   * So a session identifier that does not exist, one that has expired, and one that was deleted a
+   * moment ago all return `ok`. The only errors this can produce are Dudo-side — a store failure
+   * or an exhausted daily budget — and the handler collapses those too.
+   *
+   * IT PERFORMS NO WRITE WHEN THERE IS NOTHING TO DELETE, which is what keeps an unauthenticated
+   * caller from spending D1 capacity. A forged credential never reaches this function at all: the
+   * MAC is checked first (`session-credential.ts`), so it costs one HMAC and no database read.
+   *
+   * THE PRINCIPAL FOR THE RESERVATION COMES FROM THE SESSION ROW, never from the caller. That is
+   * what `ControlPlaneWriteAdmission.reserve` requires — a principal identifier that is
+   * server-derived from a verified credential — and reading the row first is the only way to
+   * obtain one here.
+   */
+  revokeSession(sessionId: string): Promise<Result<void>>;
 };
 
 export type SessionResolverDependencies = {
@@ -239,6 +300,63 @@ export type SessionResolverDependencies = {
 /** RFC 3339 strings from `toRfc3339Utc` are lexicographically ordered, so this is a comparison. */
 function isExpired(session: SessionRecord, nowMs: number): boolean {
   return session.expiresAt <= toRfc3339Utc(nowMs);
+}
+
+/**
+ * The refusal for a principal present in BOTH `platform_operator` and `organization_membership`.
+ *
+ * ===========================================================================================
+ * A NAMED INTERNAL MARKER. "An internal error type is not a wire code" — Team Lead ruling,
+ * 2026-09-05. THE WIRE CODE IT RENDERS TO IS A PROPERTY OF THE REQUEST CLASS, NOT OF THE RULE.
+ * ===========================================================================================
+ *
+ * `platform-operator-v1` states BOTH halves, in two different sections, and they name two
+ * different codes:
+ *
+ *   §`errors.forbidden`      — on a PLATFORM ROUTE, four causes including this one receive "the
+ *                              identical argument-free forbidden. The four are indistinguishable."
+ *   §`testRequirements`      — "denied on every platform route AND on every Action, WITH CODES
+ *                              IDENTICAL TO AN UNKNOWN PRINCIPAL."
+ *
+ * On the Action path an unknown principal receives `unauthenticated` — that is `liveSession`'s
+ * existing four-way collapse, which §`errors.unauthenticated` describes as "unchanged". So the
+ * contract asks for `forbidden` on one class and `unauthenticated` on the other, and BOTH are
+ * satisfied only by rendering per class:
+ *
+ *   PLATFORM ROUTES  `forbidden`      — applied by `platform/platform-authority.ts`, which
+ *                                       `resolvePrincipalId` defers to. It also equalises the
+ *                                       WORK across all four causes, which refusing here could
+ *                                       not: this function has issued two statements, and the
+ *                                       other three causes issue two more.
+ *   ACTION PATH      `unauthenticated` — applied below, joining the four conditions this function
+ *                                       already collapses.
+ *
+ * NEITHER CHOICE IS A GLOBALLY TIGHTER COLLAPSE, WHICH IS WHY THE CLASS DECIDES. Whichever code
+ * is used, it hides among that path's refusals and stands out from the other path's. What matters
+ * is that within each class the causes are indistinguishable from one another, and per-class
+ * rendering is the only arrangement that achieves that on both.
+ *
+ * SO WHAT DOES THE NAME BUY, given each value is an ordinary shared constant? One grep. This is
+ * the state that "means something is already wrong" — unreachable through Dudo's own code, so a
+ * principal that lands here arrived through direct database access, a partially applied migration,
+ * or a restore from two backups taken at different moments. When an alerting channel exists, THIS
+ * is the call site it hooks, and it is already named and already in one place.
+ *
+ * IT IS DELIBERATELY NOT A NEW `ErrorCode`. `kernel/errors.ts`'s taxonomy is closed and is
+ * contract surface (`packages/contracts/common/error-envelope.schema.json`) that this agent does
+ * not author; and a distinct code would be exactly the distinguishing signal both collapses exist
+ * to remove. The marker is internal in the only sense that matters — it names the branch, not the
+ * response.
+ *
+ * THE PLATFORM CLASS'S RENDERING IS NOT IN THIS FILE, AND IS DELIBERATELY NOT AN EXPORT HERE.
+ * `platform/platform-authority.ts` refuses the state itself, with `forbidden()`, from its OWN two
+ * reads — which is what equalises the work across all four platform causes as well as the value.
+ * An exported-but-uncalled sibling here would be a second definition nothing invokes, which is the
+ * shape `M-1` already flags elsewhere in this slice; a pointer costs nothing and cannot rot into
+ * dead code.
+ */
+function authorityConflictRefusal(): CoreError {
+  return unauthenticated();
 }
 
 export function createSessionResolver(
@@ -262,13 +380,37 @@ export function createSessionResolver(
    * All three are facts about the caller's own credential, so the collapse costs nothing and
    * removes three branches that could otherwise drift apart.
    */
-  async function liveSession(
+  /**
+   * Steps 1 and 2 WITHOUT the mutual-exclusion refusal, returning the two flags instead.
+   *
+   * ===========================================================================================
+   * IT EXISTS BECAUSE THE REFUSAL'S *CODE* IS A PROPERTY OF THE REQUEST CLASS, NOT OF THE RULE.
+   * ===========================================================================================
+   *
+   * `platform-operator-v1` requires the four platform denial causes — no operator row, an
+   * unrecognised role, a role lacking the permission, and A PRINCIPAL IN BOTH TABLES — to be
+   * INDISTINGUISHABLE FROM ONE ANOTHER, and the value it names is `forbidden`. The Action path's
+   * "unknown principal" collapse is `unauthenticated`. **The same rule therefore has to answer
+   * with two different codes depending on who is asking**, or one of the two collapses breaks.
+   *
+   * `qa-agent` caught exactly that: an earlier version of this file refused inside `liveSession`,
+   * so a both-tables principal received `unauthenticated` on a platform route where the contract
+   * requires `forbidden` — which made the fourth cause distinguishable from the other three by
+   * status code alone, and re-opened the probe the collapse exists to close.
+   *
+   * SO THE FACT IS PRODUCED HERE AND THE REFUSAL IS APPLIED BY THE CALLER. There are exactly two
+   * callers, they are both immediately below, and neither can forget: `liveSession` refuses with
+   * the Action code, and `resolvePrincipalId` hands the principal to
+   * `platform/platform-authority.ts`, which refuses with the platform code and with equalised work.
+   */
+  async function liveSessionUnrefused(
     sessionId: string,
   ): Promise<
     Result<{
       session: SessionRecord;
       principalId: string;
       principalType: ControlPlanePrincipalType;
+      inBothTables: boolean;
     }>
   > {
     const found = await store.findSession(sessionId);
@@ -291,7 +433,70 @@ export function createSessionResolver(
       session,
       principalId: principal.principalId,
       principalType: principal.principalType,
+      // THE CONJUNCTION, COMPUTED ONCE. Writing it as either flag alone is the mistake to avoid:
+      // `isPlatformOperator` alone locks out every legitimate operator, `holdsMembership` alone
+      // refuses every ordinary user. Only the pair is the defect. Both come from the
+      // `findPrincipal` statement that already ran, so this costs no read.
+      inBothTables: principal.isPlatformOperator && principal.holdsMembership,
     });
+  }
+
+  async function liveSession(
+    sessionId: string,
+  ): Promise<
+    Result<{
+      session: SessionRecord;
+      principalId: string;
+      principalType: ControlPlanePrincipalType;
+    }>
+  > {
+    const live = await liveSessionUnrefused(sessionId);
+    if (!live.ok) {
+      return err(live.error);
+    }
+    const { session, principalId, principalType, inBothTables } = live.value;
+
+    // =========================================================================================
+    // THE MUTUAL EXCLUSION, ACTION SIDE. `docs/decisions/0025` decision 1 · `docs/decisions/0024`
+    // as amended 2026-09-05 · `platform-operator-v1`, `theMutualExclusionInvariant`.
+    // =========================================================================================
+    //
+    // "A PRINCIPAL APPEARING IN BOTH IS REFUSED EVERYWHERE — not resolved in favour of either, not
+    // treated as a platform operator, not treated as a tenant member. BOTH ITS PLATFORM ROUTES AND
+    // ITS ACTIONS DENY."
+    //
+    // The platform half is `platform/platform-authority.ts`, which refuses the same state with
+    // `forbidden` because that is ITS class's collapse. THIS IS THE ACTION HALF, and it covers
+    // every entry point that goes through `liveSession`: `resolve`, `listEnterableOrganizations`
+    // and `selectOrganization`. `resolvePrincipalId` deliberately does NOT — see
+    // `liveSessionUnrefused` above, and see below for why that is not a gap.
+    //
+    // THE CODE IS THIS CLASS'S, NOT THE RULE'S — see `authorityConflictRefusal`. On the Action
+    // path an unknown principal receives `unauthenticated`, and `platform-operator-v1`
+    // §`testRequirements` requires this refusal to carry "codes identical to an unknown
+    // principal". The platform class renders the SAME marker as `forbidden`, because that is the
+    // value its own four-way collapse uses.
+    //
+    // THE CONSOLE LOOP THE TEAM LEAD IDENTIFIED IS ON THE PLATFORM SIDE AND IS CLOSED THERE:
+    // `admin-shell` maps 401 to "anonymous" and renders the sign-in form, which for a principal
+    // that will be refused again "builds a loop that cannot terminate". The admin console reaches
+    // Core ONLY through platform routes, and those answer `forbidden`, which `admin-shell` gives a
+    // screen of its own.
+    //
+    // IT COSTS NOTHING EXTRA. Both flags come from the `findPrincipal` statement that already ran;
+    // see `d1-control-plane-store.ts`. This is not a new read.
+    //
+    // *** REACHING THIS BRANCH MEANS SOMETHING IS ALREADY WRONG. *** Dudo's own code cannot create
+    // the state — `0010`'s four triggers refuse it on INSERT and UPDATE in both directions,
+    // verified against a real D1 — so a principal that lands here arrived by direct database
+    // access, a partially applied migration, or a restore from two backups taken at different
+    // moments. Those are exactly the three cases `0025` names as the reason the authorization
+    // check exists at all, and they are why this is not dead code.
+    if (inBothTables) {
+      return err(authorityConflictRefusal());
+    }
+
+    return ok({ session, principalId, principalType });
   }
 
   /**
@@ -376,7 +581,21 @@ export function createSessionResolver(
           principalId,
           principalType,
           organizationId,
-          authorizedBusinessIds: authorized.value.authorizedBusinessIds,
+          // ===================================================================================
+          // EMPTY HERE, AND COMPLETED BY THE PIPELINE. `docs/decisions/0020`.
+          //
+          // This is §C.5's authorized ORGANIZATION context. The authorized BUSINESS set is the
+          // step after `TenantStoreResolver`, because it is a read of the tenant's own `business`
+          // table and there is no tenant store at this point in the order. `0020` calls this a
+          // SPLIT rather than a reordering, and the distinction matters: nothing about when
+          // authorization happens has moved. Two things with different dependencies were bundled
+          // into one step, and they are now two steps.
+          //
+          // Leaving it empty is safe in the only direction that counts — a principal that somehow
+          // reached a handler without being completed is authorized over nothing.
+          // ===================================================================================
+          authorizedBusinessIds: [],
+          businessScope: 'organization',
           grants: authorized.value.grants,
           // Delegation is `AUTHORIZATION_STANDARD.md` §11 and is not part of `0014` §C. A
           // session cannot express "acting for", and inventing a column for it here would be
@@ -384,6 +603,37 @@ export function createSessionResolver(
           onBehalfOfPrincipalId: null,
         }),
       });
+    },
+
+    async resolvePrincipalId(sessionId: string): Promise<Result<string>> {
+      // Steps 1 and 2, and then it STOPS. No membership read, no authorization source, no
+      // `AuthenticatedPrincipal`, no organization identifier — see the port's documentation for
+      // why each of those absences matters to the class that calls this.
+      //
+      // =====================================================================================
+      // IT USES `liveSessionUnrefused`, SO A BOTH-TABLES PRINCIPAL IS **NOT** REFUSED HERE. THAT
+      // IS DELIBERATE AND IT IS THE OPPOSITE OF A GAP.
+      // =====================================================================================
+      //
+      // The only caller is the platform route class, and `platform/platform-authority.ts` refuses
+      // that principal one step later with `forbidden` — the value `platform-operator-v1` names,
+      // identical to the other three platform denial causes, from the same two statements so the
+      // work is equal too.
+      //
+      // REFUSING HERE INSTEAD WOULD ANSWER `unauthenticated`, WHICH IS A DIFFERENT STATUS CODE
+      // FROM THE OTHER THREE CAUSES — and a caller that can tell "I am in both tables" from "I
+      // have no operator row" can use a platform route to probe `organization_membership`, which
+      // is precisely the probe the contract's four-way collapse exists to close. `qa-agent` caught
+      // that regression; this line is the fix.
+      //
+      // THE PRINCIPAL IS NEVER *ADMITTED* BY THIS FUNCTION. It returns an identifier, and an
+      // identifier grants nothing: every platform route resolves authority before it does anything
+      // else, and there is no path from here to a handler that skips it.
+      const live = await liveSessionUnrefused(sessionId);
+      if (!live.ok) {
+        return err(live.error);
+      }
+      return ok(live.value.principalId);
     },
 
     async listEnterableOrganizations(sessionId: string): Promise<Result<readonly string[]>> {
@@ -458,6 +708,15 @@ export function createSessionResolver(
         // hold, or holds as suspended. Fail closed and disclose nothing.
         return err(unauthenticated());
       }
+      // THE MUTUAL EXCLUSION AT LOGIN. `issueSession` reads the principal directly rather than
+      // through `liveSession` — it has no session yet — so the check is repeated here rather than
+      // inherited. Without it a principal in both tables would be refused on every subsequent
+      // request and still receive a session cookie at login, which is the confusing half of a
+      // refusal rather than a milder one. Same conjunction, same argument-free
+      // `unauthenticated()`, same statement it was already read from. See `liveSession`.
+      if (principal.isPlatformOperator && principal.holdsMembership) {
+        return err(authorityConflictRefusal());
+      }
 
       // The hint, validated before anything is reserved or written — same ordering argument as
       // `selectOrganization`, and the same three observable cases.
@@ -508,6 +767,52 @@ export function createSessionResolver(
         return err(written.error);
       }
       return ok(record);
+    },
+
+    async revokeSession(sessionId: string): Promise<Result<void>> {
+      // ---- The row is read first, and NOT through `liveSession`.
+      //
+      // `liveSession` refuses an expired session and a suspended principal, which is right for
+      // authentication and wrong here. A SUSPENDED PRINCIPAL MUST STILL BE ABLE TO HAVE ITS
+      // SESSION DELETED — suspension is exactly when you want the live credential gone — and an
+      // expired session's row is still a row that retention would otherwise have to collect.
+      // Reading directly keeps logout working in both states.
+      const found = await store.findSession(sessionId);
+      if (!found.ok) {
+        return err(found.error);
+      }
+      const session = found.value;
+      if (session === null) {
+        // NOTHING TO DELETE, AND NO WRITE. This is the branch an attacker with a guessed
+        // identifier reaches, and it must cost nothing and disclose nothing. `ok` is returned
+        // rather than an error precisely so that a caller cannot tell it apart from a successful
+        // revocation — the token-validity oracle above.
+        return ok(undefined);
+      }
+
+      // A DELETE COSTS THE SAME 3 ROW-WRITES AS AN INSERT, and the reason is worth keeping next
+      // to the number: removing a row removes its entry from EVERY index, so the table row, the
+      // primary key and `session_by_principal` are all written. `control-plane-admission.ts`
+      // records it as "session revocation — 1 statement, 3 true, 3 charged, exact".
+      const admitted = await admission.reserve({
+        principalId: session.principalId,
+        estimatedRowWrites: SESSION_ROW_WRITES,
+        nowMs: clock.nowMs(),
+      });
+      if (!admitted.ok) {
+        return err(admitted.error);
+      }
+      if (admitted.value.kind === 'deferred') {
+        // THE DAILY CEILING CAN REFUSE A LOGOUT, and that is a genuine consequence rather than an
+        // oversight: at the platform ceiling nothing writes, including this. The session still
+        // expires on its own at 12 hours, and rotating `SESSION_HMAC_KEY` remains the bulk
+        // revocation of last resort. The handler collapses this to `acknowledged`, so a caller
+        // is told the same thing either way — which means A REFUSED LOGOUT IS INVISIBLE TO THE
+        // USER. Reported; it is the price of the collapse, not a defect in it.
+        return err(quotaExceeded());
+      }
+
+      return store.deleteSession(sessionId, admitted.value.reservation);
     },
   };
 }

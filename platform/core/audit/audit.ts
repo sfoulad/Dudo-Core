@@ -116,6 +116,45 @@ export function deriveActorBusinessContext(
 }
 
 /**
+ * ===========================================================================================
+ * THE SECOND CONSTRUCTOR, AND IT TAKES NOTHING. For a PLATFORM OPERATOR, which has no
+ * `AuthenticatedPrincipal` and no Business context at all. `organization-onboarding-v1`.
+ * ===========================================================================================
+ *
+ * ONBOARDING WRITES A TENANT-SIDE AUDIT RECORD (step 7) AND ITS ACTOR IS A PLATFORM OPERATOR.
+ * `PlatformAuthority` is deliberately a smaller type than `AuthenticatedPrincipal` — no
+ * `organizationId`, no `authorizedBusinessIds` — which is `0025` decision 3's P1 expressed as a
+ * type. So `deriveActorBusinessContext` cannot be called: there is no principal to read a field
+ * off, and there must not be.
+ *
+ * *** ADDING A SECOND CONSTRUCTOR TO A BRAND IS THE `M-1` MISTAKE IF IT IS DONE CARELESSLY, SO
+ * NOTE WHAT THIS ONE CANNOT DO. *** It takes **no parameters**. There is no argument through
+ * which a Business identifier could enter, no array to copy, and no object to read. **It can
+ * only ever produce the empty context**, which is not a claim it could get wrong — an operator
+ * genuinely has authority over no Business in the Organization it just created, and that is the
+ * property `theOPERATORSTILLCANNOTENTER` rests on.
+ *
+ * WHY NOT WIDEN `deriveActorBusinessContext` TO ACCEPT A UNION. Because a function taking
+ * `AuthenticatedPrincipal | PlatformAuthority` has a branch, and the branch is where a future
+ * edit reads `authorizedBusinessIds` off "whichever one has it". Two constructors with disjoint
+ * signatures — one that takes a principal, one that takes nothing — have no branch to get wrong.
+ *
+ * IT IS NOT EXPORTED AS A GENERAL "EMPTY CONTEXT" HELPER, and the name says who may use it. An
+ * `emptyActorBusinessContext()` would be reached for by any caller that found the real one
+ * inconvenient, which is exactly how a guard becomes optional.
+ */
+export function derivePlatformOperatorActorContext(): ActorBusinessContext {
+  const derived: string[] = [];
+  Object.defineProperty(derived, ACTOR_BUSINESS_CONTEXT_BRAND, {
+    value: true,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return Object.freeze(derived) as unknown as ActorBusinessContext;
+}
+
+/**
  * Thrown, not returned, for the same reason as `AuditValueLeakError`: an unbranded value here
  * means some code path assembled an actor context out of something that was not the
  * authenticated principal, and the whole point is that it must not be written and noticed

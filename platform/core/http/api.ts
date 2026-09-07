@@ -67,6 +67,25 @@ import { retryAfterSecondsUntilReset } from '../protection/write-admission.ts';
 import type { PreAuthDependencies } from '../identity/pre-auth-admission.ts';
 import { dispatchPreAuthRequest } from '../identity/pre-auth-admission.ts';
 import { matchPreAuthEntryPoint } from '../identity/pre-auth-registry.ts';
+import type { SessionRouteDependencies } from '../identity/session-routes.ts';
+import { dispatchSessionRoute, matchSessionRoute } from '../identity/session-routes.ts';
+import type { PlatformRouteDependencies } from '../platform/platform-routes.ts';
+import {
+  dispatchPlatformRoute,
+  isPlatformHost,
+  matchPlatformRoute,
+} from '../platform/platform-routes.ts';
+import { CORE_APP_PERMISSIONS, CORE_BASE_PATH, createCoreRouter } from './core-routes.ts';
+
+/**
+ * Core's own route table, built once at module load exactly as an App's router is.
+ *
+ * IT IS A MODULE CONSTANT RATHER THAN A DEPENDENCY, and that is deliberate: Core's Actions are
+ * not optional, not composable and not something a deployment may omit or substitute. Every
+ * deployment has them, which is `docs/decisions/0023`'s reason for putting them in Core rather
+ * than in an App's router in the first place.
+ */
+const coreRouter = createCoreRouter();
 import { buildPreAuthRequest, renderPreAuthResolution } from './pre-auth-http.ts';
 
 export type ApiDependencies = PipelineDependencies & {
@@ -89,6 +108,25 @@ export type ApiDependencies = PipelineDependencies & {
    * `http/adapters/worker-entry.ts` already refuses to make for the authenticated path.
    */
   readonly preAuth?: PreAuthDependencies;
+  /**
+   * THE SESSION ROUTE CLASS. `docs/decisions/0021`. Optional here, and absent means the two
+   * routes are UNREACHABLE — not open: `not_found`, exactly as an unregistered path gets.
+   *
+   * Composed by `identity/composition.ts`, which is the only place that holds both the session
+   * resolver and the credential reader these need.
+   */
+  readonly sessionRoutes?: SessionRouteDependencies;
+  /**
+   * THE PLATFORM ROUTE CLASS. `docs/decisions/0025`. Optional here, and absent means the routes
+   * are UNREACHABLE — not open: `not_found`, exactly as an unregistered path gets.
+   *
+   * Composed by `platform/composition.ts`, which is the only place that holds the platform store,
+   * the credential reader and the admission port these need.
+   *
+   * IT CARRIES ITS OWN HOST LIST, and the block below refuses on a host outside it. Both halves
+   * matter: an uncomposed runtime and a request on `app.dudo.work` answer the identical 404.
+   */
+  readonly platformRoutes?: PlatformRouteDependencies;
 };
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
@@ -181,6 +219,11 @@ export async function handleRequest(
       buildPreAuthRequest(
         bodyText,
         request,
+        // THE ENTRY-POINT ID IS PASSED SO THE TRANSPORT CAN DECIDE WHETHER THIS ROUTE MAY SEE
+        // `Authorization` (docs/decisions/0018 §A). It is the value Core matched against its own
+        // frozen registry a few lines above — never anything the caller supplied — so it cannot
+        // be steered to widen the allow-list.
+        preAuthEntryPoint.id,
         origin.sourceAddressHash,
         requestId,
         correlationId,
@@ -189,12 +232,186 @@ export async function handleRequest(
     return renderPreAuthResolution(resolution, requestId, correlationId);
   }
 
-  if (!url.pathname.startsWith(basePath)) {
-    return renderError(notFound(), requestId, correlationId);
+  // ===========================================================================================
+  // THE SESSION ROUTE CLASS. `docs/decisions/0021`. Matched AFTER the pre-authentication registry
+  // and BEFORE the App router, and both sides of that position are deliberate.
+  // ===========================================================================================
+  //
+  // AFTER PRE-AUTH: the five entry points are a closed set that must not be shadowed, and their
+  // paths are exact, so anything reaching here is not one of them.
+  //
+  // BEFORE THE APP ROUTER AND BEFORE THE `basePath` TEST: these are ABSOLUTE `/auth/**` paths, not
+  // App-relative ones. They sit under a reserved prefix, so `assertNoReservedPathCollision`
+  // already refuses any App route table that could resolve onto them — an App cannot serve,
+  // shadow, or present itself as the Organization picker.
+  //
+  // NOTHING BELOW THIS BLOCK RUNS FOR A SESSION ROUTE. No principal is resolved, no tenant store
+  // is obtained, no permission is evaluated and `invokeAction` is never called. That is `0021`'s
+  // whole decision expressed as control flow: an Action always has a tenant, and these are not
+  // Actions.
+  const sessionRoute = matchSessionRoute(request.method, url.pathname);
+  if (sessionRoute !== undefined) {
+    if (dependencies.sessionRoutes === undefined) {
+      // Registered but not composed: unreachable, exactly as an unregistered path is.
+      return renderError(notFound(), requestId, correlationId);
+    }
+    let sessionBodyText = '';
+    if (METHODS_WITH_BODY.has(request.method)) {
+      try {
+        sessionBodyText = await request.text();
+      } catch {
+        return renderError(
+          invalidArgument([detail('', 'must_be_valid_json')]),
+          requestId,
+          correlationId,
+        );
+      }
+    }
+    const outcome = await dispatchSessionRoute(dependencies.sessionRoutes, sessionRoute, {
+      bodyText: sessionBodyText,
+      headers: new Map(
+        [...request.headers.entries()].map(([name, value]) => [name.toLowerCase(), value]),
+      ),
+      // THE RAW QUERY STRING, REFUSED WHOLESALE BY THE DISPATCHER. Neither route declares a query
+      // parameter, and `0021` is explicit that without this the one route in Dudo that accepts a
+      // tenant identifier would be the one route with no input validation.
+      queryString: url.search.startsWith('?') ? url.search.slice(1) : url.search,
+      requestId,
+      correlationId,
+    });
+    if (!outcome.ok) {
+      return renderError(outcome.error, requestId, correlationId);
+    }
+    // 200 for both. Neither route creates a resource — selection MOVES the row behind an existing
+    // session rather than making one — so a 201 would misdescribe it.
+    return renderSuccess(outcome.value, 200, requestId, correlationId);
   }
-  const routePath = url.pathname.slice(basePath.length);
 
-  const matched = router.match(request.method, routePath);
+  // ===========================================================================================
+  // THE PLATFORM ROUTE CLASS. `docs/decisions/0025`. Matched AFTER the session routes and BEFORE
+  // Core's own Actions and the App router.
+  // ===========================================================================================
+  //
+  // BEFORE THE `basePath` TEST AND BEFORE BOTH ROUTERS: these are ABSOLUTE `/api/v1/platform/**`
+  // paths. The prefix sits in `RESERVED_PRE_AUTH_PATH_PREFIXES`, so
+  // `assertNoReservedPathCollision` refuses at CONSTRUCTION any App route table that could
+  // resolve onto them, and this block answers first at RUNTIME. Both halves are needed: an App
+  // that could serve a path here could present itself to an operator as the admin console.
+  //
+  // THE HOST BINDING IS CHECKED HERE AND IT ANSWERS 404, NOT 403. `docs/decisions/0022` as
+  // amended made admin a SECOND WORKER with THE SAME `main`, so this route table is present in
+  // both deployments; without this test `/api/v1/platform/**` would be reachable on
+  // `app.dudo.work`, where every tenant user already has a session. It would still be REFUSED
+  // there — authorization runs on the `platform_operator` row and not on the hostname — so this
+  // is not a hole, but it is an unnecessary surface that exists purely as a side effect of a
+  // deployment decision taken for an unrelated reason.
+  //
+  // 404 RATHER THAN 403 BECAUSE ANSWERING 403 WOULD CONFIRM THE ROUTE EXISTS on a host where it
+  // should not appear to. The same choice `organization-selection-v1` makes when it requires GET
+  // on the singular path to be 404 rather than 405.
+  //
+  // *** THE AUTHORIZATION CHECK IS THE CONTROL; THIS IS A SECOND LAYER AND MUST NEVER BECOME THE
+  // FIRST. *** An implementation that bound the host and skipped the `platform_operator` check
+  // would be relying on routing for authorization, which is "UI hiding is presentation, never
+  // security" moved down a layer.
+  //
+  // NOTHING BELOW THIS BLOCK RUNS FOR A PLATFORM ROUTE. No `AuthenticatedPrincipal` is built, no
+  // tenant store is obtained, and `invokeAction` is never called. That is `0025` decision 3 as
+  // control flow: an Action always has a tenant, and these are not Actions.
+  const platformRoute = matchPlatformRoute(request.method, url.pathname);
+  if (platformRoute !== undefined) {
+    if (
+      dependencies.platformRoutes === undefined ||
+      !isPlatformHost(dependencies.platformRoutes.adminHosts, url.hostname)
+    ) {
+      // Uncomposed, or the wrong host. ONE ANSWER FOR BOTH, so a caller cannot tell a deployment
+      // that does not serve this class from a host that does not.
+      return renderError(notFound(), requestId, correlationId);
+    }
+    let platformBodyText = '';
+    if (METHODS_WITH_BODY.has(request.method)) {
+      try {
+        platformBodyText = await request.text();
+      } catch {
+        return renderError(
+          invalidArgument([detail('', 'must_be_valid_json')]),
+          requestId,
+          correlationId,
+        );
+      }
+    }
+    const platformOutcome = await dispatchPlatformRoute(
+      dependencies.platformRoutes,
+      platformRoute.route,
+      {
+        // DECLARED `{name}` SEGMENTS, ALREADY VALIDATED BY THE MATCHER against the platform
+        // identifier grammar — a value that could not be an identifier never reached this line.
+        // They are passed separately from the body and never merged into it: `mergeInputSources`
+        // exists for the Action path, and merging here would let a body field and a path segment
+        // of the same name shadow one another, which is a precedence rule and therefore a way for
+        // a caller to shadow a value a reviewer assumed was authoritative.
+        pathParams: platformRoute.pathParams,
+        bodyText: platformBodyText,
+        headers: new Map(
+          [...request.headers.entries()].map(([name, value]) => [name.toLowerCase(), value]),
+        ),
+        // THE RAW QUERY STRING. The class parses it against the route's DECLARED parameter set
+        // and refuses the whole string for a route that declares none — it is not merged into an
+        // Action input, because there is no Action here.
+        queryString: url.search.startsWith('?') ? url.search.slice(1) : url.search,
+        requestId,
+        correlationId,
+      },
+    );
+    if (!platformOutcome.ok) {
+      return renderError(platformOutcome.error, requestId, correlationId);
+    }
+    // THE ROUTE'S DECLARED STATUS, from the route table. It was a literal 200 while every route in
+    // the class was a read; `platform.organizations.create` answers 201, and rederiving that from
+    // the method here would also have changed the challenge route and `templates.create`, both of
+    // which are POSTs their contracts declare as 200.
+    return renderSuccess(
+      platformOutcome.value,
+      platformRoute.route.successStatus,
+      requestId,
+      correlationId,
+    );
+  }
+
+  // ===========================================================================================
+  // CORE'S OWN ACTIONS, AHEAD OF THE APP ROUTER. `docs/decisions/0023`.
+  // ===========================================================================================
+  //
+  // `core.ListAuthorizedBusinesses` and `core.ResolveBusinessReferences` are Core's contract
+  // routes, not an App's. They 404'd on the live deployment because `/api/v1/businesses` does not
+  // start with the App's `/api/v1/apps/customers`, so it failed the base-path test below.
+  //
+  // THE MATCH IS TRIED FIRST AND FALLS THROUGH ON A MISS RATHER THAN ANSWERING 404. Core's base
+  // path `/api/v1` is a PREFIX of the App's, so a Core block that claimed every path under it
+  // would swallow every App route. Falling through is what keeps the two tables independent.
+  //
+  // EVERYTHING BELOW THIS POINT IS SHARED — authentication, body parsing, the repeated-parameter
+  // refusal, input merging, and `invokeAction`. A Core Action gets the identical pipeline an App
+  // Action gets, including the tenant store and the permission evaluation, because
+  // `architecture-agent`'s test is that anything touching tenant data is always an Action. The
+  // only thing that varies is WHICH ENVELOPE declares the ceiling.
+  let envelope = app;
+  let matched = coreRouter.match(
+    request.method,
+    url.pathname.startsWith(CORE_BASE_PATH) ? url.pathname.slice(CORE_BASE_PATH.length) : '',
+  );
+  if (matched.kind === 'none') {
+    if (!url.pathname.startsWith(basePath)) {
+      return renderError(notFound(), requestId, correlationId);
+    }
+    matched = router.match(request.method, url.pathname.slice(basePath.length));
+  } else {
+    // CORE'S OWN ENVELOPE, AND ONLY FOR A ROUTE CORE'S OWN FROZEN TABLE MATCHED. It is not a
+    // bypass: the ceiling still binds, the principal must still hold the permission at a
+    // reaching scope, and this envelope declares exactly one permission so it cannot serve as a
+    // ceiling for anything else. See `http/core-routes.ts`.
+    envelope = CORE_APP_PERMISSIONS;
+  }
 
   if (matched.kind === 'none') {
     // An unmatched path and an unmatched method both answer not_found. There is no
@@ -284,7 +501,8 @@ export async function handleRequest(
     matched.route.action,
     {
       principal: principal.value,
-      app,
+      // The App's envelope, or Core's when Core's own frozen table matched the route.
+      app: envelope,
       requestId,
       correlationId,
       sourceAddressHash: origin.sourceAddressHash,

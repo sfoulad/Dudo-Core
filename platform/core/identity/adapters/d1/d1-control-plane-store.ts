@@ -51,12 +51,14 @@ import type { Result } from '../../../kernel/result.ts';
 import { err, ok } from '../../../kernel/result.ts';
 import { internal, unavailable } from '../../../kernel/errors.ts';
 import type { D1Database } from '../../../storage/adapters/d1/d1-store.ts';
+import { toMembershipRole } from '../../../authorization/roles.ts';
 import type {
   ControlPlanePrincipalType,
   ControlPlaneStores,
   IdentityControlPlaneStore,
   MembershipStatus,
   MembershipWithOrganization,
+  NewOrganizationMembership,
   OrganizationMembershipRecord,
   OrganizationStatus,
   PrincipalRecord,
@@ -65,6 +67,12 @@ import type {
   TenantDirectoryRecord,
   TenantDirectoryStore,
 } from '../../control-plane-store.ts';
+import type { MembershipAdmission } from '../../../platform/platform-authority.ts';
+// A VALUE import, and the direction is deliberate: the adapter reaches INTO the platform module
+// for the verifier, while `control-plane-store.ts` takes only the erased TYPE. There is no
+// runtime cycle — `platform-authority.ts`'s own value imports are the kernel and
+// `platform-permissions.ts`, neither of which reaches back here.
+import { consumeMembershipAdmission } from '../../../platform/platform-authority.ts';
 import type { ControlPlaneWriteReservation } from '../../control-plane-admission.ts';
 import { consumeControlPlaneWriteReservation } from '../../control-plane-admission.ts';
 
@@ -99,6 +107,24 @@ function text(row: SqlRow, column: string): string | null {
 function requiredText(row: SqlRow, column: string): string | null {
   const value = text(row, column);
   return value === null || value === '' ? null : value;
+}
+
+/**
+ * Reads a SQL `EXISTS` result as a boolean, TRUE ONLY FOR AN EXACT 1.
+ *
+ * `Boolean(value)` would be wrong in the dangerous direction and the difference is not theoretical:
+ * every non-empty string is truthy in JavaScript, so a driver returning `'0'` as text would make
+ * `Boolean('0')` be `true` — which for `holds_membership` reads a compliant operator as violating
+ * (annoying) and for a future inverted use would read a violating one as compliant (a hole).
+ *
+ * ANYTHING THAT IS NOT 1 OR '1' IS `false`. `null`, `undefined`, an absent column and an
+ * unexpected type all collapse to `false`, which for these two flags is the SAFE direction only
+ * because the refusal is on their CONJUNCTION — see `PrincipalRecord`. If either flag is ever used
+ * alone, this default has to be re-examined.
+ */
+function flag(row: SqlRow, column: string): boolean {
+  const value = row[column];
+  return value === 1 || value === '1' || value === true;
 }
 
 /**
@@ -184,11 +210,33 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
     },
 
     async findPrincipal(principalId: string): Promise<Result<PrincipalRecord | null>> {
-      // Point lookup on the primary key of `principal`.
+      // =====================================================================================
+      // Point lookup on the primary key of `principal`, PLUS the two mutual-exclusion flags.
+      // `docs/decisions/0025` decision 1, `docs/decisions/0024` as amended 2026-09-05.
+      // =====================================================================================
+      //
+      // ONE STATEMENT, NOT THREE. Both flags are correlated `EXISTS` subqueries against primary-key
+      // indexes — `platform_operator(principal_id)` and `organization_membership(principal_id, …)`,
+      // whose leading column is `principal_id` for exactly this shape. This statement already ran
+      // on every authenticated request, so THE ACTION-SIDE MUTUAL-EXCLUSION CHECK COSTS NO
+      // ADDITIONAL ROUND TRIP AND NO ADDITIONAL STATEMENT. A separate port method would have cost
+      // one of each, on the hottest path in the platform, which is why it is not one.
+      //
+      // `EXISTS` RATHER THAN `COUNT(*)`: the engine stops at the first matching index entry, so a
+      // principal in fifty Organizations costs the same as one in a single Organization.
+      //
+      // IT REQUIRES CONTROL-PLANE MIGRATION 0008. A database without `platform_operator` makes
+      // this statement fail, `selectRows` returns `unavailable()`, and NOTHING AUTHENTICATES. That
+      // is the same coupling `0007_membership_role.sql` already created by adding `role` to the
+      // membership projection, and it is the correct direction: a build whose isolation check
+      // cannot run must refuse rather than proceed without it.
       const rows = await selectRows(
         database,
-        'SELECT principal_id, principal_type, status FROM principal WHERE principal_id = ? LIMIT 1',
-        [principalId],
+        'SELECT principal_id, principal_type, status, ' +
+          'EXISTS (SELECT 1 FROM platform_operator WHERE principal_id = ?) AS is_platform_operator, ' +
+          'EXISTS (SELECT 1 FROM organization_membership WHERE principal_id = ?) AS holds_membership ' +
+          'FROM principal WHERE principal_id = ? LIMIT 1',
+        [principalId, principalId, principalId],
       );
       if (!rows.ok) {
         return err(rows.error);
@@ -203,7 +251,17 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       if (id === null || principalType === null || status === null) {
         return err(internal());
       }
-      return ok({ principalId: id, principalType, status });
+      return ok({
+        principalId: id,
+        principalType,
+        status,
+        // `EXISTS` yields the integer 1 or 0. COMPARED AGAINST 1 RATHER THAN COERCED WITH
+        // `Boolean(...)`: every non-empty string is truthy, so a driver that returned '0' as text
+        // would make an operator-with-a-membership read as compliant — the fail-OPEN direction on
+        // the one flag whose whole purpose is to fail closed.
+        isPlatformOperator: flag(row, 'is_platform_operator'),
+        holdsMembership: flag(row, 'holds_membership'),
+      });
     },
 
     async findMembershipWithOrganization(
@@ -232,9 +290,14 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       // it would open the `organization` table on the failing path — one edit away from a LEFT
       // JOIN that reports "the Organization exists but you are not a member", which is the
       // oracle written out in full. Two statements with an early return cannot drift that way.
+      // `role` JOINS THE PROJECTION AND CHANGES NOTHING ELSE (docs/decisions/0019). It is still
+      // ONE statement against ONE table filtered on `status = 'active'`, so the anti-oracle
+      // argument above is untouched: a non-member, a suspended member and a caller naming a
+      // non-existent Organization still produce the same result from the same work. Adding a
+      // column to a projection reads no additional row.
       const membershipRows = await selectRows(
         database,
-        'SELECT principal_id, organization_id, status FROM organization_membership ' +
+        'SELECT principal_id, organization_id, status, role FROM organization_membership ' +
           "WHERE principal_id = ? AND organization_id = ? AND status = 'active' LIMIT 1",
         [principalId, organizationId],
       );
@@ -283,6 +346,14 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
           principalId: memberPrincipalId,
           organizationId: memberOrganizationId,
           status: membershipStatus,
+          // AN UNRECOGNISED ROLE COLLAPSES TO `null`, WHICH DENIES — it is NOT validated with
+          // `enumeration()` and NOT reported as `internal()` like the other stored enumerations
+          // in this file. The distinction is deliberate and it is the same one
+          // `d1-credential-store.ts` makes for an unrecognised credential algorithm: a value a
+          // FUTURE migration introduces must fail onto the safe path, so a build older than its
+          // data denies rather than erroring. Failing loudly here would turn a routine
+          // mid-migration state into an outage, and would do it for one principal at a time.
+          role: toMembershipRole(text(membershipRow, 'role')),
         },
         organization: {
           organizationId: memberOrganizationId,
@@ -303,7 +374,7 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
       // `sql-compiler.ts` does, so it cannot carry caller-controlled text.
       const rows = await selectRows(
         database,
-        'SELECT principal_id, organization_id, status FROM organization_membership ' +
+        'SELECT principal_id, organization_id, status, role FROM organization_membership ' +
           `WHERE principal_id = ? ORDER BY organization_id ASC LIMIT ${String(limit)}`,
         [principalId],
       );
@@ -318,7 +389,12 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
         if (rowPrincipalId === null || organizationId === null || status === null) {
           return err(internal());
         }
-        memberships.push({ principalId: rowPrincipalId, organizationId, status });
+        memberships.push({
+          principalId: rowPrincipalId,
+          organizationId,
+          status,
+          role: toMembershipRole(text(row, 'role')),
+        });
       }
       return ok(memberships);
     },
@@ -343,6 +419,265 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
           record.expiresAt,
         ],
       );
+    },
+
+    async createMembership(
+      record: NewOrganizationMembership,
+      reservation: ControlPlaneWriteReservation,
+      admission: MembershipAdmission,
+    ): Promise<Result<void>> {
+      // ---- Layer 1. THE RECEIPT. Throws rather than returning, exactly as
+      // `consumeControlPlaneWriteReservation` does and for the same reason: no client can cause
+      // this, because clients supply values and never receipts. It also binds the receipt to THIS
+      // row's principal, so one minted for A cannot fund a write for B.
+      consumeMembershipAdmission(admission, record.principalId);
+      consumeControlPlaneWriteReservation(reservation, 1);
+
+      // =====================================================================================
+      // ---- Layer 2. THE GUARD IS IN THE STATEMENT, NOT IN FRONT OF IT.
+      // =====================================================================================
+      //
+      // `INSERT ... SELECT ... WHERE NOT EXISTS` re-asks the platform-operator question IN THE
+      // SAME STATEMENT THAT WRITES, which closes the one thing the receipt cannot: the fact it
+      // certifies was true when it was minted, and a principal could be made an operator between
+      // the mint and this line. Here there is no window — the check and the write are one
+      // statement.
+      //
+      // IT COSTS NOTHING. A correlated subquery against `platform_operator`'s primary key, on a
+      // statement that was going to run anyway. No extra round trip and no extra statement.
+      //
+      // AND IT HOLDS ON A DATABASE WHERE `0010` WAS NEVER APPLIED. That is the case
+      // `security-agent` identified as the one the triggers structurally cannot cover — a restore
+      // from two backups taken at different moments does not re-run triggers, and `0010`
+      // deliberately does not validate rows that already exist. This layer does not depend on
+      // that migration at all.
+      //
+      // ---- WHAT IT DOES NOT DO, STATED BECAUSE IT IS THE RESIDUAL.
+      //
+      // A refused write lands ZERO ROWS AND REPORTS `ok`. Core's `D1Database` exposes no
+      // `meta.changes` — `batch` returns `unknown[]` — so this adapter cannot tell "wrote one row"
+      // from "wrote none", and surfacing it would mean widening a Cloudflare-shaped type that
+      // `.claude/rules/architecture.md` §6 requires to stay minimal and replaceable.
+      //
+      // THAT IS ACCEPTABLE ONLY BECAUSE OF LAYER 1, AND THE ORDER OF THE ARGUMENT MATTERS. The
+      // receipt already refused loudly, with a real error, before any of this ran. This branch is
+      // reachable only after someone has deliberately cast past the type — at which point "the
+      // forbidden row was not created" is the property that matters, not the message. A guarded
+      // INSERT as the ONLY layer would be a silent false success and would not be acceptable.
+      return execute(
+        database,
+        'INSERT INTO organization_membership ' +
+          '(principal_id, organization_id, status, role, created_at) ' +
+          'SELECT ?, ?, ?, ?, ? ' +
+          'WHERE NOT EXISTS (SELECT 1 FROM platform_operator WHERE principal_id = ?)',
+        [
+          record.principalId,
+          record.organizationId,
+          record.status,
+          record.role,
+          record.createdAt,
+          record.principalId,
+        ],
+      );
+    },
+
+    async listLiveSessionIds(
+      principalId: string,
+      nowIso: string,
+      limit: number,
+    ): Promise<Result<readonly string[]>> {
+      if (!Number.isInteger(limit) || limit < 1) {
+        return err(internal());
+      }
+      // OLDEST FIRST. See the port: if the cap truncates, the sessions that survive should be the
+      // most recent — an attacker's freshly minted session is the one being raced.
+      //
+      // `expires_at > ?` USES THE SERVER'S CLOCK PASSED IN, never SQLite's `datetime('now')`, so
+      // the same instant governs the count, the reservation and the delete.
+      const rows = await selectRows(
+        database,
+        'SELECT session_id FROM session WHERE principal_id = ? AND expires_at > ? ' +
+          `ORDER BY created_at LIMIT ${String(limit)}`,
+        [principalId, nowIso],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      const ids: string[] = [];
+      for (const row of rows.value) {
+        const id = requiredText(row, 'session_id');
+        if (id === null) {
+          return err(internal());
+        }
+        ids.push(id);
+      }
+      return ok(Object.freeze(ids));
+    },
+
+    async resetCredential(
+      identifierHash: string,
+      replacement: {
+        readonly algorithm: string;
+        readonly iterations: number;
+        readonly salt: string;
+        readonly verifier: string;
+      },
+      sessionIds: readonly string[],
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<void>> {
+      consumeControlPlaneWriteReservation(reservation, 1 + sessionIds.length);
+
+      // ONE BATCH, ONE TRANSACTION: the credential is replaced and the sessions are deleted
+      // together. See the port for why the ORDER of these two is a security property and why one
+      // batch removes the window rather than shrinking it.
+      const statements: { readonly sql: string; readonly parameters: readonly unknown[] }[] = [
+        {
+          sql:
+            'UPDATE principal_credential SET algorithm = ?, iterations = ?, salt = ?, ' +
+            'verifier = ? WHERE identifier_hash = ?',
+          parameters: [
+            replacement.algorithm,
+            replacement.iterations,
+            replacement.salt,
+            replacement.verifier,
+            identifierHash,
+          ],
+        },
+      ];
+      for (const sessionId of sessionIds) {
+        // ONE STATEMENT PER SESSION, matching the reservation exactly. A predicate delete would
+        // remove however many exist rather than however many were paid for.
+        statements.push({
+          sql: 'DELETE FROM session WHERE session_id = ?',
+          parameters: [sessionId],
+        });
+      }
+      return executeBatch(database, statements);
+    },
+
+    async createOrganizationWithFirstAdmin(
+      rows,
+      reservation: ControlPlaneWriteReservation,
+      admission: MembershipAdmission,
+    ): Promise<Result<void>> {
+      // ---- Layer 1. THE RECEIPTS, both bound to this operation's own values.
+      consumeMembershipAdmission(admission, rows.membership.principalId);
+      consumeControlPlaneWriteReservation(reservation, 5);
+
+      // =====================================================================================
+      // ONE BATCH, ONE TRANSACTION, FIVE STATEMENTS, DEPENDENCY ORDER.
+      // =====================================================================================
+      //
+      // D1 EXECUTES A BATCH AS A SINGLE IMPLICIT TRANSACTION — the same property
+      // `storage/adapters/d1/d1-store.ts` relies on to make a mutation and its audit record one
+      // unit. So all five rows land or none do, and there is no window in which an Organization
+      // exists without its admin, an admin without a credential, or a directory entry pointing at
+      // nothing. **`organization-onboarding-v1`'s `ON-1` orphan is unreachable through this port.**
+      //
+      // THE ORDER IS FORCED BY THE SCHEMA AND MEASURED, NOT ASSUMED. `tenant_directory`,
+      // `principal_credential` and `organization_membership` all carry `REFERENCES`, D1 enforces
+      // foreign keys, and SQLite checks them per statement rather than deferring to commit. So
+      // parents precede children: organization, tenant_directory, principal, principal_credential,
+      // organization_membership.
+      //
+      // ---- THE MEMBERSHIP STATEMENT KEEPS ITS IN-STATEMENT GUARD.
+      //
+      // `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM platform_operator ...)` — identical
+      // to `createMembership`'s, and it is not redundant here even though the principal is created
+      // three statements earlier in the same transaction. **The guard is what survives a future
+      // edit that reorders these statements or reuses this method for an existing principal**, and
+      // it costs a correlated subquery on a primary key.
+      //
+      // ---- NO `ON CONFLICT` ANYWHERE, AND THAT IS THE ANTI-TAKEOVER PROPERTY.
+      //
+      // A duplicate `identifier_hash` violates the primary key and aborts the whole batch. An
+      // upsert would silently repoint an existing person's credential at a new Organization's
+      // admin, which is account takeover wearing the shape of a convenience. The service checks
+      // for the collision first so the ordinary case answers `conflict`; this is what makes the
+      // race fail closed rather than fail open.
+      return executeBatch(database, [
+        {
+          // `template_id` IS ON THIS INSERT AS OF `0013`. It is the reference `0012_template.sql`
+          // said onboarding would add and that onboarding shipped without — the column did not
+          // exist, so the value was validated and discarded, and Templates stayed inert while
+          // being reported as connected.
+          //
+          // THE FOREIGN KEY MEANS THIS STATEMENT CAN NOW FAIL ON A TEMPLATE THAT VANISHED between
+          // the service's validating read and this write. That aborts the whole batch and answers
+          // `unavailable` — nothing is half-created, and the window needs no lock because no route
+          // deletes a Template (`TM-2`).
+          // `display_name` IS ON THIS INSERT AS OF `0015`. The route now accepts it — it was in
+          // the contract and not in the route's declared field list until 2026-09-07, which made
+          // every onboarding that trusted the contract fail before authentication.
+          //
+          // THE OTHER TWELVE `0015` COLUMNS ARE NOT LISTED AND MUST NOT BE. Both registrations
+          // default to `not_recorded` with every other column NULL, which is the coherent
+          // `not-recorded` state and what `0016`'s triggers require — and it is TRUE of a new
+          // Organization: nobody has asked for its CR or VAT number at the moment it is created.
+          sql:
+            'INSERT INTO organization (organization_id, status, template_id, display_name, ' +
+            'created_at) VALUES (?, ?, ?, ?, ?)',
+          parameters: [
+            rows.organization.organizationId,
+            rows.organization.status,
+            rows.organization.templateId,
+            rows.organization.displayName,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO tenant_directory (organization_id, binding_name, state, created_at) ' +
+            'VALUES (?, ?, ?, ?)',
+          parameters: [
+            rows.directory.organizationId,
+            rows.directory.bindingName,
+            rows.directory.state,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO principal (principal_id, principal_type, status, created_at) ' +
+            'VALUES (?, ?, ?, ?)',
+          parameters: [
+            rows.principal.principalId,
+            rows.principal.principalType,
+            rows.principal.status,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO principal_credential ' +
+            '(identifier_hash, principal_id, algorithm, iterations, salt, verifier, created_at) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+          parameters: [
+            rows.credential.identifierHash,
+            rows.credential.principalId,
+            rows.credential.algorithm,
+            rows.credential.iterations,
+            rows.credential.salt,
+            rows.credential.verifier,
+            rows.membership.createdAt,
+          ],
+        },
+        {
+          sql:
+            'INSERT INTO organization_membership ' +
+            '(principal_id, organization_id, status, role, created_at) ' +
+            'SELECT ?, ?, ?, ?, ? ' +
+            'WHERE NOT EXISTS (SELECT 1 FROM platform_operator WHERE principal_id = ?)',
+          parameters: [
+            rows.membership.principalId,
+            rows.membership.organizationId,
+            rows.membership.status,
+            rows.membership.role,
+            rows.membership.createdAt,
+            rows.membership.principalId,
+          ],
+        },
+      ]);
     },
 
     async setSessionActiveOrganization(
@@ -394,6 +729,35 @@ export function createD1ControlPlaneStores(database: D1Database): ControlPlaneSt
   };
 
   return { identity, tenantDirectory };
+}
+
+/**
+ * Several statements, ONE transaction. The multi-statement form of `execute` below.
+ *
+ * IT EXISTS SO THAT THE ATOMICITY IS AT THE PORT AND NOT AT THE CALL SITE. A caller that wanted
+ * five rows written together could not assemble it from five `execute` calls — that is five
+ * transactions — and the difference is `ON-1`'s orphan row.
+ *
+ * A FAILURE ANYWHERE IN THE BATCH IS `unavailable`, exactly as `execute`'s is, and for the same
+ * reason: distinguishing a constraint violation from an outage would mean reading a D1 error
+ * message, which is a vendor-shaped string in a control flow. Callers that need to tell a
+ * collision apart must check for it with a read BEFORE the write, which is what
+ * `onboarding-service.ts` does and documents.
+ */
+async function executeBatch(
+  database: D1Database,
+  statements: readonly { readonly sql: string; readonly parameters: readonly unknown[] }[],
+): Promise<Result<void>> {
+  try {
+    await database.batch(
+      statements.map((statement) =>
+        database.prepare(statement.sql).bind(...statement.parameters),
+      ),
+    );
+    return ok(undefined);
+  } catch (cause) {
+    return err(unavailable());
+  }
 }
 
 async function execute(

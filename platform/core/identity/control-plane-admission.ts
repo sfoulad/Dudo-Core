@@ -136,6 +136,22 @@ export const PRINCIPAL_ROW_WRITES = 2;
 export const ORGANIZATION_ROW_WRITES = 2;
 
 /**
+ * *** UPDATING AN `organization` ROW COSTS ONE, NOT TWO, AND THE DIFFERENCE IS THE PRIMARY KEY. ***
+ *
+ * `ORGANIZATION_ROW_WRITES` is an INSERT: a table row plus the implicit primary-key index entry.
+ * `platform.organizations.identity.update` writes thirteen columns on an EXISTING row and touches
+ * no key, and `0002_organization.sql` gives that table **no secondary index** — so there is nothing
+ * else to maintain. One row, one write.
+ *
+ * A SEPARATE CONSTANT RATHER THAN REUSING THE INSERT'S, because reusing it would over-reserve by
+ * one on every identity update and, worse, would make a future reader think an update maintains an
+ * index. **If a secondary index is ever added to `organization`, this number moves and the insert's
+ * does too** — the same instruction `PLATFORM_OPERATOR_ACTION_ROW_WRITES` carries, which `0016` is
+ * the worked example of honouring.
+ */
+export const ORGANIZATION_UPDATE_ROW_WRITES = 1;
+
+/**
  * `organization_membership` (`0003`): 1 table row + 1 implicit primary-key index.
  *
  * Also unwritten here — membership administration is the organization-structure slice. Note for
@@ -149,6 +165,146 @@ export const ORGANIZATION_MEMBERSHIP_ROW_WRITES = 2;
 
 /** `tenant_directory` (`0005`): 1 table row + 1 implicit primary-key index. Unwritten here. */
 export const TENANT_DIRECTORY_ROW_WRITES = 2;
+
+/**
+ * `platform_operator` (`0008`): 1 table row + 1 implicit primary-key index.
+ *
+ * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL —
+ * the same property `PRINCIPAL_CREDENTIAL_ROW_WRITES` has, and the one place in the whole
+ * super-admin surface where it SURVIVES. `docs/decisions/0025` publishes no route that creates a
+ * platform operator; `core.platform-operator.create` is deliberately absent from the permission
+ * catalog, and adding one is a decision rather than an extension. The rows are inserted by an
+ * operator running SQL that `tools/seed-platform-operator.ts` printed, so they never pass through
+ * `reserve` and cannot be caused by a request.
+ *
+ * Declared anyway, for the reason `PRINCIPAL_ROW_WRITES` is: the first writer must draw an
+ * accounted, already-counted cost rather than a number it picked.
+ */
+export const PLATFORM_OPERATOR_ROW_WRITES = 2;
+
+/**
+ * `platform_operator_action` (`0009`): 1 table row + 1 implicit primary-key index + **2 explicit
+ * indexes from `0016`**.
+ *
+ * ===========================================================================================
+ * *** IT WENT FROM 2 TO 4 ON 2026-09-07, AND THE INSTRUCTION BELOW IS WHY IT MOVED ON TIME. ***
+ * ===========================================================================================
+ *
+ * `0016` added `(occurred_at, action_record_id)` and
+ * `(target_organization_id, occurred_at, action_record_id)` to close a read exposure: both audit
+ * feeds scanned the whole log and sorted it, so a page of 25 read every row, and **D1's row-read
+ * allowance is account-wide and stops queries in every database rather than degrading the feed.**
+ * An operator paging a feed took every tenant's logins down with them.
+ *
+ * **THE DISTRIBUTION OF THIS COST IS COUNTER-INTUITIVE, SO IT IS STATED HERE RATHER THAN LEFT TO
+ * ARITHMETIC.** Against `PER_PRINCIPAL_DAILY_ROW_WRITES` = 600:
+ *
+ *   a pure read route          2 -> 4      300 -> 150 per operator per day   (-50%)
+ *   the scoped audit feed      4 -> 6      150 -> 100
+ *   an onboarding             12 -> 14      50 ->  ~42                       (-14%)
+ *
+ * **THE CHEAP READ ROUTES TAKE THE LARGEST CUT AND ONBOARDING THE SMALLEST**, because the audit
+ * record is the WHOLE cost of a read and a small fraction of an onboarding. Whoever next widens
+ * this number should expect that shape rather than be surprised by it.
+ *
+ * ===========================================================================================
+ * THIS IS THE ONE COST IN THIS FILE THAT REQUEST TRAFFIC ACTUALLY SPENDS ON A **READ**.
+ * ===========================================================================================
+ *
+ * `platform-operator-v1` binding property P4 requires EVERY platform route to write an audit
+ * record, including both of its reads, because "an operator enumerating every Organization is
+ * exactly the reconnaissance step that precedes a targeted action". So a platform GET costs 2
+ * row-writes where a tenant GET costs none.
+ *
+ * IT IS SAFE FOR A REASON THAT DOES NOT GENERALISE, and `0013` is the test it has to pass:
+ * `0013`'s problem was that an UNAUTHENTICATED or merely authenticated caller could force
+ * unbounded denial audits. A record here is written only after the caller has been established as
+ * the holder of a `platform_operator` row, so the population that can force a write is bounded by
+ * the number of real operators — one or two — rather than by traffic.
+ *
+ * IF THAT CLASS EVER BECOMES REACHABLE BY A LARGER POPULATION, THE ARGUMENT FAILS AND P4 MUST BE
+ * BOUNDED THE WAY D2 BOUNDED SUCCESSFUL READS. Written here because the failure would be silent.
+ *
+ * WHEN A MIGRATION ADDS AN INDEX, THIS NUMBER MUST MOVE WITH IT. `0009` says the same at the
+ * schema, and `0016` is the first time it was owed — **it was paid in the same change, which is
+ * the only reason the reservation still matches the write.** Under-reserving is the dangerous
+ * direction (`0014` §A.12): over-reserving delays a write, under-reserving is an outage.
+ *
+ * **THE REMAINING CANDIDATE IS STILL `(actor_principal_id, occurred_at, action_record_id)`** — "what
+ * has this operator done" — and `0016` DELIBERATELY DID NOT ADD IT. It would take this to 5 and buy
+ * one query shape; the answer to that shape is a mandatory bounded time window on filtered feed
+ * queries, which costs zero row-writes and is `architecture-agent`'s decision. **Do not add it as a
+ * shortcut past that decision.**
+ */
+export const PLATFORM_OPERATOR_ACTION_ROW_WRITES = 4;
+
+/**
+ * `confirmation` (`0011`): 1 table row + 1 implicit primary-key index.
+ *
+ * CHARGED TWICE PER CRITICAL OPERATION — once to issue and once to spend — so a critical operation
+ * costs ABOUT 4 MORE control-plane row-writes than it did, plus its route's audit record.
+ *
+ * THE SPEND IS AN UPDATE OF ONE ROW AND IS CHARGED THE SAME 2 AS THE INSERT. That is a deliberate
+ * over-charge of 1, on the same reasoning `SESSION_ROW_WRITES` uses for the Organization switch:
+ * the true cost is one row because the UPDATE touches no indexed column, and a separate
+ * `CONFIRMATION_SPEND_ROW_WRITES = 1` would be correct today and silently wrong the first time
+ * somebody indexes `expires_at` for the retention job. One constant cannot drift from the schema.
+ *
+ * ===========================================================================================
+ * THE CEILING, AND WHY IT HOLDS FOR A REASON THAT IS STRUCTURAL RATHER THAN LUCKY
+ * ===========================================================================================
+ *
+ * ~750 confirmations a day platform-wide against the 3,000/day control-plane sub-ceiling. A
+ * CRITICAL OPERATION REQUIRES A HUMAN TO READ A STATEMENT AND TYPE A PASSWORD, so the volume is
+ * bounded by human attention and not by traffic. `0013` control 5's test — is the population that
+ * can force a write bounded by something other than the attacker? — passes.
+ *
+ * *** AND THE HAZARD IS NAMED RATHER THAN DISCOVERED. *** The challenge route is a write reachable
+ * by any authenticated principal holding a critical permission, and an unbounded loop of challenge
+ * requests is 2 row-writes each against a shared ceiling. That is `0013`'s shape again — the
+ * control becoming the lever. RATE LIMITING IS REQUIRED ON BOTH CHALLENGE ROUTES AND DOES NOT
+ * EXIST; `0017`'s limiter is per-isolate and bounds nothing deployed. The per-principal daily
+ * ceiling is the real bound at closed-beta scale. DO NOT REPORT RATE LIMITING AS DONE.
+ */
+export const CONFIRMATION_ROW_WRITES = 2;
+
+/**
+ * `template` (`0012`): 1 table row + 1 primary-key autoindex + 1 uniqueness index on the
+ * normalised name = 3, CHARGED 4 with the platform-operator audit record.
+ *
+ * OVER-CHARGED BY DESIGN, per `0014` §A.12 — *"over-reserving delays a write, under-reserving is a
+ * platform outage"* — and `template-v1` charges 4 for the same reason.
+ *
+ * THE POPULATION IS BOUNDED BY HUMAN EFFORT. A business type is created by an operator typing, so
+ * the realistic ceiling is tens of rows in Dudo's life, not thousands. At operator volume this is
+ * under 100 row-writes a day against the 3,000/day control-plane sub-ceiling, and **nothing
+ * degrades for any tenant when it refuses, because no tenant depends on this surface.**
+ *
+ * WHEN A MIGRATION ADDS AN INDEX — a `status` index for a retire route is the obvious candidate —
+ * THIS NUMBER MUST MOVE WITH IT.
+ */
+export const TEMPLATE_ROW_WRITES = 4;
+
+/**
+ * `principal_credential` (`0006`): 1 table row + 1 implicit primary-key index.
+ *
+ * NOTHING IN THE RUNNING WORKER WRITES IT, AND THAT IS STRUCTURAL RATHER THAN CIRCUMSTANTIAL:
+ * `CredentialStore` (`credential-store.ts`) has exactly one method and it is a read. Enrollment is
+ * an operator action performed out of band by `tools/seed-principal.ts`, which PRINTS SQL and
+ * executes nothing, so these two row-writes are spent by a human running a statement by hand and
+ * never by request traffic. No unauthenticated caller can cause a write to this table at all.
+ *
+ * Declared anyway, for the reason `PRINCIPAL_ROW_WRITES` is: the first writer — self-service
+ * registration, or credential rotation — must draw an accounted, already-counted cost rather than
+ * a number it picked. THAT SLICE MUST ALSO ANSWER TWO QUESTIONS THIS ONE DOES NOT: which
+ * allocation an enrollment draws from, and how an enrollment endpoint stops a client posting a
+ * raw password in place of the derived value (`credential-verifier.ts`,
+ * `SUBMITTED_VALUE_CHARACTERS`).
+ *
+ * WHEN A MIGRATION ADDS AN INDEX — the obvious candidate is `principal_id`, for revoking every
+ * credential a principal holds — THIS NUMBER MUST MOVE WITH IT.
+ */
+export const PRINCIPAL_CREDENTIAL_ROW_WRITES = 2;
 
 /**
  * =============================================================================================
@@ -169,7 +325,19 @@ export const TENANT_DIRECTORY_ROW_WRITES = 2;
  *   Organization switch            1          1       3      OVER-CHARGED BY 2 (200%)
  *   session rotation               2          6       6      NOT BUILT
  *   membership change              1        1-2       2      NOT BUILT; + 5 in the tenant database
- *   Organization change            1        1-2       2      NOT BUILT; onboarding is 6
+ *   Organization change            1        1-2       2      NOT BUILT; onboarding is 10 — see below
+ *   credential enrollment          1          2       2      OPERATOR-ONLY, out of band; see below
+ *   platform operator created      1          2       2      OPERATOR-ONLY, out of band; no route
+ *   platform operator action       1          2       2      EVERY platform request, including reads
+ *
+ * CREDENTIAL ENROLLMENT IS IN THIS TABLE AND NOT IN THIS BUDGET, and the distinction is worth
+ * stating rather than inferring from a blank cell. `docs/decisions/0015` §D gave the platform a
+ * credential format, so `principal_credential` now exists and has a cost — but the running Worker
+ * contains no code that writes it. The rows are inserted by an operator running SQL that
+ * `tools/seed-principal.ts` printed, so they never pass through `reserve` and cannot be caused by
+ * a request. When self-service registration is built, it will be the first thing on this path to
+ * write without a verified principal, which is the case `ControlPlaneWriteAdmission.reserve` has
+ * no parameter for — the same finding `pre-auth-admission.ts` records for login start.
  *
  * LOGIN AND SESSION CREATION ARE THE SAME WRITE. A login that names an Organization writes the
  * validated identifier IN THE INSERT rather than following up with an UPDATE, so there is no
@@ -203,11 +371,25 @@ export const TENANT_DIRECTORY_ROW_WRITES = 2;
  * it explicitly; §C does not. It also spends from TWO ALLOCATIONS: 2 from `system` through this
  * port, 5 from `business` through the per-Organization coordinator.
  *
- * ORGANIZATION CREATION HAS NO AUDITABLE HOME YET, and that is worth knowing before it is built.
- * Onboarding is 6 row-writes here — `organization` 2 + `tenant_directory` 2 + the owner's
- * `organization_membership` 2 — and its audit record cannot go into the new Organization's
- * tenant audit log, because reaching that log needs a tenant store handle, which needs the
- * directory entry that the same operation is still creating. Another decision for that slice.
+ * ORGANIZATION CREATION COSTS **10**, NOT 6, AND BOTH HALVES OF THIS PARAGRAPH HAVE BEEN
+ * CORRECTED BY `docs/decisions/0024` AND `docs/decisions/0025`. THE ORIGINAL IS KEPT IN THE
+ * SENTENCE BELOW BECAUSE THE WAY IT WAS WRONG IS THE USEFUL PART.
+ *
+ * AS WRITTEN: "Onboarding is 6 row-writes here — `organization` 2 + `tenant_directory` 2 + the
+ * owner's `organization_membership` 2 — and its audit record cannot go into the new
+ * Organization's tenant audit log, because reaching that log needs a tenant store handle, which
+ * needs the directory entry that the same operation is still creating."
+ *
+ * THE ARITHMETIC ASSUMED THE ADMIN PRINCIPAL AND THEIR CREDENTIAL ALREADY EXISTED, which is
+ * exactly what is false when a new customer arrives. `0024`: add `principal` 2 +
+ * `principal_credential` 2 = **10**, plus the first inner unit and the audit record from a
+ * different allocation. The gap was precisely the two objects nobody counted.
+ *
+ * THE CIRCULARITY WAS AN ARTEFACT OF ORDERING AND NOT A PROPERTY OF THE PROBLEM. `0025` decision
+ * 5: WRITE `tenant_directory` FIRST and the store handle then resolves, so the tenant-side audit
+ * record can be written after all. The platform-side record has a home of its own — the
+ * platform-operator action log, `0009_platform_operator_action.sql` — and BOTH ARE REQUIRED. The
+ * order is: the operation's own writes, then the platform audit record, then the tenant record.
  */
 
 // =============================================================================================

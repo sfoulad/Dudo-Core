@@ -1,9 +1,24 @@
 # 0002 — Repository structure and MVP delivery strategy
 
-- **Status:** Accepted
+- **Status:** Accepted — **delivery strategy PARTLY SUPERSEDED by `0030` (2026-09-06)**
 - **Date:** 2026-08-31
 - **Deciders:** User (explicit approval in conversation), Dudo Team Lead
 - **Owning agent:** Team Lead
+
+> **⚠ What `0030` withdrew, and what it did not.**
+>
+> **Superseded:** the MVP framing, *one small complete vertical feature at a time*, and the
+> rule that no agent begins the next feature before step 7. Work now runs continuously and
+> stops at named milestones.
+>
+> **Still binding, and unaffected:** the **two-repository structure**, `Dudo-Core` and
+> `Dudo-Apple` meeting only through the published contract set; both repositories public;
+> the Apple and web release requirements; release honesty; and **production actions
+> requiring explicit user approval every time.**
+>
+> **Kept rather than rewritten.** The reasoning below was right on its own terms, and the
+> seven-step shape is still the correct checklist for what a milestone owes the user — it
+> is the *waiting* that was withdrawn, not the *evidence*.
 
 ## Context
 
@@ -17,8 +32,10 @@ realities that the team's rules did not previously acknowledge. Second, the team
 definition of "done" — nothing distinguished code that compiles from a feature the user
 has actually used and accepted. Without that, work accumulates unverified.
 
-The product is now explicitly **MVP-focused**: one small, complete vertical feature at a
-time, tested and accepted before the next begins.
+~~The product is now explicitly **MVP-focused**: one small, complete vertical feature at a
+time, tested and accepted before the next begins.~~ **SUPERSEDED by `0030` (2026-09-06)** —
+the target is the full system, and work stops at named milestones rather than after every
+slice.
 
 ## Options considered
 
@@ -51,9 +68,13 @@ time, tested and accepted before the next begins.
 
 ### 1. Product
 
-**Dudo** is an **MVP-focused business-management platform for startups and SMEs.**
+~~**Dudo** is an **MVP-focused business-management platform for startups and SMEs.**
 Build **one small, complete vertical feature at a time.** Do not begin the next feature
-until the user has tested and accepted the current one.
+until the user has tested and accepted the current one.~~
+
+> **SUPERSEDED by `0030` (2026-09-06).** The MVP framing is withdrawn; work runs
+> continuously and stops at named milestones. **Production actions still require explicit
+> user approval every time.**
 
 A vertical feature slice reaches all the way through: contract, Core implementation, web
 implementation, Apple implementation, tests, and both delivered test releases. A slice
@@ -120,8 +141,10 @@ A feature is complete only when **all seven** hold, in order:
    checklist.
 7. The user explicitly accepts the feature.
 
-**No agent may begin the next feature before step 7.** Steps 1–6 are the team's work;
-step 7 is the user's alone and cannot be inferred, assumed, or granted by the Team Lead.
+~~**No agent may begin the next feature before step 7.**~~ **SUPERSEDED by `0030`** — work
+does not wait on acceptance. Steps 1–6 are the team's work and **remain the right checklist
+for what a milestone owes the user**; step 7 became *milestone* acceptance, and it is still
+the user's alone — never inferred, never assumed, never granted by the Team Lead.
 
 ### 6. Team
 

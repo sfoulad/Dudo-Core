@@ -61,7 +61,10 @@ import type {
   CoordinationFailureReporter,
 } from '../../../../platform/core/audit/coordination-failure.ts';
 import { createStoreDenialSummarySink } from '../../../../platform/core/audit/denial-summary-sink.ts';
-import type { DenialGroupKey } from '../../../../platform/core/protection/coordination.ts';
+import type {
+  CoordinatedRequest,
+  DenialGroupKey,
+} from '../../../../platform/core/protection/coordination.ts';
 import {
   DENIAL_WINDOW_MS,
   DenialGroupKeyNotDerivedError,
@@ -747,7 +750,13 @@ export function buildBoundedDenialAuditingSuite(makeWorld: MakeWorld): Suite {
   suite.test('CONTROL 6 — the pipeline forwards the transport\'s source hash and derives the other two levels from the AUTHENTICATED context, never from the request', async () => {
     const world = await makeWorld();
     try {
-      const requests: { organizationId: string; principalId: string; sourceAddressHash: string | null }[] = [];
+      // `CoordinatedRequest[]` RATHER THAN A HAND-WRITTEN SHAPE, since 2026-09-05. The literal
+      // listed three of the port's four fields and omitted `nowMs`, so this array had quietly
+      // stopped being the thing `withKeyRecorder` records into. **The assertions below read the
+      // fields they name and would not have noticed a fourth appearing** — which is the whole
+      // reason `npm run typecheck:tests` exists. Naming the port's own type means the next field
+      // arrives as a compile error rather than as a silently-narrower record.
+      const requests: CoordinatedRequest[] = [];
       const dependencies = {
         ...world.dependencies,
         coordinator: withKeyRecorder(world.dependencies.coordinator, [], requests),

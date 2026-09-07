@@ -53,6 +53,7 @@
  */
 
 import type { PrincipalGrants } from '../authorization/authorizer.ts';
+import { grantsForRole } from '../authorization/roles.ts';
 import type { Result } from '../kernel/result.ts';
 import { ok } from '../kernel/result.ts';
 import type {
@@ -90,8 +91,14 @@ export type PrincipalAuthorizationSource = {
 };
 
 /**
- * Grants nothing to anyone. See the header for why this is the only implementation that may
- * exist until `0007`'s storage question and the organization-structure slice are settled.
+ * Grants nothing to anyone.
+ *
+ * IT IS NO LONGER THE PRODUCTION IMPLEMENTATION AND IT IS DELIBERATELY NOT DELETED.
+ * `docs/decisions/0019` replaced it at the composition site with the membership-backed source
+ * below, and required this one to stay in the tree — it remains the correct answer for a
+ * principal with no recognised role, it is what a verification harness composes when it wants a
+ * principal that authenticates and can do nothing, and a fail-closed default that has been
+ * deleted is a fail-closed default nobody can fall back to.
  */
 export function createDenyAllPrincipalAuthorizationSource(): PrincipalAuthorizationSource {
   const nothing: PrincipalAuthorization = {
@@ -101,6 +108,77 @@ export function createDenyAllPrincipalAuthorizationSource(): PrincipalAuthorizat
   return {
     async resolve(): Promise<Result<PrincipalAuthorization>> {
       return ok(nothing);
+    },
+  };
+}
+
+/**
+ * ===========================================================================================
+ * THE MEMBERSHIP-BACKED SOURCE. `docs/decisions/0019`, closing the GRANTS half of AZ5.
+ * ===========================================================================================
+ *
+ * It reads the role off the membership row the resolver has ALREADY VALIDATED and maps it through
+ * `authorization/roles.ts`. That is the whole implementation, and its smallness is the design:
+ * the mapping is a frozen table of literal permission identifiers, so there is no query, no cache,
+ * no second source of truth, and no row-write.
+ *
+ * IT CANNOT BE ASKED ABOUT AN ORGANIZATION THE PRINCIPAL DOES NOT BELONG TO.
+ * `PrincipalAuthorizationRequest` carries the MEMBERSHIP, not a caller-supplied Organization
+ * identifier — the port was built that way before there was anything to grant, and it is what
+ * stops this function being tricked into answering for the wrong tenant. There is no parameter
+ * here through which a request value could arrive.
+ *
+ * THE ROLE NAME STOPS HERE. `AUTHORIZATION_STANDARD.md` §9 — "a role name appearing in a
+ * conditional in source is a defect" — holds: the name is used once, as a lookup key, and what
+ * leaves this function is a set of permissions with no memory of which role produced it.
+ *
+ * ===========================================================================================
+ * `authorizedBusinessIds` IS EMPTY HERE, AND SINCE `docs/decisions/0020` THAT IS THE DESIGN
+ * RATHER THAN A GAP. THE ORIGINAL ARGUMENT IS KEPT BECAUSE IT RECORDS WHY THE GAP EXISTED.
+ * ===========================================================================================
+ *
+ * AS WRITTEN, WHEN THIS WAS STILL OPEN: *"`tenancy/tenant-context.ts`: 'An organization-scope
+ * principal's set is every Business in its Organization.' Computing that set is a read of the
+ * TENANT database's `business` table, which requires a tenant store handle, which comes from
+ * `TenantStoreResolver` — and `0014` §C.5 fixes the order as `session -> principal -> memberships
+ * -> authorized context -> TenantStoreResolver -> business data`. THIS STEP IS BEFORE THE STORE
+ * EXISTS."*
+ *
+ * **THE DEPENDENCY WAS NEVER CIRCULAR, AND THAT IS WHAT THE ARGUMENT ABOVE MISSED.** The resolver
+ * needs the ORGANIZATION, which is known here; only the business set needs the STORE. §C.5
+ * bundled two things with different dependencies into one step. `0020` SPLITS THEM:
+ *
+ *   session -> principal -> memberships -> authorized ORGANIZATION context ->
+ *   TenantStoreResolver -> authorized BUSINESS set -> business data
+ *
+ * **It is a split, not a reordering.** Nothing about when authorization happens has moved, and
+ * describing it as "we reordered authorization" invites a security reading it does not deserve.
+ *
+ * SO THIS FUNCTION ANSWERS THE ORGANIZATION HALF — the grants — and `action/pipeline.ts` completes
+ * the principal with the business set immediately after the tenant store resolves, reading it
+ * through the tenant-scoped handle so it is tenant-scoped by construction. The set is computed
+ * per request and never cached beyond it: a Business removed mid-session must not stay authorized
+ * for twelve hours.
+ *
+ * WHAT WAS RIGHT IN THE ORIGINAL ARGUMENT AND STAYS RIGHT: there is no sentinel meaning "all" and
+ * one must not be invented. A magic value would be an ambient tenant-wide grant wearing an array.
+ * `AuthenticatedPrincipal.businessScope` is an EXPLICIT field for exactly that reason — it says
+ * which rule fills the set, rather than overloading the empty array that means "authorized over
+ * nothing" everywhere else in this codebase.
+ */
+export function createMembershipPrincipalAuthorizationSource(): PrincipalAuthorizationSource {
+  return {
+    async resolve(
+      request: PrincipalAuthorizationRequest,
+    ): Promise<Result<PrincipalAuthorization>> {
+      return ok({
+        grants: grantsForRole(request.membership.role),
+        // Empty HERE, and completed by the pipeline after the tenant store resolves. `0020`.
+        // This is not a placeholder and must not be filled in from the control plane: the set
+        // lives in the tenant's own `business` table and reading it through the tenant handle is
+        // what makes it tenant-scoped by construction rather than by care.
+        authorizedBusinessIds: [],
+      });
     },
   };
 }

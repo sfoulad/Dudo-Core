@@ -25,6 +25,8 @@
 
 import { FIXTURE_BUSINESSES, FIXTURE_CUSTOMERS } from './fixtures';
 import { ApiError, type ErrorCode, type ErrorDetail } from './errors';
+import { fixtureOrganizationSelected } from './fixture-session-state';
+import { signalPreconditionFailed } from './session-signal';
 import {
   validateField,
   normalise,
@@ -785,6 +787,27 @@ export function createFixtureTransport(): Transport {
 
     async invoke(action, input = {}) {
       await delay();
+      /*
+       * THE FIXTURE REFUSES EXACTLY AS CORE REFUSES, until an Organization has
+       * been selected. `session-principal-resolver.ts` maps
+       * `organization-not-selected` onto `failedPrecondition()` at
+       * authentication — BEFORE the router — so in the real system the refusal
+       * is total and identical for every route. Modelling it before the action
+       * table is looked up is what makes that true here too.
+       *
+       * A fixture that skipped this would be a fixture in which the application
+       * works and the deployment does not, which is the exact gap that let an
+       * unusable client reach a real browser.
+       */
+      if (!fixtureOrganizationSelected()) {
+        signalPreconditionFailed();
+        // Core's constant, verbatim (`kernel/errors.ts`), because the whole
+        // point is that this refusal is indistinguishable from the real one.
+        throw error(
+          'failed_precondition',
+          'The resource is not in a state that permits this operation.',
+        );
+      }
       const handler = ACTIONS[action];
       if (!handler) throw error('not_found', `No such action: ${action}`);
       try {

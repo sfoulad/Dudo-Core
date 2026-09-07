@@ -1,0 +1,815 @@
+---
+# Platform audit read — contract of record, version 1
+#
+# Core is already writing the platform-operator action log and NOTHING CAN READ IT. Data is
+# accumulating that no route can reach, which is the state this contract exists to end.
+#
+# The machine-readable half is platform-audit-read-v1.schema.json. BOTH ARE NORMATIVE TOGETHER,
+# and `required` lists are ASSERTIONS rather than description (.claude/rules/workflow.md §12).
+#
+# THIS IS AN OPERATION IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class; this
+# contract restates none of it.
+#
+# Governed by: docs/decisions/0025 Decision 5 — what the log holds, and what it must never hold
+#              organization-detail-v1 theMembershipRuling — WHICH THIS CONTRACT NEARLY UNDID
+#              core-object-registry.yaml CO1
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# PROVENANCE: THE WRITER EXISTS AND IS TRANSCRIBED WHERE IT CONSTRAINS THE SHAPE; the routes, the
+# wire shapes and every rule below are NEW WORK.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: "Dudo Team Lead, 2026-09-05, jointly with organization-detail-v1 — theFindingTHISCONTRACTALMOSTSHIPPED and that contract's theMembershipRuling are one finding in two places."
+updated: "2026-09-05"
+documentsExistingImplementation: partial
+
+# ---------------------------------------------------------------------------
+# theFindingTHISCONTRACTALMOSTSHIPPED — read before the operations
+# ---------------------------------------------------------------------------
+theFindingTHISCONTRACTALMOSTSHIPPED:
+  what: >-
+    A PLAIN "READ THE OPERATOR LOG" ROUTE REINTRODUCES THE CO1 AGGREGATION organization-detail-v1
+    JUST REFUSED, AND IT DOES SO FROM DATA CORE IS ALREADY WRITING.
+  theMechanism: >-
+    The log records the ACTION AND ITS TARGET IDENTIFIERS. Every
+    `platform.organizations.members.resolve` therefore leaves a record of the form
+    "operator X resolved principal P in Organization O" — WHICH IS A MEMBERSHIP FACT. Read the log
+    in bulk and those tuples aggregate into exactly the mapping the membership ruling rations: which
+    principals belong to which Organizations, for every resolve ever performed, in one request.
+  whyItMATTERSMORETHANITLOOKS: >-
+    THE ATTACK THE MEMBERSHIP RULING ACCEPTED AS RESIDUAL WAS "N REQUESTS, AUDITED, TENANT-VISIBLE,
+    RATE LIMITED". An unrestricted log read collapses that to ONE REQUEST, and — this is the part
+    that matters — TO A REQUEST THE TENANT CANNOT SEE. A resolve writes a tenant-side record so the
+    customer knows the platform asked about their staff. READING THE LOG WRITES NO TENANT RECORD,
+    because it names no single Organization to write one into. So the cheap path is also the
+    invisible one, which inverts every control the residual rested on.
+  itIsTHESAMESHAPEASTHERULINGITSELF: >-
+    Two permitted reads composing into a forbidden one. `core.platform-audit.read` discloses nothing
+    CO1 forbids on its own — a log of operator actions is exactly what oversight requires — and
+    neither does the resolve. THE COMBINATION IS THE DISCLOSURE, and it arrives not by an operator
+    doing anything unusual but by the audit control faithfully recording what it was built to record.
+    THE CONTROL BECOMES THE LEAK, which is `0013`'s shape in a new place.
+  soTHECONTRACTISSHAPEDAROUNDIT: "See theTwoFeeds. It is the whole design and not a caveat on it."
+
+# ---------------------------------------------------------------------------
+# theTwoFeeds — the design, and why it is two routes rather than one with a filter
+# ---------------------------------------------------------------------------
+theTwoFeeds:
+  ruling: >-
+    TWO READ ROUTES, DIFFERING IN WHAT THEY MAY DISCLOSE RATHER THAN IN CONVENIENCE.
+      THE PLATFORM FEED     every operator action, ACROSS all Organizations,
+                            WITHOUT `target_principal_id`.
+      THE ORGANIZATION FEED every operator action affecting ONE NAMED Organization,
+                            WITH the principal-level target.
+  theRULETHATGENERATESBOTH: >-
+    PRINCIPAL-LEVEL TARGETS ARE DISCLOSED ONLY WHEN THE CALLER NAMES THE ORGANIZATION.
+    That is the identical gate the membership ruling applies to the resolve: an operator must
+    already have a reason to ask about a specific customer. THE ORGANIZATION-LEVEL TARGET NEEDS NO
+    GATE, because an operator can enumerate Organizations from their own home screen and learning
+    that one was acted on discloses nothing they could not obtain there.
+  whyNOTONEROUTEWITHANOPTIONALFILTER:
+    ruling: "TWO ROUTES. A single route with an optional `organization_id` query parameter is REFUSED."
+    why: >-
+      BECAUSE THE FIELD SET WOULD THEN DEPEND ON A QUERY PARAMETER, and a response whose columns
+      change with an argument is a response nobody can reason about — a client would have to branch,
+      a reviewer would have to trace which branch produced which fields, and the security property
+      would live in an `if` rather than in a route table. TWO ROUTES MAKE THE DISCLOSURE VISIBLE IN
+      THE PATH, which is where a reviewer looks.
+      IT ALSO MAKES THE PERMISSION SPLITTABLE LATER. If oversight is ever separated from support,
+      the platform feed and the Organization feed can carry different permissions without a shape
+      change.
+  theAGGREGATIONCOSTISNOWLINEARAGAIN: >-
+    An operator who wants the membership mapping must call the Organization feed once per
+    Organization. THAT IS N REQUESTS, EACH AUDITED, EACH WRITING A TENANT-SIDE RECORD INTO THE
+    ORGANIZATION IT NAMES — the same cost and the same visibility as N resolves. THE BACK DOOR IS
+    CLOSED BY MAKING IT THE SAME SIZE AS THE FRONT ONE, rather than by adding a rule that says not
+    to use it.
+  whatTHEPLATFORMFEEDSTILLANSWERS: >-
+    AND IT IS MOST OF WHAT OVERSIGHT ACTUALLY NEEDS, which is why dropping one field is a
+    proportionate fix rather than a mutilation: who is acting, how often, against how many
+    Organizations, at what times, with what outcomes, and whether an operator's activity changed
+    shape. A REVIEWER INVESTIGATING AN OPERATOR LEARNS EVERYTHING EXCEPT WHICH INDIVIDUAL PEOPLE
+    WERE NAMED, and can obtain that per Organization, audibly, when they have cause.
+
+# ---------------------------------------------------------------------------
+# whatTheLogHolds — transcribed from docs/decisions/0025 Decision 5, and NOT widened
+# ---------------------------------------------------------------------------
+whatTheLogHolds:
+  fields: >-
+    Actor principal, actor platform role, action id, target Organization, target principal,
+    outcome, timestamp, correlation id.
+  theBINDINGCONSTRAINT: >-
+    `0025` Decision 5: IT RECORDS THE OPERATION AND ITS TARGET IDENTIFIERS, NEVER THE CONTENTS OF
+    WHAT WAS TOUCHED — because "an operator log that accumulates customer data is a second copy of
+    the tenant database with weaker access rules."
+    THIS CONTRACT MAY NOT WIDEN THAT AND DOES NOT. There is no field here for a Template's name, an
+    Organization's name, a customer, a request body, a response body, a diff, or a reason string. A
+    READ CONTRACT CANNOT DISCLOSE WHAT THE WRITER DOES NOT STORE, and this one must not create
+    pressure to store more.
+  theTHINGITWILLBEASKEDFORFIRST: >-
+    "WHAT CHANGED?" — a before-and-after on a Template edit, or which fields an onboarding set.
+    REFUSE IT HERE. Field-level change data is the contents of what was touched, and the moment the
+    operator log carries it, `0025` Decision 5 is dead and the log is the second database it warned
+    about. If a change history is genuinely needed it belongs to the object's own tenant-scoped
+    trail, read by the party that owns the object.
+  NOCREDENTIALEVER: >-
+    STATED SEPARATELY BECAUSE IT IS THE ONE THAT WOULD BE CATASTROPHIC. No password, no derived
+    value, no verifier, no salt, no session identifier, no confirmation token. credential-reset-v1
+    already requires that the audit record "says a reset happened, never what the value was", and
+    the read side must be incapable of returning one — which it is, because the writer stores none.
+
+# ---------------------------------------------------------------------------
+# separationOfDuties — the weakness this contract cannot fix
+# ---------------------------------------------------------------------------
+separationOfDuties:
+  theProblem: >-
+    THE PARTY BEING AUDITED CAN READ THE AUDIT LOG. `platform-admin` holds both
+    `core.credential.reset` and `core.platform-audit.read`, so the same principal acts and reviews.
+    At one or two operators there is no other arrangement available — a second role that only reads
+    would need a second person to hold it.
+  whatSAVESITANDWHATDOESNOT:
+    - >-
+      THE LOG IS APPEND-ONLY AND THIS CONTRACT PUBLISHES NO DELETE, NO UPDATE AND NO EXPORT. An
+      operator can read their own trail and cannot alter it. THAT IS THE PROPERTY THAT MATTERS —
+      being able to see what was recorded about you is not the same as being able to change it.
+    - >-
+      READING THE LOG IS ITSELF AUDITED (P4), so an operator reviewing another operator's activity
+      leaves a record of having done so. The reviewer is reviewable.
+    - >-
+      WHAT DOES NOT SAVE IT: nothing prevents an operator from acting and then reading their own
+      record to confirm what was captured. That is a real limitation of a single-operator platform
+      and it is recorded rather than dressed up.
+  whenTOREVISIT: >-
+    THE MOMENT A THIRD OPERATOR EXISTS. `core.platform-audit.read` is already a separate permission
+    precisely so that oversight can be split from action without a contract change — a
+    read-only reviewer role is a catalog edit, not a redesign. Recorded as PA-1.
+
+# ---------------------------------------------------------------------------
+# pagination
+# ---------------------------------------------------------------------------
+pagination:
+  cursor: >-
+    THE TENANT-FREE CURSOR `core-agent` BUILT, BOUND TO THE PRINCIPAL AND TO THE QUERY SHAPE.
+    platform-operator-v1's corrected `$defs/cursor` states the property: a cursor must not be
+    transferable between operators, or one operator could resume another's enumeration. THAT
+    MATTERS MORE HERE THAN ANYWHERE ELSE IN THE CLASS, because a resumable position in an audit feed
+    is a position in a record of everyone's activity.
+  bindingTOTHEQUERYSHAPE: >-
+    A cursor issued by the ORGANIZATION feed must not be spendable on the PLATFORM feed, or the
+    field-set difference between them could be crossed by replaying a cursor. THE TWO FEEDS ARE
+    DIFFERENT QUERIES AND THEIR CURSORS ARE NOT INTERCHANGEABLE — the same substitution property
+    confirmation-v1's binding relies on, applied to pagination.
+  ordering: >-
+    NEWEST FIRST, BY (timestamp, record id) DESCENDING. The composite is required rather than
+    cosmetic: a cursor over a non-unique sort key either skips records or repeats them, and AN
+    AUDIT FEED THAT SILENTLY SKIPS A RECORD IS WORSE THAN ONE THAT REFUSES TO PAGE.
+  thePRECISIONCLAIMWASWRONGANDTHECONCLUSIONISREDERIVED:
+    whatWasStruck: >-
+      CORRECTED 2026-09-05. THIS CLAUSE PREVIOUSLY SAID "timestamps collide at SECOND precision
+      under a burst". CORE WRITES MILLISECONDS. `kernel/clock.ts::toRfc3339Utc` is
+      `new Date(ms).toISOString()`, which always emits `.sssZ`, and nothing truncates it anywhere.
+      The same false premise appeared in the schema's justification for `record_id` and in a test
+      requirement; all three are corrected.
+    howItSurfaced: >-
+      TWO AGENTS READING TWO SOURCES THAT ARE SUPPOSED TO AGREE. One reasoned from the code and
+      said a `T23:59:59Z` boundary would drop sub-second records; the other reasoned from this
+      contract and said the feed is second-precision, citing all three sentences. NEITHER WAS
+      CARELESS. This is workflow.md §12's shape exactly, and it is the reason the premise is
+      re-derived here rather than the sentences quietly deleted.
+    theCONCLUSIONSURVIVESONASTRONGERPREMISE: >-
+      RE-DERIVED RATHER THAN LEFT PROPPED UP, because an argument that survives the deletion of its
+      premise is an argument nobody has checked. THE COMPOSITE SORT KEY IS NOT MERELY STILL
+      CORRECT — IT IS MORE NECESSARY AT MILLISECOND PRECISION THAN THE ORIGINAL ARGUMENT CLAIMED.
+      The original reasoning was probabilistic: at one-second granularity a burst is LIKELY to
+      collide. At millisecond granularity the naive version of that argument is weaker, because
+      two records are unlikely to land on the same millisecond BY CHANCE.
+      THAT IS NOT THE SITUATION. ON WORKERS THE CLOCK DOES NOT ADVANCE DURING EXECUTION.
+      `docs/decisions/0015` finding 3, verified against Cloudflare's own documentation and quoted in
+      `identity/credential-verifier.ts`: *"`Date.now()` returns the time of the last I/O. It does
+      not advance during code execution."* So records written within one execution slice do not
+      merely RISK a shared timestamp — THEY ARE GUARANTEED TO HAVE AN IDENTICAL ONE, deterministically,
+      every time. A collision is not a burst-time coincidence; it is the normal case for any two
+      records written between the same pair of I/O operations.
+      SO A NON-UNIQUE SORT KEY IS NOT AN EDGE CASE HERE AND `record_id` ON THE WIRE IS LOAD-BEARING.
+      A reader who finds the tiebreaker unjustified and removes it as redundant would produce a feed
+      that skips records under precisely the conditions that produce the most records.
+    andCOREALREADYKNEW: >-
+      `platform/core/platform/platform-operator-store.ts` documents its own anchor as compound
+      because *"the clock has millisecond resolution"*. THE PORT AND THIS CONTRACT HAVE BEEN SAYING
+      DIFFERENT THINGS ABOUT THE SAME COLUMN, which is what made the divergence survivable long
+      enough for two agents to argue from opposite sides of it.
+  bounds: "page_size 1-100, default 25. There is no unbounded form and none may be added."
+
+# ---------------------------------------------------------------------------
+# theTimeWindow — `since` and `until`. ADDED 2026-09-05; the contract previously specified
+# NEITHER the format NOR the inclusivity of its own two time parameters.
+# ---------------------------------------------------------------------------
+theTimeWindow:
+
+  # -------------------------------------------------------------------------
+  # theMANDATORYWINDOW — ADDED 2026-09-07. THE CHEAP HALF OF AN AVAILABILITY FIX.
+  # -------------------------------------------------------------------------
+  theMANDATORYWINDOW:
+    theFINDING: >-
+      MEASURED TWICE, AND THE NUMBERS ARE THE POINT RATHER THAN THE ADJECTIVES. `qa-agent`
+      measured that 49 feed requests exhaust D1's account-wide 5,000,000 rows-read/day allowance
+      against a 50,000-row log, because both feeds scan the whole table with a temp b-tree sort.
+      EXCEEDING THAT ALLOWANCE STOPS D1 FOR EVERY TENANT — including the session lookup every
+      login performs — so this is an availability finding and not a latency one.
+      `core-agent` then measured six query shapes across four index sets and found the rule
+      underneath: *** A TIME-ORDERED WALK TESTS EACH FILTER ROW BY ROW, SO ANY FILTER MATCHING
+      FEWER ROWS THAN ONE PAGE COSTS A FULL WALK. *** A brand-new operator's own history is the
+      worked example: rare filter, whole table walked.
+
+    ruling: >-
+      *** A BOUNDED TIME WINDOW IS REQUIRED ON ANY REQUEST CARRYING A FILTER THAT NO INDEX PREFIX
+      SERVES, AND IS NOT REQUIRED OTHERWISE. *** Both `since` AND `until` must be present and the
+      span must not exceed THIRTY-ONE DAYS.
+      *** THE RULE IS THE PROPERTY. THE LIST BELOW IS DERIVED FROM IT ON A DATE AND IS NOT THE
+      RULE. *** Amended 2026-09-07 from an enumeration of filter names to the property plus a
+      derived list, for the reason `architecture.md` §1a gives about scoping a reservation to
+      "contracts that compose with the mechanism today": A LIST OF NAMES IS CORRECT THE DAY IT IS
+      WRITTEN AND SILENTLY WRONG THE FIRST TIME A FILTER IS ADDED. A new filter is covered by the
+      property the moment it exists, with no contract change and no window to be exempt through.
+      DERIVED ON 2026-09-07, against the index set `0016` leaves in place. *** THE TWO ROUTES
+      ACCEPT DIFFERENT FILTER SETS AND THE DIFFERENCE IS THE WHOLE OF THE DERIVATION, SO BOTH SETS
+      ARE STATED HERE RATHER THAN LEFT TO BE LOOKED UP: ***
+        `platform.audit.list`
+            ACCEPTS  page_size, cursor, actor_principal_id, action_id, since, until.
+            WINDOW REQUIRED when `actor_principal_id` OR `action_id` is present — neither is in an
+            index prefix, so each is tested row by row. NOT required otherwise.
+        `platform.organizations.audit.list`
+            ACCEPTS  page_size, cursor, action_id, since, until. *** NO `actor_principal_id`. ***
+            WINDOW REQUIRED when `action_id` is present. NOT required otherwise — `organization_id`
+            is a PATH parameter served by an index prefix, so it is a seek and not a per-row test.
+      *** SO EVERY FILTER EITHER ROUTE ACCEPTS TODAY REQUIRES A WINDOW. The only exempt shapes are
+      the UNFILTERED ones, and each is bounded by an index prefix rather than by looking cheap. ***
+    whyTHEACTORFILTERSPLITISEASYTOMISREAD: >-
+      STATED BECAUSE IT HAS ALREADY CAUSED TWO MISREADINGS — one by this author, and one by a
+      reviewer who went to the source to check it and QUOTED THE RIGHT LINES OFF THE WRONG ROUTE.
+      *** THE SECOND IS THE MORE DANGEROUS AND IT IS WORTH SAYING WHY, BECAUSE THE INTUITION RUNS
+      THE OTHER WAY. *** Not checking produces a HEDGED claim. Checking and landing in the wrong
+      block of two produces an UNHEDGED one, carrying exactly the evidence a reader looks for — so
+      it DISPLACED the correct finding, and the correct finding did not displace it. Every fact in
+      the overruling was true; only the attribution was wrong. It is `architecture.md` §3c's family
+      with a twist: THE CITATION WAS VERIFIABLE, AND VERIFYING IT WOULD HAVE CONFIRMED IT. Opening
+      the quoted line shows exactly the quoted array. What it does not show is which route owns it,
+      and nothing about the quote reveals that the question is open.
+      *** THE RULE THAT FOLLOWS: WHEN A FILE CONTAINS ADJACENT BLOCKS OF THE SAME SHAPE, A LINE
+      NUMBER IS NOT AN IDENTIFIER. ANCHOR A QUOTATION TO THE BLOCK'S OWN `id` AND QUOTE THAT TOO.
+      *** Here that is `id: 'platform.audit.list'` versus `id: 'platform.organizations.audit.list'`,
+      and either one settles in a word what twenty lines of context does not.
+      `platform-routes.ts` carries the two arrays about twenty lines apart, and the comment
+      immediately above the PLATFORM feed's says *"`actor_principal_id` IS PERMITTED. Filtering by
+      the OPERATOR is not a disclosure."* THAT SENTENCE IS TRUE OF THE ROUTE IT SITS ABOVE AND
+      FALSE OF THE NEXT ONE DOWN, whose own comment says *"NO `actor_principal_id` HERE ... adding
+      an actor filter would let a caller ask 'which of our operators touched this customer'."*
+      BOTH COMMENTS ARE CORRECT IN PLACE; READ OUT OF CONTEXT, THE FIRST ANSWERS A QUESTION ABOUT
+      THE SECOND ROUTE WRONGLY. That is why the parameter sets are transcribed above — a reader
+      checking this rule should not have to land in the right one of two adjacent blocks.
+    ifTHEACTORFILTERISEVERADDEDTOTHEORGANIZATIONFEED: >-
+      IT REQUIRES A WINDOW BY THE PROPERTY, WITH NO AMENDMENT TO THIS CONTRACT. That is the point
+      of stating the rule as a property rather than as the list above: the list is dated and
+      derived, and a filter added tomorrow is covered the moment it exists.
+    whatANEXEMPTSHAPEACTUALLYCOSTS: >-
+      *** AN EXEMPTION IS A BOUND BY AN INDEX, NEVER AN ABSENCE OF COST, AND THE DIFFERENCE IS
+      INVISIBLE FROM THE RESPONSE. *** Measured by `core-agent` against a 50,000-row log with
+      `0016` applied: a filtered feed shape that no index prefix serves walks A CONSTANT FRACTION
+      OF THE LOG — thousands of rows — and that fraction GROWS LINEARLY WITH THE TABLE. It is not
+      a different class from the unbounded case; it is the same class with a smaller constant.
+      *** THE SHARP END IS THE EMPTY PAGE. *** Such a request can walk thousands of rows and
+      return NOTHING, so A CALLER MEASURING COST BY ROWS RETURNED SEES A FREE REQUEST. That is the
+      same trap this contract already names one section down as "the shape that looks safest and
+      is least guarded", arriving through a filter rather than through a missing index.
+      SO AN EXEMPT SHAPE MUST BE EXEMPT BECAUSE AN INDEX PREFIX BOUNDS IT, and never because it
+      looks cheap or usually returns little.
+
+    whyNOTMANDATORYONEVERYTHING: >-
+      BECAUSE IT WOULD BUY NOTHING AND COST SOMETHING. `core-agent` measured the unfiltered feed
+      as already bounded to ONE PAGE by the ordering index — a time-ordered walk with no filter
+      stops after 25 rows. A window there removes no reads and removes an operator's ability to
+      ask "what happened, ever", which is the question an audit trail exists to answer. THE RULE
+      IS MORE PRECISE THAN "ALWAYS" AND THAT IS WHY IT NEEDS EXPLAINING RATHER THAN WHY IT IS
+      WRONG.
+      THE EXEMPTION HAS ONE SENTENCE BEHIND IT: A FILTER SERVED BY AN INDEX PREFIX IS A SEEK; A
+      FILTER NOT SERVED BY ONE IS A TEST APPLIED TO EVERY ROW THE WALK PASSES. Only the second
+      needs a bound on how many rows are walked, and `organization_id` is the first.
+
+    whyAWINDOWANDNOTATHIRDINDEX: >-
+      `core-agent` MEASURED BOTH. A third index takes the log's write cost from 2 TO 5 ROW-WRITES
+      PER PLATFORM REQUEST and buys ONE query shape; P4 makes every platform request a write, so
+      that cost is paid on every call forever, including the reads. THE WINDOW COSTS ZERO
+      ROW-WRITES and took the equivalent quiet-tenant case from 49,993 rows to 9,033 on one index
+      alone.
+      IT IS THE `0030`-SHAPED ANSWER: the free tier may cost us CONFIGURATION, never SCHEMA. A
+      span limit is a constant somebody can change; an index is a write cost paid into the data
+      shape and never recovered.
+
+    theARITHMETIC_STATEDINROWSRATHERTHANINADJECTIVES:
+      theARITHMETICHOLDSONLYIFTHESERVERENFORCESTHEWINDOW: >-
+        *** THE FIGURES BELOW ARE A CONSEQUENCE OF THE REQUIREMENT, NOT A MEASUREMENT OF THE
+        SYSTEM. They hold for a caller the SERVER bounds and for no other. *** A window enforced
+        only in a client is not a bound: it holds for that client and for no script, no second
+        client and no direct request — the same shape as `0017`'s in-process limiter, which
+        `platform-operator-v1` records must not be reported as rate limiting.
+        THIS SENTENCE IS DELIBERATELY ABOUT THE CONTRACT'S REQUIREMENT RATHER THAN ABOUT WHAT CORE
+        CURRENTLY DOES, AND THAT IS A CORRECTION OF FORM MADE ON 2026-09-07. The previous wording
+        reported Core's state — "Core enforces neither token, only `since >= until`" — and WENT
+        STALE WITHIN THE HOUR when the enforcement landed. Nothing turned red. A claim about
+        another module's behaviour has a half-life; a statement of what this contract requires does
+        not, and the second kind is the only kind a contract should be making about code it does
+        not own.
+        HOW TO CHECK IT RATHER THAN BELIEVE IT: the requirement is discharged when the server
+        refuses `time_window_required`, `time_window_too_wide` and `time_window_inverted`, asserted
+        at the boundary — 31 days exactly, ±1 ms, and 32 days. That is a test's answer, not a
+        contract's, and `testRequirements.theMandatoryWindow` is where it is owed.
+      theBOUNDISDERIVEDANDNOTESTIMATED: >-
+        A WINDOW'S ROW COUNT IS BOUNDED BY THE WRITE CEILING THAT PRODUCED IT. The per-principal
+        control-plane allowance is 600 estimated row-writes a day and a record costs 2, so ONE
+        OPERATOR CANNOT PRODUCE MORE THAN 300 RECORDS PER UTC DAY. Therefore a D-day window
+        contains AT MOST (operators × 300 × D) records, whatever the table's total size.
+      atTODAYSPOPULATION: >-
+        TWO OPERATORS, THIRTY-ONE DAYS: at most 2 × 300 × 31 = 18,600 rows walked per request,
+        against 5,000,000 rows-read/day. THAT IS ~268 SUCH REQUESTS A DAY IN THE WORST CASE, where
+        the unbounded form measured 49. Realistic operator volume is tens of actions a day rather
+        than 300, so the ordinary case is one to two orders of magnitude below that.
+      whyTHIRTYONEDAYSANDNOTSEVENORNINETY: >-
+        31 DAYS IS "THE LAST MONTH", which is the natural unit of an investigation, a support case
+        and a billing period. NINETY at today's population is 54,000 rows and 92 requests a day,
+        which is inside the range qa-agent measured as dangerous. SEVEN would be ~4,200 rows and
+        is a materially worse investigative tool for a saving nobody needs yet.
+      *** THE SPAN SCALES WITH THE OPERATOR POPULATION AND THE NUMBER MUST MOVE WITH IT. *** At
+        TEN operators, 31 days is 93,000 rows and 53 requests a day — worse than the number that
+        produced this finding. THIRTY-ONE DAYS IS CORRECT FOR ONE OR TWO OPERATORS AND IS WRONG
+        FOR TEN. Recorded as `PA-4`, with the derivation above so that the next person can
+        re-derive rather than re-measure.
+
+    theSPANLIMITAPPLIESONLYWHERETHEWINDOWISREQUIRED:
+      ruling: >-
+        *** THE 31-DAY MAXIMUM BINDS ONLY A WINDOW THE RULE REQUIRES. A CALLER MAY SUPPLY A WIDER
+        WINDOW ON AN EXEMPT SHAPE, AND A 90-DAY UNFILTERED FEED QUERY IS ACCEPTED. *** Team Lead
+        ruling, 2026-09-07, confirming `core-agent`'s reading so that it stops being a reading.
+      why: >-
+        REFUSING A WIDE WINDOW ON AN EXEMPT SHAPE WOULD REFUSE SOMETHING STRICTLY CHEAPER THAN THE
+        NO-WINDOW REQUEST THIS CONTRACT ALREADY PERMITS. An unfiltered feed with no window at all
+        is served from the ordering index and stops after one page; adding `since` and `until`
+        narrows it further. A LIMIT THAT REFUSED THE NARROWER REQUEST AND ALLOWED THE WIDER ONE IS
+        NOT A LIMIT, IT IS A RULE APPLIED WHERE IT DOES NO WORK.
+      itISWRITTENDOWNBECAUSEITISWHATATIDYINGPASSDESTROYS: >-
+        A LATER READER WILL SEE "the span must not exceed 31 days" BESIDE "a window is required
+        when a filter is present" AND HARMONISE THE FIRST INTO A UNIVERSAL RULE. It reads like an
+        inconsistency and it is not one: the span exists to bound A WALK, and an exempt shape has
+        no walk to bound. The conditional scope is the whole of its meaning.
+    omissionAndExcess:
+      ruling: >-
+        *** REFUSE. NEVER DEFAULT, NEVER TRUNCATE, NEVER NARROW SILENTLY. *** A request that
+        needs a window and omits one is `invalid_argument` with the detail token
+        `time_window_required`. A span exceeding 31 days is `invalid_argument` with
+        `time_window_too_wide`. A window whose `until` is not after its `since` is
+        `invalid_argument` with `time_window_inverted`.
+      whySILENTNARROWINGISTHEWORSTOPTION: >-
+        *** ON AN EVIDENCE SURFACE, A QUIETLY NARROWED WINDOW IS A FEED THAT HIDES RECORDS. *** An
+        investigator asking "has this operator touched anything" over what they believe is all
+        time would receive an empty page and conclude nothing happened. A REFUSAL IS VISIBLE AND
+        AN OMISSION IS NOT, and that asymmetry decides it: the failure mode of refusing is an
+        operator who has to type two dates, and the failure mode of defaulting is a false
+        negative in an investigation.
+      theERRORNAMESTHELIMIT: >-
+        The refusal states the maximum span, so a client corrects without guessing. THAT IS SAFE
+        HERE AND IT IS WORTH SAYING WHY, because this contract collapses five cursor rejections
+        into one indistinguishable answer for the opposite reason: A SPAN LIMIT IS A CONSTANT,
+        NOT A FACT ABOUT DATA. Disclosing it teaches a caller nothing about any record, any
+        operator or any Organization.
+      bothBOUNDSORNEITHER: >-
+        `since` ALONE OR `until` ALONE IS NOT A BOUNDED WINDOW and is refused with
+        `time_window_required`. Half a window is an unbounded walk in one direction, which is the
+        thing being fixed.
+
+    whatITCOSTSANOPERATOR_ANDTHISISTHEHONESTHALF:
+      whatISUNAFFECTED: >-
+        "WHAT HAPPENED, EVER" — the unfiltered platform feed, unbounded in time, fully paged.
+        "WHAT HAPPENED TO THIS ORGANIZATION, EVER" — the unfiltered Organization feed. NEITHER
+        NEEDS A WINDOW AND NEITHER GAINS ONE. The wide question stays wide.
+      whatISCONSTRAINED: >-
+        "WHAT DID OPERATOR Y DO, EVER" AND "WHEN DID ACTION Z LAST HAPPEN" BECOME A SEQUENCE OF
+        MONTH-SIZED QUESTIONS. An investigator walks backwards a month at a time. THE COST IN
+        NUMBERS: a twelve-month investigation is 12 requests at 2 control-plane row-writes each =
+        24 row-writes of an operator's 600/day. Affordable, and stated as a figure rather than as
+        "manageable".
+        IT IS A REAL DEGRADATION OF AN INVESTIGATIVE TOOL AND IT IS NOT DRESSED UP. An audit
+        trail exists to answer questions about the past, and "you may ask about a month at a
+        time" is a constraint on that. It is accepted because the alternative measured at 49
+        requests to stop D1 for every customer on the platform.
+      theCLIENTOBLIGATION_ANDITISTHETRAPRATHERTHANTHERULE: >-
+        *** A CONSOLE MUST RENDER AN EMPTY WINDOWED RESULT AS "NO RECORDS IN THIS WINDOW" AND
+        NEVER AS "NO RECORDS". *** The refusal above stops an operator receiving a silently
+        narrowed answer; nothing stops them MISREADING a correctly narrow one. An empty page over
+        a month is not evidence of absence, and the console is the only place that difference can
+        be shown. Same obligation, same reason, as `audit-read-v1`'s theFEEDCANBEINCOMPLETE.
+
+    whatITDOESNOTCLOSE:
+      - >-
+        *** THE UNFILTERED FEED IS BOUNDED BY AN INDEX AND BY NOTHING ELSE, AND NO WINDOW GUARDS
+        IT. *** If the ordering index is dropped, renamed or has its column order changed, the
+        unfiltered feed reverts to a full scan with a temp b-tree — and it is EXEMPT from the
+        window, so nothing refuses the request. THIS IS THE SHAPE THAT LOOKS SAFEST AND IS LEAST
+        GUARDED. It needs a test that asserts the access path, not one that asserts the answer.
+      - >-
+        A WINDOW BOUNDS THE WALK; IT DOES NOT MAKE A FILTER SELECTIVE. A filter matching MOST rows
+        in the window still walks the whole window. THE GUARANTEE IS "AT MOST THE WINDOW'S
+        RECORDS", NEVER "AT MOST page_size" — and a reader who takes the second reading will be
+        surprised by a dense filter.
+      - >-
+        THE ORGANIZATION FEED'S `action_id` FILTER IS BOUNDED TO ONE ORGANIZATION'S RECORDS IN THE
+        WINDOW, which is an improvement and not an index. A single very active Organization is
+        still a walk of its own slice.
+      - >-
+        *** `core-agent` NAMED A REMAINING UNBOUNDED SHAPE AND I HAVE NOT READ ITS REPORT. *** The
+        four items above are derived from the rule rather than transcribed from that measurement,
+        so they may not be the same list. RECONCILE THIS SECTION AGAINST core-agent's finding
+        before accepting the contract; if they disagree, the measurement is right and this is what
+        moves.
+
+    theCHANGECLASS:
+      ruling: "BREAKING under API_STANDARD.md §6 — it narrows the set of accepted requests."
+      whatISOWED: >-
+        A DECISION RECORD, per `.claude/rules/architecture.md` §1, and it is the Team Lead's. This
+        contract is `status: accepted` with a deployed consumer.
+      theDEPLOYMENTORDERING_ANDITISTHESAMESHAPEASON7: >-
+        *** THE CONSOLE MUST SEND WINDOWS ON ITS FILTERED QUERIES BEFORE CORE REFUSES REQUESTS
+        WITHOUT THEM. *** A client sending bounds a server ignores is harmless; a server refusing
+        requests the deployed client still makes turns the operator's own audit screens into
+        `invalid_argument`. Reversed, this breaks the console for the population that would have
+        to diagnose it.
+
+  whyThisBLOCKEXISTS: >-
+    THE CONTRACT ACCEPTED TWO TIMESTAMP PARAMETERS AND DEFINED NEITHER. The schema covers response
+    shapes only, so `since` and `until` had no stated format anywhere; the console inferred RFC 3339
+    UTC from `occurred_at` and was right, by inference rather than by contract. And nothing said
+    whether `until` was inclusive or exclusive, so the console chose a bound that is correct under
+    BOTH readings — a good defensive choice that it should not have had to make.
+
+  format:
+    ruling: >-
+      `since` AND `until` ARE RFC 3339 UTC INSTANTS OF EXACTLY THIS SHAPE:
+        YYYY-MM-DDTHH:MM:SS.sssZ
+      FOUR-DIGIT YEAR, `T` SEPARATOR, `Z` ONLY, AND EXACTLY THREE FRACTIONAL DIGITS. No offset form
+      (`+00:00` is refused), no lowercase `t` or `z`, no omitted fractional part, no more or fewer
+      than three digits. A value not matching is `invalid_argument` with the detail token
+      `must_be_an_rfc3339_utc_instant`, and it is REFUSED rather than ignored — an accepted-but-
+      unusable filter silently widens an audit query to everything, which reads as "there is nothing
+      to hide here".
+    whyZONLY: >-
+      THE COMPARISON IS LEXICOGRAPHIC AGAINST A STORED `Z` STRING, so an accepted `+01:00` would
+      have to be normalised before comparison and, unnormalised, would silently select the wrong
+      hour. `Date.parse` is not a substitute for a fixed grammar: it accepts `2026-09-05`,
+      `Sep 5 2026`, and `2026-09-05T12:00:00` with no zone — which some engines read as local time
+      and others as UTC, so the same request would select a DIFFERENT SET OF AUDIT RECORDS DEPENDING
+      ON WHERE THE WORKER RAN. For a feed whose purpose is evidence, a window that means different
+      things in different places is worse than no filter.
+    whyEXACTLYTHREEFRACTIONALDIGITS_ANDTHISISTHEPARTNOBODYHAD:
+      finding: >-
+        *** A BOUND THAT OMITS THE FRACTIONAL PART DOES NOT MEAN ITS OWN TEMPORAL VALUE, AND THE
+        ERROR IS SILENT AND ONE-SIDED. *** This was found while specifying the format and neither
+        agent in the original disagreement had it.
+      theArithmetic: >-
+        Stored values always carry milliseconds (`toISOString` emits `.sssZ`). Comparison is
+        LEXICOGRAPHIC on fixed-width strings, which is equivalent to temporal comparison ONLY WHEN
+        BOTH OPERANDS HAVE THE SAME WIDTH. They do not when the bound omits `.sss`:
+          At index 19 a stored value has `.` (0x2E) and a bound without milliseconds has `Z` (0x5A),
+          and `.` < `Z`. SO EVERY STORED VALUE IN THAT SECOND SORTS BEFORE THE BOUND — including the
+          `.000Z` record at exactly the bound's own instant.
+        THE CONSEQUENCES ARE OPPOSITE AND BOTH WRONG:
+          `until=...T23:59:59Z` is EXCLUSIVE and yet INCLUDES the whole of second 59, up to
+          `23:59:59.999Z`. It behaves as if it were inclusive-through-the-second.
+          `since=...T00:00:00Z` is INCLUSIVE and yet EXCLUDES every record in second 00, because
+          `00:00:00.000Z` < `00:00:00Z` lexicographically. It behaves as if it were
+          exclusive-through-the-second.
+        BOTH BOUNDS SHIFT FORWARD BY UP TO ONE SECOND, in opposite senses, with no error and no
+        indication. An operator investigating an incident would silently receive a window one second
+        off the one they asked for.
+      theRuling: >-
+        REQUIRING EXACTLY THREE FRACTIONAL DIGITS REMOVES THE DIVERGENCE ENTIRELY, because every
+        compared string then has identical width and lexicographic order IS temporal order. That is
+        the same property `platform-cursor` relies on and the same reason `occurred_at` is stored as
+        a fixed-width string rather than an epoch integer.
+      whatCOREDOESTODAY_ANDWHATISOWED: >-
+        REPORTED, NOT ASSUMED. Core's grammar as observed at `ce6e952` accepts the fractional part
+        as OPTIONAL, so it accepts the shorter form and exhibits the shift above. THIS CONTRACT
+        NARROWS THE ACCEPTED SET, which is BREAKING under API_STANDARD.md §6 — and it is free at
+        this instant for the same reason confirmation-v1's amendment was: the only consumer is the
+        console, which already sends three fractional digits.
+        THE ALTERNATIVE WAS CONSIDERED AND REFUSED: let Core keep accepting the short form and
+        NORMALISE it by appending `.000` for `since` and `.999` for `until`. That is a second place
+        that decides what a bound means, it differs per parameter, and a reader of either the client
+        or the query would have to know it. A grammar that admits only unambiguous values needs no
+        such rule.
+        core-agent's CHANGE IS ONE CHARACTER — make the fractional group required — and it is
+        reported to the Team Lead rather than performed here.
+
+  inclusivity:
+    ruling: >-
+      THE WINDOW IS HALF-OPEN: `since` IS INCLUSIVE, `until` IS EXCLUSIVE. A record is returned when
+      `since <= occurred_at < until`. Either may be omitted; omitting both returns the unfiltered
+      feed, still paged.
+    itMATCHESWHATCOREDOES: >-
+      TRANSCRIBED, NOT CHOSEN AGAINST THE CODE. The adapter builds `occurred_at >= ?` for `since`
+      and `occurred_at < ?` for `until`. The contract is what was missing, not the behaviour.
+    whyHALFOPENISTHERIGHTCONVENTIONANYWAY: >-
+      ADJACENT WINDOWS TILE EXACTLY. `[A, B)` followed by `[B, C)` covers every record once, with no
+      gap and no duplicate — which is what an operator paging a week day by day, or an export job
+      walking an hour at a time, actually needs. A closed interval double-counts every boundary
+      instant; an open one drops it. THIS MATTERS MORE HERE THAN IN AN ORDINARY LISTING because the
+      artifact is EVIDENCE: a record counted twice across two windows suggests two events, and a
+      record dropped between them suggests none.
+    theCLIENTCONSEQUENCE_STATEDPLAINLY: >-
+      A CALENDAR DAY IS `since=...T00:00:00.000Z` AND `until=<next day>T00:00:00.000Z`. Not
+      `T23:59:59.999Z`, which is now merely a very close approximation rather than a necessary
+      defensive choice: under the settled rule it drops any record in the final millisecond of the
+      day. THE CONSOLE'S EXISTING CHOICE WAS CORRECT UNDER BOTH READINGS AND IS NO LONGER
+      NECESSARY — with inclusivity decided, next-day-midnight is exact, and it is the form both
+      clients should use.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+
+  # =======================================================================================
+  - id: platform.audit.list
+    title: "The platform feed"
+    method: GET
+    path: "/audit"
+    surface: platform
+    provenance: "NEW WORK. The writer exists; nothing reads it."
+    description: >-
+      Every platform-operator action, across all Organizations, WITHOUT the principal-level target.
+      This is the oversight view: who acted, how often, against how many Organizations, when, and
+      with what outcome.
+    permission: core.platform-audit.read
+    scope: platform
+    request: >-
+      Query parameters `page_size`, `cursor`, `actor_principal_id`, `action_id`, `since` and `until`
+      only. Every other parameter is refused with invalid_argument by the class (P2).
+      *** A BOUNDED TIME WINDOW — BOTH `since` AND `until`, SPAN AT MOST 31 DAYS — IS REQUIRED
+      WHENEVER `actor_principal_id` OR `action_id` IS PRESENT, AND IS NOT REQUIRED OTHERWISE. ***
+      Neither filter is served by an index prefix, so each is tested row by row and a rare value
+      costs a full walk. See theTimeWindow.theMANDATORYWINDOW for the measurement, the arithmetic
+      and what it does not close.
+    response: { schemaRef: "urn:dudo:schema:platform-audit-read:1#/$defs/platformFeedOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 2
+    audit: required
+    theOMITTEDFIELD: >-
+      `target_principal_id` IS NOT IN THIS RESPONSE AND MUST NOT BE ADDED. It is the field that
+      aggregates into the CO1 mapping — see theFindingTHISCONTRACTALMOSTSHIPPED. The record still
+      names the Organization, so a reviewer can see that operator X acted on Organization O and go
+      to the Organization feed for the detail, audibly.
+    theFILTERSARENOTAWAYAROUNDIT: >-
+      CHECKED RATHER THAN ASSUMED, BECAUSE A FILTER IS THE OBVIOUS BYPASS. There is deliberately NO
+      `target_principal_id` FILTER: filtering by a principal and counting results would disclose
+      that principal's Organizations one bit at a time, which is the omitted field reconstructed
+      through a query parameter. `actor_principal_id` filters by the OPERATOR, which is not a
+      disclosure — operators are a known set to anyone who can read this feed at all.
+    notes: >-
+      NO not_found. An empty feed returns 200 with data: [] — and it is the ordinary state today,
+      because no route has written a record that anyone has read.
+      maxRowWrites IS 2 ON A READ, per P4. Every call to the audit log writes to the audit log,
+      which is correct and slightly vertiginous: THE FIRST RECORD IN AN EMPTY LOG WILL USUALLY BE
+      SOMEONE READING IT.
+
+  # =======================================================================================
+  - id: platform.organizations.audit.list
+    title: "The Organization feed"
+    method: GET
+    path: "/organizations/{organization_id}/audit"
+    surface: platform
+    provenance: "NEW WORK."
+    description: >-
+      Every platform-operator action affecting one named Organization, WITH the principal-level
+      target. This is the accountability view — what has the platform done to this customer — and
+      it is the view an operator handling a support case actually needs.
+    permission: core.platform-audit.read
+    scope: platform
+    request: >-
+      Path parameter `organization_id`; query parameters `page_size`, `cursor`, `action_id`,
+      `since`, `until`.
+      *** A BOUNDED TIME WINDOW IS REQUIRED WHENEVER `action_id` IS PRESENT, AND IS NOT REQUIRED
+      OTHERWISE. `organization_id` IS EXEMPT AND THAT IS NOT A CONCESSION — it is a PATH parameter
+      served by an index prefix, so it is a seek rather than a per-row test. *** See
+      theTimeWindow.theMANDATORYWINDOW.
+    response: { schemaRef: "urn:dudo:schema:platform-audit-read:1#/$defs/organizationFeedOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    theTENANTSIDERECORD:
+      ruling: >-
+        THIS ROUTE WRITES A TENANT-SIDE AUDIT RECORD INTO THE NAMED ORGANIZATION, ON EVERY CALL.
+        It is the second read operation in Dudo that does; the first is
+        platform.organizations.members.resolve, and for the same reason.
+      why: >-
+        IT IS WHAT KEEPS THE BACK DOOR THE SAME SIZE AS THE FRONT ONE. The membership ruling accepted
+        an N-probe residual because each probe is visible to the customer probed. A per-Organization
+        audit read discloses the same class of fact, so it must carry the same visibility — otherwise
+        an operator would simply read the log instead of resolving, and the control would have been
+        routed around rather than enforced.
+      theRECURSIONISBOUNDEDANDWORTHNAMING: >-
+        READING AN ORGANIZATION'S AUDIT TRAIL WRITES TO THAT ORGANIZATION'S AUDIT TRAIL. That is
+        intended, and it terminates — a read produces one record, it does not produce a record per
+        record read — but it means a trail contains reads of itself and a reader will see their own
+        previous visits. STATED SO IT IS NOT REPORTED AS A DEFECT.
+    notFound: >-
+      An unknown organization_id returns the argument-free 404, on the same reasoning
+      organization-detail-v1 records: every caller who can reach this route can already enumerate
+      Organizations, so the distinction discloses nothing. SPECIFIC TO THIS CLASS; do not copy it to
+      a route a tenant principal can reach.
+    notes: >-
+      maxRowWrites 4 counts the CONTROL-PLANE cost — the platform-operator record (2) plus the
+      reservation for the tenant write. The tenant `audit_event` write is 5 row-writes from the
+      `business` allocation. TWO LEDGERS, BOTH RESERVED, exactly as
+      platform.organizations.members.resolve.
+
+# ---------------------------------------------------------------------------
+# whatThisContractDOESNOTPUBLISH
+# ---------------------------------------------------------------------------
+whatThisContractDOESNOTPUBLISH:
+  - >-
+    NO EXPORT. `core.audit.export` exists in the catalog for a TENANT exporting its own log and is
+    declared [organization]. A platform-wide export would be a downloadable copy of every operator
+    action against every customer, and §3.2 keeps export separate from read precisely because
+    "reading one record and downloading the whole book are different risks". If it is ever wanted it
+    needs its own permission and its own argument.
+  - >-
+    NO DELETE AND NO UPDATE. The log is append-only. This is what makes it evidence rather than
+    notes, and it is the property that makes separationOfDuties survivable.
+  - >-
+    NO READ OF THE TENANT-SIDE audit_event. That log belongs to the Organization and is read by the
+    Organization through `core.audit.read` at organization scope. A PLATFORM ROUTE READING A
+    TENANT'S AUDIT LOG WOULD BE A TENANT READ WITH AN OFFICIAL-SOUNDING NAME, and it is exactly the
+    kind of thing that arrives as "operators need to see the full picture". It is AZ3.
+  - >-
+    NO SUBSCRIPTION, STREAM OR WEBHOOK. A push feed of operator actions is a copy of the log living
+    somewhere with different access rules, which is `0025` Decision 5's own objection.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none-for-the-reads-one-for-the-organization-feeds-audit
+  ruling: >-
+    BOTH ROUTES READ ONLY THE CONTROL-PLANE OPERATOR LOG. Neither reads a row behind
+    `whereWithTenant`, and neither can be made to: the log is a control-plane table with no
+    tenant_id.
+  theORGANIZATIONFEEDSTENANTWRITE: >-
+    Resolves a tenant handle SOLELY to append one audit record, reads no business data through it,
+    and the handle's lifetime is the operation — the same review point three other platform
+    contracts now carry. Putting a resolver on the platform route context to serve it would defeat
+    P1 for the whole class.
+  theISOLATIONTESTFORTHISCONTRACT: >-
+    Not "tenant A must not read tenant B" — there is no tenant on the reading side. WHAT REPLACES
+    IT: assert that no response from either route contains a customer, a Workspace, a name, a field
+    value, a diff or a credential, AND that the platform feed contains no `target_principal_id`
+    under any combination of filters. Assert by attempting it.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read, d1-rows-written, d1-storage]
+  writes: "2 control-plane row-writes per platform-feed page; 2 control-plane plus 5 tenant per Organization-feed page."
+  theGROWTHTERMWORTHWATCHING: >-
+    THE LOG IS THE ONLY TABLE IN THIS SURFACE THAT GROWS WITHOUT BOUND. Every platform route writes
+    to it, including every read, so it grows with operator activity and NEVER SHRINKS — there is no
+    delete. At ~300 operator actions per day per operator the volume is trivial against 500 MB, but
+    THE RETENTION QUESTION IS REAL AND IS NOT ANSWERED HERE: an append-only log with no retention
+    policy is a storage commitment nobody has costed. Recorded as PA-2.
+  paging: "Bounded at 100 rows per page, enforced by the store's LIMIT as docs/decisions/0020's correction requires — the bound is a contract with the store, and a store that ignored `limit` would grow the page unbounded with nothing noticing."
+  cost: "USD 0 / BD 0 per month. No new table beyond the log the writer already creates, no new service."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  theCentralOne:
+    - >-
+      THE PLATFORM FEED NEVER RETURNS target_principal_id, UNDER ANY COMBINATION OF FILTERS,
+      page_size, cursor OR TIME RANGE. This is the assertion the whole contract turns on. Assert the
+      field is absent from the shape AND that no code path populates it.
+    - "There is no target_principal_id FILTER on the platform feed. Supplying one is refused with invalid_argument, not ignored — an ignored parameter is a parameter someone will later honour."
+  theFeeds:
+    - "The Organization feed returns target_principal_id; the platform feed does not. Assert both against the same underlying record, so the difference is proven to be the route and not the data."
+    - "A cursor issued by one feed is refused by the other."
+    - "A cursor issued to operator A is refused for operator B."
+    - >-
+      THE TIME WINDOW IS HALF-OPEN AND ITS BOUNDS ARE EXACT. Seed records at exactly `since`, one
+      millisecond before it, exactly at `until`, and one millisecond before `until`. The record AT
+      `since` is RETURNED; the one before it is not. The record AT `until` is NOT returned; the one
+      a millisecond before it is. Assert all four — a suite that only tests the middle of a window
+      tests nothing about the boundary, and the boundary is the whole of the ruling.
+    - >-
+      A `since` OR `until` OMITTING THE FRACTIONAL PART IS REFUSED with
+      `must_be_an_rfc3339_utc_instant`, and so are `+00:00`, a lowercase `z`, a bare date, and a
+      value with one or six fractional digits.
+      THIS IS A NEGATIVE CONTROL AND NOT HYGIENE: if the short form is accepted, assert what it
+      then does, because it does NOT mean its own instant. `until=...T23:59:59Z` includes the whole
+      of second 59 and `since=...T00:00:00Z` excludes it, both silently, because a stored `.` sorts
+      before a bound's `Z` at index 19. A suite that accepts the short form and checks only that
+      "some records came back" will not see either shift.
+    - >-
+      Paging over records with identical timestamps neither skips nor repeats a record. This is the
+      defect the composite sort key exists to prevent.
+      CORRECTED 2026-09-05, AND THE OLD WORDING WOULD HAVE PRODUCED A SUITE THAT TESTED NOTHING. It
+      said "seed a burst at one-second precision". CORE CANNOT PRODUCE A SECOND-PRECISION TIMESTAMP
+      — `toRfc3339Utc` always emits `.sssZ` — so a suite written to that sentence would seed values
+      the system never generates, exercise a collision case that does not occur, and leave the
+      collision case that DOES occur untested while reporting the property covered.
+      SEED RECORDS WITH IDENTICAL MILLISECOND TIMESTAMPS — the same `.sssZ` value, byte for byte.
+      That is not a contrived fixture: it is what the platform produces whenever two records are
+      written between the same pair of I/O operations, because the Workers clock does not advance
+      during execution (0015 finding 3). Seed at least three such records so a page boundary can
+      fall INSIDE the identical-timestamp run, which is the position that skips or repeats.
+      THE NEGATIVE CONTROL: remove `record_id` from the sort key and from the cursor anchor, and
+      this test must go RED. If it stays green, the fixture's timestamps are not actually identical
+      and the test is proving something else.
+  theMandatoryWindow:
+    - >-
+      A FILTERED REQUEST WITHOUT A WINDOW IS REFUSED. `actor_principal_id` alone, `action_id`
+      alone, `since` alone and `until` alone each return `invalid_argument` with
+      `time_window_required`. HALF A WINDOW IS NOT A WINDOW and is the case a suite skips.
+    - "A span of 32 days is refused with `time_window_too_wide`; 31 days exactly is accepted. Assert the boundary, not a value in the middle."
+    - "An inverted window is refused with `time_window_inverted`, NOT answered with an empty page. An empty page for a malformed question is the silent-narrowing failure in another costume."
+    - >-
+      *** THE EXEMPTION HOLDS: AN UNFILTERED REQUEST WITH NO WINDOW SUCCEEDS *** — on BOTH feeds,
+      and on the Organization feed with only its path parameter. A suite that requires the window
+      everywhere would pass this contract's prose and break the one question the feed exists to
+      answer.
+    - >-
+      THE ACCESS PATH IS ASSERTED, NOT THE ANSWER. The unfiltered feed reads at most one page's
+      rows; a filtered windowed request reads at most the window's records. ASSERT ROWS READ,
+      because every other test here passes identically against a full table scan that returns the
+      right 25 rows — which is exactly the state that measured 49 requests to exhaustion.
+    - >-
+      THE CONSTRUCTED FAILING INPUT: remove the ordering index and the unfiltered feed's rows-read
+      assertion must go RED. It is the shape the window does not guard, it is exempt by design,
+      and nothing else in this suite would notice it regressing.
+  audit:
+    - "Both routes write a platform-operator record. A caller with no platform_operator row writes NONE."
+    - "The Organization feed writes a tenant-side record into the named Organization on EVERY call, including one that returns an empty page."
+  theContents:
+    - "No response contains a credential, a password, a derived value, a salt, a session identifier or a confirmation token. Assert by grepping the serialised response, not by inspecting the schema."
+    - "No response contains a field value, a diff, a before/after, an Organization name or a Template name — 0025 Decision 5's 'never the contents of what was touched'."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: PA-1
+    question: "The party being audited can read the audit log. platform-admin both acts and reviews."
+    recommendation: >-
+      Unavoidable at one or two operators. The log is append-only and reads are themselves audited,
+      which is what makes it survivable. SPLIT IT THE MOMENT A THIRD OPERATOR EXISTS —
+      core.platform-audit.read is already a separate permission so a read-only reviewer role is a
+      catalog edit rather than a redesign.
+    blocks: "Nothing at current scale. It is a stated weakness of a single-operator platform."
+  - id: PA-2
+    question: >-
+      The operator log is append-only, grows with every platform route call including reads, and has
+      NO RETENTION POLICY. Nothing deletes it and nothing has costed it.
+    recommendation: >-
+      Trivial at closed-beta volume and a real commitment at any other. Retention for an audit log
+      is a compliance decision as much as a storage one — deleting evidence has consequences deleting
+      cache does not — so it belongs in a record rather than in a cron job someone adds.
+    blocks: "Nothing today."
+  - id: PA-3
+    question: >-
+      A customer cannot read the platform's actions against them EXCEPT through the tenant-side
+      records this surface writes, and no tenant route reads `audit_event` yet either.
+    recommendation: >-
+      `core.audit.read` is catalogued at organization scope and has no route. THE TENANT-SIDE READ
+      IS THE MORE IMPORTANT OF THE TWO — a trail only the platform can read is a trail kept by the
+      party being audited, which platform-operator-v1's auditModel already names as insufficient.
+      It belongs to the organization-structure slice, alongside OD-2.
+    blocks: "A customer's ability to see what the platform did to their account. Not this contract."
+  - id: PA-4
+    question: >-
+      THE 31-DAY SPAN IS CORRECT FOR ONE OR TWO OPERATORS AND WRONG FOR TEN. A window's worst-case
+      row count is (operators × 300 × days), because the per-principal ceiling of 600 row-writes
+      at 2 per record caps one operator at 300 records a UTC day. At two operators, 31 days is
+      18,600 rows and ~268 requests against the 5,000,000/day allowance. AT TEN OPERATORS IT IS
+      93,000 ROWS AND ~53 REQUESTS — worse than the 49 that produced the finding.
+    recommendation: >-
+      RE-DERIVE THE SPAN WHEN THE OPERATOR POPULATION CHANGES, using the arithmetic in
+      theTimeWindow.theMANDATORYWINDOW rather than re-measuring. The lever is the constant, which
+      is the whole reason a window was chosen over an index — `0030`: the free tier may cost us
+      configuration, never schema. IF NARROWING THE SPAN EVER MAKES THE FEED UNUSABLE, THAT IS THE
+      POINT AT WHICH THE INDEX'S 2 → 5 ROW-WRITES BECOMES THE BETTER TRADE, and it should be
+      argued then rather than assumed now.
+    blocks: "Nothing at one or two operators. It is a number with a stated expiry rather than a constant."

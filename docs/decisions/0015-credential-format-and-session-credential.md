@@ -349,3 +349,73 @@ does not scale beyond a closed beta. **Nothing is implemented against it yet**, 
 it is cheap now and expensive later. If a conventional product with a real recovery story is
 wanted, the answer is OIDC — and that requires explicit user approval of a named third party,
 which this record does not have and does not claim.
+
+## Amendment, 2026-09-04 — §D never said how to normalise the password
+
+**§D specifies "the UTF-8 password" and stops there. That is a gap, not a choice**, and it was
+found by `web-agent` while implementing the client rather than by anyone reviewing the record.
+
+**The defect it leaves.** Any password containing a non-ASCII character can be typed in composed
+or decomposed form. The two are different byte sequences, so they derive **different keys**.
+Input methods do not agree on which they produce — a macOS keyboard, an iOS keyboard and a
+browser can each hand the client a different encoding of what the user believes is one password.
+The user enrols on one platform and cannot log in on the other, and the failure presents as a
+wrong password, which is the least diagnosable form it could take.
+
+**Why this is fixed now and could not be fixed later.** The derived key *is* the credential.
+Nothing stores a plaintext password, so changing this rule after any credential is enrolled
+invalidates that credential permanently, with no migration available. **Today the cost is one
+line in each client. After the first enrolment the cost is every account.**
+
+**Normative addition to §D:** the password is **NFC-normalised** before UTF-8 encoding.
+
+```
+web    password.normalize('NFC')
+Apple  password.precomposedStringWithCanonicalMapping
+```
+
+**It is NFC, and specifically not NFKC.** The two normalisations now appear in the same code
+path for different inputs, which is precisely how they get confused:
+
+| Input | Normalisation | Why |
+|---|---|---|
+| **email** (the salt) | validate ASCII `0x21`–`0x7E`, then **NFKC**, then ASCII-only case folding | Collapsing compatibility variants is *correct* for an identifier: `ﬁ` and `fi` should reach the same account |
+| **password** | **NFC** only — no case folding, no trimming, no ASCII restriction | Canonical composition fixes encoding differences without collapsing distinct characters |
+
+**NFKC on a password would destroy entropy the user believes they have**, mapping distinct
+characters onto one. The password is also not case-folded, not trimmed and not ASCII-restricted;
+only the identifier is.
+
+This follows **RFC 8265's PRECIS `OpaqueString` profile** — the profile SCRAM and SASL use for
+this exact problem — which specifies composition normalisation, no case mapping, and no
+compatibility mapping.
+
+**Consequences.** `platform/core/identity/login.ts`'s header and
+`packages/contracts/core/identity/login-v1.contract.yaml` both state the KDF input and must
+carry this rule. The web and Apple clients each apply it locally; the Core **request path** never
+sees a password and therefore cannot enforce it — **this is a rule only the clients can keep, which is why it belongs
+in the contract rather than in a code comment.**
+
+**Free-tier impact: none.**
+
+### Correction, 2026-09-04 — "Core never sees a password" was too broad
+
+`qa-agent` flagged this while deciding whether `tools/seed-principal.ts` was in scope for the
+rule. The original sentence read *"Core never sees a password and therefore cannot enforce it."*
+**That is true of the request path and false of the repository.**
+
+`platform/core/identity/tools/seed-principal.ts` lives inside `platform/core/**`, and it **does**
+see a password — it generates one and derives the client value from it. It is an operator tool, not
+a request handler, but it is Core code and it is bound by this rule exactly as the two clients are.
+
+**There are three implementations of the client-side KDF, not two**, and the enrolment tool is the
+one nobody thinks of. It is also the most dangerous to get wrong: **a client that skips NFC fails
+to log in, and an enrolment tool that skips NFC creates an account nobody can ever log into**, with
+no plaintext stored anywhere to re-derive from.
+
+This is not hypothetical. `qa-agent` recorded a near-miss: on its first read of the tree,
+`deriveClientValue` encoded the password **without** NFC while the web client applied it. It was
+corrected before testing, and the window existed.
+
+**QA reading the sentence as too broad, and testing the tool as a third client anyway, is what
+found it.** The reading was right; the sentence was wrong. It now says the Core **request path**.

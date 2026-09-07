@@ -81,7 +81,47 @@
  */
 
 import type { Result } from '../kernel/result.ts';
+import type { MembershipRole } from '../authorization/roles.ts';
 import type { ControlPlaneWriteReservation } from './control-plane-admission.ts';
+/**
+ * ===========================================================================================
+ * `import type` IS LOAD-BEARING HERE. DO NOT "TIDY" IT INTO A VALUE IMPORT.
+ * ===========================================================================================
+ *
+ * `verbatimModuleSyntax` erases this line, so there is NO RUNTIME EDGE from `identity/**` to
+ * `platform/**` — only the compile-time obligation that `createMembership`'s third argument
+ * cannot be fabricated. The value side of the relationship runs the other way, as it should:
+ * `platform/platform-authority.ts` performs the read, and the D1 adapter imports its verifier.
+ *
+ * DROPPING THE `type` KEYWORD CREATES AN IMPORT CYCLE — `identity` → `platform` → ... → back —
+ * AND IT WILL NOT LOOK LIKE ONE. It compiles, review reads it as a formatting change, and the
+ * failure arrives at MODULE LOAD in a deployed Worker, where a partially-initialised module
+ * yields `undefined` for an export that every authenticated request depends on. That is a
+ * cold-start failure on the control plane, which is the worst place in the platform to discover
+ * an import-order problem.
+ *
+ * THE CHECK, AND IT IS WORTH RUNNING WITH THE OTHER NEGATIVE CONTROLS. Within
+ * `platform/core/identity/**` there are exactly TWO value imports from
+ * `platform/core/platform/**`, and both are intended:
+ *
+ *   1. `adapters/d1/d1-control-plane-store.ts` imports `consumeMembershipAdmission`. This is the
+ *      direction that is supposed to exist — the adapter reaches into the platform module for the
+ *      verifier, and `platform-authority.ts`'s own value imports are the kernel and
+ *      `platform-permissions.ts`, neither of which reaches back.
+ *   2. `tools/seed-platform-operator.ts` imports `PLATFORM_ROLES`, `toPlatformRole` and
+ *      `reachablePlatformPermissions`. That file is a COMMAND-LINE TOOL, is imported by nothing
+ *      under `platform/core/http/**`, and is not in the Worker's module graph at all — so it
+ *      cannot participate in a load-time cycle regardless of what it imports.
+ *
+ * A THIRD ONE NEEDS AN ARGUMENT. `control-plane-store.ts` — this file — must never become one.
+ *
+ * *** WRITE THAT CHECK TO HANDLE MULTI-LINE IMPORTS AND TO STRIP COMMENTS FIRST. *** A naive
+ * line-oriented grep misses `import {\n  a,\n  b,\n} from '...'` entirely, because the path is on
+ * a different line from the keyword — and it matches the word "import" inside prose like this
+ * paragraph. Both mistakes were made while writing this comment, and the first one produced a
+ * confident count that was wrong by one.
+ */
+import type { MembershipAdmission } from '../platform/platform-authority.ts';
 
 // =============================================================================================
 // Records. Each one is the minimum the resolution algorithm reads, and no more.
@@ -112,11 +152,53 @@ export type PrincipalStatus = 'active' | 'suspended';
  * the system and it would exist for the convenience of a login screen.
  *
  * It also has no credential material: see the header.
+ *
+ * ===========================================================================================
+ * THE TWO MUTUAL-EXCLUSION FLAGS. `docs/decisions/0025` decision 1, `docs/decisions/0024`.
+ * ===========================================================================================
+ *
+ * `platform-operator-v1` states the rule normatively: a principal present in BOTH
+ * `platform_operator` AND `organization_membership` is *"refused everywhere — not resolved in
+ * favour of either, not treated as a platform operator, not treated as a tenant member. BOTH ITS
+ * PLATFORM ROUTES AND ITS ACTIONS DENY."*
+ *
+ * The platform half lives in `platform/platform-authority.ts`. THIS IS THE ACTION HALF, and it is
+ * here — on the principal record — rather than as a fifth port method for one reason: **the
+ * statement that reads this row already runs on every authenticated request**, so two correlated
+ * subqueries against two primary-key indexes cost NO ADDITIONAL ROUND TRIP and no additional
+ * statement. A separate method would have cost one of each, on the hottest path in the platform.
+ *
+ * BOTH FLAGS ARE REQUIRED, AND NEITHER ALONE IS THE CONDITION. Refusing on
+ * `isPlatformOperator` alone would lock out every legitimate platform operator — they must still
+ * authenticate, because `whoami` and the console depend on it. Refusing on `holdsMembership`
+ * alone would refuse every ordinary user in Dudo. **The defect is the CONJUNCTION**, which is
+ * exactly what makes it easy to write the check backwards, and why the two are carried as
+ * separate facts rather than pre-combined into one boolean by the adapter.
+ *
+ * THEY ARE REQUIRED FIELDS, NOT OPTIONAL ONES. An optional flag defaulting to `undefined` reads
+ * as `false`, which is the fail-OPEN direction: a store implementation that forgot them would
+ * silently admit exactly the principal this exists to refuse.
  */
 export type PrincipalRecord = {
   readonly principalId: string;
   readonly principalType: ControlPlanePrincipalType;
   readonly status: PrincipalStatus;
+  /** True when a `platform_operator` row exists for this principal, whatever role it carries. */
+  readonly isPlatformOperator: boolean;
+  /**
+   * True when ANY `organization_membership` row exists for this principal — active, suspended, or
+   * otherwise.
+   *
+   * ANY ROW COUNTS, and the breadth is deliberate. `0024`'s invariant is that a platform principal
+   * holds ZERO memberships: "not a scoped one, not a read-only one, not one just for the tenant
+   * being supported". Ignoring suspended rows would let a suspended membership be reactivated
+   * later and turn a compliant operator into a violating one with no code change anywhere.
+   *
+   * IT IS A COUNT COLLAPSED TO A BOOLEAN AND NEVER THE ROWS. `core-object-registry.yaml` CO1 —
+   * "a user's list of Organizations must never be visible to any of them" — is why this is not a
+   * list.
+   */
+  readonly holdsMembership: boolean;
 };
 
 export type OrganizationStatus = 'active' | 'suspended';
@@ -139,18 +221,150 @@ export type OrganizationRecord = {
 export type MembershipStatus = 'active' | 'suspended';
 
 /**
- * Binds one principal to one Organization.
+ * Binds one principal to one Organization, and carries the grant.
  *
- * NO ROLE, NO PERMISSION, NO GRANT AND NO BUSINESS ASSIGNMENT. `docs/decisions/0007`'s logical
- * permission model does not say where a principal's grants are stored, `0014` §C does not decide
- * it, and a column here encoding roles would settle it silently. The seam is
- * `PrincipalAuthorizationSource` (`principal-authorization-source.ts`), which is injected and
- * defaults to granting nothing.
+ * `role` ARRIVED WITH `docs/decisions/0019`, WHICH CLOSED AZ5. Until then this record deliberately
+ * had no role, no permission and no grant, because `0007` did not say where a principal's grants
+ * were stored and a column encoding them would have settled that silently. The decision now
+ * exists, and the mapping from role to permissions is `authorization/roles.ts` — never a
+ * conditional on the role name anywhere else.
+ *
+ * `null` MEANS DENY EVERYTHING, and it covers two cases the adapter deliberately merges: no role
+ * was ever set, and a value this build does not recognise. `0019`: an unrecognised role "is not
+ * an error and not a partial grant — it is deny all, on the same path as an absent membership."
+ *
+ * THE ROLE IS PER-ORGANIZATION BECAUSE IT SITS HERE AND NOT ON `PrincipalRecord`. A principal may
+ * belong to several Organizations and must not carry authority across them; on `principal` this
+ * field would be a tenant-isolation defect with a convenient shape.
+ *
+ * STILL NO BUSINESS ASSIGNMENT. `AuthenticatedPrincipal.authorizedBusinessIds` cannot be answered
+ * from this record — for an organization-scope principal the set is "every Business in its
+ * Organization", which is a read of the TENANT database after `TenantStoreResolver`, and that is
+ * after this step in `0014` §C.5's order. `0019` does not close that half; see
+ * `principal-authorization-source.ts`.
  */
 export type OrganizationMembershipRecord = {
   readonly principalId: string;
   readonly organizationId: string;
   readonly status: MembershipStatus;
+  readonly role: MembershipRole | null;
+};
+
+/**
+ * A membership row about to be WRITTEN, as distinct from one that has been read.
+ *
+ * IT IS A SEPARATE TYPE BECAUSE THE WRITE NEEDS ONE FIELD THE READ DOES NOT PROJECT.
+ * `created_at` is on the table and is `NOT NULL`, and no read path selects it — the resolution
+ * algorithm has never needed it, and adding it to `OrganizationMembershipRecord` would mean every
+ * membership SELECT in the platform started projecting a column nothing consumes.
+ *
+ * THE ALTERNATIVE — a fourth positional argument on `createMembership` — was rejected for the
+ * reason `PlatformCursorBinding` exists: `createMembership(record, createdAt, reservation,
+ * admission)` and `createMembership(record, reservation, admission, createdAt)` would both
+ * compile, and two adjacent parameters of the same shape are a call site waiting to be written
+ * backwards.
+ *
+ * `createdAt` IS THE SERVER'S CLOCK AND NEVER A REQUEST VALUE, the same rule
+ * `session-resolution.ts` applies by taking no `nowMs` parameter anywhere.
+ */
+export type NewOrganizationMembership = OrganizationMembershipRecord & {
+  /** RFC 3339, UTC. */
+  readonly createdAt: string;
+};
+
+/**
+ * ===========================================================================================
+ * THE FIVE ROWS ONBOARDING CREATES, AS ONE VALUE. `organization-onboarding-v1`.
+ * ===========================================================================================
+ *
+ * THEY ARE ONE TYPE BECAUSE THEY ARE ONE WRITE. See `createOrganizationWithFirstAdmin` for why
+ * the port exposes a single call rather than five — the atomicity is only available if the
+ * boundary is given the whole operation, and a port with five methods is a port that cannot
+ * offer it.
+ *
+ * `createdAt` IS ONE VALUE SHARED BY ALL FIVE ROWS, taken once from the server's clock. Five
+ * separate timestamps would differ by milliseconds and would let a reader of the tables infer an
+ * ordering that has no meaning — the rows commit together.
+ */
+export type NewOrganization = {
+  readonly organizationId: string;
+  readonly status: 'active' | 'suspended';
+  /**
+   * The Template this Organization adopts. `0013_organization_template.sql`.
+   *
+   * REQUIRED IN THE TYPE AND NULLABLE IN THE COLUMN, which is deliberate and is not the same
+   * thing. The column is nullable because every Organization created before `0013` has no Template
+   * and never will — nobody can say retroactively which business type they are. **The field is
+   * required here so that a future writer must decide**, rather than omitting it and producing a
+   * `null` nobody chose.
+   *
+   * ONBOARDING ALWAYS SUPPLIES ONE, because `template_id` is a required field on its request and
+   * is validated against the catalogue before any capacity is reserved.
+   */
+  readonly templateId: string | null;
+  /**
+   * The Organization's name. `0015_organization_identity.sql`.
+   *
+   * **REQUIRED IN THE TYPE AND NULLABLE IN THE COLUMN**, for exactly the reason `templateId` above
+   * gives and it is worth having twice: the column is nullable because Organizations created before
+   * `0015` have no name, and **the field is required here so a future writer must decide** rather
+   * than omitting it and producing a `null` nobody chose.
+   *
+   * ONBOARDING SUPPLIES `null` WHEN THE OPERATOR DID NOT TYPE ONE, and that is a decision rather
+   * than a gap — `0031`: *"a default would invent a name, and an invented name is indistinguishable
+   * from one an operator typed, forever."* There is no synthesis anywhere on this path.
+   */
+  readonly displayName: string | null;
+};
+
+export type NewPrincipal = {
+  readonly principalId: string;
+  readonly principalType: ControlPlanePrincipalType;
+  readonly status: 'active' | 'suspended';
+};
+
+/**
+ * A credential row about to be written.
+ *
+ * *** THIS TYPE IS THE ACCOUNT-CREATION SURFACE `credential-store.ts` DID NOT HAVE. *** That file
+ * records the property being given up here, and it was the strongest one available: *"no
+ * `createCredential` and no `updateCredential`... THE RUNNING WORKER HAS NO CODE PATH THAT WRITES
+ * A CREDENTIAL AT ALL — which means no request, authenticated or not, can create or change one."*
+ *
+ * IT IS SPENT KNOWINGLY, BY `docs/decisions/0026` AND `organization-onboarding-v1`, and what
+ * replaces it is narrower than the absence but not nothing:
+ *
+ *   - **ONE writer.** `createOrganizationWithFirstAdmin`, which cannot write a credential without
+ *     also creating a `principal` and an `organization` in the same statement batch. There is no
+ *     method that writes a credential alone, so there is no way to attach one to an existing
+ *     principal through this port.
+ *   - **NO UPDATE PATH.** `principal_credential`'s primary key is the identifier hash, the insert
+ *     is a plain `INSERT` with no `ON CONFLICT`, and a collision is a `conflict` refusal. So this
+ *     port can create a credential and STILL cannot change one. `credential-reset-v1` will need
+ *     its own writer and will not find one here to widen.
+ *   - **NO PASSWORD REACHES THE SERVER.** `verifier` is derived from a `derived_value` the client
+ *     computed; `0015` §D's central property is untouched. See `theDERIVATIONHAPPENSONTHESERVER
+ *     HERE_ANDTHATISADEPARTURE`, closed as option B.
+ *
+ * THE HONEST STATEMENT OF WHAT DUDO'S ACCOUNT-CREATION SURFACE NOW IS: *"whatever authorizes
+ * `core.organization.create`"* — a platform operator, on the platform host, holding a permission
+ * six roles' worth of grants are checked against. That is strictly weaker than "no code path
+ * exists", and `platform_operator` itself keeps the stronger guarantee: no route creates one.
+ */
+export type NewPrincipalCredential = {
+  /** base64url of `HMAC-SHA-256(IDENTITY_LOOKUP_KEY, normalized_identifier)`. */
+  readonly identifierHash: string;
+  readonly principalId: string;
+  readonly algorithm: string;
+  readonly iterations: number;
+  readonly salt: string;
+  readonly verifier: string;
+};
+
+export type NewTenantDirectoryEntry = {
+  readonly organizationId: string;
+  readonly bindingName: string;
+  readonly state: 'active' | 'suspended' | 'migrating';
 };
 
 /**
@@ -305,6 +519,168 @@ export type IdentityControlPlaneStore = {
     sessionId: string,
     organizationId: string | null,
     reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<void>>;
+
+  /**
+   * ===========================================================================================
+   * WRITES ONE `organization_membership` ROW. IT CANNOT BE CALLED WITHOUT THE PLATFORM-OPERATOR
+   * CHECK HAVING HAPPENED. `docs/decisions/0025` decision 1 · finding `M-1`.
+   * ===========================================================================================
+   *
+   * `admission` IS THE WHOLE POINT OF THIS SIGNATURE. `platform/platform-authority.ts` exports
+   * `admitMembershipWrite` as the ONLY producer of a `MembershipAdmission`, and its mint is
+   * module-private — so there is no way to obtain this argument without the `platform_operator`
+   * read actually having run and returned no row.
+   *
+   * `M-1` was that the write-side guard had no call sites and that omitting it, when membership
+   * administration eventually landed, WOULD BE SILENT: nothing fails, no test goes red, and
+   * `0010`'s triggers become the only layer — on a database where that migration may not have been
+   * applied. **A parameter that cannot be fabricated turns that silent omission into a compile
+   * error.** It is the device `ControlPlaneWriteReservation` already uses one field along, and
+   * reusing it keeps one pattern rather than two that drift.
+   *
+   * ===========================================================================================
+   * NOTHING IN THIS REPOSITORY CALLS THIS YET, AND THAT IS STATED RATHER THAN IMPLIED.
+   * ===========================================================================================
+   *
+   * Membership administration belongs to the organization-structure slice and onboarding to
+   * `organization-onboarding-v1`; neither is built. This method exists now for the same reason
+   * `issueSession` was written before any credential verifier existed and says so in capitals:
+   * **the signature IS the mechanism**, and a signature that arrives with its first caller is a
+   * signature that caller gets to choose. `PRINCIPAL_ROW_WRITES` and its siblings are declared
+   * ahead of their writers on the identical reasoning — "so the first writer draws an accounted,
+   * already-counted cost rather than a number it picked".
+   *
+   * IT IS NOT A STUB. The adapter implements it fully, its guard is tested as an attack, and it
+   * charges `ORGANIZATION_MEMBERSHIP_ROW_WRITES` from the same budget every other control-plane
+   * write draws on.
+   *
+   * WHAT THE CALLER STILL OWES, because this method cannot supply it: the ORGANIZATION's own
+   * existence and the caller's authority to add a member to it. This checks one thing — that the
+   * principal is not a platform operator — and it is not an authorization decision.
+   */
+  createMembership(
+    record: NewOrganizationMembership,
+    reservation: ControlPlaneWriteReservation,
+    admission: MembershipAdmission,
+  ): Promise<Result<void>>;
+
+  /**
+   * ===========================================================================================
+   * ONBOARDING'S FIVE CONTROL-PLANE ROWS, IN ONE STATEMENT BATCH. `organization-onboarding-v1`.
+   * ===========================================================================================
+   *
+   * *** IT IS ONE METHOD BECAUSE ATOMICITY IS ONLY AVAILABLE AT THIS BOUNDARY, AND A PORT WITH
+   * FIVE METHODS COULD NOT OFFER IT. ***
+   *
+   * The contract plans for a partial failure and accepts the litter: *"IF THE OPERATION FAILS
+   * BETWEEN STEP 3 AND STEP 4, AN ORPHAN DIRECTORY ROW SURVIVES... it is litter in a table nothing
+   * cleans, and it is the price of breaking the circularity in this direction"* — recorded as
+   * `ON-1`. **THAT PRICE DOES NOT HAVE TO BE PAID.** All five rows are in ONE database, D1 executes
+   * a batch as a single implicit transaction, and `storage/adapters/d1/d1-store.ts` already relies
+   * on exactly that to make a mutation and its audit record one unit. So the five commit together
+   * or not at all, and **`ON-1`'s orphan is not reachable through this port.**
+   *
+   * IT IS REPORTED RATHER THAN TAKEN QUIETLY, because it makes a contract's accepted risk
+   * unreachable, and a contract that plans for a state the implementation cannot produce should be
+   * amended rather than left to imply the state is live.
+   *
+   * ===========================================================================================
+   * THE ORDER OF THE FIVE IS THE SCHEMA'S ORDER, NOT THE CONTRACT'S, AND THE SCHEMA WINS
+   * ===========================================================================================
+   *
+   * `theOrdering` step 3 says write `tenant_directory` FIRST. **`0005_tenant_directory.sql`
+   * declares `organization_id ... REFERENCES organization (organization_id)`, and D1 enforces
+   * foreign keys — measured 2026-09-05 with a positive control.** So the contract's order fails
+   * every time and onboarding would never have worked.
+   *
+   * The contract's stated REASON survives the correction: the circularity it breaks is that the
+   * tenant store handle needs a directory entry, and the handle is resolved at step 6 — after both
+   * of these. `organization` before `tenant_directory` puts the entry in place just as surely.
+   *
+   * SO THE ORDER IS DEPENDENCY ORDER THROUGHOUT: organization, tenant_directory, principal,
+   * principal_credential, organization_membership — the same order `tools/seed-principal.ts` emits
+   * and for the same stated reason.
+   *
+   * ===========================================================================================
+   * WHAT IT REFUSES
+   * ===========================================================================================
+   *
+   * A DUPLICATE IDENTIFIER IS A `conflict` AND NOT AN UPSERT. The insert carries no `ON CONFLICT`,
+   * so an identifier already enrolled anywhere on the platform refuses the whole batch and nothing
+   * lands. `theIdentifierCollision`: one identifier, one principal, platform-wide. **An upsert here
+   * would silently move an existing person's credential to a new Organization's admin**, which is
+   * account takeover wearing the shape of a convenience.
+   *
+   * IT STILL REQUIRES A `MembershipAdmission`, exactly as `createMembership` does. The new
+   * principal cannot be a platform operator — it was created in this same batch — so the check is
+   * satisfied by construction. **The receipt is required anyway**, because the type is what makes
+   * "every membership write is preceded by the mutual-exclusion check" true of the port rather
+   * than of the callers that happen to remember.
+   */
+  /**
+   * ===========================================================================================
+   * REPLACE A CREDENTIAL AND REVOKE THE TARGET'S SESSIONS, IN ONE STATEMENT BATCH.
+   * `credential-reset-v1` steps 4 and 5.
+   * ===========================================================================================
+   *
+   * *** THE CREDENTIAL CHANGES FIRST AND THE ORDER IS A SECURITY PROPERTY, NOT A PREFERENCE. ***
+   * The contract considered revoke-then-reset and rejected it: *"the target could simply log in
+   * again between the two steps, using the password the operator is about to replace, and end up
+   * with a fresh session that survives."* **One batch removes the window entirely** — D1 runs a
+   * batch as one transaction, so there is no instant at which the old credential works and the
+   * sessions are already gone, or the reverse.
+   *
+   * IT IS AN `UPDATE`, NOT A DELETE-AND-INSERT. The primary key is the identifier hash, which does
+   * not change: **the same account keeps the same row.** A delete-and-insert would briefly leave a
+   * principal with no credential at all, and would make the operation indistinguishable from
+   * enrollment in the write log.
+   *
+   * `sessionIds` ARE COUNTED AND PASSED IN RATHER THAN DELETED BY PREDICATE, because the caller
+   * reserved capacity for exactly that many rows. **A `DELETE … WHERE principal_id = ?` could
+   * remove more sessions than were reserved for**, which `0014` §A.12 calls the outage direction —
+   * and the cap at 50 is `CR-2`'s bound, which a predicate delete would silently ignore.
+   */
+  resetCredential(
+    identifierHash: string,
+    replacement: {
+      readonly algorithm: string;
+      readonly iterations: number;
+      readonly salt: string;
+      readonly verifier: string;
+    },
+    sessionIds: readonly string[],
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<void>>;
+
+  /**
+   * The target's live session identifiers, oldest first, capped.
+   *
+   * *** THE CAP IS `CR-2` AND IT IS A REAL HOLE, BOUNDED AND REPORTED. *** A target with more than
+   * `limit` live sessions **keeps some of them** after a reset. The contract records it rather than
+   * hiding it: the right fix is a per-principal session cap, which does not exist and is a decision
+   * of its own.
+   *
+   * OLDEST FIRST, DELIBERATELY. If some must survive, the ones that survive should be the ones
+   * most recently created by the legitimate holder — an attacker's freshly minted session is the
+   * one an operator is racing, so **dropping the oldest first would revoke exactly the wrong set.**
+   */
+  listLiveSessionIds(
+    principalId: string,
+    nowIso: string,
+    limit: number,
+  ): Promise<Result<readonly string[]>>;
+
+  createOrganizationWithFirstAdmin(
+    rows: {
+      readonly organization: NewOrganization;
+      readonly directory: NewTenantDirectoryEntry;
+      readonly principal: NewPrincipal;
+      readonly credential: NewPrincipalCredential;
+      readonly membership: NewOrganizationMembership;
+    },
+    reservation: ControlPlaneWriteReservation,
+    admission: MembershipAdmission,
   ): Promise<Result<void>>;
 
   /**

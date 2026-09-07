@@ -91,13 +91,30 @@ These apply in full throughout Phases 0–3 and are not negotiable:
 - **Secret protection**
 - **Production approval controls**
 
-### When the full gate returns
+### ~~When the full gate returns~~ — the gate it returns to no longer exists
 
-**The complete seven-step feature-release gate of `0002` becomes mandatory beginning with
-the first runnable vertical product feature** — in practice Phase 4, the
+> **AMENDED 2026-09-06 by `0030`.** This clause named a return condition for a gate that has
+> since been withdrawn. **Its trigger had already fired when `0030` was accepted** — the
+> admin console is deployed at `admin.dudo.work` and is something a user can open, which is
+> exactly what "produces something a user can actually open" means. So for a few hours this
+> record required a gate that no longer existed, and nothing went red.
+>
+> **The substance survives, and it maps cleanly.** `0005` required **user approval per
+> phase** — four approval points before the first App. `0030` requires **milestone
+> acceptance**. Those are the same mechanism: **the phases ARE the milestones.** Nothing is
+> lost by the supersession and no approval point disappears.
+>
+> **What `0005` still binds, untouched by `0030`,** is the more important half anyway — the
+> eight requirements it explicitly did NOT suspend, including truthful test reporting
+> (passed, failed, skipped and **not run**, as actually observed), secret protection, and
+> **production approval controls.** Those were never gate mechanics; they are why the
+> platform-operator slice shipped with its defects found rather than deployed.
+
+~~The complete seven-step feature-release gate of `0002` becomes mandatory beginning with
+the first runnable vertical product feature — in practice Phase 4, the
 first official Apps. It is triggered by the work becoming runnable, not by a phase
 number: any Phase 0–3 work that produces something a user can actually open falls under
-the full gate.
+the full gate.~~
 
 ## Consequences
 

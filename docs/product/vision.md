@@ -5,16 +5,25 @@
 
 ## What Dudo is
 
-Dudo is a modern, **MVP-focused, AI-native business-management platform for startups and
-SMEs**.
+Dudo is a modern, **AI-native business-management platform for startups and SMEs**.
+
+*(This read "MVP-focused" until 2026-09-06. `docs/decisions/0030` withdrew that framing:
+the target is the full system.)*
 
 It gives a small company one place to run its operations, with AI built into the
 product from the ground up rather than added as a feature, and with a plugin system
 that lets the platform be extended without being forked.
 
-**How it gets built: one small, complete vertical feature at a time.** The next feature
-does not begin until the user has tested and accepted the current one. Delivery policy
-and the completion gate: `docs/product/mvp-delivery-policy.md`.
+**How it gets built: continuously, stopping at named milestones for the user to test and
+accept.** Changed 2026-09-06 by `docs/decisions/0030`, which withdrew the MVP framing —
+this previously read *"one small, complete vertical feature at a time,"* and the next
+feature waited on acceptance of the last.
+
+**Production actions still require explicit user approval every time** — migrations,
+deploys, credential changes, spend — and **zero cost still holds, with expandability
+binding beside it: the free tier may cost us configuration, never schema.** Delivery
+requirements: `docs/product/mvp-delivery-policy.md`, whose pacing sections are superseded
+and whose release requirements are not.
 
 Dudo ships on two surfaces — a **responsive web application** and a **native Apple
 application** for iPhone, iPad, and macOS — built from one shared contract set.

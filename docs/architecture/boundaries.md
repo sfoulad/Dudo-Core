@@ -115,8 +115,11 @@ Unit, integration, contract, security, tenant-isolation, and regression suites, 
 
 Owns the repository root, shared configuration, **releases, integration, root-level
 shared test configuration** and `docs/**`. Assigns work, sequences it,
-prevents concurrent edits, integrates results, and performs step 6 of the feature
-completion gate.
+prevents concurrent edits, integrates results, and **hands the user each milestone** — the
+URL, the deployed commit and version, release notes, a test checklist, and the gaps stated
+rather than rounded up. *(Was "performs step 6 of the feature completion gate"; `0030`
+replaced that gate with milestone acceptance on 2026-09-06. The obligation is unchanged —
+only its name and its cadence.)*
 
 ## Allowed dependencies
 

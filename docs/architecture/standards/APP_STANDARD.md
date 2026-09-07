@@ -15,6 +15,31 @@ only Dudo may set. If an official App needs something the SDK cannot express, th
 incomplete — that is the finding, and it goes to the Team Lead. This is the only reliable
 test that the developer platform actually works.
 
+> ## ⚠ THE FIRST APP DOES NOT SATISFY THIS SENTENCE, AND THIS STANDARD IS NOT BEING EDITED TO AGREE
+>
+> Reported 2026-09-06, **CONTRADICTED**, for the Team Lead to disposition. `apps/customers/` is
+> built, deployed and tested, and it took the privileged path this paragraph says does not exist —
+> **because the SDK it was supposed to use does not exist** (`SDK_STANDARD.md` §0 row b).
+>
+> | This standard says | `apps/customers/` does |
+> |---|---|
+> | §2: *"Import Core internals → Use `packages/sdk/**` against a published contract"* | `app.ts:28–30` imports `AppPermissionEnvelope`, `Router` and `createRouter` from `../../platform/core/**` |
+> | §3: `manifest.json` **required** in the App directory | No manifest in `apps/customers/`. It lives at `packages/contracts/apps/customers/manifest.json`, and `apps/customers/README.md:9–10` records the split deliberately: *"Already authored and ADR `0011`-compliant. Not re-authored here"* |
+> | §3: `events/`, `ui/`, `tests/` directories | None of the three exists; the suites are in `packages/testing/suites/customer-directory/` (`TESTING_STANDARD.md` §9) |
+> | §4: *"A manifest declaration is a promise the platform enforces"* | Nothing reads the manifest at runtime. The nine permissions are **transcribed by hand** into `app.ts`, which says so: *"TRANSCRIPTION IS A DRIFT SURFACE, DECLARED AS ONE… they can disagree"* |
+>
+> **Which side is wrong: this standard is right and the implementation is ahead of the platform it
+> is supposed to sit on.** Every divergence above has the same cause — there is no App runtime, no
+> SDK and no manifest loader — and each was recorded rather than concealed, which is the behaviour
+> this paragraph is for. **The finding is not that the App misbehaved. It is that the SDK's gaps
+> were discovered exactly as §1 predicted they would be, and were then worked around instead of
+> being fixed**, because no SDK code may be written yet (`SDK_STANDARD.md` SD1).
+>
+> **What must not happen next is a second App copying the first.** At one App this is a documented
+> exception with a named cause; at two it is the architecture, and `APP_STANDARD.md` becomes a
+> description of something nobody does. The decision that closes it is CF1/AP2 — whether a
+> first-party App is a separate Worker behind a Service Binding, which `0030` records as free.
+
 ---
 
 ## 1. What an App owns
@@ -125,7 +150,21 @@ no schema, no audit, and no AI surface.
   path. A migration that cannot be rolled back is escalated before it is written.
 - **Physical storage layout is not the App's business.** An App that assumes a shared
   table, a per-tenant database, or a particular engine has coupled itself to a decision
-  that is explicitly still open (`MULTITENANCY_STANDARD.md` §7).
+  that is **decided but required to stay reversible** — `0006` chose one shared database,
+  `0030` requires that choice to remain changeable by configuration rather than by rebuilding
+  (`MULTITENANCY_STANDARD.md` §7). *(Corrected 2026-09-06: this bullet said the decision was
+  "explicitly still open". `0006` is Accepted. The obligation on an App is unchanged and the
+  reason for it is now stronger, not weaker.)*
+- **An App's tenant migrations have no runner, and this is a live defect rather than a
+  future concern.** Added 2026-09-06. `wrangler`'s `migrations_dir` is one directory per
+  database and does not recurse, but a tenant database is written by Core **and by every
+  installed App**. `apps/customers/data/migrations/0001_customer.sql` was therefore never
+  applied by the runner, and the result was a deployed system that authenticated perfectly and
+  answered **`503` on every Customer Directory read** — the table did not exist, so the storage
+  boundary refused, correctly, and the failure presented as a dependency error rather than as a
+  missing schema (`docs/operations/deployment-runbook.md` §3). The current remedy is a manual
+  `wrangler d1 execute --file=…` per App migration. **It will recur for every App**, and it is
+  the App-side half of `CLOUDFLARE_STANDARD.md` CF5, which is otherwise closed.
 
 ---
 
@@ -222,8 +261,14 @@ In addition to `TESTING_STANDARD.md` §8:
 
 ## 12. Open questions
 
-| # | Question | Recommendation |
-|---|---|---|
-| AP1 | **App id format.** The plan never specifies one, but ids namespace permissions, events, and API paths, so the format is load-bearing. | Globally unique kebab-case slug, `^[a-z][a-z0-9-]{1,62}[a-z0-9]$`, assigned at marketplace registration; publisher is a separate field. Encoded in the schema. |
-| AP2 | **App runtime isolation.** How a third-party App executes without reaching Core is unrecorded — `0001` bound it to the stack decision, `0003` did not approve Workers for Platforms. | Blocked. No third-party App runs until that record exists. Official Apps in Phase 4 run in-platform under the same manifest enforcement. |
-| AP3 | **Per-App storage units multiply by tenant count.** Not addressed by the plan. | `MULTITENANCY_STANDARD.md` §7 — a routing decision behind the storage port. |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would — those
+are reported, never resolved by editing the standard to agree). The largest contradiction in this
+document is not in this table: it is the §0 box above, on the first App's use of the SDK path.
+
+| # | State | Question | Recommendation |
+|---|---|---|---|
+| AP1 | **CLOSED** | ~~**App id format.**~~ Decided and encoded, exactly as recommended. | `packages/contracts/registries/app-manifest.schema.json:325` defines `$defs/slug` as **`^[a-z][a-z0-9-]{1,62}[a-z0-9]$`**, and line 329 applies it to the App id, with the permission, action, event and API-path grammars at lines 334–358 built on the same slug so the namespacing this row called load-bearing is one definition rather than five. **One caveat that belongs to `0009`, not to AP1:** *nothing in this repository executes JSON Schema*, so the pattern is enforced by review and by the dependency-free relation validator, not by a validator run. The **format** is settled; the **enforcement** is `TESTING_STANDARD.md` TS1's neighbourhood. |
+| AP2 | **Split 2026-09-06 — the third-party half is OPEN, the first-party half is not blocked at all** | **App runtime isolation.** This row read *"Blocked. No third-party App runs until that record exists"*, which is right, and it was widely cited as though it blocked more than that. | **`0030` narrows it, and the narrowing is the point:** *"Workers is free. Workers for Platforms is a different product and is paid-only."* Workers for Platforms gates **only untrusted third-party code execution** — `0006` §4.13 had already recorded that it *"concerns executing untrusted code (Phase 7)"* and is independent of tenancy, and `0030` adds that it gates neither Apps as a concept nor the capability model. So: **(a) THIRD-PARTY — OPEN.** Root R1: no free mechanism exists for executing untrusted code, and Workers for Platforms is prohibited while `0008` is active. A user budget decision or a free alternative, either recorded. Its non-technical prerequisites (review process, trust tiers, distribution) are undecided anyway, so deferring forfeits nothing reachable. **(b) FIRST-PARTY — NOT BLOCKED, AND CURRENTLY UNUSED.** *"First-party Apps as separate Workers, deployed by Dudo, reached through service bindings with least-privilege bindings per App"* is free and is *"a real isolation boundary, not a pretend one"* (`0030`). Today `apps/customers` instead runs **in the Core Worker's process, importing Core directly**. **That is a choice nobody recorded**, and it is now the same decision as `CLOUDFLARE_STANDARD.md` CF1. Decide it **before a second App exists.** |
+| AP3 | **OPEN** — deferred behind the storage port; blocks nothing today | **Per-App storage units multiply by tenant count.** | Unchanged in substance and now sharper: under `0006` Option A there is one shared database, so the multiplication has not started, and `0030` forbids the tempting answer — **"anything that assumes exactly one database exists" is a named violation.** The routing decision stays behind the Core-owned storage port (`MULTITENANCY_STANDARD.md` §7), which is what keeps it a configuration change rather than a schema change. Re-ask it when either a second App ships tenant tables or the 500 MB per-database ceiling is approached, whichever is first. |

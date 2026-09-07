@@ -95,6 +95,29 @@ party being constrained, and letting it certify its own constraint removes the c
 - Confirmation is per operation and states exactly what will happen: the amount, the
   recipient, the record.
 - A confirmation is single-use and short-lived.
+
+> **BUILT, 2026-09-06 — the mechanism this section assumed now exists in Core, and it went further
+> than this section asked.** `0027` (Accepted) implements confirmation as **two independent
+> proofs**: *intent* — a server-authored statement bound to a token the client must echo — and
+> *presence*, a **re-authentication using the existing login KDF**. Its argument for needing both
+> (`0027:23–24`): *"A 'type DELETE to continue' box proves (a) AND NOT (b). A re-authentication
+> prompt proves (b) AND NOT (a)."* Core-side: `platform/core/confirmation/**`, migration
+> `platform/core/migrations/control-plane/0011_confirmation.sql`, and `0029` for the binding.
+>
+> **Three consequences for this document, none of which weaken it.** **(1)** §5's rule that a model
+> *"asserting 'the user confirmed' is not a confirmation"* is now the **general** rule rather than
+> an AI-specific one — `0027:44` gives the same reason this section does, *"the model is the party
+> being constrained"*, and `0027:82` states the generalisation: **the constrained party must not
+> author the constraint.** **(2)** `0029` is the case study for §5's *"states exactly what will
+> happen"*: a confirmation minted for one platform operator was **`0029:22` — *"spendable on any
+> other"*** — because the bound object was computed from the body and that route's body carried
+> nothing else. The binding now covers **the route's declared path parameters** as well
+> (`0029:44–53`). **An MCP tool call must bind its arguments the same way or it inherits that
+> defect**, and the defect was caught by a load-time guard rather than by review. **(3)** The
+> ceiling `0027:38–41` records applies here verbatim: re-authentication **"is not two-factor and
+> must never be described as such"**, and `MfaFactor` is *"a registry entry at `proposed` with no
+> table, no enrolment path and no code"* (`0027:32`) — so §5's mention of MFA names something that
+> does not exist, and a `critical` action over MCP is protected by a password, not by a factor.
 - `critical` actions over MCP are denied outright unless the tenant has explicitly enabled
   them for AI principals. Default = deny extends to *which class of action AI may perform
   at all*, not only to individual permissions.
@@ -163,9 +186,15 @@ untrusted.
 
 ## 10. Open questions
 
-| # | Question | Recommendation |
-|---|---|---|
-| MC1 | **How Dudo hosts an MCP server.** The candidates are the Agents SDK and remote MCP; **neither is approved** (`0003`). | This standard defines derivation, authorization, discovery, confirmation, and audit — all of which are transport-independent. The transport needs an ADR before Phase 8. Nothing here depends on it. |
-| MC2 | **MCP authentication.** Binding an MCP session to a Dudo principal and tenant has no recorded mechanism, and it is the security boundary of the whole surface. | Needs an ADR with AZ2 (authentication). **Phase 8 is blocked on it.** |
-| MC3 | **Whether tool descriptions are tenant-customisable.** Useful for domain vocabulary; also a way to make a tool describe itself as something it is not. | Do not allow free-text override of the description in the first version. Revisit with evidence. |
-| MC4 | **Cost attribution for AI-driven tool storms.** An agent can generate far more calls than a human. | Per-principal quota from the tenant's plan (§6). The pricing consequence is a user decision. |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would).
+**No MCP code exists**, so nothing here is contradicted. Two of the four rows named dependencies
+that have since been settled, and both are corrected below.
+
+| # | State | Question | Recommendation |
+|---|---|---|---|
+| MC1 | **OPEN — ROOT R5.** Cloudflare product record; independent of R3 | **How Dudo hosts an MCP server.** The candidates are the Agents SDK and remote MCP; **neither is approved** (`0003`). | Unchanged, and the claim that made this row cheap has held up under a year of building: this standard defines derivation, authorization, discovery, confirmation and audit, **all of which are transport-independent**, and nothing in §§1–9 has had to change while the transport stayed unknown. ~~The transport needs an ADR before Phase 8.~~ **`0030` withdrew the phase framing**; it needs a record before any MCP surface, whenever that is scheduled. **Note it is a separate root from the AI provider** (`AI_STANDARD.md` AI1): Dudo could host MCP tools for an external model without approving an AI provider of its own, and could approve a provider without hosting MCP. Two decisions, neither implying the other. |
+| MC2 | **Dependency CLOSED; the design is still OPEN** | **MCP authentication.** Binding an MCP session to a Dudo principal and tenant has no recorded mechanism, and it is the security boundary of the whole surface. | ~~Needs an ADR with AZ2 (authentication). **Phase 8 is blocked on it.**~~ **Corrected 2026-09-06: AZ2 is decided and shipped.** `0014` (Accepted) records authentication in three parts, `0015` the credential and session-credential format, `0018` and `0021` the revocation and session-route classes, and login is live in production. **So this row is no longer waiting for a mechanism — it is a design on top of one that exists**, and the shape is largely dictated by decisions already made: §4 requires an MCP session bound to **one** tenant, and `0021` established a request class that resolves a session and stops, which is the nearest existing analogue. **What is still genuinely undecided:** how a non-browser agent obtains a credential (the session credential is a cookie or `Authorization: Bearer` per `0018` §A, neither of which an autonomous agent acquires by itself), and whether an AI principal's credential is an `ApiCredential` bound to one principal with an explicit permission set — *"never 'everything its creator has', which silently grows as the creator's role grows"* (`core-object-registry.yaml`). **Needs its own record; it is no longer blocked, only unwritten.** |
+| MC3 | **OPEN** — product decision; blocks nothing | **Whether tool descriptions are tenant-customisable.** Useful for domain vocabulary; also a way to make a tool describe itself as something it is not. | Unchanged: do not allow free-text override in the first version; revisit with evidence. **One connection worth recording:** `0025` established that a **Template** may carry display labels per structural level *"and may never contain logic"*, which is the same distinction this row needs — a per-tenant **label** is data, a per-tenant **description a model acts on** is closer to an instruction. If tenant vocabulary is ever admitted here, admit it as labels bound to declared fields, not as prose. |
+| MC4 | **OPEN** — a user pricing decision; the mechanism half is largely built | **Cost attribution for AI-driven tool storms.** An agent can generate far more calls than a human. | The recommendation stands — per-principal quota from the tenant's plan (§6) — and **the enforcement machinery it assumed now exists**, which was not true when this row was written. `0014` §A established a daily D1 write-admission port with a platform ceiling split three ways and per-principal sub-ceilings, and `0013` established a coordinator that bounds a hostile caller's write amplification. **An MCP principal is exactly the caller those controls were designed against**, and it should reuse them rather than introduce a parallel limiter. **Two cautions from the free-tier register, both measured:** a naive one-Durable-Object-call-per-request limiter *"lets an unauthenticated flood exhaust the allowance the authenticated path depends on"*, and a new consumer's §6a check must state **which other consumer it shares with**. **The pricing consequence remains a user decision.** |

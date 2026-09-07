@@ -1,0 +1,101 @@
+-- Control-plane migration 0013 — the Organization's Template reference.
+-- docs/decisions/0025 decision 2, contract template-v1 TM-4, contract organization-detail-v1.
+--
+-- Read `0012_template.sql` and `0002_organization.sql` first.
+--
+-- IT BELONGS TO `DB_CONTROL`. A Template is tenant-independent platform configuration and an
+-- Organization is a control-plane row; neither has a `tenant_id` and neither is reachable through
+-- a tenant handle.
+--
+-- NOT APPLIED. No migration runner exists (CLOUDFLARE_STANDARD.md CF5) and no agent may run one
+-- against real data (.claude/rules/security.md §7). This file is the reviewed definition.
+--
+-- ROLLBACK PATH: SQLite cannot drop a column in the version D1 targets, so the rollback is to
+-- leave the column in place and stop writing it — it is nullable, so an unwritten column is
+-- indistinguishable from the state before this migration. That is stated rather than a
+-- `DROP COLUMN` nobody could run. FORWARD-ONLY, and idempotent only in the sense that re-running
+-- it fails loudly on `duplicate column name` rather than corrupting anything.
+--
+-- =============================================================================================
+-- WHY THIS EXISTS: A CAPABILITY THAT WAS REPORTED AS ABOUT TO BE CONNECTED, AND WAS NOT
+-- =============================================================================================
+--
+-- `0012_template.sql` said, in normative voice:
+--
+--   "NO FOREIGN KEY FROM `organization` TO HERE YET. Nothing references a Template: Organizations
+--   have no `template_id` column, so creating one changes what no user sees.
+--   `organization-onboarding-v1` ADDS THE REFERENCE. Until then this capability is COMPLETE AND
+--   INERT, and contract TM-4 requires it to be reported that way rather than as 'business types
+--   now work'."
+--
+-- ONBOARDING LANDED (`6e00fbf`) AND DID NOT ADD THE REFERENCE. It reads the Template to validate
+-- `template_id` — one `findById`, at step 1, purely to produce an honest `not_found` — and then
+-- writes it nowhere, because there was no column to write it to.
+--
+-- SO THE SENTENCE ABOVE BECAME FALSE IN THE MOST MISLEADING DIRECTION AVAILABLE: it told a reader
+-- the gap was closed by work that was already merged. The Team Lead had twice reported to the user
+-- that onboarding was what made Templates stop being inert. It was not, and this migration is what
+-- makes it so.
+--
+-- THAT IS THE FAILURE `workflow.md` §12 DESCRIBES, POINTING FORWARD RATHER THAN BACK: an artifact
+-- that instructs went stale because a decision was IMPLEMENTED INCOMPLETELY rather than withdrawn.
+-- A clause naming a future change as the fix creates an obligation nobody is assigned to collect,
+-- and the only thing that catches it is somebody comparing the claim against the schema.
+--
+-- =============================================================================================
+-- WHY THIS IS A COLUMN AND NOT A JOIN TABLE
+-- =============================================================================================
+--
+-- AN ORGANIZATION HAS EXACTLY ONE TEMPLATE, OR NONE. `0025` decision 2: a business type IS a
+-- Template — "a pre-configured combination of Apps and settings for a business type" — and a
+-- business is one kind of business. A join table would express a cardinality the model does not
+-- have, and the first code to read it would have to decide what two Templates mean.
+--
+-- NULLABLE, AND THE NULL IS A REAL STATE RATHER THAN A MIGRATION ARTEFACT. Every Organization
+-- created before this migration has no Template and never will have one retroactively — nobody
+-- can say which business type they are. `organization-detail-v1` contracts the field as nullable
+-- for exactly this reason, and a backfill would be inventing an answer.
+--
+-- =============================================================================================
+-- THE FOREIGN KEY IS THE POINT, AND D1 ENFORCES IT
+-- =============================================================================================
+--
+-- MEASURED 2026-09-05, with a positive control: an insert naming an absent parent fails with
+-- `FOREIGN KEY constraint failed` and lands zero rows; the same insert with the parent present
+-- succeeds. This is not assumed.
+--
+-- SO AN ORGANIZATION CANNOT NAME A TEMPLATE THAT DOES NOT EXIST, and the check is in the database
+-- rather than only in the service that validates before writing. Onboarding already refuses an
+-- unknown `template_id` with `not_found` at step 1 — this is the layer that survives an edit to
+-- that service, a second writer added later, and rows inserted by hand.
+--
+-- IT ALSO MAKES A TEMPLATE UNDELETABLE ONCE ADOPTED, which is correct and is worth stating because
+-- it constrains a route that does not exist yet: there is no Template deletion route (`TM-2`: no
+-- route sets `status` in version 1), and when retirement is built it must be a STATUS CHANGE and
+-- not a DELETE. An Organization whose `template_id` pointed at nothing would be an Organization
+-- whose business type is a dangling reference, which is worse than one that has none.
+--
+-- =============================================================================================
+-- ORDERING INSIDE ONBOARDING'S BATCH
+-- =============================================================================================
+--
+-- `organization` IS THE FIRST STATEMENT IN THAT BATCH AND STAYS FIRST. The Template it names is
+-- not created by the operation — it was created earlier, by `platform.templates.create`, and
+-- validated by a read before any capacity was reserved. So this foreign key adds no ordering
+-- constraint to the five statements; it constrains only the value.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a)
+-- =============================================================================================
+--
+-- NO CHANGE TO ANY ROW-WRITE COUNT. Adding a nullable column to an existing INSERT writes the same
+-- one row and touches no index — `ORGANIZATION_ROW_WRITES` stays 2, and onboarding's total stays
+-- 10. No new table, no new index, no new binding. COST: USD 0 / BD 0 per month.
+--
+-- NO INDEX ON `template_id`, DELIBERATELY. The only query that would want one is "list every
+-- Organization using Template X", which is a route that does not exist and which nobody has asked
+-- for. An index costs a row-write on every Organization insert, forever, to serve a question
+-- nothing asks. Add it with the route that needs it.
+
+ALTER TABLE organization
+  ADD COLUMN template_id TEXT REFERENCES template (template_id);

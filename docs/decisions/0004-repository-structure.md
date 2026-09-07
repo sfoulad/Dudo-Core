@@ -71,7 +71,7 @@ History is preserved with `git mv`. No file is dropped or silently overwritten.
 |---|---|
 | `architecture-agent` | `packages/contracts/**`, `docs/architecture/**`, `agents/**` |
 | `core-agent` | `platform/core/**` and the other `platform/` domain services |
-| `web-agent` | `platform/web/**` |
+| `web-agent` | `platform/web/**` **and `platform/admin/**` — see the amendment below** |
 | `plugin-agent` | `platform/capabilities/**`, `packages/sdk/**`, `connectors/**` |
 | `app-agent` | `Dudo-Apple` (unchanged) |
 | `qa-agent` | `packages/testing/**`, plus Apple test targets |
@@ -103,3 +103,49 @@ client move to `platform/web/**`, the reservation of `apps/**` for installable b
 Apps, and that ownership rules, agent definitions, documentation, CODEOWNERS, testing
 paths, and planned CI paths all be updated to match, preserving history and losing no
 files.
+
+---
+
+## Amendment, 2026-09-06 — `platform/admin/` exists, is deployed, and this record never named it
+
+**Found by `architecture-agent` during the Phase 0 reconciliation, as `STUDIO_STANDARD.md`'s
+`ST1`.** The gap that standard predicted for Studio **happened to something else first, by
+drift, and nobody noticed until the corpus was read against the system.**
+
+**The facts.** `platform/admin/` is a deployed platform application serving
+`admin.dudo.work` from its own Worker. It appears in **neither** table above: not in the
+moves, not in ownership. It was created, built, tested, deployed and documented while this
+record — the one that says where things live and who owns them — did not know it existed.
+
+### The rule this record was missing
+
+`0004` named three destinations under `platform/`: `core/`, `web/`, `capabilities/`. It gave
+no rule for **a platform application that is none of those**, so the fourth one was placed by
+whoever needed it rather than by a decision.
+
+> **`platform/<name>/` is the home of a platform application — a deliverable Dudo itself
+> ships and deploys. `apps/` remains reserved for INSTALLABLE business Apps and nothing
+> else.**
+
+The distinction that matters is not "front end versus back end" — it is **who ships it.**
+`platform/web/` and `platform/admin/` are both browser applications; both are Dudo's.
+A CRM is not, however much code it shares.
+
+### Ownership
+
+**`web-agent` owns `platform/admin/**`**, on the same reasoning that gives it
+`platform/web/**`: it is a browser application consuming published contracts, holding no
+business rules and performing no data access. **This ratifies what has been true in practice
+for two days** rather than announcing anything new — the console was built by `web-agent`
+throughout.
+
+### Two consequences, both owed
+
+**`0010`, the admin frontend stack record, is Accepted and is on the `decision/admin-frontend`
+branch.** It is present in the working tree and on `main`, so this is narrower than it first
+appeared — but the branch still exists unmerged and should be resolved rather than left as a
+second home for an accepted decision.
+
+**Whatever amendment eventually names Studio must name it in the same edit.**
+`STUDIO_STANDARD.md` `ST1` is the same gap for a future application, and fixing one while
+leaving the other is how this record acquires a fifth unnamed directory.

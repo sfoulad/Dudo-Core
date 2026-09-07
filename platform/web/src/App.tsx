@@ -14,10 +14,74 @@ import { buildHash, matchPath, useLocation } from '@/lib/router';
 import { setLastListHash } from '@/lib/last-list';
 import { createCustomerDirectoryClient } from '@/api/client';
 import { createFixtureTransport } from '@/api/fixture-transport';
+import { createHttpTransport } from '@/api/http-transport';
+import { signalPreconditionFailed, signalUnauthenticated } from '@/api/session-signal';
+import { createAuthClient } from '@/api/auth';
+import { createOrganizationClient } from '@/api/organization';
+import { AuthGate } from '@/components/AuthGate';
+import { OrganizationGate } from '@/components/OrganizationGate';
+import { useSession } from '@/lib/use-session';
+import { useOrganization } from '@/lib/use-organization';
+import { CONFIG } from '@/api/config';
+
+/**
+ * The transport seam.
+ *
+ * ONE TERNARY IS THE WHOLE OF THE SWAP, and it is deliberately here rather than
+ * hidden inside the client: which transport a build talks to is the single most
+ * consequential fact about it, and it should be visible in the file a reader
+ * opens first. `config.ts` refuses to start on an unrecognised value, so this
+ * never silently falls back to fixtures.
+ *
+ * It is built OUTSIDE the component and memoised on nothing, because a new
+ * transport identity would re-trigger every `useEffect` keyed on the client and
+ * re-issue every in-flight read.
+ */
+function createTransport() {
+  return CONFIG.transport === 'http'
+    ? createHttpTransport({
+        onUnauthenticated: signalUnauthenticated,
+        onPreconditionFailed: signalPreconditionFailed,
+      })
+    : createFixtureTransport();
+}
 
 export function App() {
   const { path, query } = useLocation();
-  const client = useMemo(() => createCustomerDirectoryClient(createFixtureTransport()), []);
+  const transport = useMemo(createTransport, []);
+  const auth = useMemo(createAuthClient, []);
+  const organizations = useMemo(createOrganizationClient, []);
+  const session = useSession(transport, auth);
+  const organization = useOrganization(transport, organizations, {
+    settled: session.settled,
+    organizationRequired: session.organizationRequired,
+    authenticated: session.state === 'authenticated',
+  });
+
+  /*
+   * THE CLIENT'S IDENTITY IS THE RETRY.
+   *
+   * `organization.nonce` is not read here, and that is deliberate rather than a
+   * mistake: it is in the dependency list so that a successful Organization
+   * selection produces a NEW client object. Every screen keys its read effect
+   * on `client`, so a new identity re-issues exactly the request that was
+   * refused — which is the contract's "retry the original request ONCE",
+   * served without a single screen knowing that Organization selection exists.
+   *
+   * ONCE, AND ONLY ONCE: nothing bumps the nonce again until the next
+   * successful selection, so there is no path here that can loop.
+   *
+   * IT DOES NOT REPLAY WRITES. A create or an update refused with
+   * `failed_precondition` is not re-submitted when selection completes — the
+   * person presses the button again. Silently re-posting a write on the
+   * client's initiative is a different thing from re-reading a list, and only
+   * the second one is safe to do without being asked.
+   */
+  const client = useMemo(
+    () => createCustomerDirectoryClient(transport),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [transport, organization.nonce],
+  );
   const [busy] = useState(false);
 
   // Remember the directory the person was looking at, so a record's back link
@@ -53,8 +117,23 @@ export function App() {
   }, [path]);
 
   return (
-    <AppShell busy={busy}>
-      <Screen path={path} client={client} />
+    <AppShell
+      busy={busy}
+      signedIn={session.state === 'authenticated'}
+      signingOut={session.signingOut}
+      onSignOut={session.signOut}
+    >
+      <AuthGate session={session} auth={auth}>
+        {/*
+          INSIDE the auth gate, not beside it. Choosing an Organization is a
+          thing only an authenticated person can do, and the picker's own route
+          answers 401 without a session — so a signed-out visitor must reach the
+          login form, never this.
+        */}
+        <OrganizationGate organization={organization}>
+          <Screen path={path} client={client} />
+        </OrganizationGate>
+      </AuthGate>
     </AppShell>
   );
 }

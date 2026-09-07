@@ -1,0 +1,538 @@
+/**
+ * ===========================================================================================
+ * RESOLVING ONE MEMBER, AND TELLING THE TENANT IT HAPPENED.
+ * `docs/decisions/0028` Decision 2 · contract `organization-detail-v1`.
+ * ===========================================================================================
+ *
+ * *"AN OPERATOR RESOLVING AN IDENTIFIER THEY WERE GIVEN IS SUPPORT. AN OPERATOR RECEIVING A LIST
+ * THEY DID NOT ASK FOR BY NAME IS SURVEILLANCE."*
+ *
+ * This module exists because the second half of that sentence needs a mechanism, not a rule. The
+ * resolve is the narrow thing published in place of a member list, and **what makes it acceptable
+ * is not that it returns one row — it is that the customer can see it happen.**
+ *
+ * ===========================================================================================
+ * WHY THIS IS NOT IN `platform/core/platform/**`, WHICH IS THE SAME REASON `onboarding/` IS NOT
+ * ===========================================================================================
+ *
+ * **The tenant-side audit record needs a tenant store handle.** `platform-operator-v1` P1 says the
+ * platform route class can reach none, and `organization-detail-v1` names the tension itself:
+ * *"PUTTING A RESOLVER ON THE PLATFORM ROUTE CONTEXT TO SERVE IT WOULD DEFEAT P1 FOR THE WHOLE
+ * CLASS."*
+ *
+ * So the resolver is held here. The platform class receives `MemberResolutionService` — a port
+ * with one method that returns a principal id and a role. **`qa-agent`'s control — "no module
+ * under `platform/core/platform/**` names a tenant primitive" — stays exact rather than gaining a
+ * second exception.**
+ *
+ * IT IS A SEPARATE DIRECTORY FROM `onboarding/` AND NOT A SHARED `tenant-writers/`. That directory
+ * is one operation's. A second unrelated operation moving in is how a well-named boundary becomes
+ * a junk drawer, and the next reader would have to work out which of two services the resolver
+ * belonged to.
+ *
+ * ===========================================================================================
+ * *** THE AUDIT RECORD IS WRITTEN ON EVERY CALL, INCLUDING EVERY REFUSAL. ***
+ * ===========================================================================================
+ *
+ * *"BECAUSE THE PROBE IS THE THING BEING RECORDED, NOT THE ANSWER. A record written only on
+ * success would leave every unsuccessful probe invisible, which is exactly the half an attacker
+ * generates most of."*
+ *
+ * `0028` accepts a residual it does not close: an operator holding one known identifier can probe
+ * it against every Organization and learn which ones that person belongs to. **That is `CO1`, for
+ * one principal, at a cost of N requests.** What bounds it is that every probe is loud in two
+ * places — the platform operator log AND the victim's own audit trail — where a member list would
+ * have been one silent request per Organization returning everything.
+ *
+ * **THE HONEST LIMIT, AND IT IS WORSE TODAY THAN THE CONTRACT IMPLIES.** `0028` says the attack is
+ * bounded by *"N requests, audited in both homes, visible to each victim, rate limited."* **The
+ * last term is false.** `PO-4` is owed and unimplemented: there is no rate limiter on this class,
+ * and what actually bounds an operator is the per-principal daily write ceiling — roughly 150
+ * resolves per operator per UTC day, because each costs 4 control-plane row-writes. That is a
+ * bound, and it is not rate limiting, and it must not be reported as though it were.
+ *
+ * AND: auditing is DETECTION, NOT PREVENTION. Nobody reads the operator log today because the read
+ * route does not exist. `platform-audit-read-v1` is next; until it lands, "it is audited" must not
+ * be cited as though someone were watching.
+ */
+
+import type { Clock } from '../kernel/clock.ts';
+import { toRfc3339Utc } from '../kernel/clock.ts';
+import type { IdGenerator } from '../kernel/ids.ts';
+import type { Result } from '../kernel/result.ts';
+import { err, ok } from '../kernel/result.ts';
+import { quotaExceeded, rateLimited, unavailable } from '../kernel/errors.ts';
+import type { IdentifierHasher } from '../identity/credential-store.ts';
+import type { CheckedIdentifier } from '../identity/credential-store.ts';
+import { normalizeIdentifier } from '../identity/credential-store.ts';
+import type {
+  PlatformMemberResolution,
+  PlatformOperatorStore,
+} from '../platform/platform-operator-store.ts';
+import type { TenantStoreResolver } from '../tenancy/tenant-store-resolver.ts';
+import type { TenantScopedStore, WriteOperation } from '../storage/store.ts';
+import type { RequestCoordinator } from '../protection/coordination.ts';
+import type { AuditSink } from '../audit/audit.ts';
+import { derivePlatformOperatorActorContext } from '../audit/audit.ts';
+import type { OperatorWriteCharged } from '../platform/platform-audit.ts';
+import { consumeOperatorCharge } from '../platform/platform-audit.ts';
+
+/**
+ * A tenant `audit_event` write: 1 row + its primary key + 3 explicit indexes.
+ *
+ * THE SAME FIGURE `control-plane-admission.ts` USES, and it is drawn from the Organization's
+ * `business` allocation rather than the operator's `system` one. **Two ledgers, both reserved** —
+ * the same split `organization-onboarding-v1` makes.
+ */
+export const RESOLVE_TENANT_ROW_WRITES = 5;
+
+/**
+ * ===========================================================================================
+ * WHICH PERMISSION A TENANT-SIDE PLATFORM RECORD MAY NAME. A CLOSED LIST, AND ADDING TO IT IS
+ * MEANT TO BE A STOP RATHER THAN A COPY-PASTE.
+ * ===========================================================================================
+ *
+ * *** IT IS NOT A SECURITY CHECK AND MUST NOT BE READ AS ONE. *** Nothing here compares this value
+ * against the permission the dispatcher actually authorized; a caller passing the wrong member of
+ * this union writes a wrong-but-well-formed record and nothing notices. See the residual named at
+ * `recordProbe`.
+ *
+ * WHAT IT DOES BUY: a typo does not compile, and a new caller cannot inherit a value by accident —
+ * it has to add its permission here, in a file it would otherwise never open, next to this comment.
+ * That is the same device `organization-identity-v1` uses for the third registration type: make the
+ * default a stop.
+ */
+export type TenantRecordedPlatformPermission =
+  | 'core.credential.reset'
+  | 'core.platform-audit.read'
+  // ADDED 2026-09-07 for `platform.organizations.identity.update`, and adding it was the stop this
+  // union was built to be: the identity route did not inherit a value, it required a decision in
+  // this file. **It is also the first MUTATION to record here** — the two above are reads.
+  | 'core.platform-organization.update';
+
+export type MemberResolutionService = {
+  /**
+   * Resolves an identifier within one Organization, and records the attempt in that Organization's
+   * own audit trail whatever the answer.
+   *
+   * `null` IS THE COLLAPSED REFUSAL and covers all five cases the contract names. The caller
+   * renders it as the argument-free 404 and cannot tell them apart, because this returns no
+   * discriminant.
+   */
+  resolve(input: {
+    readonly organizationId: string;
+    /**
+     * *** `CheckedIdentifier`, NOT `string`. ***
+     *
+     * The handler checks this today and **nothing made that a property of the service.** A second
+     * caller would have hashed an unchecked string — which is not a security hole by itself, since
+     * an unaccepted identifier simply matches no credential, but it is the guard being a discipline
+     * rather than a mechanism. See `CheckedIdentifier`.
+     *
+     * IT IS THE RAW VALUE. `normalizeIdentifier` runs below, after the check, in that order.
+     */
+    readonly identifier: CheckedIdentifier;
+    readonly actorPrincipalId: string;
+    /**
+     * *** THE PERMISSION THE CALLER EXERCISED. REQUIRED, AND NOT DERIVED HERE. ***
+     *
+     * See `recordProbe` for the defect this closes and for what it does NOT close.
+     */
+    readonly permissionId: TenantRecordedPlatformPermission;
+    readonly requestId: string;
+    readonly correlationId: string;
+    /**
+     * *** PROOF THE OPERATOR'S WRITE BUDGET WAS CHARGED FIRST. REQUIRED. ***
+     *
+     * This is the parameter that makes the fix a mechanism rather than a convention. Before it,
+     * the tenant write happened and the operator was charged afterwards — so an operator whose own
+     * 600 was spent kept spending a customer's 10,000, five row-writes at a time, until that
+     * customer's own mutations began failing. **Measured: 2,000 calls took one Organization's
+     * whole day.**
+     *
+     * IT IS UNFORGEABLE AND NAMES ITS SUBJECT. `dispatchPlatformRoute` is the only producer;
+     * `consumeOperatorCharge` compares it against the actor being recorded.
+     */
+    readonly charge: OperatorWriteCharged;
+  }): Promise<Result<PlatformMemberResolution | null>>;
+
+  /**
+   * ===========================================================================================
+   * APPEND A TENANT-SIDE RECORD FOR A PLATFORM READ OF THIS ORGANIZATION, WITHOUT RESOLVING
+   * ANYTHING. `platform-audit-read-v1`'s Organization feed.
+   * ===========================================================================================
+   *
+   * *** IT IS ON THIS SERVICE RATHER THAN IN A THIRD MODULE, AND THAT IS A JUDGEMENT I WANT
+   * VISIBLE. *** The scoped audit feed needs exactly the write half of `resolve` and none of its
+   * lookup. The alternatives were a third `platform/core/**` directory holding a resolver — which
+   * is one more component that can reach a tenant store, and the count is the thing `0025`'s
+   * amendment asks to be measured — or duplicating the write, which is two places the *"names no
+   * principal, decision always allowed"* rules have to stay correct.
+   *
+   * **SO THE REACH DOES NOT GROW: the same service, the same resolver, the same audit shape, one
+   * more caller.** If a fourth operation ever needs this, the right move is a named
+   * `TenantAuditAppender` port rather than a third method here — and that is the point at which to
+   * ask whether P1 still means anything.
+   *
+   * IT TAKES `actionId` because the record must say WHICH read happened. A feed read and a resolve
+   * are different disclosures and a customer reading their trail must be able to tell them apart.
+   *
+   * *** THE NAME SAYS "ACCESS" AND SINCE 2026-09-07 IT ALSO APPENDS FOR A MUTATION —
+   * `platform.organizations.identity.update`. *** The name is now slightly wrong and is left alone
+   * deliberately: renaming it is a fifth change to a shared port for a word, and `changedFieldNames`
+   * already distinguishes the two cases at every call site. **Recorded rather than tidied, so the
+   * next reader knows it is a known imprecision and not an oversight.**
+   */
+  recordOrganizationAccess(input: {
+    readonly organizationId: string;
+    readonly actionId: string;
+    readonly actorPrincipalId: string;
+    /**
+     * *** THE PERMISSION THE CALLER EXERCISED. REQUIRED, AND NOT DERIVED HERE. ***
+     *
+     * See `recordProbe` for the defect this closes and for what it does NOT close.
+     */
+    readonly permissionId: TenantRecordedPlatformPermission;
+    /**
+     * *** WHICH FIELDS CHANGED. REQUIRED, AND EMPTY IS A STATEMENT RATHER THAN A DEFAULT. ***
+     *
+     * FIELD NAMES ONLY — `audit.ts`'s pattern is *"deliberately too narrow to admit a value"*, so
+     * the record says `vat_registration` changed and never says from what. For a field whose point
+     * is legal provenance that is a real limit (`OI-2`); it is not repaired by widening the audit
+     * record, which would make the trail a second copy of the data.
+     *
+     * **IT IS REQUIRED RATHER THAN DEFAULTING TO `[]` FOR THE REASON `organization-identity-v1`
+     * GIVES ONE OBJECT OVER** — *"`verified` IS REQUIRED RATHER THAN DEFAULTING TO FALSE, so no
+     * code path produces a verification by omission."* A mutation that silently recorded "nothing
+     * changed" because an argument was omitted is that defect, in the customer's own trail, on the
+     * one record `0028` makes the control rather than a by-product.
+     */
+    readonly changedFieldNames: readonly string[];
+    readonly requestId: string;
+    readonly correlationId: string;
+    /**
+     * *** PROOF THE OPERATOR'S WRITE BUDGET WAS CHARGED FIRST. REQUIRED. ***
+     *
+     * This is the parameter that makes the fix a mechanism rather than a convention. Before it,
+     * the tenant write happened and the operator was charged afterwards — so an operator whose own
+     * 600 was spent kept spending a customer's 10,000, five row-writes at a time, until that
+     * customer's own mutations began failing. **Measured: 2,000 calls took one Organization's
+     * whole day.**
+     *
+     * IT IS UNFORGEABLE AND NAMES ITS SUBJECT. `dispatchPlatformRoute` is the only producer;
+     * `consumeOperatorCharge` compares it against the actor being recorded.
+     */
+    readonly charge: OperatorWriteCharged;
+  }): Promise<Result<void>>;
+};
+
+export type MemberResolutionDependencies = {
+  readonly store: PlatformOperatorStore;
+  readonly identifiers: IdentifierHasher;
+  readonly resolver: TenantStoreResolver;
+  readonly coordinator: RequestCoordinator;
+  readonly auditSinkFor: (store: TenantScopedStore) => AuditSink;
+  readonly ids: IdGenerator;
+  readonly clock: Clock;
+};
+
+export function createMemberResolutionService(
+  dependencies: MemberResolutionDependencies,
+): MemberResolutionService {
+  return {
+    async resolve(input): Promise<Result<PlatformMemberResolution | null>> {
+      const nowMs = dependencies.clock.nowMs();
+
+      // ---- THE LOOKUP. One statement, five refusing cases, equal work. See the adapter.
+      //
+      // THE IDENTIFIER IS NORMALISED AND HASHED HERE, so nothing below this line holds an email
+      // address — not the port, not the adapter, not a log line. NFKC then ASCII case folding,
+      // through the SAME function login uses; a second normalisation would agree until one was
+      // touched, and the divergence would be an operator unable to resolve a principal who can log
+      // in perfectly well.
+      const identifierHash = await dependencies.identifiers.hash(
+        normalizeIdentifier(input.identifier),
+      );
+      const found = await dependencies.store.resolveMemberByIdentifierHash(
+        input.organizationId,
+        identifierHash,
+      );
+      if (!found.ok) {
+        return err(found.error);
+      }
+
+      // =====================================================================================
+      // ---- THE TENANT-SIDE RECORD, WRITTEN BEFORE THE ANSWER IS RETURNED AND ON BOTH PATHS.
+      // =====================================================================================
+      //
+      // *** THE ORDER IS THE POINT: THE RECORD IS WRITTEN, THEN THE ANSWER IS PRODUCED. *** It is
+      // `recordThen`'s shape in the platform dispatcher, for the same reason — an operation that
+      // returned first and recorded second would, on a failed write, have disclosed the answer
+      // with no evidence that it did.
+      //
+      // A FAILED WRITE REFUSES THE WHOLE OPERATION with `unavailable`. `0013` D2: the audit event
+      // must not fail open, and inability to record the evidence is not a reason to proceed
+      // without it. **Here that rule is doing real work rather than ceremony** — the evidence IS
+      // the control, because the residual `0028` accepts rests on the customer being able to see
+      // the probe.
+      //
+      // THE RECORD IS IDENTICAL IN SHAPE ON BOTH PATHS. `decision` is `allowed` whether or not a
+      // principal was found, because **the operator was permitted to ask** — the record is of the
+      // probe, not of its result. A `denied` on the miss path would turn the tenant's own audit
+      // trail into a hit/miss oracle for anyone who can read it, which is the customer's owner.
+      const recorded = await recordProbe(dependencies, {
+        organizationId: input.organizationId,
+        actionId: 'platform.organizations.members.resolve',
+        actorPrincipalId: input.actorPrincipalId,
+        permissionId: input.permissionId,
+        // EMPTY, AND IT IS A STATEMENT: **a resolve changes nothing.** It reads. Naming a field
+        // here would be describing a mutation that did not happen. This is the reason that used to
+        // live inside `recordProbe`, moved to where a new caller will actually read it.
+        changedFieldNames: [],
+        charge: input.charge,
+        requestId: input.requestId,
+        correlationId: input.correlationId,
+        occurredAt: toRfc3339Utc(nowMs),
+        nowMs,
+      });
+      if (!recorded.ok) {
+        return err(recorded.error);
+      }
+      return ok(found.value);
+    },
+
+    async recordOrganizationAccess(input): Promise<Result<void>> {
+      // THE SAME WRITE, THE SAME SHAPE, A DIFFERENT `action_id`. There is deliberately no lookup
+      // here and no branch inside `recordProbe` — the feed read has nothing to resolve, and a
+      // shared function with a "sometimes resolve" flag would be one place two operations are
+      // half-merged.
+      const nowMs = dependencies.clock.nowMs();
+      return recordProbe(dependencies, {
+        organizationId: input.organizationId,
+        actionId: input.actionId,
+        actorPrincipalId: input.actorPrincipalId,
+        permissionId: input.permissionId,
+        // PASSED THROUGH, NOT DECIDED HERE. The feed read supplies `[]`; the identity update
+        // supplies the fields it replaced. This function no longer knows which of those it is
+        // serving, which is the point.
+        changedFieldNames: input.changedFieldNames,
+        charge: input.charge,
+        requestId: input.requestId,
+        correlationId: input.correlationId,
+        occurredAt: toRfc3339Utc(nowMs),
+        nowMs,
+      });
+    },
+  };
+}
+
+/**
+ * Appends one `audit_event` row to the named Organization.
+ *
+ * *** IT RECORDS THAT A PROBE HAPPENED AND NOTHING ABOUT WHOM IT WAS FOR. ***
+ *
+ * `targetResourceId` IS `null` AND `changedFieldNames` IS EMPTY, deliberately. Naming the resolved
+ * principal would put "operator X asked about principal P" in the tenant's trail — which is the
+ * membership fact `0028` Decision 3 spent a whole feed design rationing, arriving here through the
+ * back door. **And on a MISS there is no principal to name**, so a record that named one on
+ * success and not on failure would be a hit/miss oracle in the log itself.
+ *
+ * THE IDENTIFIER PROBED IS NOT RECORDED EITHER. It is an email address; `0001_principal.sql`
+ * refused a column for one and this must not become storage for one at 5 row-writes a time.
+ *
+ * WHAT THE OWNER SEES: *"the platform asked about a member of your Organization, at this time, by
+ * this operator."* That is the disclosure they would most want to know about, and it is the whole
+ * of what this row asserts.
+ */
+async function recordProbe(
+  dependencies: MemberResolutionDependencies,
+  context: {
+    readonly organizationId: string;
+    /** WHICH platform read this was. A resolve and a feed read are different disclosures. */
+    readonly actionId: string;
+    /**
+     * *** UNDER WHAT AUTHORITY. A PARAMETER, NOT A MAPPING THIS FUNCTION REMEMBERS. ***
+     *
+     * ===========================================================================================
+     * THE DEFECT IT CLOSES, AND IT WAS FOUND BEFORE IT SHIPPED RATHER THAN AFTER
+     * ===========================================================================================
+     *
+     * This was a two-value ternary on `actionId`: the resolve got `core.credential.reset` and
+     * **EVERYTHING ELSE FELL INTO THE ELSE BRANCH AND CLAIMED `core.platform-audit.read`.** With two
+     * callers that was correct and looked stable. The third caller —
+     * `platform.organizations.identity.update`, which EDITS A CUSTOMER'S LEGAL IDENTIFIERS — would
+     * have written a record into that customer's own trail saying the platform READ THEIR AUDIT LOG.
+     *
+     * **A WRONG AUDIT VALUE IS WORSE THAN A MISSING ONE BECAUSE IT DEFENDS ITSELF**, and
+     * `audit-read-v1`'s platform feed renders this field to the customer as *"under what
+     * authority"* — so the customer would have been shown a confident false answer to the one
+     * question the field exists to answer. Reported by `architecture-agent` in
+     * `organization-identity-v1` (theHAZARDINTHEEXISTINGWRITER), which ruled that the route must
+     * not be implemented against the old signature. It was not.
+     *
+     * THE SHAPE IS `architecture.md` §3a: a value the write REQUIRES, so a new caller cannot
+     * inherit one by falling through. Omitting it does not compile.
+     *
+     * ===========================================================================================
+     * *** WHAT IT DOES NOT CLOSE, STATED HERE SO NOBODY CONCLUDES IT DID. ***
+     * ===========================================================================================
+     *
+     * **Nothing compares this against the permission the dispatcher actually authorized.** A caller
+     * passing the wrong member of `TenantRecordedPlatformPermission` writes a wrong-but-well-formed
+     * record, and no layer notices — the type refuses a typo, not a mistake.
+     *
+     * THE STRUCTURAL CLOSE IS TO CARRY THE AUTHORIZED PERMISSION ON `PlatformRouteContext` and pass
+     * THAT, which makes the recorded value and the evaluated value **the same value** rather than
+     * two that agree. It is not done here because it changes a type this work did not flag, and an
+     * unflagged shared-type change is the failure this team had last week. Owed, not forgotten.
+     */
+    readonly permissionId: TenantRecordedPlatformPermission;
+    /**
+     * *** REQUIRED, AND THE REASON A CALLER PASSES `[]` NOW LIVES AT THAT CALLER RATHER THAN HERE.
+     * ***
+     *
+     * It was hardcoded empty in the body below, with a correct explanation: *"a probe records that
+     * a read happened and nothing about whom it was for"*. **That reason explains why the CURRENT
+     * callers pass nothing; it does not tell a NEW caller what to pass, and it was one mutation
+     * away from becoming the justification for a wrong default.** A reason at the call site is what
+     * the next author reads before deciding.
+     */
+    readonly changedFieldNames: readonly string[];
+    readonly charge: OperatorWriteCharged;
+    readonly actorPrincipalId: string;
+    readonly requestId: string;
+    readonly correlationId: string;
+    readonly occurredAt: string;
+    readonly nowMs: number;
+  },
+): Promise<Result<void>> {
+  // *** THE RECEIPT IS CONSUMED BEFORE THE RESOLVER IS EVEN TOUCHED. ***
+  //
+  // Not merely held — checked, and bound to the actor this record will name. Reaching this line
+  // without a genuine charge means Dudo's own code cast past the type, which throws rather than
+  // returns: no client can cause it, because clients supply values and never receipts.
+  //
+  // IT IS THE FIRST STATEMENT ON PURPOSE. A check placed after the store resolution would still
+  // be correct and would have let a future edit slip a write in between.
+  consumeOperatorCharge(context.charge, context.actorPrincipalId);
+
+  const store = await dependencies.resolver.resolve(context.organizationId);
+  if (!store.ok) {
+    // AN UNRESOLVABLE STORE REFUSES THE OPERATION rather than answering unrecorded. Note what this
+    // means for the collapsed 404: an unknown Organization has no directory entry, so this line is
+    // reached for it and answers `unavailable` — which is a DIFFERENT answer from the 404 the
+    // other four cases receive.
+    //
+    // *** THAT IS A REAL RESIDUAL AND IT IS NAMED RATHER THAN HIDDEN. *** It is an
+    // Organization-existence signal available to a caller who can already enumerate every
+    // Organization from `platform.organizations.list`, one screen away, so it discloses nothing to
+    // this population — the same argument `organization-detail-v1` makes for its own 404 and
+    // explicitly scopes to this class. IT MUST NOT BE COPIED to a route a tenant principal can
+    // reach.
+    //
+    // THE ALTERNATIVE IS WORSE: answering 404 for an unresolvable store would make a genuine
+    // outage indistinguishable from "no such member", so an operator debugging a real incident
+    // would be told their customer's staff do not exist.
+    return err(store.error);
+  }
+
+  let coordination;
+  try {
+    coordination = await dependencies.coordinator.begin({
+      organizationId: context.organizationId,
+      principalId: context.actorPrincipalId,
+      sourceAddressHash: null,
+      nowMs: context.nowMs,
+    });
+  } catch {
+    return err(unavailable());
+  }
+  if (!coordination.ok) {
+    return err(unavailable());
+  }
+
+  let admitted;
+  try {
+    // `'platform'` — AN OPERATOR SPENDING A CUSTOMER'S ALLOCATION, WHICH IS THE THING BEING
+    // BOUNDED. This is the call that measured 10,000 of 10,000 before the sub-ceiling existed.
+    admitted = await coordination.value.reserveWrites(RESOLVE_TENANT_ROW_WRITES, 'platform');
+  } catch {
+    return err(unavailable());
+  }
+  if (!admitted.ok) {
+    return err(unavailable());
+  }
+  if (admitted.value.kind === 'deferred') {
+    // =====================================================================================
+    // *** TWO CEILINGS CAN REFUSE HERE AND THEY MEAN OPPOSITE THINGS. THE OPERATOR IS TOLD
+    // WHICH. ***
+    // =====================================================================================
+    //
+    // `'platform-share'` → `rate_limited`. **A statement about the operator**: the platform has
+    // spent its share of this Organization's day. The correct response is to stop, and the
+    // correct response to being told is not to retry.
+    //
+    // `'organization'` → `quota_exceeded`. **A statement about the customer**: this Organization
+    // is at its own daily allocation. The operator is not being throttled; the customer is having
+    // a bad day, which is the thing the operator most needs to know and the thing they would
+    // otherwise misread as their own throttling.
+    //
+    // *** WITHOUT THE DISTINCTION AN OPERATOR RETRIES, AND RETRYING IS HOW A SUPPORT SESSION
+    // BECOMES THE SCRIPT THE SUB-CEILING EXISTS TO STOP. *** A control that induces the behaviour
+    // it exists to prevent is worse than the disclosure telling them apart costs.
+    //
+    // BOTH CODES ARE DECLARED BY THIS OPERATION — `organization-detail-v1:252` — so neither
+    // collapses into `internal`. Checked against the contract rather than assumed.
+    //
+    // AND THE DISCLOSURE IS ACCEPTED RATHER THAN DENIED: `quota_exceeded` tells an operator that a
+    // customer is near their write ceiling, which is a coarse signal about that customer's
+    // business activity and is one no other platform route gives. It is ONE BIT, at the extreme,
+    // to a caller who can already enumerate every Organization. **Never report how much is left.**
+    return err(
+      admitted.value.refusedBy === 'platform-share' ? rateLimited() : quotaExceeded(),
+    );
+  }
+
+  const audit = dependencies.auditSinkFor(store.value);
+  const operations: readonly WriteOperation[] = [
+    audit.operation({
+      appId: 'core',
+      actionId: context.actionId,
+      principalId: context.actorPrincipalId,
+      principalType: 'user',
+      onBehalfOfPrincipalId: null,
+      // THE PERMISSION THE CALLER EXERCISED, SUPPLIED BY THE CALLER. It was a ternary on
+      // `actionId` until 2026-09-07 and the else branch would have mislabelled the third caller —
+      // see the field's own documentation above, which records what that would have told a
+      // customer and what this parameter still does not check.
+      permissionId: context.permissionId,
+      scope: 'platform',
+      // ALWAYS `allowed`. See the header: the record is of the probe, not of its result.
+      decision: 'allowed',
+      denialReason: null,
+      // NULL ON BOTH PATHS. See the header.
+      targetResourceId: null,
+      targetUnresolved: false,
+      relatedBusinessIds: [],
+      actorBusinessIds: derivePlatformOperatorActorContext(),
+      // SUPPLIED BY THE CALLER SINCE 2026-09-07, not hardcoded empty here. FIELD NAMES ONLY — the
+      // shape is deliberately too narrow to admit a value, so this can never become a second copy
+      // of the data it describes.
+      changedFieldNames: context.changedFieldNames,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+      occurredAt: context.occurredAt,
+    }),
+  ];
+
+  let committed;
+  try {
+    committed = await store.value.write(operations, admitted.value.reservation);
+  } catch {
+    return err(unavailable());
+  }
+  if (!committed.ok) {
+    return err(committed.error);
+  }
+  return ok(undefined);
+}

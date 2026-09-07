@@ -1,0 +1,235 @@
+-- Control-plane migration 0016 — two indexes on the operator action log.
+-- AN AVAILABILITY FIX. docs/decisions/0008, 0028, 0030. Contract platform-audit-read-v1.
+--
+-- Read `0009_platform_operator_action.sql` and `0014_platform_operator_action_organization.sql`
+-- first. `0014` reasoned about this table's read cost and reached a DIFFERENT conclusion; the
+-- section below says why that reasoning does not reach this, and it is the author of `0014`'s
+-- comment saying it.
+--
+-- IT BELONGS TO `DB_CONTROL`. See 0009.
+--
+-- ROLLBACK PATH: `DROP INDEX platform_operator_action_by_time` and
+-- `DROP INDEX platform_operator_action_by_organization`. Dropping them restores the read exposure
+-- this migration exists to close, so the rollback is a decision rather than a cleanup.
+-- FORWARD-ONLY and idempotent.
+--
+-- SEPARATE FROM `0015` DELIBERATELY. An availability fix and an identity feature have different
+-- reasons and different rollback stories, and a reader tracing why an index exists should not have
+-- to read past three columns about VAT numbers.
+--
+-- =============================================================================================
+-- THE FAILURE. AN OPERATOR DOING THEIR JOB CORRECTLY TAKES THE PLATFORM DOWN FOR EVERY TENANT.
+-- =============================================================================================
+--
+-- `qa-agent` measured the plan over the real schema with real parameters:
+--
+--     SCAN platform_operator_action | USE TEMP B-TREE FOR ORDER BY
+--
+-- Nothing indexed `ORDER BY occurred_at DESC, action_record_id DESC`, so **the engine read every
+-- row and sorted them before `LIMIT` applied.** The filters bought nothing: a page of 25 from a
+-- 50,000-row log read 50,000 rows whether it was filtered or not.
+--
+-- D1'S ROW-READ ALLOWANCE IS 5,000,000 PER DAY AND IT IS ACCOUNT-WIDE. At 50,000 rows a page that
+-- is on the order of a hundred feed requests — 25 records a page, one operator, one incident, one
+-- afternoon. AND D1 STOPS QUERIES ACCOUNT-WIDE RATHER THAN DEGRADING THE FEED, including the
+-- session lookup every login performs, in every database. No malice, no bug, no warning.
+--
+-- =============================================================================================
+-- *** WHY TWO INDEXES AND NOT ONE. THE ARGUMENT THAT DECIDED IT. ***
+-- =============================================================================================
+--
+-- The obvious fix is the time index alone. Measured over a 50,000-row log built from this schema,
+-- page size 25, rows the plan must visit for one page:
+--
+--   query shape                          today    + time index   + BOTH
+--   ------------------------------------------------------------------------
+--   platform feed, no filters            50,000        25           25
+--   platform feed, one operator          50,000       123          123
+--   platform feed, one action id         50,000       297          297
+--   Organization feed, BUSY tenant       50,000       363           25
+--   Organization feed, QUIET tenant      50,000    ** 49,993 **      9
+--   Organization feed, quiet + 1 week    50,000     9,033            3
+--
+-- HOW THOSE THREE COLUMNS WERE COUNTED, because they are three different costs and mixing them is
+-- how this table was wrong in its first draft:
+--
+--   TODAY the plan is `SCAN ... | USE TEMP B-TREE FOR ORDER BY`. **A plan that sorts cannot stop
+--   early** — `LIMIT` applies AFTER the sort — so the cost is the whole table for every shape,
+--   filtered or not.
+--
+--   WITH THE TIME INDEX the walk is time-ordered and the predicate is not in the index, so the
+--   cost is every row that sorts at-or-above the page's last.
+--
+--   WITH BOTH the scoped feed walks INSIDE one Organization's own entries, so the cost is that
+--   Organization's rows at-or-above the page's last — three orders of magnitude smaller, and NOT
+--   the same quantity as the middle column.
+--
+-- *** A QUIET ORGANIZATION IS A NEW CUSTOMER. *** Their feed is the most likely one an operator
+-- opens and, with the time index alone, THE MOST EXPENSIVE QUERY ON THE PLATFORM. So the shape the
+-- read allowance is most exposed to is the NEWEST TENANT, which is the opposite of the intuition —
+-- and it is the feed `0028` built FOR THE CUSTOMER. **Shipping one index would have fixed the
+-- operator's convenience and left the customer's own view as the thing that takes the platform
+-- down.**
+--
+-- ---------------------------------------------------------------------------------------------
+-- THE RULE UNDERNEATH IT, WHICH GENERALISES PAST THIS TABLE
+-- ---------------------------------------------------------------------------------------------
+--
+-- *** A WALK ORDERED BY TIME TESTS EVERY FILTER ROW BY ROW, SO ANY FILTER MATCHING FEWER ROWS THAN
+-- ONE PAGE COSTS A FULL WALK. *** The index supplies the ORDER BY; it does not supply the
+-- predicate, so each candidate is fetched and tested until the page fills. A filter that matches
+-- 10 rows in 50,000 walks all 50,000 to find them.
+--
+-- **THE 123 AND 297 ABOVE ARE NOT THE REAL NUMBERS FOR THOSE SHAPES.** They are that small only
+-- because every operator in the synthetic log is equally busy. A brand-new operator's own history,
+-- filtered by actor, is the quiet-tenant case wearing a different column name.
+--
+-- =============================================================================================
+-- WHAT THIS DOES NOT FIX, STATED SO THE NEXT PERSON MEETS THE GAP RATHER THAN DISCOVERING IT
+-- =============================================================================================
+--
+-- **A PLATFORM-FEED QUERY FILTERED BY AN ACTOR OR AN ACTION ID THAT MATCHES FEWER THAN ONE PAGE
+-- STILL WALKS THE TABLE.** These two indexes do not close it and are not intended to.
+--
+-- THE ANSWER IS A MANDATORY BOUNDED TIME WINDOW ON FILTERED FEED QUERIES, NOT A THIRD INDEX.
+-- Measured: a one-week window took the quiet-tenant walk from 49,993 to 9,033 on the time index
+-- alone. **A window is CONFIGURATION and costs ZERO row-writes**, which is the `0030`-shaped
+-- answer; a third index on `(actor_principal_id, occurred_at, action_record_id)` would take the
+-- per-route write cost from 4 to 5 and buy one query shape.
+--
+-- IT NEEDS A CONTRACT CHANGE, SO IT IS `architecture-agent`'s AND IT IS ITS OWN DECISION. Routed
+-- separately by the Team Lead. **Do not add the third index as a shortcut past that decision.**
+--
+-- =============================================================================================
+-- *** WHY `0014`'s REASONING DOES NOT REACH THIS — WRITTEN BY THE AUTHOR OF `0014`'s COMMENT ***
+-- =============================================================================================
+--
+-- `0014` argued the other way and was not wrong. It measured a different thing, and all three
+-- differences make this worse rather than equivalent:
+--
+-- 1. **`0014` ASKED WHEN THIS GETS SLOW.** It derived "about 50,000 rows" from a latency curve.
+--    **LATENCY DEGRADES CONTINUOUSLY AND RECOVERS WHEN LOAD DROPS. A METERED ALLOWANCE IS A
+--    CLIFF** — it does not get gradually worse, it stops. That distinction is worth more than this
+--    migration.
+--
+-- 2. **`0014` NAMED THE BLAST RADIUS AND UNDERSTATED IT.** It said *"D1 is single-threaded per
+--    database, so a 200 ms scan here blocks every authentication for 200 ms"* — true, and scoped
+--    to ONE DATABASE, because single-threadedness is per-database. **THE READ ALLOWANCE IS
+--    ACCOUNT-WIDE ACROSS ALL FOUR D1 DATABASES**, so it reaches the tenant database too. A
+--    sentence that is true with too small a scope is harder to catch than one that is wrong.
+--
+-- 3. **`0014`'s REMEDY COULD NOT HAVE CAUGHT THIS.** It said *"check the row count; do not wait to
+--    be told"*. **EXHAUSTION IS REQUESTS × ROWS, AND A ROW COUNT SHOWS ONE FACTOR.** A log sitting
+--    quietly at 50,000 rows looks identical on the day someone pages the feed a hundred times. **A
+--    monitoring instruction that measures the wrong factor is worse than none, because it gets
+--    checked and reports fine.**
+--
+-- ---------------------------------------------------------------------------------------------
+-- *** THE COINCIDENCE TRAP. READ THIS BEFORE CONCLUDING `0014` ALREADY COVERED IT. ***
+-- ---------------------------------------------------------------------------------------------
+--
+-- `0014` says "about 50,000 rows", from a latency curve. `qa-agent` says "at a 50,000-row log",
+-- from 5,000,000 ÷ (50,000 × 2). **SAME NUMBER, DIFFERENT DERIVATIONS, DIFFERENT QUESTIONS.**
+--
+-- A reader comparing the two would reasonably conclude `0014` had already covered this. **IT HAD
+-- NOT.** That is the most persuasive kind of stale claim: one that agrees with the new evidence by
+-- accident.
+--
+-- =============================================================================================
+-- *** RETENTION IS FORBIDDEN AS A FIX HERE, AND IS NAMED BEFORE IT IS PROPOSED. ***
+-- =============================================================================================
+--
+-- Deleting old action rows bounds the log and makes this problem disappear. **IT DESTROYS AUDIT
+-- EVIDENCE TO SAVE A READ ALLOWANCE**, which is strictly worse than an index and is precisely what
+-- `0030` exists to refuse: the free tier may cost us CONFIGURATION, never the shape or the
+-- substance of what is kept.
+--
+-- IF RETENTION IS EVER RAISED IT IS A DECISION RECORD ABOUT EVIDENCE RETENTION, NEVER A
+-- PERFORMANCE FIX, and it must argue on its own terms rather than arrive as thrift.
+--
+-- `0030` CHECK ON THIS MIGRATION ITSELF: **an index is configuration.** It changes how the data is
+-- reached, not what is kept or what shape it has. The pull this author felt was toward FEWER
+-- INDEXES, which is a write-budget trade rather than a shape trade, so it is not the thing `0030`
+-- polices. Recorded because a rule that only ever reports "no violation" teaches nothing about
+-- where its edge is.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a)
+-- =============================================================================================
+--
+-- ALLOWANCES: d1-rows-written (worse), d1-rows-read (very much better), d1-storage (worse).
+--
+-- *** WRITES: `PLATFORM_OPERATOR_ACTION_ROW_WRITES` GOES 2 → 4, AND EVERY PLATFORM ROUTE PAYS IT,
+-- BECAUSE P4 MAKES EVERY PLATFORM REQUEST A WRITE. *** The constant is moved in
+-- `identity/control-plane-admission.ts` in the same change, which is what that constant's own
+-- comment instructs: *"WHEN A MIGRATION ADDS AN INDEX ... THIS NUMBER MUST MOVE WITH IT."*
+--
+--   operation                               today   after   per operator per day (600)
+--   ---------------------------------------------------------------------------------
+--   any pure read route (whoami, list,
+--     detail, unscoped feed)                  2       4        300  ->  150
+--   scoped audit feed (2 + tenant
+--     reservation 2)                          4       6        150  ->  100
+--   onboarding (10 + the P4 record 2)        12      14         50  ->   ~42
+--
+-- **THE DISTRIBUTION IS COUNTER-INTUITIVE AND IS STATED RATHER THAN LEFT TO BE INFERRED: THE CHEAP
+-- READ ROUTES TAKE THE −50% AND ONBOARDING TAKES ONLY −14%.** The reason is that the audit record
+-- is the WHOLE cost of a read and a small fraction of the cost of an onboarding. An operator at
+-- 150 platform actions a day is a real constraint, and it is not the one anyone would predict.
+--
+-- IT IS NOT A CLOSE TRADE. 150 actions per operator per day, for a handful of operators, against
+-- an account-wide allowance whose exhaustion stops EVERY TENANT'S LOGINS.
+--
+-- **STORAGE, MEASURED at 50,000 rows: +2.20 MiB for the time index and +2.38 MiB for the
+-- Organization index — 96 bytes per row across both, 62% on top of the table.** Against 5 GB this
+-- is not a term.
+--
+-- *** IT DOES NOT MOVE THE CAPACITY MODEL'S BINDING LIMIT. *** `qa-agent`'s model binds on STORAGE
+-- at 32 businesses, driven by `audit_event` at 611 bytes/row in the TENANT database. These indexes
+-- bind a DIFFERENT limit that model does not model — the per-principal daily WRITE ceiling.
+-- **Conflating the two would make the capacity answer wrong in a way nobody would notice.**
+--
+-- ONE-TIME COST: building an index over the existing log writes one entry per row, once. The log
+-- is far below 50,000 rows today, so this is negligible now and grows if it is deferred.
+--
+-- COST: USD 0 / BD 0 per month. No new table, no new service, no new binding.
+--
+-- ---------------------------------------------------------------------------------------------
+-- WHAT WAS MEASURED, AND ON WHAT — BECAUSE TWO MEASUREMENTS HERE COULD LOOK LIKE A DISAGREEMENT
+-- ---------------------------------------------------------------------------------------------
+--
+-- The row counts above were measured on **plain SQLite**, not on D1. They are ROWS THE PLAN MUST
+-- VISIT. **D1's `rows_read` is D1's own accounting**, and whether a temp-b-tree sort is billed once
+-- or twice per row is not something a local engine can answer.
+--
+-- SO `qa-agent`'s FACTOR OF TWO IS NEITHER CONFIRMED NOR DENIED HERE, AND NOTHING ABOVE DEPENDS ON
+-- IT: at 50,000 rows visited, one page request is 1% of the daily allowance even at a factor of
+-- one. The two measurements agree about the problem and differ only in a constant that does not
+-- change the conclusion.
+
+-- ---------------------------------------------------------------------------------------------
+-- THE PLATFORM FEED'S ORDER. Serves `ORDER BY occurred_at DESC, action_record_id DESC` directly,
+-- scanned in reverse, so the unfiltered feed stops after one page instead of sorting the log.
+--
+-- THE SECOND COLUMN IS NOT DECORATION: the feed's order is compound and its cursor is a keyset on
+-- both columns, so an index on `occurred_at` alone would still need a sort to break ties.
+-- ---------------------------------------------------------------------------------------------
+
+CREATE INDEX IF NOT EXISTS platform_operator_action_by_time
+  ON platform_operator_action (occurred_at, action_record_id);
+
+-- ---------------------------------------------------------------------------------------------
+-- THE ORGANIZATION FEED. `0014` named this index and its leading column; the two trailing columns
+-- are what make it serve the ORDER BY as well as the predicate, so the walk stays inside one
+-- Organization's own entries instead of traversing the whole log to find them.
+--
+-- THIS IS THE ONE THAT MATTERS FOR A NEW CUSTOMER. See the table above: 49,993 rows becomes 9.
+--
+-- AND THE ORDER OF ITS THREE COLUMNS IS LOAD-BEARING RATHER THAN TIDY. `target_organization_id`
+-- leads because it is the equality predicate; `(occurred_at, action_record_id)` follow in the
+-- feed's own sort order, which is what lets one seek serve the filter AND the ORDER BY. Reversing
+-- them, or dropping the third, restores the sort for this feed and the table above with it.
+-- ---------------------------------------------------------------------------------------------
+
+CREATE INDEX IF NOT EXISTS platform_operator_action_by_organization
+  ON platform_operator_action (target_organization_id, occurred_at, action_record_id);

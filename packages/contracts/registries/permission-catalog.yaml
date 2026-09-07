@@ -10,7 +10,11 @@
 # Owner:       architecture-agent authors; Team Lead accepts.
 #
 # STATUS OF THIS FILE
-# Every entry is status "proposed". No code exists. Most are the permissions entailed by
+# "No code exists" was true when this was written and is NO LONGER TRUE: as of 2026-09-05
+# `core.business.read` and the seven granted `customers.*` permissions are enforced by running
+# code, and `authorization/roles.ts` grants them. The `status: proposed` values below have not
+# been re-verified entry by entry and must not be read as current build state.
+# Every entry is status "proposed". Most are the permissions entailed by
 # Core's declared responsibilities (CORE_BOUNDARIES.md §3) and the App lifecycle
 # (APP_STANDARD.md §9), so that Phase 1 and Phase 2 build against a reviewed set rather
 # than accreting one.
@@ -23,11 +27,16 @@
 # grant it to anyone, and does not make its Action reachable on its own.
 #
 # AUTHORIZATION_STANDARD.md §1-§10 constitutes the "logical permission model" that
-# docs/decisions/0001 requires as its own decision record BEFORE implementation. That
-# record does not exist yet. Nothing implements against this catalog until it does.
+# docs/decisions/0001 requires as its own decision record BEFORE implementation. THAT RECORD
+# NOW EXISTS: docs/decisions/0007, Accepted by the user 2026-09-01 subject to ten binding
+# rules. This paragraph previously ended "That record does not exist yet. Nothing implements
+# against this catalog until it does", and 0007 §5 consequence 5 required it to stop saying so.
+# Implementation may proceed against this catalog, under 0007's ten rules — of which rule 3
+# (no wildcards anywhere) and rule 4 (unregistered means non-existent) govern this file most
+# directly.
 
 catalogVersion: 1
-updated: "2026-09-02"
+updated: "2026-09-05"
 
 # ---------------------------------------------------------------------------
 # model
@@ -37,18 +46,78 @@ model:
   default: deny
   rules:
     - "Default = Deny. Not 'deny after the checks fail' — deny unless a check explicitly passed."
-    - "An entry point with no declared permission is unreachable, not open."
+    - >-
+      A ROUTE WITH NO DECLARED PERMISSION IS UNREACHABLE, NOT OPEN — UNLESS it is registered in
+      one of TWO closed, Core-owned, enumerated sets, NEITHER OF WHICH IS MANIFEST-DECLARABLE:
+        docs/decisions/0014 §B's `PreAuthEntryPoint` registry — FIVE routes: login start, login
+          completion, session refresh, logout, and a health endpoint carrying no tenant or user
+          data. `0014` §B AMENDS `0007` D1 rather than contradicting it, and a route enters that
+          registry by a decision, never by declaring itself.
+        docs/decisions/0021's session class, which resolves a session and STOPS — no tenant, no
+          permission, and `0021` states that "widening it is a decision, not a refactor".
+      *** docs/decisions/0025's PLATFORM CLASS IS NOT AN EXCEPTION AND MUST NOT BE LISTED AS
+      ONE. *** All fourteen of its routes DECLARE a permission, and
+      `assertEveryRoutePermissionIsReachable` fails the build if one declares a permission no
+      role can reach. What distinguishes that class is that it evaluates a permission WITHOUT A
+      TENANT, which is an exception to tenant scoping and not to this rule. A PERMISSIONLESS
+      PLATFORM ROUTE IS NOT LEGITIMATE AND CORE REFUSES TO BUILD ONE.
+      *** THIS ENTRY PREVIOUSLY READ: "An entry point with no declared permission is
+      unreachable, not open." *** True of the Action pipeline and false of two request classes
+      that exist because decisions put them there. IT IS A WORSE DEFECT THAN THE WITHDRAWN
+      WILDCARD RULE ABOVE, AND IN THE OPPOSITE DIRECTION: THE WILDCARD ENTRY PERMITTED SOMETHING
+      FORBIDDEN; THIS ONE FORBADE SOMETHING REQUIRED. A validator author following it literally
+      would build something that refuses the login route.
     - "Authorization is decided in Core, at every entry point, on every call."
     - "No caller is trusted to have already checked — not a client, not an App, not another service."
     - "UI hiding is presentation, never security."
     - "No decision is cached beyond its scope. A cached yes that outlives a revoked role cannot be revoked."
     - "Permissions are additive. There are no negative permissions and no deny rules."
-    - "Wildcards may appear in ROLE definitions. Never in an App manifest."
+    - >-
+      NO WILDCARD PERMISSION ANYWHERE. Not in a role, not in an App manifest, not in a grant.
+      docs/decisions/0007 binding rule 3, Accepted by the user 2026-09-01.
+      *** THIS ENTRY PREVIOUSLY READ: "Wildcards may appear in ROLE definitions. Never in an App
+      manifest." IT IS WITHDRAWN, AND IT IS KEPT VISIBLE RATHER THAN DELETED BECAUSE THE REASON
+      IT EXISTED IS STILL WORTH KNOWING. *** It was written when `0007` D6 left wildcard
+      EXPANSION SEMANTICS undecided, and it was an attempt to bound where an undecided thing
+      could appear. `0007`'s acceptance closed the question by removing the construct instead of
+      defining it: there are no expansion semantics because there is nothing left to expand.
+      WHY IT IS STRUCK HERE AND NOT ONLY IN THE PROSE ABOVE `defaultRoles`. That correction sits
+      hundreds of lines below this one — no count, because a line number in a comment rots for
+      the same reason the withdrawn rule did — and A READER WHO FINDS THIS RULE HAS ALREADY GOT
+      WHAT THEY CAME FOR: they will not read on to discover it was withdrawn. `model.rules` is the
+      MACHINE-READABLE half, nothing in this repository executes it, and the reader most likely
+      to act on it literally is whoever eventually writes the validator, who will be reading
+      this list PRECISELY BECAUSE it is the machine-readable form. Prose describes; a rule
+      instructs (.claude/rules/workflow.md §12).
+      `authorization/roles.ts::assertRoleMappingIsCoherent` enforces the prohibition in code, at
+      module load, and names this file as where a wildcard would otherwise be smuggled back in.
     - >-
       An App manifest may never request a permission at 'platform' scope. 'platform' is
-      reserved to platform principals; a manifest declaring it FAILS VALIDATION and the App
-      does not install. Enforced structurally by app-manifest.schema.json
-      ($defs/appRequestableScope), not by review.
+      reserved to platform principals; a manifest declaring it must FAIL VALIDATION and the App
+      must not install — not accepted-then-trimmed, because an App installed in a state where it
+      will fail unpredictably at runtime is worse than one that did not install.
+      *** WHAT ENFORCES THIS TODAY: NOTHING. IT IS A REVIEW OBLIGATION. *** Corrected 2026-09-06;
+      this entry previously ended "Enforced structurally by app-manifest.schema.json
+      ($defs/appRequestableScope), not by review", and that sentence was false in the way the
+      whole corpus keeps being false.
+      NAMING WHICH SIDE IT IS FALSE ABOUT, because a dismissal that does not is how this
+      survives review (.claude/rules/architecture.md §3b). THE SCHEMA EXPRESSES THE CONSTRAINT
+      CORRECTLY — `$defs/appRequestableScope` is `$defs/scope` minus `platform`, and
+      `permissions[].scope` `$ref`s it. NOTHING EXECUTES IT. `packages/contracts/README.md`:
+      "Nothing in this directory is executed. There is no JSON Schema implementation in this
+      repository ... every schema here is normative and hand-checked, never machine-validated."
+      `0009` approved ONE zero-dependency validator, for the AZ7 relation family only, and it
+      does not look at scopes. AND THERE IS NO MANIFEST-ADMISSION PATH AT ALL: no SDK, no App
+      runtime, nothing that parses a manifest. `apps/customers` is compiled in rather than
+      installed, and `authorization/authorizer.ts` enforces the declared-scope CEILING at call
+      time against an `AppPermissionEnvelope` A CORE AUTHOR TRANSCRIBED BY HAND.
+      SO THE REVIEW OBLIGATION IS CONCRETE AND HAS AN OWNER: whoever writes an
+      `AppPermissionEnvelope` is the last check that no App reaches 'platform' scope, because
+      the constraint that would have refused the manifest never runs.
+      WHY THE OVERSTATEMENT WAS WORSE THAN THE GAP: it told the next reader the hazard was
+      handled, which stops the person who would otherwise build the thing that closes it. What
+      would make the original sentence true is a manifest-admission path that executes this
+      schema — `AS1`/`TS1` and the App permission and trust ADR, neither of which exists.
     - >-
       An Action declaring scope 'own' on an entity that declares no ownershipField FAILS
       VALIDATION (rule VAL-OWN, AUTHORIZATION_STANDARD.md §4). It is never accepted and
@@ -339,6 +408,169 @@ permissions:
   - id: core.principal.grant-platform-scope
     group: authorization
     description: "Grant platform scope. The broadest grant in the system."
+    sensitivity: critical
+    scopes: [platform]
+    status: proposed
+    phase: 1
+
+  # --- platform operations (docs/decisions/0025) --------------------------------
+  #
+  # THE FIRST PERMISSIONS DECLARED AT 'platform' SCOPE SINCE THE CATALOG WAS WRITTEN, AND ONLY
+  # THE THIRD, FOURTH, FIFTH AND SIXTH TO EXIST THERE AT ALL. Read the `platform` scope note
+  # above before adding a seventh: platform scope is the only scope that spans Organizations, and
+  # it NEVER grants access to tenant business data without the AZ3 break-glass elevation, which
+  # does not exist. Every permission below obeys that line, and the line is what makes them
+  # buildable now:
+  #
+  #   core.organization.create   writes control-plane rows. Touches no Organization's data,
+  #                              because the Organization has none yet.
+  #   core.organization.list     reads the control plane's organization table — identifiers and
+  #                              status. NOT a tenant read, and NOT core.organization.read, which
+  #                              is declared [organization] and stays there. Widening that one to
+  #                              platform is the escalation AZ8 removed from marketplace-moderator
+  #                              and must not be repeated here.
+  #   core.template.*            reads and writes tenant-INDEPENDENT platform configuration.
+  #   core.credential.reset      replaces a principal's credential. Touches no business record.
+  #
+  # NONE OF THEM READS A CUSTOMER, AN INVOICE, OR ANY ROW BEHIND whereWithTenant. That is not a
+  # coincidence and it is not a coding style — it is the reason this whole surface could be built
+  # before AZ3 rather than after it.
+  - id: core.organization.create
+    group: platform
+    description: >-
+      Create an Organization together with its first admin principal, credential, membership,
+      tenant-directory entry and first Workspace. Platform operators only. Ten control-plane
+      row-writes; see the onboarding contract. The Organization it creates is empty, so this
+      permission never reads business data.
+      RECLASSIFIED FROM `critical` TO `sensitive` ON 2026-09-05 BY docs/decisions/0026 DECISION 1 —
+      in a record, never by a silent edit. Onboarding CREATES an empty tenant: nothing is
+      destroyed, no money moves, and the credential it creates is THE TENANT'S FIRST, so there is
+      no prior state to take over. §6's examples of critical are "move money, delete data
+      irreversibly, rotate credentials" and this is none of them.
+      core.credential.reset BELOW STAYS `critical`, and the split is the point: it replaces a
+      credential a principal is ALREADY USING, which is account takeover with a legitimate front
+      door. THE LADDER KEEPS ITS MEANING ONLY IF SOMETHING STAYS AT THE TOP. Do not read this
+      reclassification as a precedent for reaching a route by lowering its class — 0026 took it
+      only because the establishment-versus-takeover distinction survives scrutiny on its own.
+      `sensitive` STILL REQUIRES AN AUDIT EVENT (§6), and onboarding writes two.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.organization.list
+    group: platform
+    description: >-
+      Enumerate Organizations — identifiers and status only, from the control plane. Separate
+      from core.organization.read (declared [organization]), which is a TENANT principal reading
+      its OWN Organization record. Two permissions rather than one widened one, because widening
+      a tenant-scoped permission above the tenant boundary is the escalation AZ8 exists to record.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.platform-organization.update
+    group: platform
+    description: >-
+      Set an Organization's display name, its commercial registration and its VAT registration —
+      the control-plane `organization` row, never anything behind whereWithTenant. Requested by
+      organization-identity-v1 and docs/decisions/0031.
+      IT IS SEPARATE FROM core.organization.update, which is declared [organization] and is a
+      TENANT principal editing its OWN Organization record. Two permissions rather than one
+      widened one, for the reason AZ8 records: widening a tenant-scoped permission above the
+      tenant boundary is an escalation, not a convenience. THE TENANT PERMISSION HAS NO ROUTE AND
+      CANNOT BE GIVEN ONE OVER THIS TABLE TODAY — `organization` is control-plane and an Action
+      reaches no control-plane port — which is organization-identity-v1's OI-1 and is the reason
+      the platform enters these values on the customer's behalf.
+      IT DOES NOT COVER STATUS. Not suspension, not deletion, not activation. A suspend route,
+      when it exists, is a separate permission and a separate argument — §3.2's splitting
+      discipline applied before rather than after.
+      NAMING: `core.platform-audit.read` is the only existing platform twin of a tenant permission
+      and its convention is followed, the resource carrying `platform-`. THE ANALOGY IS IMPERFECT
+      AND SAYING SO BEATS INVENTING A SECOND CONVENTION — there the two permissions cover
+      DIFFERENT OBJECTS, here they cover the same Organization and differ in the caller class.
+      SENSITIVE RATHER THAN WRITE, AND SENSITIVE RATHER THAN CRITICAL. It is above `write`
+      because it is a platform principal editing a record inside a customer's own identity, which
+      is not an ordinary record edit. IT INHERITS 0031's REASONING FOR NOT BEING CRITICAL: the
+      ladder grades what the OPERATION does, and this one replaces a correctable field on a
+      mutable record — nothing destroyed, no money moved, no authority changed, and a wrong value
+      fixed by the same route that set it. If "a value that might later appear on a document"
+      made it critical, so would the commercial registration and the display name, and the rung
+      would stop sorting anything (0026, and 0031 Decision 2).
+      A PERMISSION'S CLASSIFICATION IS NOT PER-ACTION AND WILL NOT TRACK ONE. It gates exactly one
+      Action today; core.credential.reset already gates two of different shapes. IF THIS EVER
+      GATES A CRITICAL ACTION, THE PERMISSION IS WHAT MUST BE REVISITED, because that is the level
+      §7's confirmation requirement is read from.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.template.read
+    group: platform
+    description: "View one Template — its name and its per-level display labels."
+    sensitivity: read
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.template.list
+    group: platform
+    description: "Enumerate Templates. Separate from read, because enumeration is its own disclosure (§3.2)."
+    sensitivity: read
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.template.create
+    group: platform
+    description: >-
+      Create a Template — a business type. Carries a name and display labels and NEVER logic
+      (docs/decisions/0025). Sensitive rather than write: a Template shapes what every
+      Organization adopting it renders, so it is configuration with reach.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.principal.revoke-platform-scope
+    group: platform
+    description: >-
+      Remove a principal's platform authority. THE COUNTERPART TO
+      core.principal.grant-platform-scope, AND DELIBERATELY A SEPARATE PERMISSION RATHER THAN THE
+      SAME ONE — §3.2's logic that `list` is separate from `read` and `export` from `read` applies:
+      granting and revoking the broadest authority in the system are different risks in opposite
+      directions.
+      THE SEPARATION BUYS SOMETHING CONCRETE: a break-glass responder role can hold REVOKE without
+      GRANT, so the person reachable at 3am can cut off a compromised operator without themselves
+      being able to create one. That role does not exist yet and this permission is what makes it a
+      catalog edit rather than a redesign.
+      CRITICAL, so confirmation applies (confirmation-v1) — which means SESSION THEFT ALONE CANNOT
+      REVOKE ANYONE. There is no corresponding route for GRANT, deliberately: platform-operator-v1
+      records that "a route that grants platform authority is the single most valuable target in the
+      platform" and that "the frequency does not justify the surface."
+    sensitivity: critical
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.platform-audit.read
+    group: platform
+    description: >-
+      Read the platform-operator action log — which operator did what, to which Organization, when.
+      NEVER the contents of what was touched (docs/decisions/0025 Decision 5).
+      IT IS SEPARATE FROM core.audit.read, which is declared [organization, business] and is a
+      TENANT principal reading its OWN log. Two permissions rather than one widened one, for the
+      reason AZ8 records: widening a tenant-scoped permission above the tenant boundary is an
+      escalation, not a convenience.
+      SENSITIVE RATHER THAN READ, because an operator-action log is a record of what the platform
+      did to its customers, and reading it in bulk is the oversight function rather than an
+      ordinary lookup.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.credential.reset
+    group: platform
+    description: >-
+      Replace a principal's credential with a generated value shown exactly once. CRITICAL, and it
+      is the most dangerous permission in this catalog that is not AZ3: holding it is the ability
+      to take over any account on the platform. It cannot READ a credential — no reversible form
+      of one is stored — and it revokes the target's live sessions.
     sensitivity: critical
     scopes: [platform]
     status: proposed
@@ -748,21 +980,157 @@ permissions:
 # under EVERY candidate expansion rule, and each list contains only permissions whose own
 # declared 'scopes' include the role's 'scope'.
 #
-# The general expansion rule is a decision, not a schema detail. It is drafted as
-# docs/decisions/0007 D6 and that record is Proposed — it decides nothing. Until it is
-# accepted, do not reintroduce a wildcard here.
+# The general expansion rule is a decision, not a schema detail, and IT IS NOW DECIDED —
+# harder than D6 stated. docs/decisions/0007 was Accepted 2026-09-01 subject to ten binding
+# rules, and RULE 3 PROHIBITS WILDCARD PERMISSIONS OUTRIGHT: "Not in roles, not in manifests,
+# not in grants." So D6's intersection semantics govern nothing here, because there is nothing
+# left to expand. The sentence above — "syntactically permitted in a role definition and
+# nowhere else" — is superseded: a wildcard is permitted NOWHERE, and one must never be
+# reintroduced here. `authorization/roles.ts::assertRoleMappingIsCoherent` enforces the same
+# rule in code, at module load, and names this as the file where a wildcard would otherwise be
+# smuggled back in.
 # ---------------------------------------------------------------------------
 defaultRoles:
-  # Every permission below is declared at 'scopes: [platform]' in this catalog, and those
-  # are the only two that are. This role holds NO tenant-scoped permission: reaching
-  # tenant business data requires the AZ3 break-glass elevation, which does not exist yet.
+  # ===========================================================================
+  # THE PLATFORM ROLES, AND THE INVARIANT THAT SURVIVES THE SET GROWING
+  # ===========================================================================
+  #
+  # THE INVARIANT: every permission held by a role whose own 'scope' is 'platform' declares
+  # 'platform' among that permission's own 'scopes'. Equivalently — NO PLATFORM ROLE HOLDS A
+  # TENANT-SCOPED PERMISSION. It follows that reaching tenant business data from a platform
+  # role requires the AZ3 break-glass elevation, WHICH DOES NOT EXIST.
+  #
+  # IT IS STATED AS A PROPERTY RATHER THAN AS A COUNT, AND THAT IS A CORRECTION.
+  # This comment previously read "those are the only two that are". THERE ARE ELEVEN. Eight
+  # arrived with docs/decisions/0025 through 0028 and a ninth addition with 0031, and the
+  # sentence was true when it was written — which is exactly the problem: A COUNT IN A COMMENT
+  # IS AN ASSERTION THAT ROTS EVERY TIME A DECISION ADDS AN ENTRY, AND NOTHING GOES RED WHEN IT
+  # DOES (.claude/rules/workflow.md §12). The property above does not rot. It stays true as the
+  # set grows and it fails loudly the day it stops being true.
+  #
+  # THE COUNT MOVED WITHIN TWO DAYS OF BEING WRITTEN DOWN, WHICH IS THE ARGUMENT RATHER THAN AN
+  # EMBARRASSMENT. `core.platform-organization.update` was added 2026-09-07 and the figure went
+  # from ten to eleven; the PROPERTY above needed no edit at all.
+  #
+  # THE RECONCILIATION, because two counts disagreed and both were right about different
+  # things. Grepping this file for the literal 'scopes: [platform]' finds FOURTEEN occurrences:
+  # ELEVEN are permission entries and THREE are prose inside comments — this block and the
+  # two-line omission note above 'business-owner'. THE ENTRY COUNT IS THE NUMBER THAT MEANS
+  # ANYTHING. Recorded because "count the string" and "count the entries" will keep giving
+  # different answers to whoever checks next.
+  #
+  # *** THE READING THE OLD COMMENT INVITED WAS THE DANGEROUS PART, NOT THE ARITHMETIC. ***
+  # "Only two" leaves a reader concluding the operator surface is tiny. It is not, and two of
+  # them are severe on their own terms: core.credential.reset, which its own entry calls
+  # "the most dangerous permission in this catalog that is not AZ3", and
+  # core.principal.revoke-platform-scope, which can strip platform authority.
+  # THE INVARIANT SAYS THE SURFACE DOES NOT CROSS THE TENANT BOUNDARY. IT SAYS NOTHING ABOUT
+  # HOW MUCH POWER SITS ON THE PLATFORM SIDE OF IT, and it must not be read as though it did.
+  #
+  # TODAY platform-admin HOLDS ALL ELEVEN, and marketplace-moderator holds one of them
+  # (core.marketplace.moderate). THAT IS AN OBSERVATION OF THE CURRENT STATE AND NOT A SECOND
+  # INVARIANT — do not turn it into a set-equality check. This file already anticipates a
+  # break-glass responder role holding REVOKE without GRANT, and a platform permission
+  # deliberately withheld from platform-admin is precisely what that would look like.
+  #
+  # *** THE HELD-BY-NOBODY STATE LASTED ONE DAY. *** On 2026-09-07 this said
+  # `core.platform-organization.update` was declared and granted to nobody, "deliberate and
+  # temporary". The user granted it the same day and this paragraph is the correction rather than
+  # the argument — WHICH IS WHY IT WAS WRITTEN AS AN OBSERVATION AND NOT AS AN INVARIANT. A
+  # set-equality check would have gone red on the intended state and green on the corrected one,
+  # and somebody would have spent the day defending a number.
+  # THE PROVENANCE OF THE GRANT IS BESIDE THE GRANT, in platform-admin's permission list, not
+  # here: a reader asking "who approved this" is looking at the entry, not at a preamble.
+  #
+  # THE ORDERING THIS IMPOSES ON CORE, AND STEP 2 IS NOW THE OUTSTANDING ONE:
+  #   1. DECLARED HERE. Done 2026-09-07.
+  #   2. GRANTED BY THE USER. Done 2026-09-07. *** CORE HAS NOT YET TRANSCRIBED IT into
+  #      platform/core/platform/platform-permissions.ts, and it must also go into that file's
+  #      HELD_BUT_UNREACHABLE list, because no route serves it yet. ***
+  #   3. THE ROUTE LANDS, and it leaves HELD_BUT_UNREACHABLE in the same change.
+  #
+  # *** BETWEEN 2 AND CORE'S TRANSCRIPTION, `registry-coherence.ts`'s "platform-admin holds
+  # exactly what the catalog grants it" IS RED, BY DESIGN AND FAIL-CLOSED. *** That suite compares
+  # this list against `grantsForPlatformRole('platform-admin')`, and its own header records which
+  # direction each drift runs: a permission missing from the ROLE mapping denies an operator
+  # something the catalog promises — a broken feature, never a broken boundary. IT IS THE
+  # MECHANISM WORKING, and it goes green on the transcription.
+  # assertEveryRoutePermissionIsReachable in platform-routes.ts is the other half and FAILS THE
+  # BUILD when a route declares a permission no role can reach, so registering the route before
+  # the transcription does not produce a `forbidden` somebody has to diagnose — it does not build.
+  # That check exists because the revoke route shipped while its permission was still unreachable
+  # and was `forbidden` to every operator alive.
+  #
+  # OWED AS A MECHANICAL CHECK — qa-agent, in suites/platform-operator/registry-coherence.ts,
+  # because a hand-maintained assertion about this file is the kind this repository spent
+  # 2026-09-05 learning not to trust:
+  #   For every role whose scope is 'platform', assert that every permission it names resolves
+  #   in this catalog AND declares 'platform' among its own scopes.
+  #   REPORT THE POPULATION EXAMINED — how many platform roles, how many permissions checked —
+  #   AND FAIL WHEN EITHER IS ZERO. A renamed key or a changed shape makes this check examine
+  #   nothing and report success, which is the most confident wrong answer it can give.
+  #   THE KNOWN-FAILING INPUT IT MUST SHIP WITH: a fixture platform role holding one
+  #   tenant-scoped permission — core.audit.read will do — which must turn it RED. A check that
+  #   has only ever been handed passing input has been observed, not verified
+  #   (.claude/rules/workflow.md §11a).
   - id: platform-admin
     scope: platform
     status: proposed
-    description: "Platform operator. Holds no tenant-scoped permission and cannot read tenant business data. Support access to tenant data awaits the AZ3 break-glass record."
+    description: >-
+      Platform operator. Holds no tenant-scoped permission and cannot read tenant business data.
+      Support access to tenant data still awaits the AZ3 break-glass record — UNCHANGED BY EVERY
+      PLATFORM-SCOPED PERMISSION ADDED SINCE, every one of which is control-plane or platform
+      configuration. THE PROPERTY REPLACED A COUNT ON 2026-09-06: this read "the six permissions
+      added 2026-09-05", the true figure could not be recovered from git history, and the claim
+      is true whichever number is right because none of the additions grants tenant access. A
+      number is decoration on a sentence whose job is to reassure, which is where a wrong figure
+      costs the most.
+      THIS ROLE IS NOW REACHABLE. Until docs/decisions/0025 it was seed data describing a role no
+      principal could hold, because every grant path ran through organization_membership and a
+      platform principal has no membership row (AZ9). `platform_operator.platform_role` is where
+      this identifier is stored, and Core maps it to the frozen list below exactly as
+      authorization/roles.ts maps a MembershipRole — same rules, same prohibition on wildcards,
+      and a SEPARATE mapping, because a principal appearing in both tables is refused everywhere.
     permissions:
       - core.principal.grant-platform-scope
       - core.marketplace.moderate
+      - core.organization.create
+      - core.organization.list
+      - core.template.read
+      - core.template.list
+      - core.template.create
+      - core.credential.reset
+      - core.platform-audit.read
+      - core.principal.revoke-platform-scope
+      # =======================================================================
+      # GRANTED BY THE USER, 2026-09-07. Relayed by the Team Lead, who does not
+      # approve — security.md §8 reserves the grant to the user and permits the
+      # Team Lead only to relay it.
+      #
+      # WHAT THE USER WAS TOLD, recorded so the grant can be audited against the
+      # approval rather than against somebody's memory of it. The request was
+      # enumerated and named: THE PERMISSION; that it permits EDITING AN
+      # ORGANIZATION'S DISPLAY NAME, COMMERCIAL REGISTRATION AND VAT
+      # REGISTRATION; that it adds NO NEW TENANT REACH, NO NEW DATA ACCESS AND
+      # NO NEW ROUTE beyond the identity update; and that it takes this role
+      # FROM TEN PLATFORM PERMISSIONS TO ELEVEN.
+      #
+      # CHECKED AGAINST WHAT WAS DESCRIBED, AND IT MATCHES. The permission's own
+      # entry above scopes it to the control-plane `organization` row, states
+      # that it does not cover status, suspension or deletion, and
+      # organization-identity-v1 publishes exactly one route for it.
+      #
+      # ONE THING THE DESCRIPTION DID NOT SAY, RECORDED RATHER THAN ABSORBED:
+      # that route WRITES ONE AUDIT RECORD INTO THE CUSTOMER'S OWN TENANT
+      # DATABASE — five row-writes from that Organization's daily allocation —
+      # and READS NOTHING FROM IT. It is not tenant data ACCESS and it is a
+      # tenant WRITE, so "no new tenant reach" is true of reads and needs the
+      # qualification for writes. It exists because docs/decisions/0028 requires
+      # the customer to be able to see what the platform did to them, so the
+      # write is FOR the customer rather than at their expense — but it is the
+      # kind of detail an approval should contain rather than acquire.
+      # =======================================================================
+      - core.platform-organization.update
   # core.app.read was removed from this role: it is declared scopes: [organization,
   # business], and a platform-scope role holding it reads every tenant's installed Apps
   # across the tenant boundary. Moderation reviews PUBLISHED App versions, which is a
@@ -957,6 +1325,13 @@ openQuestions:
     recommendation: "Group by the 'group' field above, with expandable detail. Product decision."
     blocks: "Phase 2"
   - id: AZ5
+    # NAMING COLLISION, recorded 2026-09-05 so a reader does not conclude this entry is closed.
+    # "AZ5" now names TWO different questions. docs/decisions/0019 and 0020 say they close
+    # "AZ5", and they do — they close where a principal's GRANTS live and how the authorized
+    # BUSINESS set is computed. THIS entry is a third question they do not touch: the grant path
+    # for an 'own'-scope permission. docs/decisions/README.md still lists it as unwritten, item
+    # 6, and that is correct. Both statements are true of different questions and the shared
+    # label is what makes them look contradictory.
     question: >-
       How does a principal come to hold an 'own'-scope permission? core.notification.read
       is declared scopes: [own], so no role at organization, business, branch or team
@@ -1043,3 +1418,124 @@ openQuestions:
       decision, so it is recorded here rather than invented. Distinct from AZ3 — this
       needs no tenant business data.
     blocks: "Phase 6 marketplace moderation"
+
+  # ---------------------------------------------------------------------------
+  # AZ9-AZ11 recorded 2026-09-05 from the super-admin / business-type request.
+  # RECORDED, NOT RESOLVED. architecture-agent proposes; the Team Lead records.
+  # ---------------------------------------------------------------------------
+  - id: AZ9
+    question: >-
+      A PLATFORM PRINCIPAL HOLDS NO PERMISSION BY ANY PATH, AND THE MODEL HAS NO CARRIER FOR
+      ONE. This catalog declares two permissions at 'platform' scope and two platform-scope seed
+      roles to hold them, and NEITHER ROLE IS REACHABLE. docs/decisions/0019 put the grant on the
+      organization_membership row; `authorization/roles.ts` is a closed union of two
+      organization-scope roles; and a principal with no membership never reaches the mapping at
+      all. So platform-admin and marketplace-moderator exist in this file as seed data and exist
+      nowhere in the running system.
+      THE OBVIOUS REPAIR IS AN ESCALATION AND MUST BE NAMED AS ONE. Adding a platform-tier value
+      to MembershipRole, or seeding an operator a membership carrying one, would let
+      `authorization/scope.ts` do the rest: 'platform' ranks above every other scope, so
+      implies() admits it for every Action at every level, and the storage boundary then scopes
+      the caller neatly into that Organization. Done once per Organization, that is cross-tenant
+      access built from parts that individually break no rule. The property that holds today is
+      structural and is worth stating exactly: NO MEMBERSHIP, NO TENANT STORE, NO ROWS.
+    recommendation: >-
+      Carry platform authority on a control-plane object of its own (core-object-registry.yaml
+      CO4), never as a MembershipRole value and never on a row an Organization can cause to be
+      written. Two invariants belong with it: a platform principal holds zero memberships, and
+      MembershipRole never gains a platform-tier value. Reaching tenant BUSINESS data remains
+      AZ3 and is deliberately NOT solved by this: platform CONFIGURATION — objects that name no
+      Organization and touch no Organization's rows — is reachable without AZ3, and tenant data
+      is not. Keep that line where it is; it is the whole reason a configuration capability can
+      be built first.
+    blocks: "Every platform-operator capability. Not AZ3, which is the separate and harder half."
+  - id: AZ10
+    question: >-
+      RELATIONSHIP-BASED ACCESS HAS NO EXPRESSION IN THIS MODEL, AND 'own' IS NOT IT. The case:
+      a parent must have authority over ONE student's records and none over any other's. That is
+      not a tier — a parent is not a weaker teacher — and it is not a scope in the §4 ladder,
+      because every scope there is a STRUCTURAL container (Organization, Business, Branch, Team)
+      and a parent-student link is neither structural nor a container.
+      'own' LOOKS LIKE THE ANSWER AND IS NOT. VAL-OWN clause 3 resolves 'own' through an
+      ownershipField ON THE RESOLVED TARGET ENTITY, holding the ACTING principal's identifier. A
+      student's record carries the student's identifier, not the parent's. Clause 4 states that
+      an ownershipField on any other entity "contributes nothing, at all, ever", and rule 6
+      forbids an owner identifier arriving with the call. Making 'own' traverse one hop to a
+      related principal is exactly the substitution VALIDATOR-AZ7 rejects as
+      AZ7_TARGET_ENTITY_NOT_OWNED, and az7-n8 is the fixture that exists to keep it rejected.
+      So implementing the parent case through 'own' would reopen the CWE-863 gap by name.
+    recommendation: >-
+      An explicit delegation edge — principal to principal, or principal to record — carrying a
+      bounded permission set, evaluated by Core as a fourth input alongside role and scope rather
+      than smuggled into either. Binding on whatever is built: D11 applies unchanged, so a
+      delegation can never carry more than the delegating principal holds; the edge is TENANT
+      DATA and lives behind the tenant storage boundary, never in the control plane; and
+      revocation is immediate under D12 like every other grant. Needs its own decision record.
+      In the meantime FAIL CLOSED — there is no approximation of this using roles that does not
+      grant a parent access to every student.
+    blocks: "Any business type whose participants are related to one another rather than ranked — the school case, and every clinic with next-of-kin access."
+  - id: AZ11
+    question: >-
+      PER-BUSINESS-TYPE ROLE VOCABULARIES CANNOT FIT A CLOSED TYPESCRIPT UNION, AND THE TRIGGER
+      docs/decisions/0023 SET HAS ALREADY FIRED. 0023 records that this catalog's six seed roles
+      and `authorization/roles.ts`'s two must be reconciled "before a second App exists". A
+      per-business-type vocabulary — principal/teacher for a school, practice manager for a
+      clinic — arrives ahead of that trigger and is a larger change than the one it anticipated,
+      because a vocabulary is TENANT DATA (D7, D16.4) and a closed compile-time union cannot hold
+      tenant data at all.
+      D10 ALREADY SAYS THE ANSWER AND THE CODE ALREADY CONTRADICTS IT: "Roles are data, never
+      code... Seed roles ship as a starting point and customers modify or replace them freely."
+      `roles.ts` is that contradiction, chosen knowingly by 0019 on a row-write argument for a
+      closed beta with no permission-editing surface. The argument was sound; the surface is now
+      being asked for.
+      THE QUESTION THE USER'S CASE ACTUALLY DECIDES: are per-business-type roles different LABELS
+      over a fixed set of capabilities, or genuinely different CAPABILITY SETS? On the evidence
+      of the school example, labels suffice for principal, teacher and student — the differences
+      are structural scope (Organization, Team, own) that the ladder already expresses. They do
+      NOT suffice for the parent, and the parent is not a labelling problem at all; it is AZ10.
+    recommendation: >-
+      Separate the label from the capability set. A tenant-owned role row carrying a display
+      label and a reference to one of Core's FROZEN, code-owned permission sets keeps rule 3 (no
+      wildcards) and rule 4 (explicit registration) intact by construction, costs one row per
+      role rather than one per permission, and makes vocabulary a customisation rather than a
+      fork. Opening per-tenant PERMISSION authoring is the larger step and drags in D11 and
+      D16's four constraints; it is separable and should be decided separately. Either way the
+      catalog's six seed roles and the code's two must stop being two vocabularies.
+    blocks: "Per-business-type role vocabularies; and it is the third patch over the crack 0019, 0021 and 0023 each papered."
+  - id: AZ12
+    question: >-
+      A CREDENTIAL RESET CONSOLE DELIBERATELY DESTROYS THE STRONGEST PROPERTY THE IDENTITY LAYER
+      HAS, AND THAT MUST BE A DECISION RATHER THAN A SIDE EFFECT. `identity/credential-store.ts`
+      states the property: "no `createCredential` and no `updateCredential`. Enrollment is an
+      OPERATOR ACTION performed out of band, so the running Worker has no code path that writes a
+      credential at all — which means no request, authenticated or not, can create or change one.
+      That is the strongest form of 'registration is not built in this slice' available."
+      ONBOARDING AND RESET BOTH REQUIRE BREAKING IT. Once the Worker can write
+      `principal_credential`, the platform's account-takeover surface stops being "nothing" and
+      becomes "whatever authorizes that write". Every control then rests on the authorization
+      check rather than on the absence of the code path, which is a strictly weaker guarantee and
+      should be adopted knowingly.
+      WHAT IS NOT NEGOTIABLE, AND IS NOT A DESIGN CHOICE: THE PASSWORD CANNOT BE SHOWN, EVER.
+      `principal_credential` holds identifier_hash, principal_id, algorithm, iterations, salt,
+      verifier — no password column and no reversible form of one. The password never reaches
+      Dudo; the client derives and the server stores a hash OF THE DERIVED VALUE. A "show the
+      customer's password" feature is not withheld, it is arithmetically impossible, and any
+      design that makes it possible has replaced the credential scheme. Recorded because the
+      request WILL recur and the answer must not drift.
+    recommendation: >-
+      Specify credential write as its own narrow port with exactly two operations — enrol and
+      replace — reachable only from the platform route class, never from an Action, and never
+      from a tenant principal acting on another principal. Bind five constraints to it: the new
+      value is machine-generated and shown EXACTLY ONCE, never stored and never re-displayable;
+      the operation is `critical` under §6 and therefore needs audit AND explicit confirmation;
+      it revokes every live session of the target principal on the next call, or the reset does
+      not actually cut off an attacker who is already in; it draws
+      PRINCIPAL_CREDENTIAL_ROW_WRITES from an allocation the slice must NAME, since
+      `control-plane-admission.ts` records enrolment as costed-but-outside-the-budget; and it is
+      rate limited, because an unbounded reset endpoint is a lockout weapon against every account
+      on the platform. Do NOT specify anything that stores a recoverable password.
+      NOTE THE ASYMMETRY WORTH KEEPING: a platform operator resetting a tenant admin's credential
+      is a takeover of that account by design, and the tenant must be able to SEE it happened —
+      which is a second reason the operator audit trail has to reach the tenant's own log
+      (core-object-registry.yaml CO7) and not only a platform one.
+    blocks: "Operator-driven onboarding and credential reset — the same code path serves both, and building them separately builds it twice."

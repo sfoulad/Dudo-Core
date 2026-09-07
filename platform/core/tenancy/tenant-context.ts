@@ -67,8 +67,49 @@ export type AuthenticatedPrincipal = {
    * (customer-directory-v1.contract.yaml authorizationModel.evaluationOrder step 2).
    * An organization-scope principal's set is every Business in its Organization; a
    * business-scope principal's set is the one it is assigned.
+   *
+   * WHEN `businessScope` IS `'organization'` THIS FIELD IS EMPTY UNTIL THE PIPELINE FILLS IT.
+   * `docs/decisions/0020` splits the authorized context in two, because the two halves have
+   * different dependencies: the Organization is known before the tenant store resolves, and the
+   * business set can only be read through it. `action/pipeline.ts` completes the principal
+   * immediately after the store resolves and uses the completed value for the handler and for
+   * the audit record.
+   *
+   * A PRE-COMPLETION PRINCIPAL USED BY MISTAKE THEREFORE DENIES RATHER THAN OVER-AUTHORIZES.
+   * Empty means "authorized over no Business" everywhere it is read — the storage boundary
+   * renders it as `0 = 1` and `authorizeSuppliedBusiness` refuses every identifier — so the
+   * failure mode of the split is refusal, which is the only direction it is safe to be wrong in.
    */
   readonly authorizedBusinessIds: readonly string[];
+  /**
+   * WHICH RULE PRODUCES `authorizedBusinessIds`. `docs/decisions/0020`.
+   *
+   * ===========================================================================================
+   * IT IS AN EXPLICIT FIELD BECAUSE THE ALTERNATIVE WAS A SENTINEL, AND A SENTINEL HERE WOULD BE
+   * AN AMBIENT TENANT-WIDE GRANT WEARING AN ARRAY.
+   * ===========================================================================================
+   *
+   *   `'organization'`  Every Business in the Organization. The pipeline reads them through the
+   *                     tenant handle after the store resolves. This is what the identity layer
+   *                     produces, because `0019`'s roles are per-Organization and grant at
+   *                     organization scope.
+   *   `'assigned'`      `authorizedBusinessIds` is already final and the pipeline MUST NOT touch
+   *                     it. This is the business-scope principal — the case `0020` explicitly
+   *                     defers rather than rejects, and the case a verification harness
+   *                     constructs directly when it needs a principal authorized over a subset.
+   *
+   * THE DEFAULT IS `'assigned'` WHEN THE FIELD IS ABSENT, and that is deliberate: a principal
+   * built without stating a rule keeps exactly the set it was given, so nothing can silently
+   * acquire authority over Businesses it was not handed. Widening is opt-in and has to be
+   * written down.
+   *
+   * WHY NOT INFER IT FROM AN EMPTY ARRAY. "Empty means every Business" would make the safest
+   * possible value — the one that denies everywhere else in this codebase — mean the widest
+   * possible grant in one place. That is the ambient-tenant shape `MULTITENANCY_STANDARD.md` §3
+   * forbids, and `principal-authorization-source.ts` already records that there is no sentinel
+   * meaning "all".
+   */
+  readonly businessScope?: 'organization' | 'assigned';
   /** The grants this principal holds, for the record-independent check at step 3. */
   readonly grants: PrincipalGrants;
   /** Set when an AI agent or a service account acts for a human (AUTHORIZATION_STANDARD.md §11). */

@@ -1,6 +1,6 @@
 # Testing Standard
 
-- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **No test framework is approved** — see §11. This standard is framework-neutral by construction.
+- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **No *third-party* test framework is approved, and a first-party suite exists and runs anyway** — `npm test` → `tools/run-suites.mjs` → four entry points under `packages/testing/`. See TS1, reclassified 2026-09-06. This standard is framework-neutral by construction, and that turned out to be the property that mattered.
 - **Authored by:** `architecture-agent`. **Tests are authored by `qa-agent`.**
 - **Applies to:** `packages/testing/**`, `apps/*/tests/**`, `connectors/*/tests/**`, and Apple test targets.
 - **Depends on:** every other standard — the checklists in each are what tests verify.
@@ -81,9 +81,15 @@ For every consumer:
 
 ### 5.1 What these tests are carrying, under the decided model
 
-`0006` is **Accepted**: **Option A — one shared production D1 database** — for the
-Zero-Cost MVP while `0008` is active (`MULTITENANCY_STANDARD.md` §7.1). State the
-consequence for testing plainly, because everything in this section follows from it:
+`0006` is **Accepted**: **Option A — one shared production D1 database** (`MULTITENANCY_STANDARD.md`
+§7.1). State the consequence for testing plainly, because everything in this section follows from it:
+
+> **STALE PREMISE, corrected 2026-09-06 (`workflow.md` §12).** This paragraph read *"for the
+> Zero-Cost MVP while `0008` is active."* **`0030` withdrew the MVP framing**; `0008` (zero cost) is
+> untouched and `0006` is **not** reversed. What changed is the reason this section is binding:
+> Option A is no longer a temporary concession to be tested loosely until a better model arrives,
+> it is the model, and `0030` requires the *choice* to stay reversible. **Nothing below weakens;
+> §5.5's structural bypass test is now also the test that keeps the tenancy model replaceable.**
 
 > **There is no physical boundary between two Organizations' data.** Every row of every
 > tenant sits in one database, and the only thing keeping tenant A out of tenant B's
@@ -166,11 +172,36 @@ requirement, not an aspiration, and the following is how it is read:
   design, no "we scope every query anyway" reasoning may tick it. Only a recorded
   measurement, run by the method TS5 defines, can move it off `UNVERIFIED / NOT RUN`.
 
-**Phase scope.** This is a runtime control over a running system holding tenant data.
-Phase 0 has neither a runtime nor tenant data, so `UNVERIFIED / NOT RUN` here **does not
-block the Phase 0 foundation**. It **is a mandatory blocker before any production release
-that serves real tenant data** — the verification is owed, and the debt is recorded here
-rather than written off.
+**Scope — the premise that made this cheap has expired.** This is a runtime control over a
+running system holding tenant data.
+
+> **CORRECTED 2026-09-06. The sentence here read: *"Phase 0 has neither a runtime nor tenant
+> data, so `UNVERIFIED / NOT RUN` here does not block the Phase 0 foundation."* **Both halves
+> of that premise are now false.** A runtime exists — two Workers deployed, `dudo-core` and
+> `dudo-admin` (`docs/product/superadmin-test-checklist.md:23–24`) — and tenant data exists:
+> **three Organizations, seeded** (line 26).
+>
+> **The conclusion still holds, but for a different and narrower reason**, and the difference
+> is the whole point of re-deriving rather than leaving it propped up. It no longer holds
+> because *"there is nothing to measure"*. It holds because **the data is synthetic and
+> operator-seeded, and the deployment is staging rather than production**. That reason expires
+> the first time a real customer's records are in the shared database — which is a date
+> somebody chooses, not a phase that arrives.
+>
+> **So the blocking condition is unchanged and is now the operative half of this paragraph, not
+> the hypothetical half:** `UNVERIFIED / NOT RUN` **is a mandatory blocker before any production
+> release serving real tenant data.** The verification is owed, the debt is recorded here rather
+> than written off, and **the runway for paying it is shorter than this paragraph used to
+> imply.**
+>
+> **A second, live consequence, because it is the same control seen from the deployed side.**
+> `docs/operations/deployment-runbook.md` §8b records that `verify-staging.ts` CHECK 4b — the
+> **two-tenant isolation probe against the deployed system** — *"always reports NOT RUN"* with
+> one seeded Organization, and that until a second exists *"the deployed isolation evidence is
+> weaker than the harness evidence."* **Three Organizations are now seeded, so that check is
+> runnable for the first time**, and this standard has no record of it having been run with
+> `--other-org`. That is a `not run` which is now avoidable, and §5.7 requires it to be reported
+> as `not run` rather than covered by the harness result.
 
 ### 5.3 Coverage is per query path, not per endpoint
 
@@ -269,8 +300,22 @@ evidence in a gate report**:
   report. A permanently broken-by-configuration path does not exist in the repository.
 - Where the toolchain supports mutation testing, mutating the tenant predicate is the
   preferred mechanical form of this requirement; where it does not, a manually recorded run
-  satisfies it. The requirement is the evidence, not the tool. **TS1 is unresolved, so the
-  mechanism is chosen when the framework is chosen; the obligation does not wait for it.**
+  satisfies it. The requirement is the evidence, not the tool.
+
+> **BUILT — the sentence that stood here was wrong about the future.** It read *"TS1 is unresolved,
+> so the mechanism is chosen when the framework is chosen."* **The mechanism was built without a
+> framework decision, and all three controls this section names exist and run.**
+> `packages/testing/run-customer-directory.ts:13` — *"A primary run, then THREE NEGATIVE-CONTROL
+> RUNS — predicate, resolver and boundary"* — with the substituted stores in
+> `packages/testing/harness/broken-controls.ts` (`createPredicateBrokenStore:87`,
+> `createBoundaryBypassStore:155`, `createAdmissionBypassStore:269`) and the resolver control at
+> `run-customer-directory.ts:129` (`resolverMode: 'always-organization-b'`). The break is
+> substituted at composition and never committed, as this section requires.
+> **The reporting half is in the runner, not in the suite:** `packages/testing/harness/runner.ts`
+> labels isolation assertions (`ISOLATION`, line 54) so a control run distinguishes *red on an
+> isolation assertion* from *red on something else* from **green — the case does not test isolation,
+> whatever its name says.** That third outcome is the one §5.6 exists to detect and it is
+> machine-detected rather than argued.
 
 ### 5.7 What a gate report may and may not claim
 
@@ -365,8 +410,11 @@ and reported honestly:
       canonical test alone, and not tickable from a sampled endpoint.**
 - [ ] **Non-disclosure of existence** — status, error shape, response-size class and timing
       distribution, per §5.2. Reported as `UNVERIFIED / NOT RUN` until TS5 defines and the
-      team implements the measurement method. **Never ticked without measurement.** Does not
-      block Phase 0; **blocks any production release serving real tenant data.**
+      team implements the measurement method. **Never ticked without measurement.**
+      ~~Does not block Phase 0;~~ **corrected 2026-09-06 — a runtime and three seeded
+      Organizations now exist, so the "nothing to measure" premise is gone (§5.2).** It does not
+      block *today* only because the data is synthetic and the deployment is staging, and it
+      **blocks any production release serving real tenant data.**
 - [ ] **Permission tests pass.**
 - [ ] Security review passes (`SECURITY_STANDARD.md` §12), by an agent that did not write
       the code.
@@ -399,6 +447,23 @@ Fixed by `0004`:
 `qa-agent` owns all of them. **Root-level shared test configuration belongs to the Team
 Lead** (`0001`); `qa-agent` proposes changes to it and does not edit the root.
 
+> **CONTRADICTED, 2026-09-06 — the first App's suites are not colocated, and this standard should
+> not be quietly rewritten to match.** `0004` and this section both say `apps/<app>/tests/`.
+> **`apps/customers/` has no `tests/` directory.** The Customer Directory suites live in
+> `packages/testing/suites/customer-directory/` (eleven files), reached through
+> `packages/testing/run-customer-directory.ts`, and the App-manifest fixtures live in
+> `packages/testing/fixtures/app-manifest/`.
+>
+> **Which side is wrong is a Team Lead call, and there is a real argument each way.** Colocation is
+> what makes an App a self-contained installable unit — the property `APP_STANDARD.md` §1 calls
+> ownership that "leaks" when it is partial, and the property a third-party App author will need.
+> Against that: these suites compose **Core's** pipeline, storage boundary, resolver and negative
+> controls, so under the current in-process App runtime they are not App-local tests at all — which
+> is a fact about the missing SDK (`SDK_STANDARD.md` SD7), not about where files belong.
+> **The forecast, stated so it can be checked: if the App runtime lands and this is still
+> unresolved, the second App will copy the first**, and colocation will then cost a migration
+> rather than a decision.
+
 ---
 
 ## 10. CI
@@ -415,10 +480,16 @@ security checks · build · integration test · deploy staging · smoke test.
 
 ## 11. Open questions
 
-| # | Question | Recommendation |
-|---|---|---|
-| TS1 | **No test framework is approved.** Vitest against the Workers runtime is the candidate; `0003` approves no npm package. | Needs an ADR **before any test is written**. Recommend the framework that can execute against the real Workers runtime rather than a Node emulation — testing Workers code in Node proves the wrong thing. `qa-agent` should evaluate and the Team Lead record it. **This blocks Phase 1 verification.** |
-| TS2 | ~~**Test data for the tenancy model** depends on a model that is not decided~~ — **UNBLOCKED by the model. MT2 is CLOSED; `0006` is Accepted** (Option A, one shared D1 database, MVP-scoped while `0008` is active). | The two-tenant harness is now specifiable: **one database, two `tenant_id` values**, no per-tenant provisioning step, no database creation, and **no remote slot consumed** — local and CI runs use `wrangler dev`'s local mode and never set `"remote": true` (`CLOUDFLARE_STANDARD.md` §4.1). The harness must also provision the `TenantStoreResolver` mapping for both tenants plus one **unmapped** Organization, because §5.4's fail-closed case cannot be tested without one. **What TS2 now depends on instead: TS1 only** — the harness cannot be written until a test framework is approved. It is no longer blocked on the architecture, only on the toolchain. |
-| TS3 | **Cross-repository contract testing.** `Dudo-Apple` is a separate repository, so verifying it against `Dudo-Core`'s contracts needs a distribution mechanism. | Depends on AS1 (contract form and transport). Flagged before the first shared contract. |
-| TS4 | **Coverage targets.** Not specified anywhere. | Do not set a percentage. Require instead that every checklist item in every applicable standard has a test. A percentage is satisfiable without testing anything that matters. **Note:** §5.3 sets a coverage *denominator* for isolation specifically — query paths enumerated versus exercised — which is a completeness measure, not a percentage target, and is required regardless of how TS4 is resolved. |
-| TS5 | **No verification method exists for the non-disclosure-of-existence control.** §5.2 **requires** that *"for equivalent unauthorised requests, status, error shape, response-size class and timing distribution must not reveal whether another tenant or its resource exists"* — by user decision the requirement stands. What is undecided is how it is measured. Under Option A, D1 is single-threaded per database and `MULTITENANCY_STANDARD.md` §7.7 accepts cross-tenant latency coupling as structural, so timing is noisy and informative at once. | **TS5 must define: sampling method and sample size, the tolerance and statistical test that separate load noise from an existence-correlated signal, which surfaces are measured, and where the measurement runs.** The distinguishing question is correlation with existence, not variance: shared-D1 load variation is not a failure; a distribution that separates on whether another tenant's resource exists is. Until TS5 is resolved and implemented, the control is reported **`UNVERIFIED / NOT RUN`** (§5.7) and **never reported as passed without measurement**. It does **not** block Phase 0 — no runtime and no tenant data exist — and it **does** block any production release serving real tenant data. Depends on TS1 for the harness. `MULTITENANCY_STANDARD.md` §8 carries the identical sentence; the two files move together. |
+**Reconciled against the built system, 2026-09-06.** Every row carries a **State**: `CLOSED`
+(something built or decided answers it, with a citation), `OPEN` (a named decision is still owed),
+or `CONTRADICTED` (the implementation went a different way than this standard said it would — those
+are reported, never resolved by editing the standard to agree).
+
+| # | State | Question | Recommendation |
+|---|---|---|---|
+| TS1 | **CONTRADICTED**, then narrowed | **What this row asserted is false as written.** It said an ADR was needed *"before any test is written"* and that this *"blocks Phase 1 verification."* **Phase 1 was verified. Four suite entry points run from `npm test`, with no third-party framework and no ADR** — the Team Lead's last recorded measurement was 564 cases, 0 failed, which is a figure from a run rather than from this file, and no count is recorded anywhere in the repository. The gate is `package.json:16` → `tools/run-suites.mjs`, whose `SUITES` array names `run-platform-operator.ts`, `run-customer-directory.ts`, `run-az2-login.ts` and `run-type-negative.ts`; it reports each suite's actual state, runs all four even when one fails, and exits non-zero. The runner is `packages/testing/harness/runner.ts` — ~150 dependency-free lines whose own header says *"when TS1 is decided, the suites move and this file is deleted."* **The framework-neutrality this standard was written for is what made that possible**, and the blocking claim was the part that was wrong. | **The residual question is real and much smaller: adopt a third-party framework, or ratify the first-party runner as the answer.** `0016` (Accepted) records it as open — *"Choosing Vite did not choose Vitest, and `qa-agent`'s dependency-free runner stays until TS1 is decided on its own merits"* — and `docs/decisions/README.md` line 113 says the same. **It blocks nothing.** Two facts the eventual ADR must weigh, neither of which existed when this row was written: **(1)** the original recommendation — execute against the real Workers runtime rather than a Node emulation — is **still unmet**, because the suites run on Node against a SQLite double (`packages/testing/harness/sqlite-d1.ts`), so "testing Workers code in Node proves the wrong thing" remains a live criticism of what exists, not an argument for a package; **(2)** replacing the runner costs the three things it was built for and a generic one does not do — whole-error comparison in `expectError`, `ISOLATION:`-labelled assertions, and `not_run` as a distinct state. **Do not adopt a framework that cannot express those three.** Team Lead records; `qa-agent` evaluates. |
+| TS2 | **CLOSED** | ~~**Test data for the tenancy model**~~ — **built, in exactly the shape this row specified.** Two active Organizations plus one unmapped one at `packages/testing/harness/world.ts:117` (`ORG_UNMAPPED`); the directory fixture at `packages/testing/harness/control-plane-fixture.ts:10` — *"that an unknown Organization fails closed through `tenant_directory` (`0006` §0.2)"*; and §5.4's fail-closed cases at `packages/testing/suites/az2-login/tenant-resolution.ts:169–260`, which assert **unknown, empty-directory, suspended, migrating, unrecognised-binding and unreadable-directory** each separately, as §5.4 requires of a default branch. No database is created and no remote slot is consumed — the harness runs against `packages/testing/harness/sqlite-d1.ts`. **The dependency this row declared was wrong and is kept visible:** it said *"the harness cannot be written until a test framework is approved."* It was written without one. The only gap that survives is not TS2's — the harness is a SQLite double rather than the Workers runtime (TS1). | ~~The two-tenant harness is now specifiable: **one database, two `tenant_id` values**, no per-tenant provisioning step, no database creation, and **no remote slot consumed** — local and CI runs use `wrangler dev`'s local mode and never set `"remote": true` (`CLOUDFLARE_STANDARD.md` §4.1). The harness must also provision the `TenantStoreResolver` mapping for both tenants plus one **unmapped** Organization, because §5.4's fail-closed case cannot be tested without one. **What TS2 now depends on instead: TS1 only** — the harness cannot be written until a test framework is approved. It is no longer blocked on the architecture, only on the toolchain.~~ Struck 2026-09-06: written, without one. |
+| TS3 | **OPEN** — root: contract transport (`API_STANDARD.md` AS1) | **Cross-repository contract testing.** `Dudo-Apple` is a separate repository, so verifying it against `Dudo-Core`'s contracts needs a distribution mechanism. **Now evidenced rather than predicted:** `docs/operations/deployment-runbook.md` §8a records that every client binding in the login release was verified against **a stub written by the same agent that wrote the client, from the same reading of the same contract** — *"a shared misreading passes all 50 tests silently"* — and lists five checks no stub can make. That is this row's failure mode, observed. | Depends on AS1 (contract form and transport), which belongs to `API_STANDARD.md` and is not reconciled here. **Raise its priority.** It is no longer flagged *"before the first shared contract"*: contracts are shipped and two clients consume them. |
+| TS4 | **OPEN** — architecture decision; blocks nothing | **Coverage targets.** Not specified anywhere. | Unchanged, and the recommendation now has a worked example. Do not set a percentage; require that every checklist item in every applicable standard has a test. **§5.3's denominator — query paths enumerated versus exercised — is the form that worked:** `apps/customers/README.md` records the enumeration for the first App as five storage functions and the query paths each serves, derived from the call sites rather than from the endpoint list, exactly as §5.3 demands. Required regardless of how TS4 resolves. |
+| TS5 | **OPEN** — architecture decision; **dependency corrected 2026-09-06** | **No verification method exists for the non-disclosure-of-existence control.** §5.2 **requires** that *"for equivalent unauthorised requests, status, error shape, response-size class and timing distribution must not reveal whether another tenant or its resource exists"* — by user decision the requirement stands. What is undecided is how it is measured. Under Option A, D1 is single-threaded per database and `MULTITENANCY_STANDARD.md` §7.7 accepts cross-tenant latency coupling as structural, so timing is noisy and informative at once. | **TS5 must define: sampling method and sample size, the tolerance and statistical test that separate load noise from an existence-correlated signal, which surfaces are measured, and where the measurement runs.** The distinguishing question is correlation with existence, not variance: shared-D1 load variation is not a failure; a distribution that separates on whether another tenant's resource exists is. Until TS5 is resolved and implemented, the control is reported **`UNVERIFIED / NOT RUN`** (§5.7) and **never reported as passed without measurement**. It does **not** block Phase 0 — no runtime and no tenant data exist — and it **does** block any production release serving real tenant data. ~~Depends on TS1 for the harness.~~ `MULTITENANCY_STANDARD.md` §8 carries the identical sentence; the two files move together. **Two corrections, 2026-09-06. (1) The TS1 dependency is struck** — the harness exists (TS2). **(2) The evidence now argues for a structural answer rather than a statistical one, and it is measured evidence:** `docs/operations/deployment-runbook.md` §8 records that `core-agent` ran a wall-clock timing assertion **five times on identical code and it failed two of five**, and the runbook instructs *"Do NOT check this with a stopwatch."* The property is instead proved by identical `crypto.subtle.deriveBits` parameter traces across all thirteen refusal inputs — `packages/testing/suites/az2-login/equal-work.ts` — which holds on any machine. **That is a method for the authentication surface only, and generalising it is what TS5 now owes:** a structural equal-work proof per surface, with a statistical test reserved for what cannot be proved structurally. The phase note above also predates a runtime: a runtime and tenant data both exist now, so the second half of that sentence is the operative one. |
+| TS6 | **OPEN** — Team Lead; **added 2026-09-06** | **Nothing runs any of this automatically.** §10 specifies a merge pipeline — format · lint · type check · unit · contract · security · build · integration · deploy staging · smoke. **`.github/` holds CODEOWNERS, a PR template and three issue templates, and no workflow file.** So `npm test` and `npm run typecheck` gate only when a human types them, and the suite's own history records the cost: `package.json:10` — `packages/testing` *"was checked by NOTHING until 2026-09-05, which concealed a fixture that had silently stopped composing what production composes while 400+ assertions kept passing."* | **`docs/operations/ci-roadmap.md`'s stated reason for creating no workflow has expired.** It creates none because *"the web framework and testing framework are still unselected"* — `0016` selected the web stack, and TS1 shows a runnable gate exists. **There is now something real to run**, which was that document's own condition. The honest remaining blockers are narrower: no lint or format tool is approved, and a deploy-staging stage must not be automated while every deploy needs explicit user approval each time (`0030`). **Recommend a first workflow of exactly two stages — `npm run typecheck` and `npm test`** — both of which pass today, which is what `0005` step 6 requires before either becomes a required check. `.github/**` and `ci-roadmap.md` are the Team Lead's; this row records the gap and does not close it. |

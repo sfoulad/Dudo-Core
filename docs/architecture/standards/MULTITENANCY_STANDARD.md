@@ -1,10 +1,22 @@
 # Multi-Tenancy Standard
 
-- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **§7 is now decided** — `docs/decisions/0006-tenancy-model.md` is **Accepted** (user decision, 2026-09-01): **Option A, one shared production D1 database, with mandatory indirection**, for the Zero-Cost MVP only while `0008` is active.
+- **Status:** Draft for Team Lead review — Phase 0. Binding on acceptance. **§7 is now decided** — `docs/decisions/0006-tenancy-model.md` is **Accepted** (user decision, 2026-09-01): **Option A, one shared production D1 database, with mandatory indirection**, ~~for the Zero-Cost MVP only while `0008` is active~~ **for the current scale, while `0008` is active, and only while the indirection keeps the choice reversible** — `docs/decisions/0030` withdrew the MVP premise this line rested on; see §7.1's amendment for what replaced it. `0008` itself is untouched and every free-tier figure below still binds.
 - **Authored by:** `architecture-agent`.
 - **Applies to:** every data path in Dudo, without exception.
 - **Depends on:** `CONSTITUTION.md` Rule 10, `SECURITY_STANDARD.md`, `CLOUDFLARE_STANDARD.md`, `docs/decisions/0006` (Accepted), `docs/decisions/0008`.
 - **Source:** `CONSTITUTION.md` Rule 10; `docs/decisions/0003`, `0006`, `0008`.
+- **Reconciled against the built system 2026-09-06.** §10 classifies all six open issues —
+  **MT1, MT2 and MT6 closed; MT3, MT4 and MT5 still open, and all three of those need a USER
+  decision, not an architecture one.** **No contradiction was found in this file**, which is
+  the notable result of the pass: the rules that are hardest to hold — one central emission
+  point for the tenant predicate, tenant derived only from authenticated context, a resolver
+  that fails closed on an unknown Organization — are the ones the code actually implements.
+  §7.1's *"for the Zero-Cost MVP only"* scoping clause is amended in place, because
+  `docs/decisions/0030` withdrew the MVP premise and named `0006` as *"the pinch point"*;
+  `0006` is **not** reversed and one shared database remains correct at current scale.
+  **§8's non-disclosure control is still `UNVERIFIED / NOT RUN` and is still owed**, as §9's
+  checklist requires — it is not a Phase 0 blocker and it **is** a blocker before any
+  production release serving real tenant data.
 
 Dudo holds other companies' invoices, payroll, contracts, and bank details. A single
 cross-tenant read is not a bug report; it is the end of the product. Everything in this
@@ -27,8 +39,20 @@ clause away from a breach, and code review does not reliably catch a missing cla
 ## 2. Vocabulary
 
 The event envelope carries both `tenant_id` and `business_id` (`EVENT_STANDARD.md` §3) and
-defines neither. This is the resolution `architecture-agent` recommends. **It needs Team
-Lead confirmation and it is load-bearing** — every table, key, and index depends on it.
+defines neither. This is the resolution `architecture-agent` recommends. ~~**It needs Team
+Lead confirmation and it is load-bearing**~~ — every table, key, and index depends on it.
+
+> **CONFIRMED, 2026-09-06 — it is decided and no longer awaits confirmation.**
+> `docs/decisions/0006` (**Accepted**, user, 2026-09-01) §1.1 lists it among the things already
+> settled: *"The tenant is the Organization. The Team Lead reports this as confirmed by the
+> user. This record takes it as given and does not re-open it. `business_id` is an
+> authorization scope inside a tenant, never an isolation boundary."* It was load-bearing and
+> it bore the load: every table, key and index in both migration sets is built on it, and the
+> `tenant_id` predicate has exactly one emission point
+> (`platform/core/storage/adapters/sql/sql-compiler.ts:141`). **The vocabulary caveat:**
+> `0025`'s 2026-09-05 amendment defers the `Business` → `Workspace` rename because
+> `business_id` is *"a published wire field two clients shipped against"* and a persisted audit
+> value — four changes, not one. Two vocabularies for one concept, accepted deliberately.
 
 | Term | Meaning |
 |---|---|
@@ -138,6 +162,46 @@ what follows from it. It no longer presents options; §7.9 keeps the option comp
 This holds **for the Zero-Cost MVP only, while `docs/decisions/0008-zero-cost-mvp-infrastructure.md`
 is active.** It is an MVP decision, not a permanent architecture promise, and it is
 expected to be revisited rather than defended.
+
+> **AMENDED 2026-09-06 — the scoping clause above has lost its referent, and `0030` named this
+> section as the place it would.** `docs/decisions/0030` (**Accepted**, 2026-09-06) withdrew
+> the MVP framing and says so about `0006` specifically:
+>
+> > *"The pinch point is `0006`, and it is named here rather than left to be discovered …
+> > it chose one shared D1 database with mandatory indirection, explicitly 'for the Zero-Cost
+> > MVP.' The MVP is now over and that premise is gone, which is `workflow.md` §12's exact
+> > shape."*
+>
+> **`0006` is NOT reversed and this section is NOT withdrawn.** `0030`: *"One shared database
+> remains correct for the current scale, and re-deciding it under a full-system premise is its
+> own piece of work."* What changes is the *reason* the model is provisional, and therefore
+> what is required of it:
+>
+> - **Was:** provisional because the MVP would end. **Now:** provisional because scale will
+>   force it, and **the requirement is that the choice stays reversible.**
+> - **`0008` is untouched.** Zero cost continues; `0030` explicitly does not supersede it. Every
+>   free-tier figure in §7.3 through §7.5 still binds.
+> - **A new binding constraint sits beside it:** *"The free tier may cost us CONFIGURATION. It
+>   must never cost us SCHEMA."* `0030` names *"anything that assumes exactly one database
+>   exists"* as a violation, and names *"one shared database behind an interface that does not
+>   promise there is only one"* as acceptable. **That is a description of §7.2, and it promotes
+>   the indirection from a decided implementation detail to the mechanism the reversibility
+>   claim rests on.** Anything bypassing the storage boundary is no longer a shortcut; it is a
+>   decision to make the tenancy model permanent.
+>
+> Read "for the Zero-Cost MVP only" as **"for the current scale, under `0008`, and only while
+> the indirection keeps it reversible."** **That substitution applies to EVERY use of "MVP" in
+> this document — including the status header, §6, §7.2, §7.4, §7.5, §7.7, §7.9 and the MT2 row
+> in §10 — and is not repeated at each site.**
+>
+> **The scope sentence above originally named only §7.3, §7.5 and §7.7, and that was wrong.**
+> A second pass with a varied search term — `MVP` rather than the phrasing just edited — found
+> the word in eight further places, two of them outside any section the first list named and
+> one of them in the **status header at the top of this file**, which is the line a reader sees
+> before anything else. **The first sweep edited the body and never looked up.** Recorded
+> rather than quietly widened, because a sweep whose stated scope is narrower than its subject
+> is the failure mode `.claude/rules/workflow.md` §12 describes, and the correction is the
+> useful half.
 
 - **One shared production D1 database** holds every Organization's business data.
 - **`tenant_id` is mandatory** on every tenant-owned row, query, command, event, cache key,
@@ -412,11 +476,17 @@ sentence in either file is a change to both.**
 
 ## 10. Open questions
 
+**Classified 2026-09-06 against the built system**, on the three states defined in
+`CONSTITUTION.md` §7. **Three closed, three still open — and all three that remain are user
+decisions, not architecture ones.** MT3, MT4 and MT5 need a person to choose a legal or
+commercial position; no agent can close any of them, and no further architecture work
+unblocks them.
+
 | # | Question | Status |
 |---|---|---|
-| MT1 | **Tenant = Organization** (§2). | Recommended; needs Team Lead confirmation. Blocks every schema. |
-| MT2 | **The tenancy implementation model** — the physical placement of tenant data (§7). | **CLOSED — decided.** `0006-tenancy-model.md` is **Accepted** (user, 2026-09-01): **Option A, one shared production D1 database, with mandatory indirection**, for the Zero-Cost MVP only while `0008` is active. Option C is the approved migration candidate; migration and any paid plan require user approval. |
-| MT6 | **The `TenantStoreResolver` indirection** (§7.2) — formerly MAJ-21, an unapproved assumption asserted inside a standard. | **CLOSED — approved and binding.** `0006` §0.2, Accepted. It is now a verification item in §9 rather than a recommendation. |
-| MT3 | **Data residency.** Some customers will require data to stay in a region; the plan does not mention it. | Not decided, and **now harder**: a single shared database has one location, so a residency requirement cannot be satisfied by placement under Option A. Raise it with the user before any Organization with a residency requirement is onboarded — it is a migration trigger (§7.8), not a configuration change. |
-| MT4 | **Retention and deletion policy** — how long audit and event history survive a tenant deletion. | Not decided. Has legal consequences; needs the user. |
-| MT5 | **Search index isolation.** Core owns search infrastructure; no engine is approved, and a shared index is a shared data store. | Whatever is chosen, the index is tenant-partitioned. Blocked on the search engine decision. |
+| MT1 | **Tenant = Organization** (§2). | **CLOSED — decided.** `docs/decisions/0006` (**Accepted**, user, 2026-09-01) §1.1 lists it under *Settled*, citing this section: *"The tenant is the Organization. The Team Lead reports this as confirmed by the user. This record takes it as given and does not re-open it. `business_id` is an authorization scope inside a tenant, never an isolation boundary."* Built accordingly: `platform/core/storage/adapters/sql/sql-compiler.ts:141` is the single emission point of `tenant_id = ?`, and the value behind it is `organizationId` (`platform/core/tenancy/tenant-context.ts:63`). **`0006` records it as confirmed rather than deciding it**, so the confirmation exists in a decision's assumptions table rather than in a record of its own — noted for the Team Lead, because a definition every schema depends on is one nobody would think to look for there. Same question as `CONSTITUTION.md` C1 and `EVENT_STANDARD.md` §4. |
+| MT2 | **The tenancy implementation model** — the physical placement of tenant data (§7). | **CLOSED — decided.** `0006-tenancy-model.md` is **Accepted** (user, 2026-09-01): **Option A, one shared production D1 database, with mandatory indirection**, ~~for the Zero-Cost MVP only while `0008` is active~~ **for the current scale, while `0008` is active, and only while the indirection keeps the choice reversible** (`0030`; see §7.1's amendment). Option C is the approved migration candidate; migration and any paid plan require user approval. **This row carried the withdrawn "MVP only" phrasing when it was first written on 2026-09-06 — after the §7.1 amendment, by the same agent, in the same pass.** Left visible because it is the more instructive kind of miss: not a stale document nobody had revisited, but new text reproducing the premise the author had just finished withdrawing four hundred lines above. |
+| MT6 | **The `TenantStoreResolver` indirection** (§7.2) — formerly MAJ-21, an unapproved assumption asserted inside a standard. | **CLOSED — approved, binding, and now built.** `0006` §0.2, Accepted. It is a verification item in §9 rather than a recommendation. **Verified in code 2026-09-06:** the port is `platform/core/tenancy/tenant-store-resolver.ts` and the implementation `platform/core/tenancy/directory-tenant-store-resolver.ts`; the tenant predicate has exactly one emission point, `whereWithTenant` at `platform/core/storage/adapters/sql/sql-compiler.ts:141`, called unconditionally by `compileSelect`, `compileUpdate` and `compileDelete` (lines 164, 206, 214) with `compileInsert` setting the column instead. That file's own header states the negative control this standard's §7.6 requires: *"remove the tenant clause from `whereWithTenant`, and every isolation test in the suite must go red. If removing it turns only some of them red, coverage is incomplete."* **`0030` raises what this indirection is for:** it is no longer only isolation, it is the mechanism that keeps `0006` reversible — see the amendment at §7.1. |
+| MT3 | **Data residency.** Some customers will require data to stay in a region; the plan does not mention it. | **STILL OPEN — needs a USER decision**, and no architecture work unblocks it. Unchanged and still harder under the decided model: one shared database has one location, so a residency requirement cannot be satisfied by placement under Option A. It is a migration trigger (§7.8), not a configuration change. **Raise it before any Organization with a residency requirement is onboarded.** Same question as `SECURITY_STANDARD.md` SE3, which pairs it with GDPR and PCI scope — **record them together; they are one conversation with the user, not three.** |
+| MT4 | **Retention and deletion policy** — how long audit and event history survive a tenant deletion. | **STILL OPEN — needs a USER decision.** Has legal consequences and no agent may make it. **Now concrete rather than hypothetical:** `audit_event` (`platform/core/migrations/0001_audit_event.sql:33`) and `platform_operator_action` (`.../control-plane/0009_platform_operator_action.sql:107`) are both accumulating rows in production with **no retention policy and no deletion path**, and §6 requires a tenant deletion to be provably complete across audit *"subject to retention"* — a clause with nothing behind it. **It also now touches `0030`'s expandability constraint:** storage is the one free-tier allowance that does not ebb, so an unbounded audit table is a growth curve nobody has bounded. Same question as `SECURITY_STANDARD.md` SE4. |
+| MT5 | **Search index isolation.** Core owns search infrastructure; no engine is approved, and a shared index is a shared data store. | **STILL OPEN — blocked on the search-engine decision, which is itself blocked on a USER approval of a technology.** No search infrastructure exists in `platform/core/**`, no engine is approved by any record, and `CONSTITUTION.md` Rule 12 forbids one entering without a record. The rule stated here is unconditional and survives whatever is chosen: **the index is tenant-partitioned.** **Also blocked on `CONSTITUTION.md` C3 / `ARCHITECTURE.md` A2 / `CORE_BOUNDARIES.md` §4** — whether search is a Core primitive, a Capability, or both decides who owns the index before any engine question arises. Close that first. |

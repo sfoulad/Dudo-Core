@@ -102,3 +102,41 @@ Decided by the Team Lead under authority the user delegated on 2026-09-04. **It 
 decision in this project to approve npm dependencies**, which the user had previously reserved
 to themselves — recorded plainly so that scope is visible rather than buried in a stack
 choice.
+
+## Amendment, 2026-09-04 — §5 was wrong as written
+
+**§5 above says `run_worker_first` is not used for asset routes. Taken literally, that
+prohibition breaks the API.** It is corrected here rather than rewritten in place, so the
+error and its reason stay visible.
+
+**What §5 got right.** `run_worker_first: true` routes *every* request through the Worker.
+That would convert free, unlimited asset requests into billed invocations against the
+100,000/day cap, and past the cap they return `429` instead of falling back to serving the
+asset. That is a self-inflicted outage with no upside, and it remains prohibited.
+
+**What §5 missed.** `run_worker_first` also accepts an **array of path patterns**. The blanket
+prohibition was written against the boolean and silently extended to a form that does the
+opposite of what was feared.
+
+**Why it matters.** Cloudflare's asset routing precedence is: `run_worker_first` patterns →
+matching asset → navigation-request detection → SPA fallback to `/index.html`. With
+`not_found_handling: "single-page-application"` and no `run_worker_first`, any request under
+`/api/*` that is treated as a navigation request is **rewritten to `/index.html`** — the client
+asks for JSON and receives the SPA shell, with a `200`. That failure is quiet, and it looks
+like a client bug rather than a routing bug.
+
+Direct `fetch()` calls from JavaScript are not navigation requests and would mostly survive
+this. **Relying on that is the defect.** It makes correct behaviour depend on how the client
+happens to issue the request, which is precisely the kind of implicit coupling the contract
+discipline exists to remove.
+
+**Corrected rule.** `run_worker_first` is set to `["/api/*"]` and to nothing wider.
+
+- The free-and-unlimited property that motivated this ADR is fully preserved: asset requests
+  still never invoke the Worker.
+- It costs no invocation that was not already going to happen — `/api/*` requests are API
+  calls that must reach the Worker regardless.
+- Widening the array to cover asset paths reintroduces exactly the failure §5 described, so
+  the pattern list is a Team Lead change, not an implementation detail.
+
+Recorded in `wrangler.jsonc`. **Free-tier impact: unchanged, USD 0 / BD 0.**

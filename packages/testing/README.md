@@ -35,6 +35,158 @@ Per-App suites colocate with their App under `apps/<name>/tests/` as Apps are bu
 - **Root-level shared test configuration belongs to the Team Lead**, not to QA. QA
   proposes changes to it — see `docs/decisions/0001-governance-and-decision-sequencing.md`.
 
+## Running the type-negative harness
+
+```
+node packages/testing/run-type-negative.ts
+```
+
+**The only check in this repository that can see a type-level guarantee being removed.** Two
+controls are enforced by the type system and by nothing else — `MembershipAdmission` (`M-1`) and
+`ControlPlaneWriteReservation` (`0014` §A.11). Relax a signature to `admission?:` or export a
+private mint and `npm run typecheck` stays green, **every suite here stays green** — Node strips
+types without checking them — and the guarantee is gone with nothing saying so.
+
+The fixtures under `type-negative/cases/**` exist **to be compiled and to fail**. A second `tsc`
+invocation compiles them and the runner asserts three properties:
+
+| # | Property | What it catches |
+|---|---|---|
+| 1 | the project must **fail** to compile | every negative case started compiling |
+| 2 | every `// @expect-error TSxxxx` line produced **that code** | it failed for a different reason — *"it didn't compile" passes on a missing semicolon* |
+| 3 | **no unmarked line produced any diagnostic** | a fixture that broke, or a **control line that stopped compiling** |
+
+**Property 3 is the one that makes it a test.** A probe that dies on a bad import exits non-zero
+and satisfies property 1 while having checked nothing — that is exactly how the first hand-run
+probe of this guarantee read as a success. It also means the **control lines need no separate
+assertion**: "produced no diagnostic" is already required of every unmarked line.
+
+**The two receipts are deliberately NOT symmetric, and the asymmetry is asserted rather than left
+as a gap.** `mintMembershipAdmission` is module-private, so "the mint cannot be named from
+outside" is a negative case. `mintControlPlaneWriteReservation` is **exported on purpose**, so the
+same fixture would fail for a *correct* reason — it is a **control line that must compile**
+instead. Making the two match, in either direction, turns this run red.
+
+**What it does not prove:** that the guarantee holds at runtime. A deliberate `as never` cast
+defeats every case here. That is why `M-1` also has a guard in the SQL and an emitted-statement
+assertion in `suites/platform-operator/membership-write-guard.ts`.
+
+`type-negative/tsconfig.json` **extends the root** and overrides only `include`/`exclude`, so the
+probe always checks the same language the product is compiled with. No root file is changed and no
+dependency is added — the fixtures import from `platform/core` only and touch no Node API.
+
+## Running the platform-operator (super-admin) suite
+
+```
+node packages/testing/run-platform-operator.ts
+```
+
+Covers the fourth request class: `docs/decisions/0024`'s two invariants, `0025`'s five
+decisions, `0026`/`0027`'s confirmation mechanism, `organization-onboarding-v1`, `template-v1`,
+and `platform-operator-v1`'s binding properties P1, P2 and P4. It builds a control-plane
+database from all thirteen real migrations, **a second `node:sqlite` database for the tenant
+side**, and composes the shipped `platform/composition.ts` over the shipped D1 adapter — so
+nothing about the class is simulated except the SQL engine.
+
+**TWO DATABASES, BECAUSE ONBOARDING IS AN OPERATION ACROSS TWO.** `onboarding-service.ts` states
+that control-plane writes and tenant writes are two databases with no batch that commits both,
+and the `201 with warnings` ruling exists because of it. A single harness database would make
+that problem invisible and the warnings path untestable.
+
+A **primary run**, then **six negative-control runs**:
+
+| # | Control | What it breaks |
+|---|---|---|
+| 1 | the mutual-exclusion probe | `principalHasAnyMembership` always answers `false` |
+| 1b | the Action-side mutual exclusion | `findPrincipal` reports `holdsMembership: false` |
+| 1c | **both halves at once** | both of the above |
+| 2 | the audit record | every write silently succeeds and stores nothing |
+| 3 | the host binding | the application host is added to `adminHosts` |
+| 4 | **`0027`'s central control, across BOTH gated classes** | `ConfirmationGate.enforce` returns `ok` for everything, in the Action pipeline **and** in the platform route class |
+
+**Standing requirement, and it generalises beyond this suite: wherever an invariant is enforced at
+N points, the suite needs a control that removes all N — not N controls that each remove one.**
+Defence in depth and negative-control coverage pull in opposite directions. Every layer added makes
+the suite less able to detect that any single layer has died, and a control that removes one of two
+redundant checks prints green and means nothing — it will keep printing green after both checks
+rot, as long as they rot one at a time.
+
+**Controls 1 and 1b cannot be read on their own, and 1c is why.** The invariant is enforced at two
+independent points reading two different statements, so the platform routes still refuse a
+both-tables principal under either control alone — defence in depth working, and also the way a
+negative control quietly stops controlling. Only 1c, with every enforcement point removed, can
+show that the "every platform route refuses" case tests the invariant rather than testing nothing.
+It turns all three isolation cases red; the cases that stay green under it are the `0010` trigger
+and schema cases, which correctly do not depend on a runtime check.
+
+**Control 3 is read differently again.** `0025` requires that the host binding
+be defence in depth and never the first layer, so the AUTHORIZATION suite is re-run under it
+and **must stay green** — an authorization suite that is indifferent to the hostname is the
+evidence that routing is not doing the authorizing.
+
+**Control 4 is `docs/decisions/0027`'s central negative control, and it now removes the gate from
+BOTH places it is enforced.** `0027` asks for *"remove the confirmation check from the pipeline and
+every critical-operation test must go red."* The gate is enforced at two independent points —
+`action/pipeline.ts` step 6 and `dispatchPlatformRoute` step 5b — and each composes its own
+instance, so a control reaching only one leaves the other enforcing.
+
+**Until 2026-09-05 it reached only the pipeline and still printed `STILL GREEN: 0`.** That zero was
+true of the two suites the control was applied to and said nothing about the class it never
+touched — the standing requirement below, failing quietly. The run now wraps both fixtures in one
+pass and classifies the results together, so the same `0` is a strictly stronger claim over four
+suites instead of two.
+
+**`STILL GREEN: 0` IS KEPT BY SPLITTING SUITES BY SCOPE, NEVER BY EXPLAINING A GREEN AWAY.** Four
+cases about the platform gate are legitimately indifferent to whether it refuses — the structural
+`isConfirmationGated` claim, the positive control, the authorization-orders-first case, and the
+uncomposed-gate case, which has no gate to break. They live in
+`buildPlatformConfirmationScopeSuite` and are not run under the control. Left in place they would
+print four still-greens every run with a standing footnote, and *the explanation would then have to
+be made correctly every run* — which is how a real gap eventually gets waved through.
+
+**No route in the shipped platform table is confirmation-gated today**, so the platform half of the
+control runs against a synthetic critical route built from shipped pieces
+(`platform-fixture.ts::createSyntheticCriticalRoute`). That is reported as the finding it is rather
+than hidden: the class's gate currently guards nothing, which is `M-1`'s shape exactly. A case
+asserts that emptiness, so the day a real gated route lands, the suite says so.
+
+### Two standing controls that are not about one feature
+
+| Suite | What it holds |
+|---|---|
+| `suites/platform-operator/registry-coherence.ts` | `permission-catalog.yaml` against Core's frozen transcriptions — the comparison `critical-permissions.ts` names as owed to `qa-agent` and calls *"the only thing standing between the catalog and this list"*. It had never been written, and it was already red when it was: `core.principal.revoke-platform-scope` was `critical` in the catalog and absent from Core, so it required no confirmation. Fixed by `core-agent` the same day; this suite is why it cannot recur silently. |
+| `suites/platform-operator/business-type-boundary.ts` | `0025` decision 2 — no identifier in `platform/core/**` may name a business type. Written by `core-agent` in its own harness and handed to tests, because a control in the author's scratch harness runs when the author remembers. |
+
+Both read files rather than building a world, so neither runs under a negative control — there is
+no runtime port to break. Both assert a **floor on what they parsed before comparing anything**:
+the catalog reader's first version handled only block-form YAML sequences and returned an empty
+list for the inline-form roles, and an empty list compared against Core would have printed green
+while comparing nothing.
+
+### What is NOT covered by this run
+
+`packages/testing` is **excluded from the root `tsconfig.json`**, deliberately and with the
+reason recorded there: it is Node code and the root config targets a Worker. So these suites
+are **not typechecked by `npm run typecheck`**. The `platform/core` half they exercise is.
+
+**`npm run typecheck:tests` covers them, and it is currently GREEN** (0 diagnostics, from 14 on
+2026-09-05). It is a separate command from `typecheck` on purpose — a red gate inside a green one
+makes the green one worthless — and wiring the two together is the Team Lead's call, not QA's.
+
+Three of the fourteen were fixture drift of exactly the class the config was added for: the
+platform fixture had stopped passing `templates` and `onboarding` to a composition root that
+required both, a `Clock` literal supplied `nowMs` and not `now`, and a recorded-request array had
+quietly narrowed to three of a port's four fields. **All three ran green.** Node strips types
+without checking them, so a double that has stopped matching its port keeps reporting on a shape
+the product no longer has.
+
+One diagnostic was cleared by an annotation rather than a fix, and the reasoning is written at the
+site (`suites/az2-login/kdf-vectors.ts`): TypeScript reported the composed/decomposed vector
+comparison as a tautology, **which it only does while the vectors are still correct** — if the file
+were ever normalised on disk the diagnostic would vanish and the runtime assertion would go red.
+A signal that fires when things are right and goes silent when they are wrong is not one worth
+keeping a gate red for.
+
 ## Running the Customer Directory suite
 
 ```

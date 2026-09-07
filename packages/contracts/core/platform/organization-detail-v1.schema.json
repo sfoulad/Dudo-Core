@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-detail:1",
+  "title": "Organization detail — wire shapes, version 1",
+  "description": "The machine-readable half of organization-detail-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema — no implementation, no package.json, no node_modules — so every constraint here is READ BY A PERSON AND HAND-IMPLEMENTED. A `required` list is an instruction someone will follow literally, with no validator to disagree with the prose (.claude/rules/workflow.md §12).",
+
+  "$defs": {
+
+    "organizationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "Opaque, non-sequential, unguessable. Never parsed, decoded or interpreted by a client."
+    },
+
+    "principalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+
+    "membershipRole": {
+      "type": "string",
+      "enum": ["owner", "member"],
+      "description": "The closed union stored on organization_membership.role (docs/decisions/0019). AN UNRECOGNISED STORED VALUE IS NEVER RENDERED: it collapses to null internally and denies everything, so a row written by a future migration this build does not understand cannot reach a client as an unknown string."
+    },
+
+    "organizationDetailOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id", "status", "created_at", "display_name", "commercial_registration", "vat_registration", "template", "member_count"],
+      "description": "EVERYTHING THE DETAIL PAGE NEEDS, IN ONE RESPONSE — the Template is embedded rather than returned as an id to fetch, because a read costs writes in this class and a three-request page spends three times the budget. NOTE WHAT IS STRUCTURALLY ABSENT AND CANNOT BE ADDED: no workspaces, no customers, no counts of either, no activity, no usage, no last-seen. Those live behind `whereWithTenant` and a platform route holds no tenant handle, so they are unreachable rather than withheld. AND NOTE WHAT IS ABSENT BY RULING: no member list. See theMembershipRuling — an operator can enumerate every Organization, so member lists over all of them invert to every principal's Organization list, which core-object-registry.yaml CO1 forbids by name.",
+      "properties": {
+        "organization_id": { "$ref": "#/$defs/organizationId" },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended"]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC."
+        },
+        "display_name": {
+          "type": ["string", "null"],
+          "maxLength": 200,
+          "description": "THE ORGANIZATION'S NAME. AMENDED 2026-09-07 by organization-identity-v1 and docs/decisions/0031; the canonical definition is urn:dudo:schema:organization-identity:1#/$defs/displayName, restated here rather than $ref'd because no URN resolver exists (AS1), and the 200 bound is the one this field already published.\n\nTHIS PREVIOUSLY READ 'ALWAYS null today — control-plane/0002_organization.sql declined a name column and THE ORGANIZATION-STRUCTURE SLICE OWNS IT.' THE SECOND HALF IS THE PART THAT HAD TO GO: it pointed a reader at a slice that had not happened, and the contract that owns this field now exists. THE FIRST HALF IS STILL TRUE UNTIL THE COLUMN LANDS — null on every response until control-plane/0002_organization.sql gains the column and an operator sets a value.\n\nNULL MEANS NO NAME HAS BEEN RECORDED. REQUIRED AND NULLABLE rather than optional, so that names arriving change no shape and no client has to learn a new field.\n\n*** THE NAMELESS SET IS OPEN TODAY. *** `organization-onboarding-v1` accepts `display_name` and does not require it, on the Team Lead's sequencing ruling of 2026-09-07, so EVERY NEW ORGANIZATION CAN BE NAMELESS until `ON-7` is discharged. It closes at three when onboarding tightens.\n\nCORRECTED 2026-09-07, SECOND HOME OF THE SAME CLAIM. This read *\"reachable only for Organizations created before onboarding required one, so the nameless set is CLOSED and shrinks\"* — the identical false statement of fact `qa-agent` found in `organization-identity-v1`, written into two schemas on one day by one author. `workflow.md` §12: budget for more homes than you find. A client MUST NOT assume a name is present on a recently created Organization.\n\nA client renders organization_id verbatim when this is null and MUST NOT substitute a placeholder of its own, or two consoles will invent two different ones. That obligation is unchanged."
+        },
+        "commercial_registration": {
+          "$ref": "urn:dudo:schema:organization-identity:1#/$defs/registrationRecord",
+          "description": "The Bahrain Commercial Registration (CR), issued through Sijilat. ADDED 2026-09-07 by organization-identity-v1. Operator-entered and recorded; there is no Sijilat API and no integration is proposed. A THREE-STATE UNION — `not_recorded`, `not_registered`, `registered` — because 'we never asked' and 'they told us they have none' are different facts. Every Organization is `not_recorded` until an operator sets it.\n\nIT IS A CONTROL-PLANE COLUMN, which is why it passes organization-detail-v1's own test — a field is available to an operator if and only if reading it requires no tenant store. NOT because a registration number is 'less sensitive' than a Workspace name: theWorkspaceFinding is explicit that the structure-versus-content intuition is what the tenancy model ignores."
+        },
+        "vat_registration": {
+          "$ref": "urn:dudo:schema:organization-identity:1#/$defs/registrationRecord",
+          "description": "The VAT account number issued by the National Bureau for Revenue. ADDED 2026-09-07 by organization-identity-v1. Operator-entered. `not_registered` IS A LEGITIMATE PERMANENT STATE rather than an unfilled field — Bahrain VAT registration is mandatory above an annual-supplies threshold and voluntary below it — so a client that treats it as missing data will keep prompting a customer who has already answered.\n\nTHERE IS NO DIGIT COUNT IN THE FORMAT AND THE ABSENCE IS A RULING. See organization-identity-v1's theFormatRuling: a pattern is a refusal, and an at-count pattern that is wrong refuses a LEGAL registration."
+        },
+        "template": {
+          "description": "The Template this Organization adopted, RESOLVED AND EMBEDDED. Null when none was recorded — every Organization created before Templates existed, which today is all of them. Embedding is safe because a Template is tenant-INDEPENDENT platform configuration, identical for every caller, so it copies nothing sensitive and creates no staleness a client could act on wrongly.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["template_id", "name", "level_labels"],
+              "properties": {
+                "template_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+                "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+                "level_labels": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["organization", "workspace", "branch"],
+                  "description": "Fully populated, with platform defaults filled in for any level the Template omitted — the client never implements the default table, which is what stops the web and Apple consoles drifting into two ideas of what an unlabelled level is called.",
+                  "properties": {
+                    "organization": { "type": "string", "minLength": 1, "maxLength": 40 },
+                    "workspace": { "type": "string", "minLength": 1, "maxLength": 40 },
+                    "branch": { "type": "string", "minLength": 1, "maxLength": 40 }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "member_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "HOW MANY PRINCIPALS BELONG TO THIS ORGANIZATION. A COUNT, NEVER A LIST, AND THE DISTINCTION IS THE RULING: a count does not invert, so it reconstructs nothing about any principal, while a list over every Organization reconstructs every principal's Organization list. It answers what an operator legitimately asks — did onboarding work, is this Organization in use, is it abandoned — without naming anyone. ITS SMALL LEAK IS RECORDED RATHER THAN DISMISSED: repeated reads reveal that membership changed, never who or in which direction, which is a fact about the Organization rather than about a person."
+        }
+      }
+    },
+
+    "resolveMemberInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["target_identifier"] },
+        { "required": ["identifier"] }
+      ],
+      "$comment": "THE `oneOf` IS THE BOTH-PRESENT REFUSAL IN MACHINE-READABLE FORM. Two branches, each requiring one name: send `target_identifier` and branch 1 matches alone; send `identifier` and branch 2 matches alone; SEND BOTH AND BOTH MATCH, so `oneOf` fails; send neither and none match, so it fails.\n\n*** THREE STATES, NOT TWO, AND THIS COMMENT PREVIOUSLY COLLAPSED THEM. It said exactly-one 'falls out of the schema instead of being a sentence someone implements'. IT DOES NOT. ***\n  STATED     — in prose, in this object's description and in the contract's theRENAMEISINPHASEONE.\n  EXPRESSED  — here, as `oneOf`. Mechanical, diffable, and enforced for free the day a validator exists.\n  EXECUTED   — BY CORE, ON THE LIVE PATH, AND BY NOTHING ELSE. **No validator in this repository executes JSON Schema** (`packages/contracts/README.md`), so AN IMPLEMENTER STILL HAS TO WRITE THIS REFUSAL.\nEXPRESSED AND ENFORCED ARE INDEPENDENT AXES — `workflow.md` §12, whose worked example is `AUTHORIZATION_STANDARD.md` §4.1 getting the scope axis meticulously right and missing the liveness one INSIDE THE SECTION WRITTEN TO POLICE THE DISTINCTION. This comment made the same error one level down, and the danger is specific: a reader who trusts the old sentence concludes the rule is handled and does not check that Core implemented it.\n\nNote that the outer object carries NO `required` list — the requirement lives in the branches — so it stays satisfiable under `packages/testing/suites/contracts/satisfiability.ts`, which is a check that DOES execute.",
+      "description": "*** PHASE 1 OF A TWO-PHASE RENAME. BOTH NAMES ARE ACCEPTED; `target_identifier` IS THE ONE TO SEND; `identifier` IS DEPRECATED AND ITS REMOVAL IS OWED AS `OD-5`. *** Team Lead ruling, 2026-09-07.\n\nWHY BOTH, BRIEFLY: Core's route table declares `identifier` and the deployed console sends it, so publishing only `target_identifier` would have the server refuse a field the live client sends — the outage direction, and the third time in one day this contract set has sequenced around it. THE SEQUENCE IS: Core accepts both → the console switches → Core drops `identifier`. THE CONTRACT'S DESTINATION IS `target_identifier` AND THIS PARAGRAPH IS THE ONLY REASON THE OTHER NAME APPEARS AT ALL.\n\n*** IF BOTH FIELDS ARE PRESENT THE REQUEST IS REFUSED WITH `invalid_argument`. NOT 'prefer target_identifier'. *** A route that silently prefers one lets a client send the wrong name forever and never learn — and if the two values differ, silently choosing is CHOOSING WHICH PRINCIPAL TO RESOLVE. Refusing is testable and has a known-failing input; preferring is a behaviour nobody will ever write a case for.\n\n*** THIS IS NOT THE COLLISION `architecture.md` §1a FORBIDS, AND THE DISTINCTION IS EXACT. *** §1a's defect was ONE NAME MEANING TWO DIFFERENT PARTIES — `identifier` as the caller's own in `confirmation-v1` and as the target's here, which made the merged route return `forbidden` on every well-formed request. THIS IS TWO NAMES MEANING THE SAME PARTY: a deprecation alias, not a shared namespace with two owners. Stated because the next reader will otherwise apply §1a to it and conclude we broke our own rule. The reservation §1a creates is unaffected — `identifier` remains forbidden as a NEW field name anywhere, and this is an old one being retired.\n\nRENAMED FROM `identifier` ON 2026-09-05 UNDER THE PLATFORM-WIDE RESERVATION. It means THE TARGET'S — the principal being resolved — and a field naming a principal must say which principal. This route is not gated today, so there was no live defect; it was one gating decision away from being the same semantic collision that made credential-reset-v1 unbuildable, because confirmation-v1 would then have stripped it as the caller's own. The rule is deliberately not scoped to 'contracts that compose with a cross-cutting mechanism': that scope depends on `sensitivity: critical`, which a route ACQUIRES LATER, so such a rule would be correct the day it was written and silently wrong the first time a route became critical.\n\nTHE OPERATOR MUST ALREADY KNOW THE IDENTIFIER — the customer gave it to them. That requirement IS the control this route rests on: an operator resolving an identifier they were given is support; an operator receiving a list they did not ask for by name is surveillance. The Organization is a path parameter, not a body field.",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[\\x21-\\x7E]*@[\\x21-\\x7E]*$",
+          "deprecated": true,
+          "description": "*** DEPRECATED. THE SAME VALUE AS `target_identifier`, UNDER THE NAME CORE AND THE DEPLOYED CONSOLE USE TODAY. DO NOT SEND IT IN NEW CLIENT CODE. *** It exists only so that phase 1 of the rename does not refuse the live console, and it is removed in phase 3 — `OD-5`, owed by THE CHANGE THAT FOLLOWS THE CONSOLE'S SWITCH, not by a date.\n\nIT CARRIES THE IDENTICAL CONSTRAINTS TO `target_identifier` DELIBERATELY. An alias that validated differently would be a second grammar for one field, and the divergence would surface as a request accepted under one name and refused under the other — which is worse than the divergence being repaired.\n\nSENDING IT ALONGSIDE `target_identifier` IS `invalid_argument`. See this object's `oneOf` and its description."
+        },
+        "target_identifier": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[\\x21-\\x7E]*@[\\x21-\\x7E]*$",
+          "description": "A login identifier. THE CANONICAL DEFINITION IS urn:dudo:schema:account-identifier:1#/$defs/accountIdentifier; this is a restatement of it, character-identical by obligation, restated rather than $ref'd because no URN resolver exists (AS1).\n\nCORRECTED 2026-09-05: the pattern was ^[!-?A-~]*@[!-?A-~]*$, which encodes EXACTLY ONE '@' — stricter than credential-store.ts, which requires at least one and never counts. RFC 5321 permits a quoted local part containing '@', so the old pattern refused legal addresses that Core accepts. ADDITIVE, since it widens.\n\nTHE ENFORCEMENT GAP THIS ROUTE SITS ON, STATED BECAUSE IT INTERACTS WITH THE FIVE-WAY COLLAPSE: platform/core/directory/member-resolution.ts:157 calls normalizeIdentifier WITHOUT calling isSubmittableIdentifier first, so Core does not today enforce this shape on this route — the only live check is client-side. While that holds, a principal the console cannot type is indistinguishable from one that does not exist, which is a SECOND collapse layered on the designed one. The remedy is Core enforcement, not a distinct refusal message; see account-identifier-v1 -> theInteractionWithTheCollapse.\n\nConstraints are credential-store.ts::isSubmittableIdentifier's, restated rather than invented: printable ASCII only, no whitespace, nothing above U+007E, at least one '@'. Normalised NFKC then ASCII-only case folding before hashing — NOT toLowerCase(), which differs between JavaScript and Swift for real characters. IT IS NOT AN ENUMERATION KEY: it selects at most one principal within one named Organization, and a caller who does not already hold it learns nothing from this route."
+        }
+      }
+    },
+
+    "resolveMemberOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "role"],
+      "description": "AT MOST ONE PRINCIPAL, NEVER A SET, AND THE SHAPE ENFORCES IT — this is an object rather than an array precisely so that a future change returning several would be a visible breaking change rather than a quiet widening of a list that was always a list. THE SUBMITTED IDENTIFIER IS NOT ECHOED: the caller sent it and knows it, and echoing it would put an email address in a response body for no purpose and in a log line for anyone who logs responses.",
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "The value credential-reset-v1 requires and that CR-3 recorded no route produced. This route exists to close that gap without opening enumeration."
+        },
+        "role": {
+          "$ref": "#/$defs/membershipRole",
+          "description": "The membership role, returned because an operator about to reset a credential should know whether they are taking over an `owner` or a `member`. That is a fact about the RELATIONSHIP, not about the person, and it changes how carefully the operator should proceed."
+        }
+      }
+    }
+  }
+}

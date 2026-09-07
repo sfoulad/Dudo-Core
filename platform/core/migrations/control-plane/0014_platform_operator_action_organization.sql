@@ -1,0 +1,123 @@
+-- Control-plane migration 0014 — the operator action log's SECOND target identifier.
+-- docs/decisions/0025 decision 5, docs/decisions/0028 decision 3, contract platform-audit-read-v1.
+--
+-- Read `0009_platform_operator_action.sql` first.
+--
+-- IT BELONGS TO `DB_CONTROL`. See 0009.
+--
+-- NOT APPLIED. No migration runner exists (CLOUDFLARE_STANDARD.md CF5) and no agent may run one
+-- against real data (.claude/rules/security.md §7).
+--
+-- ROLLBACK PATH: the column is nullable, so the rollback is to stop writing it. SQLite in the
+-- version D1 targets cannot drop a column, and an unwritten nullable column is indistinguishable
+-- from the state before this migration. FORWARD-ONLY.
+--
+-- =============================================================================================
+-- WHY: THE ORGANIZATION FEED WOULD HAVE OMITTED EXACTLY THE OPERATIONS IT EXISTS FOR
+-- =============================================================================================
+--
+-- `0009` stores ONE target — `target_kind` plus `target_id` — so a record names an Organization OR
+-- a principal, never both. `platform-audit-read-v1` needs both, in different feeds: the platform
+-- feed carries `target_organization_id` and omits the principal; the Organization feed is selected
+-- BY Organization and carries `target_principal_id`.
+--
+-- ONE COLUMN CANNOT DO BOTH, AND THE RESULT WAS INVERTED:
+--
+--   operation                     target written   in the Organization feed   target_principal_id
+--   ---------------------------------------------------------------------------------------------
+--   platform.organizations.create   organization           yes                    always null
+--   platform.organizations.read     organization           yes                    always null
+--   platform.organizations.members.resolve   principal      **NO**                     --
+--   platform.credentials.reset (next)        principal      **NO**                     --
+--
+-- **THE FEED WOULD HAVE CONTAINED EXACTLY THE RECORDS WITH NOTHING TO DISCLOSE AND OMITTED BOTH
+-- OPERATIONS WHOSE DISCLOSURE IT WAS DESIGNED TO CONTROL** — and it would have returned 200 and
+-- looked like it worked. `0028` Decision 3's whole argument is that principal-level targets are
+-- disclosed only when the caller names the Organization; there would have been no principal-level
+-- target in it at all.
+--
+-- THE CONTRACT WAS NOT WRONG. `0025` Decision 5 says the log records "the operation and its TARGET
+-- IDENTIFIERS" — plural. `0009` implemented one. **The table was narrower than the decision it
+-- implements and nobody compared them**, which is the same shape as `0005_tenant_directory.sql`'s
+-- foreign key contradicting a contract's stated write order, and as `0012`'s "onboarding adds the
+-- reference" naming a fix that shipped without it.
+--
+-- =============================================================================================
+-- *** NO INDEX. DELIBERATELY. AND THE TRIGGER FOR ADDING ONE IS BELOW. ***
+-- =============================================================================================
+--
+-- Both feeds order by `occurred_at` and filter on `actor_principal_id`, `action_id`, a time range
+-- and — now — `target_organization_id`. **None of that is indexed and this migration adds no
+-- index.** Team Lead ruling, 2026-09-05.
+--
+-- THE ARGUMENT IS `0013`'s, APPLIED WITH MORE FORCE. There it was "an index costs a row-write on
+-- every Organization insert, forever, to serve a question nothing asks." **Here the cost lands on
+-- every platform REQUEST rather than on inserts**, because `PLATFORM_OPERATOR_ACTION_ROW_WRITES` is
+-- charged by P4 on every route in the class including the reads.
+--
+--   * 2 today: one row plus its primary key.
+--   * 3 with one index. 5 with three.
+--   * Against `PER_PRINCIPAL_DAILY_ROW_WRITES` = 600, that is ~300 operator actions per day today
+--     and ~120 with three indexes. **A 60% cut in what an operator can do per day, paid every day,
+--     to speed up a scan of a table that currently holds tens of rows.**
+--
+-- `0008`'s constraint bites on WRITES. The daily write ceiling is what stops the platform working;
+-- the 5,000,000/day read allowance is nowhere near threatened by scanning a small table.
+--
+-- AND THE TRADE IS REVERSIBLE IN THE DIRECTION THAT MATTERS: adding an index later is a migration.
+-- Removing one after every row-write has been paying for it is a migration plus an argument about
+-- whether it was ever needed.
+--
+-- ---------------------------------------------------------------------------------------------
+-- *** THE TRIGGER, IN ROWS, AND WHAT ACTUALLY DEGRADES — WHICH IS NOT THE AUDIT FEED ***
+-- ---------------------------------------------------------------------------------------------
+--
+-- **ABOUT 50,000 ROWS.** Below that a filtered scan-and-sort of this table is single-digit
+-- milliseconds. The log grows at roughly ONE ROW PER PLATFORM REQUEST, so at a handful of
+-- operators working normally — ~1,000 rows/day — **50,000 is about eight weeks of real use, and a
+-- year is ~365,000**, where a scan-and-sort is hundreds of milliseconds.
+--
+-- *** THE CONSEQUENCE IS NOT A SLOW AUDIT PAGE. IT IS SLOW LOGINS. *** This is the CONTROL-PLANE
+-- database and `0014` §C put session resolution in it. **D1 is single-threaded per database**, so a
+-- 200 ms scan here blocks every authentication for 200 ms. The audit feed's worst case IS the
+-- login path's worst case.
+--
+-- SO THE TRIGGER IS A ROW COUNT AND NOT "WHEN IT FEELS SLOW". By the time a feed feels slow, the
+-- thing actually degraded is sign-in for everyone, and **nobody debugging a slow login will think
+-- to look in the audit log's migration.** Check the row count; do not wait to be told.
+--
+-- THE FIRST INDEX TO ADD, WHEN IT IS ADDED:
+--   CREATE INDEX platform_operator_action_by_organization
+--     ON platform_operator_action (target_organization_id, occurred_at);
+-- and it costs one row-write on every platform request, forever. Whoever adds it should be
+-- choosing that, not discovering it.
+--
+-- =============================================================================================
+-- WHAT THIS COLUMN IS NOT
+-- =============================================================================================
+--
+-- IT IS NOT A SECOND `target_kind`. `target_kind`/`target_id` still say what the operation ACTED
+-- ON. This says WHICH ORGANIZATION THE ACTION HAPPENED IN, which is a different question and is
+-- exactly what the Organization feed selects by. A resolve acts on a principal and happens in an
+-- Organization; both facts are now recordable and neither replaces the other.
+--
+-- IT STILL RECORDS NO CONTENTS. `0009`'s normative constraint is unchanged and is not weakened by
+-- this column: an identifier is not a value, a name, a count or a summary. **An operator log that
+-- accumulates customer data is a second copy of the tenant database with weaker access rules**, and
+-- this column adds an identifier the reader could already obtain from `platform.organizations.list`.
+--
+-- NULLABLE, BECAUSE MOST ACTIONS HAPPEN IN NO ORGANIZATION. `whoami`, the Template routes and the
+-- Organization list name none. Null is the ordinary case rather than a migration artefact, and
+-- records written before this migration have it for the same reason: nobody can say retroactively
+-- which Organization an action happened in.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a)
+-- =============================================================================================
+--
+-- NO CHANGE TO ANY ROW-WRITE COUNT. A nullable column on an existing INSERT writes the same one
+-- row and touches no index — `PLATFORM_OPERATOR_ACTION_ROW_WRITES` stays 2. No new table, no new
+-- index, no new binding. COST: USD 0 / BD 0 per month.
+
+ALTER TABLE platform_operator_action
+  ADD COLUMN target_organization_id TEXT;

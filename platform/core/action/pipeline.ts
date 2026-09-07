@@ -120,6 +120,14 @@ import type { CoreError, ErrorCode } from '../kernel/errors.ts';
 import { forbidden, internal, quotaExceeded, rateLimited, unavailable } from '../kernel/errors.ts';
 import { AUDIT_EVENT_ROW_WRITES } from '../storage/write-cost.ts';
 import type { ActionContext, AuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
+import { sealAuthenticatedPrincipal } from '../tenancy/tenant-context.ts';
+import type { BusinessDirectory } from '../tenancy/business-directory.ts';
+import type { BusinessSetFailureReporter } from '../tenancy/business-set-failure.ts';
+import { announceBusinessSetFailure } from '../tenancy/business-set-failure.ts';
+import {
+  MAX_AUTHORIZED_BUSINESSES,
+  createStoreBusinessDirectory,
+} from '../tenancy/business-directory.ts';
 import type { TenantStoreResolver } from '../tenancy/tenant-store-resolver.ts';
 import type { TenantScopedStore } from '../storage/store.ts';
 import type { Authorizer, AppPermissionEnvelope } from '../authorization/authorizer.ts';
@@ -135,6 +143,8 @@ import type {
   RequestCoordinator,
 } from '../protection/coordination.ts';
 import { deriveDenialGroupKey } from '../protection/coordination.ts';
+import type { ConfirmationGate } from '../confirmation/confirmation-gate.ts';
+import { requiresConfirmation } from '../confirmation/critical-permissions.ts';
 import type { Clock } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import { createStoreAuditSink } from '../audit/store-audit-sink.ts';
@@ -144,6 +154,28 @@ import { bindCursorCodec } from '../pagination/cursor.ts';
 export type PipelineDependencies = {
   readonly resolver: TenantStoreResolver;
   readonly authorizer: Authorizer;
+  /**
+   * Reads the authorized business set after the tenant store resolves. `docs/decisions/0020`.
+   *
+   * OPTIONAL, AND THE DEFAULT IS THE REAL ONE. It is injected so a verification harness can
+   * observe the read without patching a global, exactly as `auditSinkFactory` is — not so that it
+   * can be omitted to disable the step. Omitting it does not skip the read; it uses
+   * `createStoreBusinessDirectory()`.
+   *
+   * IT IS ONLY CONSULTED FOR A PRINCIPAL WHOSE `businessScope` IS `'organization'`. A principal
+   * carrying an assigned set — which is what a harness constructs directly, and what a
+   * business-scope principal will carry when that model is built — is never widened by it.
+   */
+  readonly businesses?: BusinessDirectory;
+  /**
+   * An ADDITIONAL destination for authorized-business-set failure notices.
+   *
+   * Optional, and optional weakens nothing: `announceBusinessSetFailure` emits to a last-resort
+   * channel unconditionally BEFORE it consults this, so omitting it, supplying a broken one, or
+   * supplying one that throws all produce the same guarantee — the failure is announced. Same
+   * shape and same reasoning as `coordinationFailureReporter` and `auditFailureReporter`.
+   */
+  readonly businessSetFailureReporter?: BusinessSetFailureReporter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly cursors: CursorCodec;
@@ -179,6 +211,24 @@ export type PipelineDependencies = {
   readonly coordinator: RequestCoordinator;
   /** ADDITIONAL destination for coordination notices. Additive only; see audit-failure.ts. */
   readonly coordinationFailureReporter?: CoordinationFailureReporter;
+  /**
+   * ===========================================================================================
+   * THE CONFIRMATION GATE. `docs/decisions/0027`. OPTIONAL HERE, AND ABSENT MEANS EVERY
+   * `critical` OPERATION IS REFUSED — not permitted, not skipped: refused.
+   * ===========================================================================================
+   *
+   * The same shape `preAuth` and `sessionRoutes` already use in `http/api.ts`, and for the same
+   * reason: a control that is optional to COMPOSE must fail closed when it is not, or a
+   * deployment that forgot to wire it is a deployment with no gate and no sign of one.
+   *
+   * IT IS NOT DEFAULTED TO A PERMISSIVE IMPLEMENTATION. There is deliberately no
+   * `gate = gate ?? allowEverything()`: a default here would mean the top rung of the sensitivity
+   * ladder silently stopped applying, which is `0026`'s whole point undone by an `??`.
+   *
+   * NON-CRITICAL OPERATIONS ARE UNAFFECTED whether this is composed or not — the gate is only
+   * consulted when the PERMISSION is critical, and `critical-permissions.ts` decides that.
+   */
+  readonly confirmations?: ConfirmationGate;
 };
 
 export type InvocationEnvelope = {
@@ -195,6 +245,33 @@ export type InvocationEnvelope = {
    * omits it throttles harder rather than disabling the level.
    */
   readonly sourceAddressHash?: string | null;
+  /**
+   * ===========================================================================================
+   * THE SESSION THIS REQUEST ARRIVED ON, FOR THE CONFIRMATION BINDING AND FOR NOTHING ELSE.
+   * `docs/decisions/0027` · `confirmation-v1` §theBinding.
+   * ===========================================================================================
+   *
+   * A confirmation is bound to the session so that one obtained on one device is not spendable on
+   * another — including by an attacker holding a second, stolen session for the same principal.
+   * Binding to the session makes the confirmation DIE WITH IT, including at revocation.
+   *
+   * *** IT IS ON THE ENVELOPE AND NOT ON `AuthenticatedPrincipal`, AND THAT IS THE POINT. ***
+   * `AuthenticatedPrincipal` flows into `ActionContext` and therefore into App handlers. **NO APP
+   * SHOULD EVER BE ABLE TO NAME A SESSION**, and putting it here means none structurally can,
+   * rather than none currently does. `InvocationEnvelope` is already the carrier for what the
+   * transport knows and the handler must not — it holds `sourceAddressHash` for exactly that
+   * reason — and `ActionContext` gains nothing from this field.
+   *
+   * NULL IS NOT AN EXEMPTION. A critical operation arriving without a session is REFUSED: the
+   * binding covers the session, so there is no binding to form. Folding a null into the hash as an
+   * empty string would put every sessionless caller in one binding namespace, where one caller's
+   * confirmation is another's — the "optional value in a security check" failure
+   * `control-plane-admission.ts` records for `WriteReservation`'s organization.
+   *
+   * NON-CRITICAL OPERATIONS NEVER READ IT, so the ordinary request path is unchanged and pays
+   * nothing for it.
+   */
+  readonly sessionId?: string | null;
 };
 
 const DENIAL_REASONS: ReadonlySet<string> = new Set<AuditDenialReason>([
@@ -258,7 +335,16 @@ export async function invokeAction(
   // Business from, only the authenticated principal. It is then the same value on every
   // branch below: the same on a success and a denial, and the same whether the identifier the
   // caller supplied belongs to another Organization or to nobody at all.
-  const actorBusinessIds = deriveActorBusinessContext(principal);
+  // IT IS A `let` BECAUSE `docs/decisions/0020` SPLIT THE AUTHORIZED CONTEXT IN TWO. For an
+  // organization-scope principal the business set is not knowable until the tenant store has
+  // resolved, so this is re-derived from the COMPLETED principal at that point. Until then it is
+  // the empty set the identity layer sealed.
+  //
+  // A DENIAL THAT HAPPENS BEFORE THE STORE RESOLVES THEREFORE RECORDS AN EMPTY ACTOR BUSINESS
+  // CONTEXT. That is honest rather than lossy — at that moment the set genuinely is unknown, and
+  // it is not a regression: before `0020` every audit record carried an empty set, because the
+  // authorization source had nothing to put in one.
+  let actorBusinessIds = deriveActorBusinessContext(principal);
 
   const nowMs = dependencies.clock.nowMs();
 
@@ -517,10 +603,139 @@ export async function invokeAction(
       return fail(rateLimited());
     }
 
+    // ===========================================================================================
+    // ---- THE CONFIRMATION GATE. `docs/decisions/0027`, `0007` D15.
+    // ===========================================================================================
+    //
+    // ONE NON-OPTIONAL POINT, DERIVED FROM THE PERMISSION, DECLARABLE NOWHERE ELSE. An Action may
+    // not opt in, opt out, configure or override it — `confirmation-v1`: *"PER-ACTION IS HOW
+    // customers.customer.delete BECAME UNREACHABLE BY ACCIDENT RATHER THAN BY DECISION. If
+    // confirmation is something an Action remembers to require, then the Action that forgets is
+    // the dangerous one, and it will look exactly like the ones that did not."*
+    //
+    // THE POSITION IS CHOSEN AND EVERY NEIGHBOUR MATTERS:
+    //
+    //   AFTER STEP 3 (AUTHORIZE), so a caller lacking the permission receives `forbidden` from
+    //   authorization rather than a confirmation refusal. Otherwise the gate would change which
+    //   error two otherwise identical callers see, and would leak that the permission was held.
+    //
+    //   AFTER STEP 4 (VALIDATE), because the confirmation fields arrive on the body and the bound
+    //   parameters are the validated ones. Binding pre-validation input would bind bytes the
+    //   operation never uses.
+    //
+    //   AFTER STAGE 5 (RATE LIMIT), because SPENDING IS A WRITE. A throttled caller must not be
+    //   able to force confirmation row-writes — that is `0013`'s "the control becoming the lever"
+    //   applied to the gate itself.
+    //
+    //   BEFORE THE TENANT STORE IS RESOLVED ON THE SUCCESS PATH, so an unconfirmed critical
+    //   request never reaches the operation's own reads and writes.
+    //
+    //   *** BUT NOT "COSTS NO TENANT READ", AND THE WEAKER CLAIM IS THE TRUE ONE. *** `fail()`
+    //   may resolve the store to write a `0013` DENIAL SUMMARY, exactly as it may for `forbidden`,
+    //   `rate_limited` and every other refusal. That path is bounded — at most
+    //   `MAX_WRITES_PER_GROUP_WINDOW` per group per 15-minute window rather than once per attempt,
+    //   which is the whole of `0013` control 1 — so a caller cannot turn refused confirmations
+    //   into unbounded tenant writes. Stated precisely because the first version of this comment
+    //   claimed the stronger property and a structural test caught it.
+    //
+    // ABSENT MEANS REFUSED. A runtime that did not compose a gate answers `unavailable` for every
+    // critical operation rather than performing it — the same fail-closed shape `http/api.ts`
+    // gives an uncomposed `preAuth`, and the direction `0013` D2 requires of a control that
+    // cannot run.
+    if (requiresConfirmation(action.permission)) {
+      if (dependencies.confirmations === undefined) {
+        return fail(constrainToDeclaredErrors(action, unavailable()));
+      }
+      const confirmed = await dependencies.confirmations.enforce({
+        principalId: principal.principalId,
+        // `?? null` rather than a default: a transport that did not supply a session is a
+        // transport with no session, and the gate refuses it. See `InvocationEnvelope.sessionId`.
+        sessionId: envelope.sessionId ?? null,
+        actionId: action.id,
+        permissionId: action.permission,
+        // THE RAW BODY, because the confirmation fields and the parameters are one object and the
+        // gate splits them. `parsed.value` is the Action's own typed shape and has already dropped
+        // whatever it does not declare.
+        body: (rawInput ?? {}) as Readonly<Record<string, unknown>>,
+        // ===================================================================================
+        // EMPTY, AND STATED RATHER THAN DEFAULTED. *** DO NOT DELETE THIS AS NOISE. ***
+        // ===================================================================================
+        //
+        // An Action has no path template — the App router matches on a base path and the Action's
+        // inputs arrive in the body and the query — so there is genuinely nothing to bind here
+        // today.
+        //
+        // **IT IS WRITTEN OUT BECAUSE `enforce` MAKES IT REQUIRED, AND THAT IS DELIBERATE.**
+        // `confirmation-v1` as of `aa48dd4`: *"a recomputation whose key set omits any declared
+        // path parameter is a defect and must fail closed, not proceed with a narrower binding."*
+        // An OPTIONAL parameter defaulting to `{}` would satisfy the compiler while violating that
+        // sentence — so the day an Action gains a path template, **this line is a compile-time
+        // decision someone has to make rather than an empty binding they inherit in silence.**
+        pathParams: {},
+      });
+      if (!confirmed.ok) {
+        return fail(confirmed.error);
+      }
+    }
+
     // ---- Step 2, deferred to here. Nothing above this line has touched storage.
     const resolvedStore = await ensureStore();
     if (resolvedStore === null) {
       return err(constrainToDeclaredErrors(action, unavailable()));
+    }
+
+    // ===========================================================================================
+    // THE AUTHORIZED BUSINESS SET. `docs/decisions/0020`, and this line is the whole of the split.
+    // ===========================================================================================
+    //
+    // §C.5's order now reads: `... -> authorized ORGANIZATION context -> TenantStoreResolver ->
+    // authorized BUSINESS set -> business data`. THE DEPENDENCY WAS NEVER CIRCULAR — the resolver
+    // needs the ORGANIZATION, and only the business set needs the STORE. One step bundled two
+    // things with different dependencies; separating them reorders nothing and costs nothing.
+    //
+    // IT IS COMPUTED PER REQUEST AND NEVER CACHED BEYOND IT (`.claude/rules/security.md` §2).
+    // Caching it for the session is tempting and refused for a reason with a direction: a
+    // Business created mid-session would be invisible, and — the half that matters — A BUSINESS
+    // REMOVED MID-SESSION WOULD STAY AUTHORIZED FOR UP TO TWELVE HOURS. It is the same argument
+    // `session-resolution.ts` ruling 2 makes for re-validating membership on every request.
+    //
+    // THE COST IS ONE D1 READ, AND IT SPENDS THE ABUNDANT RESOURCE. Reads are bounded at
+    // 5,000,000/day; writes at 100,000 are what actually bind, and this adds none.
+    //
+    // A FAILED READ REFUSES THE REQUEST RATHER THAN CONTINUING WITH AN EMPTY SET. An empty set
+    // would be indistinguishable from "authorized over nothing" and would turn a storage blip
+    // into a silent, total `forbidden` that looks like a permissions problem.
+    let authorizedPrincipal = principal;
+    if (principal.businessScope === 'organization') {
+      const directory = dependencies.businesses ?? createStoreBusinessDirectory();
+      const businesses = await directory.listInTenant(
+        resolvedStore,
+        MAX_AUTHORIZED_BUSINESSES,
+      );
+      if (!businesses.ok) {
+        // ANNOUNCED INTERNALLY, AND THE RESPONSE IS UNCHANGED. Added 2026-09-05 after this exact
+        // branch produced a 503 that was indistinguishable — in the logs as well as at the wire —
+        // from a resolver failure, a directory failure, an inactive mapping and an unknown
+        // binding. Collapsing at the wire is deliberate and stays; collapsing in the log was
+        // simply an absence. See `tenancy/business-set-failure.ts`.
+        announceBusinessSetFailure(
+          {
+            organizationId: principal.organizationId,
+            cause: 'business_set_read_failed',
+            errorCode: businesses.error.code,
+          },
+          dependencies.businessSetFailureReporter,
+        );
+        return err(constrainToDeclaredErrors(action, unavailable()));
+      }
+      authorizedPrincipal = sealAuthenticatedPrincipal({
+        ...principal,
+        authorizedBusinessIds: businesses.value,
+        // `assigned` on the completed value, so nothing downstream can complete it twice.
+        businessScope: 'assigned',
+      });
+      // The audit record carries the CALLER's Businesses, and now it carries the real ones.
+      actorBusinessIds = deriveActorBusinessContext(authorizedPrincipal);
     }
 
     const auditSink = (dependencies.auditSinkFactory ?? createStoreAuditSink)(
@@ -529,9 +744,9 @@ export async function invokeAction(
     );
 
     const context: ActionContext = {
-      principalId: principal.principalId,
-      onBehalfOfPrincipalId: principal.onBehalfOfPrincipalId,
-      authorizedBusinessIds: principal.authorizedBusinessIds,
+      principalId: authorizedPrincipal.principalId,
+      onBehalfOfPrincipalId: authorizedPrincipal.onBehalfOfPrincipalId,
+      authorizedBusinessIds: authorizedPrincipal.authorizedBusinessIds,
       store: resolvedStore,
       audit: auditSink,
       // Bound to the authenticated Organization here, so the Action never holds the value.
@@ -660,7 +875,14 @@ export async function invokeAction(
 
       let admitted;
       try {
-        admitted = await coordination.reserveWrites(reservedUnits);
+        // `'tenant'` — THE ORGANIZATION'S OWN PRINCIPALS SPENDING THEIR OWN ALLOCATION.
+        //
+        // STATED RATHER THAN DEFAULTED, and this call site is the reason the parameter is
+        // required: a customer's own mutations must NEVER be charged against
+        // `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`, because that ceiling exists to stop the platform
+        // spending a customer's day. **A customer refused by a counter they cannot increment
+        // would be the exact failure the sub-ceiling was built to prevent, caused by the fix.**
+        admitted = await coordination.reserveWrites(reservedUnits, 'tenant');
       } catch (cause) {
         // A throw out of the coordinator must not commit anything. Unreachable admission is
         // treated exactly as degraded mode is, one line above: no write.

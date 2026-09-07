@@ -1,0 +1,1458 @@
+---
+# Tenant audit read — Action contract, version 1
+#
+# THE CUSTOMER'S VIEW OF THEIR OWN AUDIT TRAIL, INCLUDING WHAT THE PLATFORM DID TO THEM.
+#
+# The machine-readable half is audit-read-v1.schema.json. BOTH ARE NORMATIVE TOGETHER, and
+# `required` lists are ASSERTIONS rather than description (.claude/rules/workflow.md §12).
+#
+# THESE ARE ORDINARY TENANT ACTIONS IN THE ACTION PIPELINE. They are NOT platform routes and
+# must never be moved into that class — see theWHYTHISISATENANTROUTE. `business-read-v1`
+# defines the shape of a Core tenant Action contract; this one follows it.
+#
+# Governed by: docs/decisions/0028 — BOTH amendments of 2026-09-05, which is why this exists
+#              docs/decisions/0013 D2 — successful tenant reads are not audited
+#              docs/decisions/0006 (Accepted) — one shared D1 database, Option A
+#              docs/decisions/0014 §A.10 — reads remain available at the write ceiling
+#              platform-audit-read-v1 — the platform's half of the same two-home audit model
+#              AUTHORIZATION_STANDARD.md §4 (scopes), §6 (sensitivity), §11 (audit)
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS
+# status: proposed. NOT YET APPROVED and NOT YET BUILT. No code exists for either Action.
+# Per .claude/rules/workflow.md §3 the Team Lead reviews and agrees this contract before any
+# consumer implements against it; architecture-agent does not accept its own contracts.
+#
+# PROVENANCE: the WRITERS exist and are transcribed where they constrain the shape —
+# platform/core/audit/audit.ts, platform/core/migrations/0001_audit_event.sql,
+# platform/core/directory/member-resolution.ts, platform/core/credential/reset-service.ts.
+# THE ROUTES, THE FEED SPLIT, THE OPERATOR-IDENTITY RULING AND EVERY RULE BELOW ARE NEW WORK.
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: audit
+status: proposed
+updated: "2026-09-06"
+documentsExistingImplementation: none
+
+# ---------------------------------------------------------------------------
+# theGAPTHISCLOSES — read before the operations
+# ---------------------------------------------------------------------------
+theGAPTHISCLOSES:
+  what: >-
+    `core.audit.read` IS CATALOGUED, IS GRANTED TO A TENANT ROLE, AND HAS NO ROUTE. Every
+    audit record Dudo writes into a customer's Organization today — the customer's own
+    activity AND everything the platform has done to them — is WRITTEN AND UNREADABLE BY THE
+    PARTY IT PROTECTS.
+  whyItISNOTMERELYAMISSINGFEATURE: >-
+    `docs/decisions/0028` RESTS ON IT. Decision 2 accepted a residual — an operator can probe
+    one identifier against every Organization — on the ground that the attack is "N requests,
+    audited in both homes, VISIBLE TO EACH VICTIM, rate limited". TWO OF THOSE FOUR TERMS HAVE
+    SINCE BEEN STRUCK AS FALSE. The amendment of 2026-09-05 struck "visible to each victim" in
+    terms: "'visible to each victim' is a property of a route that does not exist"; the
+    amendment below it struck "rate limited" on a measurement. THIS CONTRACT IS WHAT MAKES THE
+    THIRD TERM TRUE.
+  whatITDOESNOTMAKETRUE: >-
+    STATED FIRST SO NOBODY REPORTS MORE THAN WAS DELIVERED. It does not restore "rate limited"
+    — that term is still false and `PO-4` is still owed. It does not turn detection into
+    prevention: `0028`'s own sentence, "auditing is detection, not prevention", remains the
+    only term of that residual doing any work, and this contract moves the surface from
+    AUDITABLE to AUDITED without making it PREVENTED. And an audit read the customer never
+    opens is still an unread record — a route is a precondition for the control, not the
+    control.
+  theSEQUENCINGCONSEQUENCE: >-
+    `0028`'s residual should be re-derived once more when this ships, because one of its four
+    terms changes state. That is `workflow.md` §12's obligation and it belongs to whoever
+    accepts this contract, not to this file.
+
+# ---------------------------------------------------------------------------
+# theWHYTHISISATENANTROUTE — the placement, which was decided before the shape
+# ---------------------------------------------------------------------------
+theWHYTHISISATENANTROUTE:
+  ruling: >-
+    BOTH ACTIONS BELONG TO THE ACTION PIPELINE AND TO TENANT AUTHORIZATION. Neither is a
+    platform route, neither appears under /api/v1/platform, and neither may be served by
+    `dispatchPlatformRoute`.
+  why: >-
+    `0028`'s amendment says it directly: "A platform-side convenience would put the customer's
+    view of the platform's behaviour inside the platform's own console, which is the wrong
+    place for it by construction." A trail the customer can only see by asking the party being
+    audited to show them is not visibility; it is the same defect one layer up.
+  andTHEPLATFORMCLASSISALREADYFORBIDDENTOREADTHIS: >-
+    `platform-audit-read-v1` publishes the prohibition from the other side: "NO READ OF THE
+    TENANT-SIDE audit_event. That log belongs to the Organization and is read by the
+    Organization through `core.audit.read` at organization scope. A PLATFORM ROUTE READING A
+    TENANT'S AUDIT LOG WOULD BE A TENANT READ WITH AN OFFICIAL-SOUNDING NAME." This contract is
+    the route that sentence promised, and the two contracts must be read as one pair: the
+    platform reads the operator log, the tenant reads `audit_event`, and neither reads the
+    other's.
+  soTHESTOREHANDLEISORDINARY: >-
+    NOTHING NEW REACHES A TENANT STORE FOR THIS. An Action already receives a tenant-bound
+    `TenantScopedStore` from the pipeline. The count of components that can resolve a tenant
+    handle from the platform side — three today, named in `reset-service.ts` — IS NOT
+    INCREASED BY THIS CONTRACT, and that is the main structural argument for the placement.
+
+# ---------------------------------------------------------------------------
+# theTwoFeeds — the design, and why two routes rather than one with a filter
+# ---------------------------------------------------------------------------
+theTwoFeeds:
+  ruling: >-
+    TWO READ ROUTES OVER ONE TABLE, DIFFERING IN WHOSE ACTIONS THEY DESCRIBE AND IN WHAT THEY
+    MAY DISCLOSE.
+      THE ACTIVITY FEED   GET /api/v1/audit
+                          What the Organization's OWN principals did. Seventeen fields,
+                          including WHO acted.
+      THE PLATFORM FEED   GET /api/v1/audit/dudo
+                          What the PLATFORM did to this Organization. Six fields, and it
+                          NAMES NO OPERATOR.
+  theTABLEISONEANDTHEPRODUCERSARETWO: >-
+    `audit_event` has one row shape and two writers. The Action pipeline writes a tenant
+    principal's action (`action/pipeline.ts`). The platform writes into a customer's
+    Organization from `directory/member-resolution.ts` and `credential/reset-service.ts`. A
+    customer reading their trail sees both, and they are not the same kind of fact.
+
+  whyNOTONEFEED:
+    theFIRSTREASONISTHESHAPE: >-
+      THE TWO SHAPES DIFFER BY MORE THAN ONE FIELD AND THE DIFFERENCE IS A DISCLOSURE RULE. An
+      activity record names its actor; a platform record deliberately does not
+      (theOPERATORIDENTITYRULING). Eight further columns are constant for the platform writer
+      — `decision` is always `allowed`, `denial_reason` always null, three arrays always empty.
+      A single shape would carry nine fields whose meaning depends on which producer wrote the
+      row, which is `0028` Decision 3's refusal exactly: "a response whose columns change with
+      an argument is a response nobody can reason about — a client would have to branch, a
+      reviewer would have to trace which branch produced which fields, and the security
+      property would live in an `if` rather than in a route table."
+    theSECONDREASONISTHEONETHISCONTRACTEXISTSFOR: >-
+      *** VISIBILITY IS THE DELIVERABLE, AND A MERGED FEED DOES NOT DELIVER IT. *** The
+      platform touches an Organization a handful of times ever. The Organization's own trail
+      grows with every audited action it takes. Merged, the records `0028` needs the victim to
+      see are five rows somewhere inside thousands, discoverable only by a customer who already
+      knows to look for them — which is the state we are in now, one indirection later.
+      `0028`'s own sentence is the test: "AN UNREAD AUDIT RECORD IS DETECTION THAT NOBODY
+      PERFORMS." A DEDICATED FEED IS A SCREEN A CUSTOMER CAN OPEN AND UNDERSTAND IN ONE LOOK;
+      A FILTER IS A THING THEY HAVE TO KNOW TO APPLY.
+    theTHIRDREASONISAUTHORIZATION: >-
+      The two feeds are not equally scoped in principle. Platform records name no Business and
+      cannot be narrowed to one; activity records can be, one day. Two routes leave the
+      permission and the evaluated scope splittable later without a shape change — the same
+      property `0028` names for its own pair.
+  andTHEREISNOOPTIONALFILTERTOARGUEABOUT: >-
+    `scope` IS NOT A REQUEST PARAMETER ON EITHER ROUTE AND SUPPLYING ONE IS REFUSED WITH
+    `invalid_argument` RATHER THAN IGNORED. It is the discriminator; a caller-supplied value
+    would cross the two feeds and reach one shape's rows through the other's projection.
+    `0028`: "an ignored parameter is a parameter someone will later honour."
+
+  # -------------------------------------------------------------------------
+  # theDISCRIMINATOR — how a row is assigned to a feed, and how that can fail
+  # -------------------------------------------------------------------------
+  theDISCRIMINATOR:
+    ruling: >-
+      A ROW BELONGS TO THE PLATFORM FEED WHEN `scope = 'platform'` AND TO THE ACTIVITY FEED
+      OTHERWISE. Every row belongs to EXACTLY ONE feed and no row belongs to neither: the union
+      of the two feeds is the Organization's whole `audit_event` table.
+    whyTHATCOLUMNANDNOTACONVENTION: >-
+      `AuditEntry.scope` is "the permission and scope ACTUALLY EVALUATED, not the ones
+      requested" (`audit.ts`), so it is a fact about the authorization decision rather than a
+      label a writer chose. AND NO TENANT PRINCIPAL CAN PRODUCE IT: `permission-catalog.yaml`'s
+      intersection rule excludes every platform-scope permission from every tenant role —
+      `business-owner`, the widest tenant role, omits `core.principal.grant-platform-scope` and
+      `core.marketplace.moderate` for exactly that reason and holds 68 of 71 permissions
+      otherwise — so a tenant Action evaluated at `platform` scope is unreachable rather than
+      merely absent.
+    theALTERNATIVECONSIDERED: >-
+      An explicit `origin` column ('tenant' | 'platform') on `audit_event`. REFUSED FOR NOW: it
+      duplicates a value the row already carries correctly, and a second column that must agree
+      with the first is a new way for them to disagree. IT BECOMES THE RIGHT ANSWER THE MOMENT
+      A THIRD PRODUCER EXISTS, because the argument above is about a population of two.
+      Recorded as `TA-5`.
+    theWAYITFAILS_STATEDSOITISRECOGNISABLE: >-
+      *** IT FAILS SILENTLY AND IN BOTH DIRECTIONS. *** A platform operation that wrote a
+      tenant record at a non-platform scope would appear in the ACTIVITY feed, rendered as
+      though one of the customer's own people had done it — and its `principal_id` would be an
+      operator's, which the customer would try to resolve against its own membership and fail.
+      A tenant Action evaluated at platform scope would vanish from the activity feed into the
+      platform one. NEITHER PRODUCES AN ERROR. The negative control for this is mandatory and
+      is in testRequirements.theSPLIT.
+
+# ---------------------------------------------------------------------------
+# theOPERATORIDENTITYRULING — the question the Team Lead asked for a ruling on
+# ---------------------------------------------------------------------------
+theOPERATORIDENTITYRULING:
+  theQuestion: >-
+    When a platform operator resolves a member or resets a credential, the tenant's record
+    names that operator's principal. DOES THE CUSTOMER SEE WHICH OPERATOR, OR ONLY THAT THE
+    PLATFORM ACTED?
+  ruling: >-
+    *** ONLY THAT THE PLATFORM ACTED. `platformActionRecord` CARRIES NO ACTOR FIELD AND MUST
+    NOT GAIN ONE IN v1. *** The customer learns WHICH operation, UNDER WHICH PERMISSION,
+    AGAINST WHICH OF THEIR MEMBERS, WHEN, and A CORRELATION ID. It does not learn who.
+  andSAYWHICHSIDETHISISASTATEMENTABOUT: >-
+    *** THE OPERATOR'S IDENTITY IS RECORDED. IT IS NOT DISCLOSED TO THE TENANT. *** Those are
+    different sentences and only the second is this ruling. `audit_event.principal_id` holds
+    the operator's principal on every one of these rows, and the platform-operator log names
+    the actor as well. DUDO CAN ALWAYS ANSWER "WHO"; THE CUSTOMER IS TOLD "THE PLATFORM" AND
+    HOLDS A HANDLE WITH WHICH TO COMPEL THE REST. Anyone reading this ruling as "we do not
+    record who" has read it backwards, and `architecture.md` §3b is why the distinction is
+    spelled out rather than left to the reader.
+
+  theARGUMENT:
+    - >-
+      *** THE DECIDING ONE — IT WOULD UNDO A CONTROL `0028` PAID FOR AT THE FRONT DOOR. ***
+      Decision 2 collapses the member-resolve 404 over five cases, and names the fifth: "a
+      principal who is a platform operator — without which the route is an oracle for who holds
+      platform authority." A TENANT-READABLE OPERATOR IDENTIFIER IS THAT ORACLE FROM THE OTHER
+      SIDE, AND IT IS CHEAPER. Inducing a platform action against your own Organization is not
+      an attack — IT IS OPENING A SUPPORT TICKET. One Organization harvests one operator id per
+      interaction; an attacker holding several Organizations harvests a set, at no cost and
+      with nothing anomalous to detect. A control that collapses five cases at the front door
+      must not be handed back through a field at the back.
+    - >-
+      IT BUYS THE HONEST CUSTOMER ALMOST NOTHING. A principal id is 22 opaque base64url
+      characters. The customer cannot resolve it: `0001_principal.sql` refused an address column
+      outright, the operator holds no `organization_membership` row in their Organization so no
+      tenant directory read reaches them, and no route maps a principal id to a name. What they
+      would receive is a token whose only use to them is telling one actor from another.
+    - >-
+      AND THE ACCOUNTABILITY NEED IS MET ANOTHER WAY. `correlation_id` IS ON THE WIRE
+      DELIBERATELY. It identifies THE REQUEST rather than the person, it discloses nothing, and
+      it is what a customer quotes when they require Dudo to explain a specific action.
+      WITHHOLDING THE ACTOR AND WITHHOLDING THE HANDLE WOULD HAVE BEEN A DIFFERENT AND MUCH
+      WEAKER RULING; this one moves the customer's remedy from "identify the employee" to
+      "compel the vendor", which is where a customer's remedy actually lies.
+    - >-
+      THE DIRECTION OF TRAVEL IS ONE-WAY, SO THE CAUTIOUS ANSWER IS THE REVERSIBLE ONE. `0028`
+      leaves an operators list and a revoke route open; the day operator display names exist,
+      a field already carrying an operator identifier invites resolving it "for the customer's
+      benefit", and then a customer with a grievance holds a named individual. ADDING AN ACTOR
+      FIELD LATER IS ADDITIVE UNDER API_STANDARD.md §6; REMOVING ONE IS BREAKING.
+
+  whatISLOST_STATEDPLAINLYANDNOTSOFTENED:
+    - >-
+      A CUSTOMER CANNOT TELL WHETHER FORTY ACTIONS WERE ONE OPERATOR OR FORTY. They see the
+      count, the times, the operations and the permissions; they cannot attribute. If Dudo's
+      own internal controls have failed — one operator running a campaign — the customer sees
+      the campaign and not the operator, and can say so to Dudo but cannot name it.
+    - >-
+      THIS IS A REDUCTION IN DETECTION, NOT IN PREVENTION, AND IT IS A REAL COST RATHER THAN A
+      NOTIONAL ONE. It is accepted because the alternative cost — a harvestable directory of
+      privileged principals, obtainable by anyone who can open a support ticket — is larger and
+      lands on every customer at once rather than on one.
+  whatWOULDCHANGEIT: >-
+    A per-Organization PSEUDONYM — a keyed digest of the operator's principal under a
+    per-tenant salt — would give a customer correlation WITHIN their own Organization while
+    disclosing nothing across Organizations, and it is the answer if the "one operator or
+    forty" question ever turns out to matter. IT IS NOT SPECIFIED HERE: it is new machinery on
+    a read path, it needs a decision record for the key and its rotation, and the digest is
+    stable across time in a way that has to be reasoned about before it is built. Recorded as
+    `TA-2` with the recommendation to leave it until someone asks.
+
+# ---------------------------------------------------------------------------
+# whatTheTrailHolds — transcribed from the writers, and NOT widened
+# ---------------------------------------------------------------------------
+whatTheTrailHolds:
+  theBINDINGCONSTRAINT: >-
+    IDENTIFIERS AND DECISIONS, NEVER BUSINESS DATA. `audit.ts` makes it structural rather than
+    documentary — `AuditEntry` "has no field that can hold a value. There is no `payload`, no
+    `before`/`after`, no `diff`, no free-text `message`" — and `changedFieldNames` is checked
+    against a pattern "deliberately too narrow to admit a value", which throws rather than
+    storing one. A READ CONTRACT CANNOT DISCLOSE WHAT THE WRITER DOES NOT STORE.
+  theTHINGITWILLBEASKEDFORFIRST: >-
+    "WHAT CHANGED?" — the old and new values on an update. REFUSE IT. The trail names the
+    FIELDS that changed and never their contents, and the moment it carries values it is a
+    second copy of the tenant's business data with different access rules AND a copy a customer
+    -data purge cannot reach. `audit.ts` states the purge consequence as a STANDING OBLIGATION:
+    the trail survives a purge with no scrubbing precisely because no value was ever written.
+    A change history, if it is ever wanted, is the object's own versioning and not this.
+  NOCREDENTIALEVER: >-
+    No password, no derived value, no verifier, no salt, no session identifier, no confirmation
+    token. The read side is incapable of returning one because the writer stores none, and
+    `credential-reset-v1` already requires that the record "says a reset happened, never what
+    the value was".
+  theONEFIELDAREADERWILLMISREAD: >-
+    `related_business_ids` IS EMPTY ON EVERY DENIAL BY DESIGN, and empty therefore means
+    SUPPRESSED and not ABSENT. Both clients must render it as "not disclosed" on a `denied`
+    record rather than as "no Business". Stated here as well as in the schema because it is the
+    one place a well-meaning client will state something the record does not say.
+
+# ---------------------------------------------------------------------------
+# theREADCOSTSNOTHINGRULING — no row is written by reading, and what that costs
+# ---------------------------------------------------------------------------
+theREADCOSTSNOTHINGRULING:
+  ruling: >-
+    *** NEITHER ACTION WRITES A ROW ON ANY PATH. maxRowWrites IS 0, `audit` IS false AND
+    `auditOnDenial` IS false ON BOTH. A TENANT'S OWN READ OF ITS OWN TRAIL DOES NOT APPEAR IN
+    THAT TRAIL. *** Neither Action takes a write reservation, and an implementation that takes
+    one is wrong.
+  theRECURSIONCONSEQUENCE_STATEDBECAUSEITWASASKEDFOR: >-
+    THERE IS NO RECURSION. The platform's Organization feed writes a tenant-side record on
+    every call, so a platform reader sees their own previous visits and `0028` records that as
+    intended and bounded. THIS FEED DOES THE OPPOSITE: a customer paging their own trail
+    generates nothing, sees no record of having looked, and the trail contains no reads of
+    itself performed by the tenant. It still contains the PLATFORM's reads of it — those are
+    written by the platform side and appear in the platform feed as
+    `platform.organizations.audit.list`.
+
+  why:
+    theWEIGHTIESTREASONISSELFPOLLUTION: >-
+      A FEED A CUSTOMER ACTUALLY USES WOULD FILL WITH RECORDS OF ITS OWN USE. One record per
+      page, on a screen an owner is expected to open routinely, means the most recent pages of
+      the trail become mostly "you read your trail" — and the records the trail exists for get
+      pushed down by the act of looking for them. The platform's feed does not have this
+      problem because two operators call it rarely; a tenant audit screen is a product surface.
+    theSTANDINGRULEISALREADYONPOINT: >-
+      `0013` D2 LEAVES SUCCESSFUL TENANT READS UNAUDITED, and `platform/core/platform/
+      platform-audit.ts` anticipates this exact borrowing and forbids it in terms: "THE SAME
+      ARGUMENT DOES NOT GENERALISE TO TENANT ACTIONS ... If anyone ever cites this file as
+      precedent for auditing tenant reads, they have dropped the only premise that makes it
+      affordable." Auditing this read would be that citation.
+    theCOSTARGUMENTISREALBUTITISNOTTHEONETHEBRIEFTHOUGHT: >-
+      *** CORRECTED RATHER THAN INHERITED. *** `0028`'s amendment measured that a platform
+      probe spends FIVE ROW-WRITES OF THE VICTIM'S OWN 10,000/day allocation, and its finding
+      is "the attacker is told the call failed, the customer pays for it anyway". THAT FINDING
+      IS ABOUT A THIRD PARTY SPENDING THE TENANT'S BUDGET, AND IT DOES NOT TRANSFER TO THE
+      TENANT SPENDING ITS OWN. A customer's own read costing the customer's own allocation is
+      an ordinary use of it. So the perversity argument SUPPORTS this ruling and does not carry
+      it: at a handful of reads a day it is 15–50 row-writes and nobody would notice.
+      WHERE THE COST ARGUMENT DOES BITE is the pathological case — a compromised session paging
+      thousands of times would spend a real fraction of the day's allocation, and the customer's
+      own mutations would start failing because someone was reading their audit log.
+
+  whatITCOSTS_ANDITISNOTFREE:
+    theLOSS: >-
+      *** A COMPROMISED OWNER SESSION CAN READ THE ENTIRE AUDIT TRAIL AND LEAVE NO TRACE. ***
+      That is the read an attacker performs after an account takeover — to learn the tenant's
+      principals, its Apps, its denials, and whether they have been noticed — and it is exactly
+      the read §6 classes as `sensitive` in order to have it recorded. `auditOnDenial` being
+      false means a member probing the route leaves nothing either.
+    itISANEXCEPTIONANDISDECLAREDASONE: >-
+      AUTHORIZATION_STANDARD.md §6 requires "Permission + audit event" for a `sensitive` Action
+      and §11 restates it. BOTH ACTIONS DECLARE `sensitivity: sensitive` AND TAKE A DOCUMENTED
+      EXCEPTION TO THAT REQUIREMENT, on the same footing as `customer-directory-v1`'s
+      `readAuditException`. IT IS NAMED AS AN EXCEPTION RATHER THAN SOLVED BY DECLARING THE
+      ACTIONS `read`, because calling the security log an ordinary lookup in order to escape a
+      rule about security logs would be the reclassification doing the work.
+    theSHAPEOFTHEFIXIFITISEVERWANTED: >-
+      NOT A ROW PER PAGE — that reintroduces the self-pollution this exception exists to avoid,
+      and it makes the pathological case worse rather than better. THE RIGHT SHAPE IS A VOLUME
+      SIGNAL: a counter, or an alert on N audit reads by one principal in a window, which
+      `audit_event_by_tenant_principal_decision_time` was already added to make answerable
+      without reading record contents. Recorded as `TA-1`.
+
+# ---------------------------------------------------------------------------
+# theFEEDCANBEINCOMPLETE — the honest limit of the platform feed
+# ---------------------------------------------------------------------------
+theFEEDCANBEINCOMPLETE:
+  finding: >-
+    *** AN EMPTY PLATFORM FEED IS NOT PROOF THAT NOTHING HAPPENED, AND A CUSTOMER MUST NOT BE
+    TOLD IT IS. *** Two independent ways a real platform action produces no record here:
+  theWAYS:
+    - >-
+      A FAILED TENANT-SIDE WRITE DOES NOT ROLL BACK THE OPERATION. `platform-audit.ts` chooses
+      this deliberately and names the weakness: control-plane and tenant writes are two
+      databases, so "a failed tenant-side write ... is a reconciliation obligation. THAT
+      ASYMMETRY IS A REAL WEAKNESS ... the customer's copy of the trail is the one that can go
+      missing, and it is the one they most need." `reset-service.ts` implements exactly that —
+      it counts `notifiedOrganizationCount` and continues. NO RECONCILIATION MECHANISM EXISTS.
+    - >-
+      A REFUSED PLATFORM OPERATION WRITES NOTHING HERE AT ALL. The tenant record is written by
+      the operation, after authorization; an operator refused at the authority check produces a
+      platform-operator record and no tenant record. SO THIS FEED SHOWS WHAT THE PLATFORM DID
+      AND NEVER WHAT IT TRIED AND WAS REFUSED — including the credential-reset exclusion that
+      stops an operator resetting a colleague. That evidence exists, in the log the customer
+      cannot read.
+  theCLIENTOBLIGATION: >-
+    NEITHER CLIENT MAY RENDER AN EMPTY PLATFORM FEED AS AN ASSURANCE. "No platform activity in
+    this period" is the honest string; "nothing has been done to your account" is not, and it
+    is the string a designer will reach for. Recorded as `TA-3`.
+
+# ---------------------------------------------------------------------------
+# theTimeWindow — `since` and `until`.
+#
+# TRANSCRIBED FROM platform-audit-read-v1's CORRECTED WORDING, NOT RE-DERIVED. That contract
+# shipped the defect, measured it and fixed it on 2026-09-05; re-deriving it here is how the
+# two halves of one rule drift apart.
+# ---------------------------------------------------------------------------
+theTimeWindow:
+
+  # -------------------------------------------------------------------------
+  # theMandatoryWindow — ADDED 2026-09-07. THE SAME RULE AS THE PLATFORM FEEDS, APPLIED WHERE
+  # IT PAYS AND NOT WHERE IT DOES NOT. Uniformity would have been tidier and wrong.
+  # -------------------------------------------------------------------------
+  theMandatoryWindow:
+    theRULEBEINGAPPLIED: >-
+      `core-agent`'s MEASURED RULE: *** A TIME-ORDERED WALK TESTS EACH FILTER ROW BY ROW, SO ANY
+      FILTER MATCHING FEWER ROWS THAN ONE PAGE COSTS A FULL WALK. *** `qa-agent` measured the
+      consequence on the platform log: 49 requests exhaust D1's account-wide 5,000,000
+      rows-read/day, and exceeding it stops D1 FOR EVERY TENANT, including the session lookup
+      every login performs. The allowance is shared, so a tenant-side scan spends the same budget
+      a platform-side one does.
+
+    ruling: >-
+      *** REQUIRED ON `core.ListPlatformActions`, UNCONDITIONALLY. REQUIRED ON
+      `core.ListAuditEvents` ONLY WHEN `action_id` IS PRESENT. NOT REQUIRED OTHERWISE. *** Both
+      `since` and `until`, span at most THIRTY-ONE DAYS.
+    theSHAPEBYSHAPEDERIVATION:
+      - "UNFILTERED activity feed — served by `audit_event_by_tenant_time`. One page. EXEMPT."
+      - "`principal_id`, with or without `decision` — served by `audit_event_by_tenant_principal_decision_time`. EXEMPT."
+      - "`target_resource_id` — served by `audit_event_by_tenant_target`. EXEMPT."
+      - "`action_id` — NO INDEX. Tested row by row against the tenant's own trail. WINDOW REQUIRED."
+      - >-
+        THE PLATFORM FEED — `scope = 'platform'`, NO INDEX, AND THE FILTER MATCHES FEW ROWS BY
+        DESIGN AND PERMANENTLY. It is the worst instance of the rule in either contract: a handful
+        of records inside a trail that grows with every audited action the tenant takes. WINDOW
+        REQUIRED, UNCONDITIONALLY.
+
+    whyTHISCONTRACTISNOTUNIFORMWITHTHEPLATFORMONE: >-
+      BECAUSE THE TABLES DIFFER IN THE ONE PROPERTY THAT DECIDES THE BLAST RADIUS. Every read of
+      `audit_event` goes through the storage boundary, which emits `tenant_id = ?` from a resolved
+      handle — so the worst case is ONE ORGANIZATION'S TRAIL, and the tenant index prefix already
+      does most of the work that `0016`'s new indexes do for the platform log. The platform log
+      has no such prefix: a scan there walks every operator's activity across every tenant.
+      SO THE RULE TRANSFERS AND THE EXEMPTIONS DO NOT. `audit_event` carries three indexes and the
+      platform log carries none today, which is why three of this contract's five shapes are
+      exempt and only one of the platform contract's is.
+
+    theARITHMETIC_ANDITISWORSEHERETHANONTHEPLATFORMLOG: >-
+      *** STATED IN ROWS, AND THE NUMBER GOES THE UNCOMFORTABLE WAY. *** The platform log's bound
+      is (operators × 300 × days), because a per-principal ceiling of 600 row-writes at 2 a record
+      caps one operator at 300 records a day. THE TENANT TRAIL'S BOUND IS THE ORGANIZATION'S OWN
+      WRITE ALLOWANCE: 10,000 row-writes a day at 5 per `audit_event` row is AT MOST 2,000 AUDIT
+      ROWS A DAY, and in practice fewer because each audited mutation also writes its own row —
+      roughly 1,666 audited mutations a day at the ceiling.
+      SO A 31-DAY WINDOW ON A MAXIMALLY BUSY ORGANIZATION IS UP TO ~52,000 ROWS, against ~18,600
+      for two operators over the same span. THE SAME SPAN IS A WEAKER BOUND HERE.
+      IT IS STILL 31 DAYS, AND THE REASON IS THAT A SECOND NUMBER WOULD BE INVENTED RATHER THAN
+      DERIVED. Nothing has measured a real tenant's trail; the 2,000/day figure is a CEILING that
+      no Organization in the closed beta approaches, and choosing 9 days from it would be
+      arithmetic on a number nobody has observed. ONE SPAN, TWO STATED WORST CASES, AND A NAMED
+      TRIGGER — `TA-12` — rather than a magic number per surface.
+
+    omissionAndExcess: >-
+      IDENTICAL TO THE PLATFORM CONTRACT AND FOR THE IDENTICAL REASON. Omission is
+      `invalid_argument` / `time_window_required`; an over-wide span is `time_window_too_wide`;
+      an inverted window is `time_window_inverted`. *** NEVER DEFAULT, NEVER TRUNCATE, NEVER
+      NARROW SILENTLY. *** On an evidence surface a quietly narrowed window is a feed that hides
+      records, and an owner asking "has the platform touched us" would receive an empty page and
+      conclude nothing happened. A refusal is visible; an omission is not.
+
+    whatITCOSTSTHECUSTOMER_ANDITISSMALLERTHANTHEOPERATORSCOST: >-
+      "WHAT HAS HAPPENED IN OUR ORGANIZATION, EVER" IS UNAFFECTED — the unfiltered activity feed
+      needs no window. So is "everything this person did" and "everything that happened to this
+      record", because both are index-served.
+      WHAT IS CONSTRAINED: "every time the platform has ever touched us" becomes a month at a
+      time. THAT IS THE ONE THAT STINGS, because it is the question `0028` built this feed to
+      answer and a customer asks it rarely and wants all of it. IT COSTS THEM NOTHING IN WRITES —
+      this contract's reads write no rows at all — so the cost is clicks rather than budget, and
+      an interested owner can page back as far as they like.
+      *** AND THE CLIENT OBLIGATION IS THE SHARPER HALF: an empty windowed platform feed must
+      render as "no platform activity in this window", never "no platform activity". *** That is
+      theFEEDCANBEINCOMPLETE's obligation with a second reason attached — the feed can be
+      incomplete AND it can be narrow, and a customer must not read either as an assurance.
+
+    whatITDOESNOTCLOSE:
+      - >-
+        A DENSE FILTER STILL WALKS THE WHOLE WINDOW. The guarantee is "at most the window's
+        records", never "at most `page_size`".
+      - >-
+        THE EXEMPT SHAPES ARE BOUNDED BY THEIR INDEXES AND BY NOTHING ELSE. Drop
+        `audit_event_by_tenant_time` and the unfiltered feed becomes a scan that no window
+        refuses, because it is exempt by design. Same blind spot as the platform contract's, in a
+        table that has the index today.
+      - >-
+        `core-agent` NAMED A REMAINING UNBOUNDED SHAPE ON THE PLATFORM SIDE AND I HAVE NOT READ
+        THAT REPORT. This list is derived from the rule rather than transcribed from the
+        measurement. RECONCILE BEFORE ACCEPTING; if they disagree, the measurement is right.
+
+    andTA6ISREDERIVEDRATHERTHANLEFTPROPPEDUP:
+      whatWasClaimed: >-
+        `TA-6` REFUSED AN INDEX ON `scope` PARTLY ON THE GROUND THAT "reads have their own
+        allowance and remain available at the write ceiling, SO THE COST LANDS WHERE THERE IS ROOM
+        FOR IT." *** THE SECOND HALF OF THAT SENTENCE IS THE KIND OF ADJECTIVE THIS WHOLE FINDING
+        EXISTS TO PUNISH, AND qa-agent's MEASUREMENT FALSIFIED IT: the room is 49 requests. ***
+      theCONCLUSIONSURVIVESONABETTERPREMISE: >-
+        RE-DERIVED, BECAUSE AN ARGUMENT THAT OUTLIVES ITS PREMISE IS ONE NOBODY HAS CHECKED
+        (`workflow.md` §12). THE INDEX IS STILL REFUSED — a fourth index on `audit_event` takes an
+        audit row from 5 row-writes to 6, a 20% increase on the most frequent expensive write in
+        the platform, and makes `0028`'s measured availability hazard worse. WHAT CHANGED IS THE
+        REASON THE READ COST IS ACCEPTABLE: it is no longer "reads are cheap", it is "THE WINDOW
+        BOUNDS THE READ AT ZERO ROW-WRITE COST", which is the `0030`-shaped answer and is
+        strictly better than the claim it replaces.
+        `TA-6` STANDS. Its arithmetic was right and one of its two justifications was not.
+
+  format:
+    ruling: >-
+      `since` AND `until` ARE RFC 3339 UTC INSTANTS OF EXACTLY THIS SHAPE:
+        YYYY-MM-DDTHH:MM:SS.sssZ
+      FOUR-DIGIT YEAR, `T` SEPARATOR, `Z` ONLY, AND EXACTLY THREE FRACTIONAL DIGITS. No offset
+      form (`+00:00` is refused), no lowercase `t` or `z`, no omitted fractional part, no more
+      or fewer than three digits. A value not matching is `invalid_argument` with the detail
+      token `must_be_an_rfc3339_utc_instant`, and it is REFUSED rather than ignored — an
+      accepted-but-unusable filter silently widens an audit query to everything, which reads as
+      "there is nothing to hide here".
+    whyZONLY: >-
+      THE COMPARISON IS LEXICOGRAPHIC AGAINST A STORED `Z` STRING, so an accepted `+01:00`
+      would have to be normalised before comparison and, unnormalised, would silently select
+      the wrong hour. `Date.parse` is not a substitute for a fixed grammar: it accepts
+      `2026-09-06`, `Sep 6 2026`, and `2026-09-06T12:00:00` with no zone — which some engines
+      read as local time and others as UTC, so the same request would select a DIFFERENT SET OF
+      AUDIT RECORDS DEPENDING ON WHERE THE WORKER RAN.
+    whyEXACTLYTHREEFRACTIONALDIGITS: >-
+      *** A BOUND THAT OMITS THE FRACTIONAL PART DOES NOT MEAN ITS OWN TEMPORAL VALUE, AND THE
+      ERROR IS SILENT AND ONE-SIDED. *** Stored values always carry milliseconds
+      (`toRfc3339Utc` is `toISOString`, which emits `.sssZ`). Lexicographic comparison equals
+      temporal comparison ONLY WHEN BOTH OPERANDS HAVE THE SAME WIDTH. At index 19 a stored
+      value has `.` (0x2E) and a bound without milliseconds has `Z` (0x5A), and `.` < `Z`, so
+      every stored value in that second sorts BEFORE the bound. THE CONSEQUENCES ARE OPPOSITE
+      AND BOTH WRONG: `until=...T23:59:59Z` is exclusive and yet includes the whole of second
+      59; `since=...T00:00:00Z` is inclusive and yet excludes every record in second 00. Both
+      bounds shift forward by up to a second, in opposite senses, with no error.
+    andTHISCONTRACTHASNOLEGACYTOACCOMMODATE: >-
+      STATED BECAUSE THE PLATFORM CONTRACT DID. There, narrowing the grammar was BREAKING and
+      was free only because the console already sent three digits. HERE THERE IS NO CODE AND NO
+      CONSUMER, so the strict grammar is the original grammar and costs nothing. It is the
+      cheapest thing to settle now and a breaking change to settle later.
+  inclusivity:
+    ruling: >-
+      THE WINDOW IS HALF-OPEN: `since` IS INCLUSIVE, `until` IS EXCLUSIVE. A record is returned
+      when `since <= occurred_at < until`. Either may be omitted; omitting both returns the
+      unfiltered feed, still paged.
+    whyHALFOPEN: >-
+      ADJACENT WINDOWS TILE EXACTLY. `[A, B)` followed by `[B, C)` covers every record once,
+      with no gap and no duplicate — which is what a customer paging a week day by day actually
+      needs. THIS MATTERS MORE HERE THAN IN AN ORDINARY LISTING BECAUSE THE ARTIFACT IS
+      EVIDENCE: a record counted twice across two windows suggests two events, and a record
+      dropped between them suggests none.
+    theCLIENTCONSEQUENCE: >-
+      A CALENDAR DAY IS `since=...T00:00:00.000Z` AND `until=<next day>T00:00:00.000Z`. NOT
+      `T23:59:59.999Z`, which drops any record in the final millisecond of the day. Both
+      clients use next-day-midnight; a client that uses end-of-day is diverging under
+      docs/decisions/0016.
+
+# ---------------------------------------------------------------------------
+# pagination
+# ---------------------------------------------------------------------------
+pagination:
+  ordering: >-
+    NEWEST FIRST, BY (occurred_at, audit_event_id) DESCENDING, ON BOTH FEEDS. The composite is
+    required rather than cosmetic and it is MORE necessary here than on the platform feed:
+    `kernel/clock.ts` states that "A request reads the clock ONCE, at the start of the pipeline,
+    and every timestamp written by that request is that value", and on Workers the clock does
+    not advance during execution at all (`0015` finding 3). SO IDENTICAL TIMESTAMPS ARE
+    PRODUCED BY CONSTRUCTION, not by coincidence under load, and a sort on `occurred_at` alone
+    either skips or repeats records at any page boundary inside one request's rows.
+  itMATCHESTHEINDEXTHATEXISTS: >-
+    `audit_event_by_tenant_time (tenant_id, occurred_at DESC, audit_event_id)` is exactly this
+    order and `0001_audit_event.sql` calls it "the access path for reading a tenant's audit
+    trail newest-first". The contract's order is the index's order; neither was chosen to suit
+    the other after the fact.
+  cursor:
+    ruling: >-
+      OPAQUE, TENANT-BOUND, AND BOUND TO THE COMPLETE FILTER SET AND PAGE SIZE. A cursor issued
+      by the ACTIVITY feed must be refused by the PLATFORM feed and the reverse, or the
+      field-set difference between the two shapes could be crossed by replaying a cursor. All
+      five rejection cases — malformed, expired, forged, wrong tenant, wrong binding — return
+      an identical `invalid_argument` with the detail token `invalid_cursor`.
+    theANCHORISTHERECORDID: >-
+      The cursor anchors on `audit_event_id` alone, and the continuation page resolves that
+      row's `occurred_at` with ONE additional point lookup against the primary key before
+      applying `(occurred_at < anchor_time) OR (occurred_at = anchor_time AND audit_event_id <
+      anchor_id)`. THAT IS THE PATTERN `pagination/cursor.ts` ALREADY DOCUMENTS for the
+      Customer Directory — "the caller of `decode` resolves the anchor row's sort key with one
+      additional indexed read" — and it is why this contract needs no second anchor field in
+      the cursor payload. +1 query per continuation page, well inside the 50-per-invocation
+      budget.
+    theBINDINGCANNOTBEEXPRESSEDTODAY_ANDTHATISADEPENDENCY: >-
+      *** CHECKED IN CORE RATHER THAN ASSUMED, BECAUSE ASSUMING A TRANSPORT BEHAVIOUR IS HOW
+      `business-read-v1` SHIPPED A ROUTE THAT COULD NOT SUCCEED. *** `pagination/cursor.ts`'s
+      `CursorBinding` has five members — `businessId`, `status`, `pageSize`, `collection`,
+      `query` — and it is Customer-Directory-shaped. `collection` can carry which feed issued
+      the cursor, and `pageSize` is there. THERE IS NOWHERE TO PUT `since`, `until`,
+      `action_id`, `principal_id`, `decision` OR `target_resource_id`, so as it stands A CURSOR
+      ISSUED UNDER ONE TIME WINDOW COULD BE REPLAYED UNDER ANOTHER — which
+      `common/pagination.schema.json` property 4 forbids in terms. SEE dependencies.cursorBinding.
+  bounds: "page_size 1–100, default 25, per urn:dudo:schema:pagination:1. There is no unbounded form and none may be added: `storage/store.ts` makes `limit` required and states why."
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: >-
+    MULTITENANCY_STANDARD.md §2 and docs/decisions/0006 (Accepted, Option A): one shared
+    production D1 database holding every Organization's rows, with mandatory
+    `TenantStoreResolver` indirection. There is no infrastructure boundary underneath this
+    contract — a query missing its tenant predicate does not fail and does not return empty, it
+    returns ANOTHER ORGANIZATION'S AUDIT TRAIL, which is the worst single row set in the
+    platform to return to the wrong party.
+  rules:
+    - >-
+      Tenant identity is derived from the authenticated server-side context on EVERY call and
+      on EVERY page. Never from a body field, path segment, query string, header, cookie,
+      cursor, SDK argument, hostname, unverified claim, or ambient default.
+    - >-
+      NEITHER ACTION HAS A TENANT PARAMETER AND NONE MAY BE ADDED. There is no `organization_id`
+      property in any shape in this contract. A request carrying one is rejected by
+      `additionalProperties: false` as malformed — AND THAT REJECTION PROVES INPUT VALIDATION,
+      NOT ISOLATION.
+    - >-
+      NO RESPONSE CARRIES AN ORGANIZATION IDENTIFIER, structurally rather than by rule: an
+      Action is never given one (`tenancy/tenant-context.ts`) and the storage boundary never
+      selects `tenant_id` (`storage/store.ts` property 4), so there is no value available to
+      put into a response, a log line, an error message or a cursor.
+    - >-
+      Both feeds read `audit_event` through `ActionContext.store`, the same tenant-scoped handle
+      every other Action uses, whose predicate is applied centrally and cannot be named,
+      shadowed or `OR`-ed around by a caller.
+  theCROSSTENANTQUESTIONTHISTABLEUNIQUELYRAISES:
+    what: >-
+      `audit_event` IS THE ONE TABLE WHOSE ROWS ARE ABOUT OTHER OPERATIONS, INCLUDING FAILED
+      CROSS-TENANT ONES. az7-r3 audits a cross-tenant attempt IN THE CALLER'S TENANT, so tenant
+      A's trail contains a record of A reaching for something in B. A reader could reasonably
+      ask whether returning that record discloses anything about B.
+    answer_andITNAMESTHESIDEITISABOUT: >-
+      IT DOES NOT, AND THE REASON IS A PROPERTY OF THE STORED VALUE RATHER THAN OF THE READER.
+      `target_resource_id` on such a record is THE IDENTIFIER THE CALLER SUPPLIED, with
+      `target_unresolved` true (`0001_audit_event.sql`, CD-5) — never a resolved foreign
+      identifier, because nothing of the other tenant was ever read. Returning it to A echoes
+      back a string A authored. NO FIELD IN EITHER SHAPE CAN CARRY A VALUE THAT ORIGINATED IN
+      ANOTHER ORGANIZATION.
+  theCOLLUSIONPROPERTY_RECORDEDRATHERTHANDISMISSED: >-
+    A credential reset writes ONE RECORD PER ORGANIZATION the target belongs to, with the SAME
+    `correlation_id` and the same `target_principal_id` in each. TWO ORGANIZATIONS THAT COMPARE
+    THEIR PLATFORM FEEDS WOULD LEARN THAT ONE PERSON IS A MEMBER OF BOTH — which is `CO1`'s
+    subject matter. IT REQUIRES COLLUSION AND NO SINGLE PRINCIPAL CAN PERFORM IT: each
+    Organization is shown an identifier belonging to ITS OWN member, which it is entitled to
+    hold about a person it employs, and no route lets one Organization see another's feed. IT
+    IS RECORDED RATHER THAN DISMISSED because it is the property that would change character if
+    a BULK EXPORT of the tenant trail were ever published — an export makes the comparison
+    trivial where a paged read makes it tedious. `TA-4`.
+  theISOLATIONTEST: >-
+    Tenant A must not read, page, filter or infer ANY row of tenant B's `audit_event` — through
+    a query, a cursor, a time window, a `target_resource_id` filter or an error message. THE
+    NEGATIVE CONTROL IS THE ONE `customer-directory-v1` ALREADY STATES NORMATIVELY: remove the
+    tenant clause from the storage boundary and EVERY isolation test in this contract must go
+    RED. If only some do, the suite is what is wrong, not the finding.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, at every entry point, on every call. Default deny."
+
+  evaluationOrder:
+    - "1. Authenticate the principal. Failure -> unauthenticated."
+    - "2. Derive the tenant from the authenticated context. Never from the request."
+    - >-
+      3. Authorize `core.audit.read` AT ORGANIZATION SCOPE, WITHOUT reference to any record.
+      Failure -> forbidden. Record-independent, so this `forbidden` can never be correlated
+      with the existence or content of any audit record.
+    - "4. Validate the input schema. Unknown fields rejected. Failure -> invalid_argument."
+    - >-
+      5. Verify the cursor, if one was supplied, against the authenticated tenant AND the
+      complete filter set AND the page size. Any failure -> invalid_argument / `invalid_cursor`.
+    - >-
+      6. Read one page through the tenant-scoped storage boundary, applying the feed's
+      discriminator (`scope = 'platform'` or `scope <> 'platform'`) and the caller's filters.
+    - "7. Return. NO ROW IS WRITTEN ON ANY PATH — see theREADCOSTSNOTHINGRULING."
+
+  permissionRuling:
+    bothActionsUse: core.audit.read
+    alreadyRegistered: >-
+      *** VERIFIED IN THE CATALOG RATHER THAN TAKEN ON TRUST. *** `core.audit.read` exists in
+      `packages/contracts/registries/permission-catalog.yaml`, group `audit`, sensitivity
+      `sensitive`, scopes `[organization, business]`, status proposed, phase 1, with the
+      description "Read the tenant's own audit log. Nobody reads another tenant's."
+      THIS CONTRACT REQUESTS NO NEW PERMISSION AND NO CATALOG EDIT.
+      NOTE THE ONE CORRECTION TO THE BRIEF: the permission is declared at `[organization,
+      business]`, not at organization scope alone. That widening is what makes the scope ruling
+      below a decision rather than a formality.
+    seedRoleHoldings_UNCHANGED: >-
+      `business-owner` (a role at organization scope) holds it, and so does `business-admin` (a
+      role at business scope). `member`, `developer`, `platform-admin` and
+      `marketplace-moderator` hold it at no scope. THIS CONTRACT PROPOSES NO CHANGE TO ANY OF
+      THAT.
+    itISSEPARATEFROMTHEPLATFORMPERMISSION: >-
+      `core.platform-audit.read` IS A DIFFERENT PERMISSION AND NEITHER ROUTE HERE ACCEPTS IT.
+      The catalog states why: "widening a tenant-scoped permission above the tenant boundary is
+      an escalation, not a convenience" (AZ8). A platform operator holds `core.platform-audit.
+      read` and no tenant permission, has no `organization_membership` row, and therefore
+      resolves no tenant store — SO A PLATFORM OPERATOR CANNOT REACH EITHER ROUTE, and not
+      because a check refuses them.
+    permissionsDeliberatelyNotUsed: [core.audit.export]
+    andEXPORTISDELIBERATELYNOTROUTED: >-
+      `core.audit.export` is catalogued at `[organization]` and is held by `business-owner`, and
+      THIS CONTRACT PUBLISHES NO EXPORT. AUTHORIZATION_STANDARD.md §3.2 keeps export separate
+      from read because "reading one record and downloading the whole book are different
+      risks", and the page maximum of 100 is what keeps this read from being an undeclared bulk
+      export in one call. An export also changes the collusion property above from tedious to
+      trivial. If it is wanted it needs its own Action, its own argument and its own review.
+      Recorded as `TA-9` so that the catalogued-and-unrouted state is visible rather than
+      repeating the gap this contract was written to close.
+
+  scopeRuling:
+    bothActionsDeclareScope: organization
+    ruling: >-
+      BOTH ACTIONS EVALUATE `core.audit.read` AT ORGANIZATION SCOPE. Under
+      AUTHORIZATION_STANDARD.md §4 a grant at a level implies the levels beneath it and never
+      above it, so a grant held at `business` DOES NOT satisfy an `organization`-scope Action.
+      *** THE CONSEQUENCE, STATED PLAINLY: `business-admin` HOLDS `core.audit.read` AND CAN
+      REACH NEITHER ROUTE IN v1. ***
+    whyNOTBUSINESSSCOPE_ANDTHISISTHELOADBEARINGPART: >-
+      DECLARING `business` WOULD HAVE ADMITTED `business-admin`, AND THEN THE ROWS WOULD HAVE
+      HAD TO BE NARROWED TO ITS BUSINESS — AND THEY CANNOT BE, FOR THREE INDEPENDENT REASONS.
+        1. THE NARROWING FIELD IS EMPTY ON EXACTLY THE RECORDS THAT MATTER MOST.
+           `related_business_ids` is forced empty on EVERY denial, deliberately, because
+           "telling the log which Business the caller was refused turns the audit trail into
+           the disclosure the refusal withheld". A business-narrowed feed would therefore
+           silently hide every denial from a business-scope reader — the probe evidence, gone,
+           with a green screen.
+        2. PLATFORM RECORDS NAME NO BUSINESS AT ALL. `member-resolution.ts` and
+           `reset-service.ts` both write `relatedBusinessIds: []`. Under a Business narrowing
+           they would be visible to nobody; without one they would be visible to every
+           business-scope reader, which is an organization-wide disclosure reached through a
+           business-scope grant.
+        3. IT IS NOT INDEXABLE. `related_business_ids` is a JSON array in one column
+           (`store-audit-sink.ts` chose that deliberately), so a Business predicate over it is
+           a scan with no access path.
+      DECLARING `business` AND NOT NARROWING WOULD HAVE BEEN THE SILENT PRIVILEGE ESCALATION
+      §4 WARNS ABOUT: a business-scope principal receiving the whole Organization's security
+      log. The honest answer is the narrower one.
+    whatWOULDCHANGEIT: >-
+      A Business-partitionable audit record — one whose Business context is a first-class,
+      indexed, non-suppressed column — would make a business-scope feed possible and it would
+      be an ADDITIVE new Action rather than a change to these two. That is a Core data-model
+      decision and is not taken here. Recorded as `TA-8`.
+
+  notFoundVersusForbidden:
+    noNotFound: >-
+      NEITHER ACTION DECLARES `not_found` AND NEITHER MAY. A collection endpoint never 404s for
+      its contents: a tenant with no matching records receives `data: []` with `next_cursor`
+      null. FOR THE PLATFORM FEED THAT IS THE ORDINARY AND HEALTHY STATE and both clients must
+      treat it as a first-class result rather than a failure to load.
+    forbiddenIsRecordIndependent: >-
+      `forbidden` means one thing only — the caller does not hold `core.audit.read` at
+      organization scope — and it is decided at evaluationOrder step 3, before any input is
+      validated and before any row is touched. A caller cannot vary a request to change whether
+      it gets `forbidden`, because the decision does not depend on the request.
+    thereISNOEXISTENCEDISCLOSURE: >-
+      Nothing in either answer varies with the existence of a record the caller may not see,
+      because within one tenant there is no such record: `core.audit.read` at organization
+      scope reaches the Organization's whole trail. There is no per-record authorization step
+      in this contract and none may be added without reopening this paragraph.
+
+  budgetExhaustion:
+    ruling: "NEITHER ACTION EVER RETURNS `quota_exceeded`, AND NEITHER DECLARES IT. Normative, not an omission."
+    basis: >-
+      docs/decisions/0014 §A.10: "On exhaustion: mutations return 429 ... READS REMAIN
+      AVAILABLE." Both Actions are reads and neither takes a write reservation —
+      `storage/store.ts` states the asymmetry structurally: "`select` TAKES NOTHING, AND THAT
+      ASYMMETRY IS §A.10. Reads are never admitted through this port."
+    andITWOULDBEPARTICULARLYWRONGHERE: >-
+      THE AUDIT TRAIL IS THE SCREEN A CUSTOMER OPENS WHEN SOMETHING IS GOING WRONG, and a
+      customer at their write ceiling is a customer having exactly that day — possibly BECAUSE
+      of platform-originated writes, which is the availability hazard `0028`'s amendment
+      measured. Refusing this read at the write ceiling would withhold the explanation at the
+      moment it is needed. It would also add a budget-dependent signal to a path that carries
+      none.
+
+# ---------------------------------------------------------------------------
+# actions — API_STANDARD.md §1. schemaRef values resolve into audit-read-v1.schema.json.
+# ---------------------------------------------------------------------------
+actions:
+
+  - id: core.ListAuditEvents
+    title: "The activity feed"
+    description: >-
+      Return this Organization's own audit trail, newest first — what its principals did, under
+      which permission, at which scope, with what decision, and which fields changed. Use for
+      the security screen, for investigating a denial run, and for answering "who changed
+      this".
+    input: { schemaRef: "urn:dudo:schema:audit-read:1#/$defs/listAuditEventsInput" }
+    output: { schemaRef: "urn:dudo:schema:audit-read:1#/$defs/listAuditEventsOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.audit.read
+    scope: organization
+    sensitivity: sensitive
+    idempotent: false
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200
+    notes: >-
+      IT RETURNS ONLY RECORDS WHOSE `scope` IS NOT `platform`. The rest are the other feed's;
+      see theDISCRIMINATOR. `scope` IS NOT A REQUEST PARAMETER and supplying one is
+      `invalid_argument`, not ignored.
+      `sensitivity: sensitive` WITH `audit: false` IS A DECLARED EXCEPTION TO
+      AUTHORIZATION_STANDARD.md §6 AND §11, not an oversight — the full argument and the cost
+      are in theREADCOSTSNOTHINGRULING, and the cost is that a compromised owner session reads
+      the whole trail without trace.
+      NO `not_found` AND NO `quota_exceeded`, both normative.
+
+  - id: core.ListPlatformActions
+    title: "The platform feed — what Dudo did to this Organization"
+    description: >-
+      Return every action a Dudo platform operator took against this Organization, newest
+      first — which operation, under which permission, against which of the Organization's own
+      members, and when. THIS IS THE CUSTOMER'S VIEW OF THE PLATFORM'S BEHAVIOUR and it is the
+      route `docs/decisions/0028`'s residual assumed existed.
+    input: { schemaRef: "urn:dudo:schema:audit-read:1#/$defs/listPlatformActionsInput" }
+    output: { schemaRef: "urn:dudo:schema:audit-read:1#/$defs/listPlatformActionsOutput" }
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.audit.read
+    scope: organization
+    sensitivity: sensitive
+    idempotent: false
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200
+    notes: >-
+      IT NAMES NO OPERATOR. theOPERATORIDENTITYRULING is the whole argument; the one-line
+      version is that a tenant-readable operator identifier is `0028` Decision 2's
+      "oracle for who holds platform authority" rebuilt from the other side, harvestable by
+      anyone who can open a support ticket.
+      AN EMPTY PAGE IS THE ORDINARY STATE AND IS NOT AN ASSURANCE — theFEEDCANBEINCOMPLETE
+      names two ways a real action produces no record here, and binds both clients on the
+      string they may render.
+      IT IS THE MOST EXPENSIVE READ IN THIS CONTRACT AND THE CHEAPEST TO SATISFY. See
+      freeTierImpact.theACCESSPATHS: it is a filtered scan of the tenant's trail within the
+      window, because no index selects on `scope`.
+
+# ---------------------------------------------------------------------------
+# httpBinding — API_STANDARD.md §5.
+#
+# `audit` IS an allocated segment in core-object-registry.yaml's reservedApiPathSegments,
+# owner `core`. These routes are in the flat Core namespace by right.
+# ---------------------------------------------------------------------------
+httpBinding:
+  basePath: "/api/v1"
+  routes:
+    - { action: core.ListAuditEvents,     method: GET, path: "/audit",      surface: public }
+    - { action: core.ListPlatformActions, method: GET, path: "/audit/dudo", surface: public }
+
+  theSUBSEGMENTRULING:
+    theRULEBEINGOBEYED: >-
+      `business-read-v1` records it normatively: "A SUB-PATH SEGMENT UNDER A COLLECTION WHOSE
+      MEMBERS ARE ADDRESSED BY AN OPAQUE IDENTIFIER MUST NOT BE A SYNTACTICALLY VALID
+      IDENTIFIER." `auditEventId` is `^[A-Za-z0-9_-]{8,64}$`, so ANY sub-segment of eight or
+      more word characters would collide with a future `GET /audit/{audit_event_id}`. `dudo` is
+      FOUR characters and cannot be one, whatever any router's precedence rules happen to be.
+    whyNOT_platform: >-
+      TWO REASONS AND EITHER WOULD BE ENOUGH. It is eight characters, so it is a syntactically
+      valid `audit_event_id`. AND IT IS THE PLATFORM ROUTE CLASS'S OWN WORD — `/api/v1/platform`
+      is reserved for that class and is mounted only on the admin host — so a TENANT route
+      wearing it invites exactly the confusion `0028`'s amendment warns about, which is the
+      customer's view of the platform ending up on the platform's side of the line.
+    whyNOT_staff_OR_admin: >-
+      BOTH ARE AMBIGUOUS IN THE WRONG DIRECTION. A customer reading `/audit/staff` would
+      reasonably understand "our staff", which is the OTHER feed. A path segment that names the
+      wrong party is worse than an ugly one.
+    whyNOT_vendor: >-
+      IT WOULD FAIL A CHECK CORE ALREADY RUNS. `CORE_BOUNDARIES.md` §3 refuses industry nouns
+      in Core and §5 lists "Stripe, DHL, WhatsApp — any vendor" as a Connector's concern, so
+      `vendor` in Core's vocabulary means an external integration provider, and a supplier is an
+      App's business object. `storage/store.ts` names `Sort` rather than `OrderBy` for exactly
+      this reason. A segment that produces a false positive on a boundary grep is a segment
+      that teaches people to ignore the grep.
+    whatDUDOMEANSHERE: >-
+      THE NAME OF THE PARTY THE RECORDS ARE ABOUT. It cannot be mistaken for anything of the
+      customer's, and the customer's question is literally "what did Dudo do to us". Naming the
+      product in one path segment is unusual; naming the wrong party in one would be worse.
+
+  notes:
+    - >-
+      `GET /audit` CLAIMS THE CANONICAL COLLECTION, and the Team Lead should decide it
+      deliberately because it binds anything later that wants the segment. The claim is made on
+      the ground that a collection endpoint returns what the caller is authorized to see, and
+      `core.audit.read` at organization scope IS the Organization's whole trail — so "your
+      audit events" is the correct meaning of `GET /audit` rather than a narrower thing wearing
+      a general name. Moving it after either client ships is breaking.
+    - >-
+      NO IDENTIFIER APPEARS IN EITHER URL. Filters travel as query parameters and no path
+      segment is caller-supplied, so no `target_resource_id`, `principal_id` or `audit_event_id`
+      reaches an access log, a proxy log, browser history or a `Referer` header through a path.
+      THE FILTERS THEMSELVES DO TRAVEL IN A QUERY STRING, and that is accepted on the same
+      ground `business-read-v1` accepted it before its revision: the values are opaque,
+      unguessable and tenant-internal, and MULTITENANCY_STANDARD.md §4's log carrier is about
+      TENANT identifiers, which appear nowhere in this contract. If a future revision moves the
+      filters to a body, it is a METHOD change and therefore breaking.
+    - >-
+      NEITHER ROUTE ACCEPTS, REQUIRES OR HONOURS AN `Idempotency-Key`. Both are GETs and
+      API_STANDARD.md §9 scopes the header to POST, PATCH and DELETE.
+    - >-
+      NO `Cache-Control` THAT PERMITS SHARED CACHING, and this is the most important instance
+      of that rule in the platform so far. Both responses are one Organization's security log.
+      A shared or edge cache keyed on the URL alone would serve one Organization's audit trail
+      to another, and the URLs are short, stable and identical across tenants — which makes
+      these the most cacheable-LOOKING responses Dudo has and the most catastrophic to cache.
+      THIS CONTRACT DEFINES NO CACHE.
+    - >-
+      Every route is served by the same Action definition the internal API and the SDK use.
+      There is no route handler containing logic — an operation with a handler but no Action
+      has no permission, no schema, no audit and no AI surface.
+
+# ---------------------------------------------------------------------------
+# audit — AUTHORIZATION_STANDARD.md §11, SECURITY_STANDARD.md §6
+# ---------------------------------------------------------------------------
+audit:
+  auditedActions: []
+  unauditedOnSuccess:
+    actions: [core.ListAuditEvents, core.ListPlatformActions]
+    meaning: "A successful call writes no audit record. See theREADCOSTSNOTHINGRULING for the argument and the cost."
+  auditedOnDenialOnly:
+    actions: []
+    reasoning: >-
+      `auditOnDenial` IS false ON BOTH, AND IT IS THE WEAKER HALF OF THE EXCEPTION. The user's
+      2026-09-02 denied-read ruling named `customers.GetCustomer` specifically and has not been
+      widened; widening a ruling nobody made is not this contract's to do. BUT THE ARGUMENT
+      AGAINST IS THINNER HERE THAN IN `business-read-v1`: a member probing the audit route is a
+      meaningful signal, unlike a resolve that is structurally incapable of answering
+      differently. What holds it closed for now is that a denial write is a write on a
+      single-threaded shared database and the amplification risk is `CD-17`, unbounded and
+      unclosed. IF THE TEAM LEAD OR THE USER WIDENS THE DENIED-READ RULING, THESE TWO ARE IN
+      SCOPE OF THAT WIDENING AND THIS BLOCK IS WHAT SHOULD BE REVISITED FIRST.
+  exceptionsTaken: >-
+    ONE, DECLARED. Both Actions are `sensitivity: sensitive` and write no audit event, which
+    AUTHORIZATION_STANDARD.md §6 and §11 otherwise require. The argument, the three reasons and
+    the named cost are in theREADCOSTSNOTHINGRULING. IT IS TAKEN AS AN EXCEPTION RATHER THAN
+    AVOIDED BY DECLARING THE ACTIONS `read`, because reclassifying the security log as an
+    ordinary lookup in order to escape a rule about security logs would be the
+    reclassification doing the work.
+
+# ---------------------------------------------------------------------------
+# events — NONE, stated explicitly
+# ---------------------------------------------------------------------------
+events:
+  published: []
+  consumed: []
+  rationale: >-
+    Both Actions are reads; a read publishes nothing and there is no state change for anything
+    to observe. NO EXISTING EVENT IS DUPLICATED, checked against
+    `packages/contracts/registries/event-catalog.yaml`.
+  reservedNames: >-
+    NONE RESERVED, AND THE TEMPTING ONE IS NAMED SO IT IS REFUSED DELIBERATELY:
+    `PlatformActionRecorded`, or any event that fires when the platform touches a tenant. IT
+    WOULD BE A PUSH COPY OF THE AUDIT TRAIL LIVING SOMEWHERE WITH DIFFERENT ACCESS RULES, which
+    is `0025` Decision 5's own objection and the reason `platform-audit-read-v1` publishes no
+    subscription, stream or webhook. A NOTIFICATION TO THE OWNER WHEN THE PLATFORM ACTS IS A
+    GOOD PRODUCT IDEA AND IS NOT AN EVENT ON THIS CONTRACT — it belongs to the notification
+    surface, with its own delivery, its own permission and its own free-tier argument.
+
+# ---------------------------------------------------------------------------
+# mcp — NONE, and this one is a refusal rather than a deferral
+# ---------------------------------------------------------------------------
+mcp:
+  tools: []
+  rationale: >-
+    NEITHER ACTION DECLARES `mcp` IN ITS EXPOSURE, AND THIS IS THE ONE PLACE THAT ABSENCE IS
+    AN ARGUMENT RATHER THAN A PHASE-8 DEFERRAL. `business-read-v1` correctly records its two
+    Actions as among the safest MCP candidates in the platform; THESE TWO ARE AMONG THE LEAST
+    SAFE, and saying so now is cheaper than arguing it when Phase 8 arrives with a list of
+    "obvious" read Actions to expose.
+    THE AUDIT TRAIL IS THE TENANT'S SECURITY LOG. It names every principal, every denial, every
+    unresolved probe and every target identifier in the Organization. An AI principal with a
+    tool over it is a summarisation surface across the whole of a tenant's security posture,
+    reachable by prompt, and `permission-catalog.yaml` already fixes an AI principal's
+    permission as the INTERSECTION of its own grants and the acting user's — which bounds who
+    can ask and does nothing about what a single owner-authorized question returns.
+    ADDING `mcp` TO A READ ACTION'S EXPOSURE IS ORDINARILY ADDITIVE. FOR THESE TWO IT SHOULD
+    REQUIRE A DECISION RECORD, and this paragraph is the thing a future proposal has to argue
+    against.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — .claude/rules/architecture.md §6a, docs/decisions/0008
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [worker-invocations, d1-queries-per-invocation, d1-rows-read]
+  notConsumed: >-
+    NO d1-rows-written AND NO d1-storage. This contract adds no table, no column, NO INDEX and
+    no row. Both Actions declare `maxRowWrites: 0`, take no write reservation and write nothing
+    on any path — no record, no audit row, no denial summary, no session touch. NEITHER CAN
+    CONTRIBUTE TO THE 80,000-ROW-WRITE PLATFORM CEILING OR TO ANY ORGANIZATION'S 10,000/DAY.
+    THAT IS THE WHOLE POINT AND IS NOT INCIDENTAL: a customer must not pay write capacity to
+    look at their own evidence.
+  queryBudget: >-
+    ONE query for a first page. TWO for a continuation page — the anchor's `occurred_at` is
+    resolved by a primary-key point lookup before the page query (pagination.theANCHORISTHERECORDID).
+    Against the 50-queries-per-Worker-invocation limit that is 2.
+
+  theACCESSPATHS:
+    statedRATHERTHANASSUMED: >-
+      CLOUDFLARE_STANDARD.md §4 rule 4 requires every query to be indexed for its access path,
+      and on a single thread one unindexed scan is every Organization's latency. THIS TABLE HAS
+      THREE INDEXES AND THEY DO NOT COVER EVERY COMBINATION THIS CONTRACT PERMITS, so the
+      combinations are enumerated rather than left to be discovered.
+    served:
+      - "Time window only, either feed's ordering — `audit_event_by_tenant_time (tenant_id, occurred_at DESC, audit_event_id)`. This is the common case and it is exact."
+      - "`principal_id`, with or without `decision` — `audit_event_by_tenant_principal_decision_time`. `0001_audit_event.sql` added it for precisely this: 'everything this actor did', the query an investigator runs after an alert fires."
+      - "`target_resource_id` / `target_principal_id` — `audit_event_by_tenant_target`, described in the migration as the access path for 'what happened to this record'."
+    filteredScans:
+      - >-
+        *** THE PLATFORM FEED. *** No index selects on `scope`, so `GET /audit/dudo` range-scans
+        the tenant's trail and filters. ROWS READ IS BOUNDED BY THE TENANT'S OWN TOTAL ACTIVITY IN
+        THE WINDOW, NOT BY `page_size` OR BY THE NUMBER OF PLATFORM RECORDS — which is the inverse
+        of what a reader would guess from a feed that usually returns a handful of rows.
+        *** AND "IN THE WINDOW" IS NOW A GUARANTEE RATHER THAN A DESCRIPTION. *** Since 2026-09-07
+        a bounded window is REQUIRED on this feed, so the scan is bounded at 31 days of the
+        tenant's activity instead of the whole trail. See theTimeWindow.theMandatoryWindow. A
+        `target_principal_id` filter moves it onto the target index and makes it cheap.
+      - "`action_id` on the activity feed. Filtered after the index range; a window is REQUIRED with it, for the same reason and with the same bound."
+    whyNOINDEXISPROPOSED: >-
+      *** AN ADDITIVE `(tenant_id, scope, occurred_at DESC, audit_event_id)` INDEX WOULD FIX IT
+      AND IS REFUSED, AND THE ARITHMETIC IS THE REASON. *** An `audit_event` write is FIVE
+      row-writes — one row plus its primary key plus three explicit indexes, counted from the
+      migration by `core-agent` rather than taken from a constant — and a fourth index makes it
+      SIX. THAT IS A 20% INCREASE ON THE MOST EXPENSIVE AND MOST FREQUENT ROW IN THE PLATFORM,
+      it changes `RESOLVE_TENANT_ROW_WRITES`, `RESET_TENANT_ROW_WRITES` and Core's write-cost
+      constant, and — this is the deciding term — IT MAKES THE MEASURED AVAILABILITY HAZARD
+      WORSE: `0028`'s amendment measured 2,000 platform calls exhausting one customer's entire
+      daily allocation at five writes each, and the same attack at six needs 1,667.
+      A WRITE COST PAID BY EVERY AUDITED ACTION FOREVER, TO SPEED UP A READ PERFORMED
+      OCCASIONALLY BY ONE PRINCIPAL, IS THE WRONG TRADE.
+      *** CORRECTED 2026-09-07. THIS CLAUSE CONTINUED: "and reads have their own allowance and
+      remain available at the write ceiling, SO THE COST LANDS WHERE THERE IS ROOM FOR IT." THAT
+      SECOND JUSTIFICATION WAS AN ADJECTIVE WHERE A NUMBER BELONGED, AND qa-agent MEASURED IT
+      FALSE: the room is 49 requests before D1's account-wide 5,000,000 rows-read/day is exhausted
+      at a 50,000-row log, and exhausting it stops D1 for every tenant including login. ***
+      THE CONCLUSION IS RE-DERIVED AND STANDS, ON A BETTER PREMISE. The index is still refused for
+      the arithmetic above, which never depended on the false half; what makes the READ cost
+      acceptable is no longer "reads are cheap" but "THE MANDATORY WINDOW BOUNDS THE READ AT ZERO
+      ROW-WRITE COST" — `0030`'s shape, configuration rather than schema, and strictly better than
+      the claim it replaces. See theTimeWindow.theMandatoryWindow.
+      Recorded as `TA-6` with the volume at which to revisit, and as `TA-12` for the span.
+
+  responseSize: >-
+    A PLATFORM-FEED PAGE IS TINY — six short fields. AN ACTIVITY-FEED PAGE IS DOMINATED BY
+    `actor_business_ids`, which for an organization-scope actor is every Business in the
+    Organization and repeats on nearly every row. It is on the wire because `0001_audit_event.
+    sql` put the column there to answer "what could this actor see at the time", and a read
+    that omitted it would leave that column in the same written-and-unreadable state this
+    contract exists to end. THE BOUND IS `page_size` ≤ 100; if response size ever becomes the
+    binding constraint the answer is a smaller default page, not a dropped field.
+  workerInvocations: "+1 per page, against 100,000/day. Under docs/decisions/0016 the web client is a static-asset SPA whose page loads do not invoke the Worker, so these are the calls the allowance is preserved for."
+  atTheLimit: >-
+    NOTHING TO DEGRADE, AND THIS CONTRACT MUST NOT BE THE THING THAT DEGRADES. Both are reads
+    and `0014` §A.10 keeps reads available at the write ceiling. See
+    authorizationModel.budgetExhaustion for why refusing THIS read at a write ceiling would be
+    particularly wrong.
+  cost: "USD 0 / BD 0 per month. No new service, no new product, no new binding, no new table, no new index, no paid feature."
+
+# ---------------------------------------------------------------------------
+# dependencies — WHAT THIS CONTRACT CANNOT SATISFY ITSELF
+#
+# READ BEFORE REPORTING THE GAP AS CLOSED. It closes the CONTRACT gap. Two Core changes are
+# required before either Action can be built as specified, and one is a security finding that
+# is not this contract's to fix.
+# ---------------------------------------------------------------------------
+dependencies:
+
+  cursorBinding:
+    finding: >-
+      `pagination/cursor.ts`'s `CursorBinding` CANNOT EXPRESS THIS CONTRACT'S FILTER SET. Its
+      five members are `businessId`, `status`, `pageSize`, `collection` and `query` — a shape
+      drawn from the Customer Directory. `collection` carries which feed issued the cursor and
+      `pageSize` is present; `since`, `until`, `action_id`, `principal_id`, `decision` and
+      `target_resource_id` HAVE NOWHERE TO GO.
+    consequence: >-
+      Implemented against `CursorBinding` as it stands, A CURSOR ISSUED UNDER ONE TIME WINDOW
+      WOULD BE ACCEPTED UNDER ANOTHER — which `common/pagination.schema.json` property 4
+      forbids in terms, and which would let a caller page a window it did not ask for. It is
+      not a cross-tenant hole: the tenant digest is checked independently and would still
+      refuse.
+    whatISOWED: >-
+      AN ADDITIVE CHANGE TO CORE: a general filter fingerprint on `CursorBinding` that every
+      declared filter contributes to. HOW it is represented is Core's decision, not this
+      contract's; WHAT is required is that the fingerprint covers the COMPLETE set of request
+      parameters that narrow the result, so that adding a filter later cannot silently escape
+      the binding. REPORTED TO THE TEAM LEAD RATHER THAN PERFORMED HERE.
+    andITISNAMEDRATHERTHANASSUMED: >-
+      `business-read-v1` shipped a route that could not succeed over HTTP because it assumed a
+      transport behaviour instead of reading it. This block exists because that lesson applies
+      to the cursor codec as much as to the query parser.
+
+  theAppReachIntoAuditEvent:
+    finding: >-
+      *** SECURITY FINDING. REPORTED TO THE TEAM LEAD, NOT CREATED BY THIS CONTRACT, AND IT
+      CONTRADICTS AN ASSERTION IN CORE'S OWN SOURCE. *** `platform/core/audit/audit.ts` states:
+      "reading the audit trail is its own Core surface with its own permission, and an App
+      having a handle that could read it would be an undeclared disclosure of every other App's
+      activity in the tenant." THAT IS TRUE OF `AuditSink`, WHICH HAS NO QUERY METHOD. IT IS
+      NOT TRUE OF THE HANDLE BESIDE IT: `ActionContext.store` is an unrestricted
+      `TenantScopedStore`, `select` takes any table name matching `^[a-z][a-z0-9_]*$`, and
+      `apps/customers/actions/*.ts` receive that same `ActionContext`. SO ANY APP'S ACTION
+      HANDLER CAN `select({ table: 'audit_event', ... })` TODAY, with no permission check, no
+      audit record and nothing refusing it.
+    whyITMATTERSTOTHISCONTRACT: >-
+      THIS CONTRACT ASSERTS THAT THE TENANT AUDIT TRAIL IS REACHED THROUGH `core.audit.read` AT
+      ORGANIZATION SCOPE. That assertion is true of the ROUTES and false of the STORE HANDLE,
+      and `architecture.md` §3b is explicit that a contract may not assert a hazard does not
+      apply without naming which side it means. NAMING IT: the permission gates the published
+      surface; it does not gate the port.
+    itISNOTATENANTISOLATIONDEFECT: >-
+      STATED PRECISELY BECAUSE THE DIFFERENCE DECIDES THE SEVERITY. The handle is tenant-bound,
+      so an App reads only ITS OWN tenant's audit trail — no cross-tenant reach and no
+      `0024` violation. What it is: an UNDECLARED, UNAUDITED, PERMISSION-FREE read by an
+      installed App of every other App's activity, every denial and every principal identifier
+      in the Organization it is installed in. Under least-privilege App permissions
+      (`.claude/rules/security.md` §3) that is a real hole, and under §4 it is the shape of one.
+    whatWOULDCLOSEIT: >-
+      NOT THIS CONTRACT AND NOT `architecture-agent`. The candidate mechanisms are a
+      table-scoped store handle per App, or a Core-owned reserved-table list the boundary
+      refuses for non-Core callers — both are Core decisions with their own review. Recorded as
+      `TA-7` and reported immediately per `.claude/rules/workflow.md` §5.
+
+  as1: >-
+    The executable form and transport of a Dudo contract is undecided (API_STANDARD.md §13).
+    This file follows the precedent already in `packages/contracts/` — JSON Schema draft
+    2020-12 for shapes, YAML for Action metadata. Nothing here selects a framework, library,
+    ORM or npm package, and nothing may be installed to consume it.
+  urnResolver: >-
+    `audit-read-v1.schema.json` `$ref`s `urn:dudo:schema:pagination:1` for `page_size`,
+    `cursor` and `next_cursor`. No URN resolver exists, so those references are normative and
+    unfollowable today — the same state every other contract in this directory set is in.
+
+# ---------------------------------------------------------------------------
+# testRequirements — qa-agent's, and every one of these is a claim someone will implement
+# ---------------------------------------------------------------------------
+testRequirements:
+
+  theSPLIT:
+    - >-
+      *** EVERY ROW APPEARS IN EXACTLY ONE FEED, AND THE UNION IS THE WHOLE TABLE. *** Seed a
+      tenant record and a platform-written record; assert each appears in its own feed and NOT
+      in the other; assert that the union of both feeds, paged to exhaustion, equals the
+      Organization's whole `audit_event`. A row in neither feed is a record the customer can
+      never see and nothing else would report it.
+    - >-
+      THE CONSTRUCTED FAILING INPUT, AND IT IS MANDATORY RATHER THAN THOROUGH. Seed a record
+      that is tenant-written in every respect EXCEPT that its `scope` is `platform`. The
+      activity feed must not return it and the platform feed must — proving the split is
+      decided by `scope` and not by `action_id`, by `app_id`, or by which fixture wrote it. A
+      suite whose fixtures only ever vary two things at once cannot tell which one it is
+      testing. (`workflow.md` §11a: a check that ships without a known-failing input has been
+      observed, not verified.)
+    - >-
+      NO TENANT ACTION IN THE CONTRACT SET DECLARES `scope: platform`. One assertion over the
+      contract set, in the shape `suites/contracts/satisfiability.ts` already uses. IT IS THE
+      ONLY THING STANDING BETWEEN THE DISCRIMINATOR AND A SILENT MISFILING, and it must FAIL
+      LOUDLY ON READING NOTHING — an empty sweep must not render as a pass.
+    - "Supplying `scope` to either route is `invalid_argument`. Not ignored, not honoured."
+
+  theOPERATORISNOTNAMED:
+    - >-
+      *** THE ASSERTION THE PLATFORM FEED TURNS ON. *** No response from `GET /audit/dudo`
+      contains the acting operator's principal identifier, UNDER ANY combination of filters,
+      page size, cursor or time range. Assert the field is absent from the shape AND that no
+      code path populates it AND — by grepping the serialised response against the seeded
+      operator id — that it does not arrive under another name.
+    - >-
+      AND THE MIRROR, so the control is precise rather than blunt: the ACTIVITY feed DOES
+      return `principal_id`, asserted against a record seeded with a known tenant principal. A
+      test that only asserts absence passes equally well against a route that returns nothing.
+    - >-
+      A platform-written record's `principal_id` IS STORED. Assert it directly against the row,
+      not through either feed. The ruling is that the identity is recorded and not disclosed,
+      and a suite that cannot tell those apart cannot detect the day it stops being recorded.
+
+  theMANDATORYWINDOW:
+    - >-
+      `core.ListPlatformActions` WITHOUT `since` AND `until` IS REFUSED with
+      `time_window_required`, ON EVERY CALL, including one carrying `target_principal_id`.
+    - >-
+      `core.ListAuditEvents` WITH `action_id` AND NO WINDOW IS REFUSED. *** AND THE EXEMPTIONS
+      HOLD: the same route with NO filter, with `principal_id`, with `principal_id` + `decision`,
+      or with `target_resource_id`, SUCCEEDS WITHOUT A WINDOW. *** A suite that requires the
+      window everywhere passes this contract's prose and breaks four working questions.
+    - "A 32-day span is `time_window_too_wide`; 31 days exactly is accepted. `since` alone or `until` alone is `time_window_required`. An inverted window is `time_window_inverted`, never an empty page."
+    - >-
+      ASSERT ROWS READ, NOT THE ANSWER. An exempt shape reads at most one page's rows; a windowed
+      shape reads at most the window's records. EVERY OTHER TEST HERE PASSES IDENTICALLY AGAINST A
+      FULL SCAN THAT RETURNS THE RIGHT 25 ROWS, which is the state that measured 49 requests to
+      exhaustion on the platform log.
+    - >-
+      THE CONSTRUCTED FAILING INPUT: drop `audit_event_by_tenant_time` and the UNFILTERED feed's
+      rows-read assertion must go RED. That shape is exempt from the window by design, so nothing
+      else in this suite would notice it regressing — it is the shape that looks safest and is
+      least guarded.
+  theTIMEWINDOW:
+    - >-
+      THE BOUNDS ARE EXACT AND THE WINDOW IS HALF-OPEN. Seed records at exactly `since`, one
+      millisecond before it, exactly at `until`, and one millisecond before `until`. The record
+      AT `since` is RETURNED; the one before it is not. The record AT `until` is NOT returned;
+      the one a millisecond before it is. ASSERT ALL FOUR — a suite that tests the middle of a
+      window tests nothing about the boundary, and the boundary is the whole of the ruling.
+    - >-
+      A `since` OR `until` OMITTING THE FRACTIONAL PART IS REFUSED with
+      `must_be_an_rfc3339_utc_instant`, and so are `+00:00`, a lowercase `z`, a bare date, and
+      a value with one or six fractional digits. THIS IS A NEGATIVE CONTROL AND NOT HYGIENE: if
+      the short form is ever accepted, assert what it then DOES, because it does not mean its
+      own instant — `until=...T23:59:59Z` includes the whole of second 59 and
+      `since=...T00:00:00Z` excludes it, both silently. A suite that accepts the short form and
+      checks only that "some records came back" will not see either shift.
+
+  thePAGING:
+    - >-
+      PAGING OVER RECORDS WITH IDENTICAL TIMESTAMPS NEITHER SKIPS NOR REPEATS A RECORD. Seed at
+      least three records with the SAME `.sssZ` value byte for byte — which is not a contrived
+      fixture, it is what one request produces, because `clock.now()` is read once per request
+      and the Workers clock does not advance during execution. Place a page boundary INSIDE the
+      identical-timestamp run.
+    - >-
+      THE NEGATIVE CONTROL FOR IT: remove `audit_event_id` from the sort key and from the
+      cursor anchor and this test must go RED. If it stays green the fixture's timestamps are
+      not actually identical and the test is proving something else.
+    - "A cursor issued by one feed is refused by the other, with the same `invalid_cursor` as every other rejection."
+    - "A cursor issued under one time window, one `page_size`, or one filter value is refused under another — the dependency in dependencies.cursorBinding is what this test will fail against until it is met, and it should be written first for that reason."
+
+  theISOLATION:
+    - >-
+      Tenant A cannot read, page, filter or infer any row of tenant B's `audit_event`: not
+      through a first page, not through a cursor issued to B, not through a `target_resource_id`
+      that exists only in B, not through a time window, and not through an error message.
+    - >-
+      THE NEGATIVE CONTROL, AND IT MUST REMOVE THE PREDICATE AT THE BOUNDARY RATHER THAN IN A
+      HANDLER: delete the tenant clause in the storage boundary and EVERY case above must go
+      RED. If only some do, the suite is what is wrong, not the finding.
+
+  theAUTHORIZATION:
+    - "A principal holding `core.audit.read` at ORGANIZATION scope reaches both routes."
+    - >-
+      A principal holding `core.audit.read` at BUSINESS scope reaches NEITHER, and receives
+      `forbidden`. THIS IS THE `business-admin` CASE AND IT IS AN INTENDED OUTCOME RATHER THAN
+      A DEFECT — see authorizationModel.scopeRuling. Assert it explicitly so that nobody
+      "repairs" it by lowering the declared scope.
+    - "A principal holding no `core.audit.read` receives `forbidden`, decided before any input is validated and identically for every request shape."
+    - "`forbidden` does not vary with the filters supplied. Assert with a request naming a real record and one naming nothing."
+
+  theCONTENTS:
+    - "No response contains a credential, a password, a derived value, a salt, a session identifier or a confirmation token. Assert by grepping the SERIALISED RESPONSE, not by inspecting the schema."
+    - "No response contains a field VALUE, a diff, a before/after, a display name or an address — only field NAMES in `changed_field_names`. Seed an update whose new value is a distinctive string and assert that string appears nowhere in any response."
+    - "No response contains an organization identifier, in any field, including inside a cursor."
+
+  theCOST:
+    - >-
+      NEITHER ACTION WRITES A ROW ON ANY PATH — success, empty page, denial, invalid cursor,
+      malformed time bound. Assert by counting rows in `audit_event` before and after, and by
+      asserting no write reservation was taken. THE READ THAT AUDITS ITSELF IS THE DEFECT THIS
+      CONTRACT RULED OUT, and it is the change a future author is most likely to make while
+      believing they are improving the trail.
+    - "Reading the trail at an exhausted daily write budget still succeeds. `0014` §A.10, asserted rather than assumed."
+
+# ---------------------------------------------------------------------------
+# versioning
+# ---------------------------------------------------------------------------
+versioning:
+  contractVersion: 1
+  apiVersion: v1
+  changeClass: additive
+  note: >-
+    First version, no consumers, no code. Additive by definition — and the window in which
+    these choices are free is exactly the window this contract was authored in, which is why
+    the strict timestamp grammar, the half-open window, the sort order, the feed split and the
+    absent operator field are all settled now rather than when they are needed.
+  breakingOnceEitherClientShips:
+    - "Adding an actor field to `platformActionRecord`. It is additive as a SHAPE change and it reverses theOPERATORIDENTITYRULING, so it needs a decision record whatever API_STANDARD.md §6 says about the shape."
+    - "Merging the two feeds, or adding a `scope` request parameter to either."
+    - "Changing either Action's permission or its evaluated scope — including lowering `core.ListAuditEvents` to `business` scope to admit `business-admin`."
+    - "Moving `/audit` or `/audit/dudo`, or changing either method."
+    - "Relaxing the timestamp grammar, or changing the window's inclusivity."
+    - "Changing the sort order, or removing `record_id` from the wire."
+    - "Removing any field from either record shape, or making a nullable field non-nullable."
+    - "Lowering the page maximum of 100."
+  additive:
+    - "New response fields on either record shape."
+    - "A new optional filter — PROVIDED the cursor binding covers it; see dependencies.cursorBinding, which is exactly the mechanism that makes this safe rather than a hope."
+    - "A new Action in this contract set — an export, or a Business-partitionable feed."
+    - "Adding `mcp` to either exposure — which mcp.rationale argues should require a decision record anyway."
+  driftSurfaces: >-
+    NAMED, BECAUSE A DUPLICATION NOBODY NAMED IS A DEFECT NOBODY CATCHES.
+      1. `fieldName`'s pattern is transcribed from `FIELD_NAME_PATTERN` in
+         `platform/core/audit/audit.ts`. If Core widens that pattern, this schema silently
+         describes a narrower set than the table holds and the route becomes unable to render
+         a real record. A one-line qa check, not a reviewer's good intentions.
+      2. `denialReason`'s enum is transcribed from `AuditDenialReason`. That type has already
+         gained a member once — `rate_limited` was missing and its absence was a hole found by
+         running the controls. IT WILL GAIN ANOTHER, and this enum will not notice.
+      3. `principalType`'s enum is transcribed from `AuthenticatedPrincipal`. Same shape of
+         risk.
+      4. `tenantScope`'s enum is `Scope` MINUS `platform`. If `authorization/scope.ts` gains a
+         level, this enum silently excludes it from the activity feed — which would make the
+         records at that level invisible to the tenant rather than merely unrendered.
+      5. The timestamp grammar and the half-open window are stated in BOTH this contract and
+         `platform-audit-read-v1`. They must stay identical; they were transcribed rather than
+         re-derived for that reason.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TA-1
+    question: >-
+      READING THE AUDIT TRAIL LEAVES NO TRACE. Both Actions are `sensitive` and write no audit
+      record, so a compromised owner session can page the entire security log — every
+      principal, every denial, every target — and the trail will not show it. `auditOnDenial`
+      is false too, so a member probing the route leaves nothing either.
+    recommendation: >-
+      ACCEPT FOR v1 with the argument in theREADCOSTSNOTHINGRULING. If it is ever repaired, the
+      fix is a VOLUME SIGNAL — a counter or an alert on N reads by one principal in a window,
+      answerable from `audit_event_by_tenant_principal_decision_time` without reading record
+      contents — and NOT a row per page, which reintroduces the self-pollution the exception
+      exists to avoid and makes the pathological case worse.
+    blocks: "Nothing. It is a declared exception to AUTHORIZATION_STANDARD.md §6 and §11, and the Team Lead should accept it as an exception or reject it."
+
+  - id: TA-2
+    question: >-
+      THE PLATFORM FEED NAMES NO OPERATOR, SO A CUSTOMER CANNOT TELL FORTY ACTIONS BY ONE
+      OPERATOR FROM FORTY BY FORTY.
+    recommendation: >-
+      LEAVE IT. The cost of the alternative — a harvestable identifier for privileged
+      principals, obtainable by opening a support ticket — is larger and lands on every
+      customer. If the question ever matters, the answer is a PER-ORGANIZATION PSEUDONYM (a
+      keyed digest of the operator's principal under a per-tenant salt), which gives correlation
+      inside one Organization and none across them. It needs a decision record for the key and
+      its rotation and is deliberately not specified here.
+    blocks: "Nothing."
+
+  - id: TA-3
+    question: >-
+      THE PLATFORM FEED CAN BE INCOMPLETE AND NOTHING RECONCILES IT. A failed tenant-side write
+      does not roll back the platform operation (`platform-audit.ts` chooses this and names it
+      "a real weakness"), and a refused platform operation writes no tenant record at all. So an
+      empty feed is not proof that nothing happened.
+    recommendation: >-
+      The reconciliation obligation is Core's and is unowned. AT MINIMUM, BIND BOTH CLIENTS ON
+      THE STRING: "no platform activity in this period", never "nothing has been done to your
+      account". `reset-service.ts` already returns `notifiedOrganizationCount`, so the platform
+      side KNOWS when it fell short and nothing acts on it — that count is the cheapest hook a
+      reconciliation would have.
+    blocks: "Nothing today. It bounds what the Team Lead may truthfully tell the user this feed guarantees."
+
+  - id: TA-4
+    question: >-
+      TWO ORGANIZATIONS COMPARING PLATFORM FEEDS COULD LEARN THAT ONE PERSON IS A MEMBER OF
+      BOTH, from a shared `correlation_id` and `target_principal_id` on one credential reset.
+    recommendation: >-
+      ACCEPT. It requires collusion, no single principal can perform it, and each Organization
+      is shown an identifier belonging to its own member. RE-OPEN IT IF A BULK EXPORT OF THE
+      TENANT TRAIL IS EVER PUBLISHED — an export turns a tedious comparison into a trivial one,
+      and that is the change that would alter the character of this residual rather than its
+      size.
+    blocks: "Nothing. It is an argument `TA-9` must answer before an export is built."
+
+  - id: TA-5
+    question: >-
+      THE FEED SPLIT RESTS ON `scope = 'platform'` RATHER THAN ON AN EXPLICIT `origin` COLUMN,
+      AND IT FAILS SILENTLY IN BOTH DIRECTIONS.
+    recommendation: >-
+      KEEP THE COLUMN THAT EXISTS while the producer population is two, and make the negative
+      control in testRequirements.theSPLIT mandatory rather than thorough. AN EXPLICIT `origin`
+      COLUMN BECOMES THE RIGHT ANSWER THE MOMENT A THIRD PRODUCER WRITES INTO A TENANT'S
+      `audit_event` — the count is already three components that can reach a tenant store, and
+      `reset-service.ts` records that "a fourth is the point to ask whether P1 still means
+      anything".
+    blocks: "Nothing today."
+
+  - id: TA-6
+    question: >-
+      THE PLATFORM FEED IS A FILTERED SCAN. No index selects on `scope`, so its rows-read cost
+      grows with the TENANT'S OWN total activity in the window rather than with the number of
+      platform records — the inverse of what the response size suggests.
+    recommendation: >-
+      DO NOT ADD THE INDEX. A fourth index takes an `audit_event` write from five row-writes to
+      six — 20% on the most frequent expensive row in the platform — and makes `0028`'s measured
+      availability hazard worse (2,000 calls to exhaust a customer's day becomes 1,667). Reads
+      have their own allowance and stay available at the write ceiling. REVISIT IF A TENANT'S
+      `audit_event` reaches a volume at which the scan is measurable, and measure it rather than
+      assuming it.
+    blocks: "Nothing. It is a stated access-path exception to CLOUDFLARE_STANDARD.md §4 rule 4 and the Team Lead should accept it as one."
+
+  - id: TA-7
+    question: >-
+      *** SECURITY. ANY APP'S ACTION HANDLER CAN READ THE TENANT AUDIT TRAIL TODAY. ***
+      `ActionContext.store` is an unrestricted `TenantScopedStore` and `select` takes any table
+      name, so `select({ table: 'audit_event' })` from an App handler is unchecked, unaudited
+      and permission-free. `platform/core/audit/audit.ts` asserts the opposite about `AuditSink`
+      — which is true of the sink and not of the handle beside it.
+    recommendation: >-
+      NOT THIS CONTRACT'S TO FIX AND REPORTED IMMEDIATELY under `.claude/rules/workflow.md` §5.
+      It is tenant-bound, so it is NOT a cross-tenant defect and not an `0024` violation; it is
+      an undeclared, unaudited, permission-free read by an installed App of every other App's
+      activity in its Organization. Candidate fixes are a table-scoped store handle per App or a
+      Core-owned reserved-table list the boundary refuses for non-Core callers. Both are Core
+      decisions.
+    blocks: "Not this contract. It bounds what may truthfully be claimed about `core.audit.read` gating the trail."
+
+  - id: TA-8
+    question: >-
+      `business-admin` HOLDS `core.audit.read` AND CAN REACH NEITHER ROUTE, because the trail
+      cannot honestly be narrowed to one Business: the narrowing field is forced empty on every
+      denial, platform records name no Business, and the column is JSON and unindexable.
+    recommendation: >-
+      ACCEPT FOR v1. It is the narrow, fail-closed answer and the alternative was a
+      business-scope grant returning the whole Organization's security log. A Business-scoped
+      feed needs a Business-partitionable audit record — a first-class, indexed, non-suppressed
+      Business column — which is a Core data-model decision and an ADDITIVE new Action when it
+      is made. NO CATALOG CHANGE IS PROPOSED: `business-admin` keeps the permission against
+      that future Action.
+    blocks: "A business-admin's ability to see anything of the audit trail. The Team Lead should decide this deliberately rather than discover it."
+
+  - id: TA-9
+    question: >-
+      `core.audit.export` IS CATALOGUED AT `[organization]`, IS HELD BY `business-owner`, AND
+      HAS NO ROUTE — which is the same catalogued-and-unrouted state this contract was written
+      to end, one permission over.
+    recommendation: >-
+      LEAVE IT UNROUTED FOR NOW AND RECORD WHY, rather than letting it become the next `PA-3`.
+      An export is a different risk from a read (AUTHORIZATION_STANDARD.md §3.2), it makes
+      `TA-4`'s collusion property trivial, and it is a bulk egress path over a security log. IF
+      IT IS BUILT it needs its own Action, its own contract section, its own free-tier argument
+      and an answer to `TA-4`.
+    blocks: "A customer's ability to take their audit trail with them. Not this contract."
+
+  - id: TA-12
+    question: >-
+      THE 31-DAY SPAN IS ONE NUMBER SERVING TWO SURFACES WITH DIFFERENT WORST CASES. On the
+      platform log a 31-day window is bounded by (operators × 300 × days) = ~18,600 rows at two
+      operators. ON A TENANT TRAIL IT IS BOUNDED BY THE ORGANIZATION'S OWN WRITE ALLOWANCE — at
+      most ~2,000 audit rows a day — so the same span is up to ~52,000 rows for a maximally busy
+      Organization. THE SAME NUMBER IS A WEAKER BOUND HERE.
+    recommendation: >-
+      LEAVE IT AT 31 AND MEASURE BEFORE MOVING IT. The 2,000/day figure is a CEILING no
+      Organization in the closed beta approaches, and deriving a narrower tenant span from an
+      unobserved number would be arithmetic dressed as evidence — which is the failure this whole
+      finding exists to punish. WHAT TO MEASURE: the largest real tenant's `audit_event` rows per
+      day. If it approaches four figures, narrow the tenant span rather than adding an index —
+      `TA-6`'s arithmetic against a fourth index has not changed.
+    blocks: "Nothing measured. It is a number with a stated expiry and a named measurement."
+
+  - id: TA-11
+    question: >-
+      CORE HAS TWO ACTION-ID GRAMMARS AND NO STANDARD PICKS ONE. Tenant Actions are
+      `core.ListAuditEvents` and `customers.GetCustomer` — an app id and a PascalCase operation.
+      Platform routes are `platform.organizations.members.resolve` — lowercase throughout. Both
+      are written into `audit_event.action_id` by shipped code, and `platform-audit-read-v1`'s
+      `actionId` pattern admits only the second, so the two contracts define the same-named
+      field differently and a client sharing one type across both feeds would break.
+    recommendation: >-
+      THIS SCHEMA'S PATTERN ADMITS BOTH, BECAUSE A READ SCHEMA THAT REFUSES TO RENDER A STORED
+      VALUE PRODUCES A ROUTE THAT CANNOT RETURN THE TENANT'S OWN RECORD. Unifying the grammars
+      is a naming decision across every Action in the platform and is not this contract's; it is
+      reported so that whoever unifies them knows two contracts assert different things about
+      the same column.
+    blocks: "Nothing. It is a latent client-side type conflict, not a behaviour."
+
+  - id: TA-10
+    question: >-
+      A MEMBER RESOLVE TELLS THE CUSTOMER THAT THE PLATFORM ASKED ABOUT SOMEONE IN THEIR
+      ORGANIZATION AND NOT WHO. `member-resolution.ts` writes `targetResourceId: null`
+      deliberately, because naming the principal on a hit and not on a miss would make the
+      tenant's own trail a hit/miss oracle.
+    recommendation: >-
+      LEAVE IT. It is `0028` Decision 2's choice, not a gap introduced here, and the oracle it
+      avoids is inside the customer's own log where their owner can read it. RECORDED SO IT IS
+      NOT REPORTED AS A DEFECT of this feed, and so that a future proposal to name the principal
+      has to argue against the oracle rather than against a silence.
+    blocks: "Nothing."

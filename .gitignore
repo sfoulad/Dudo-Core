@@ -7,6 +7,18 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Wrangler's local secrets file. NOT covered by the .env patterns above, and it is
+# where CURSOR_SIGNING_KEY, SESSION_HMAC_KEY and IDENTITY_LOOKUP_KEY live during
+# `wrangler dev`. Both repositories are public (.claude/rules/architecture.md §8);
+# a credential committed here is compromised on landing and survives deletion.
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Wrangler's local state, including the local D1 databases created by
+# `wrangler d1 migrations apply --local`. These contain seeded principals.
+.wrangler/
+
 # === Internal AI-agent working files (deliberately NOT published) ===
 # The agent definitions, binding rules, and Claude Code settings stay local.
 # Public engineering standards live in docs/ and CONTRIBUTING.md instead.

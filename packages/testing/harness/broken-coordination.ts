@@ -51,6 +51,7 @@ import type {
 } from '../../../platform/core/protection/coordination.ts';
 import { rehydratePersistedDenialGroupKey } from '../../../platform/core/protection/coordination.ts';
 import type { WriteAdmissionOutcome } from '../../../platform/core/protection/write-admission.ts';
+import type { WriteOrigin } from '../../../platform/core/protection/coordination-engine.ts';
 import type { Result } from '../../../platform/core/kernel/result.ts';
 import { err } from '../../../platform/core/kernel/result.ts';
 import { unavailable } from '../../../platform/core/kernel/errors.ts';
@@ -89,7 +90,13 @@ function decorate(
           // close over the inner handle rather than over `this`, so no binding is lost. Stated
           // because "spread an object with methods" is a place people expect a `this` bug.
           recordDenial: (key, context) => coordination.recordDenial(key, context),
-          reserveWrites: (units) => coordination.reserveWrites(units),
+          // `origin` FORWARDED, NOT DEFAULTED, since 2026-09-05. `reserveWrites` gained a
+          // required `WriteOrigin` — `'platform'` draws from a bounded platform-wide allocation
+          // as well as the Organization's own, and the parameter is required precisely so the
+          // cheap side cannot be inherited by omission. **A pass-through that supplied `'tenant'`
+          // would be this harness quietly choosing the unbounded path** for every control that
+          // wraps a coordinator, which is the decision the required parameter exists to force.
+          reserveWrites: (units, origin) => coordination.reserveWrites(units, origin),
           dispose: () => coordination.dispose(),
           ...overrides(coordination, request),
         },
@@ -158,7 +165,15 @@ export function withExhaustedWriteBudget(
 ): RequestCoordinator {
   return decorate(inner, () => ({
     async reserveWrites(): Promise<Result<WriteAdmissionOutcome>> {
-      return { ok: true, value: { kind: 'deferred', resumeAfterMs, retryAfterSeconds } };
+      // `refusedBy` ADDED 2026-09-05 when `WriteAdmissionOutcome` gained it. `'organization'` and
+      // NOT `'platform-share'`: this control models THE ORGANIZATION'S OWN DAY being spent, which
+      // is what every case using it asserts about. `'platform-share'` is the bounded operator
+      // slice — a different refusal with a different meaning to the caller — and choosing it here
+      // would make these cases assert a cause they were not written for.
+      return {
+        ok: true,
+        value: { kind: 'deferred', refusedBy: 'organization', resumeAfterMs, retryAfterSeconds },
+      };
     },
   }));
 }
@@ -174,9 +189,9 @@ export function withWriteRequestRecorder(
   requested: number[],
 ): RequestCoordinator {
   return decorate(inner, (coordination) => ({
-    async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
+    async reserveWrites(units: number, origin: WriteOrigin): Promise<Result<WriteAdmissionOutcome>> {
       requested.push(units);
-      return coordination.reserveWrites(units);
+      return coordination.reserveWrites(units, origin);
     },
   }));
 }
@@ -214,7 +229,10 @@ export function withForeignOrganizationReservation(
  * refusal is of the shape rather than of the provenance.
  */
 export function withForgedWriteReservation(inner: RequestCoordinator): RequestCoordinator {
-  return decorate(inner, (coordination, request) => ({
+  // `_coordination` IS UNUSED ON PURPOSE AND THE NAME SAYS SO. The forgery is the whole point:
+  // this control must build a reservation from NOTHING the real coordination produced, because a
+  // value derived from it would carry the brand and would be accepted for the right reason.
+  return decorate(inner, (_coordination, request) => ({
     async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
       return {
         ok: true,
@@ -246,11 +264,11 @@ export function withReusedWriteReservation(inner: RequestCoordinator): RequestCo
   // the case passed while testing nothing.
   let held: WriteAdmissionOutcome | null = null;
   return decorate(inner, (coordination) => ({
-    async reserveWrites(units: number): Promise<Result<WriteAdmissionOutcome>> {
+    async reserveWrites(units: number, origin: WriteOrigin): Promise<Result<WriteAdmissionOutcome>> {
       if (held !== null) {
         return { ok: true, value: held };
       }
-      const granted = await coordination.reserveWrites(units);
+      const granted = await coordination.reserveWrites(units, origin);
       if (granted.ok && granted.value.kind === 'granted') {
         held = granted.value;
       }
@@ -269,8 +287,11 @@ export function withReusedWriteReservation(inner: RequestCoordinator): RequestCo
  */
 export function withUndersizedWriteReservation(inner: RequestCoordinator): RequestCoordinator {
   return decorate(inner, (coordination) => ({
-    async reserveWrites(): Promise<Result<WriteAdmissionOutcome>> {
-      return coordination.reserveWrites(1);
+    async reserveWrites(_units: number, origin: WriteOrigin): Promise<Result<WriteAdmissionOutcome>> {
+      // THE UNDERSIZED RESERVATION IS THE CONTROL AND `1` IS THE BREAK. `origin` is still
+      // forwarded faithfully: this control breaks the SIZE, and a control that also changed which
+      // allocation was drawn from would be breaking two things and could not attribute a red case.
+      return coordination.reserveWrites(1, origin);
     },
   }));
 }

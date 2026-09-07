@@ -1,0 +1,76 @@
+{
+  // Dudo-Core — TypeScript configuration for the Worker: platform/core, apps, packages.
+  //
+  // OWNER: Team Lead (root-level shared configuration).
+  //
+  // `platform/web` is EXCLUDED and has its own tsconfig.json owned by web-agent. The two
+  // are deliberately separate rather than a project-references graph: the web app targets
+  // a browser with the DOM, and Core targets a Worker without one. A shared `lib` would
+  // let Core reference a DOM global that does not exist at runtime and still typecheck.
+  "compilerOptions": {
+    "target": "ES2022",
+
+    // WebWorker, not DOM. Core legitimately uses fetch, Request, Response, URL,
+    // TextEncoder and crypto.subtle — all of which WebWorker provides. Adding DOM would
+    // also hand Core `document` and `window`, which would typecheck and then fail at
+    // runtime in a Worker isolate. Narrowing the lib is what makes that a compile error.
+    // WebWorker.Iterable is required, not optional: without it `Headers.entries()` and
+    // `URLSearchParams.entries()` — both of which Core uses and both of which exist at
+    // runtime — fail to typecheck.
+    "lib": ["ES2022", "WebWorker", "WebWorker.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+
+    // No ambient type packages. Core defines its own `D1Database` in
+    // storage/adapters/d1/d1-store.ts rather than importing @cloudflare/workers-types,
+    // which is .claude/rules/architecture.md §6's "every Cloudflare service stays
+    // replaceable behind an internal boundary" holding in practice. Pulling the vendor
+    // types in here would quietly undo that, so the list stays empty.
+    "types": [],
+
+    "strict": true,
+
+    // noUncheckedIndexedAccess is OFF, and this is a deliberate record of a mistake.
+    //
+    // I turned it on first. It produced ~190 errors across apps/customers and
+    // platform/core — almost none of which are bugs. They are the signature of a flag
+    // switched on over a codebase written without it: every indexed read becomes
+    // `T | undefined` at once.
+    //
+    // Turning it on would have created ~190 units of work inside core-agent's and the
+    // App's territory, authored by nobody, discovered by a Team Lead running a typecheck
+    // for the first time. That is not a defect report; it is a config change wearing one.
+    //
+    // The flag is worth having. Adopting it is a scoped task with an owner and a decision
+    // record, not a side effect of writing the tsconfig that was missing.
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+
+    // Core imports with explicit `.ts` extensions (`from './session-credential.ts'`),
+    // which requires this pair. Emit is wrangler's job via esbuild; tsc only checks.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
+  },
+  // `packages/testing` is EXCLUDED, and not as a convenience.
+  //
+  // It is a Node test harness — it imports `node:sqlite`, `node:fs` and `node:url` — so it
+  // targets a different runtime from everything else here. Under this config it failed
+  // with "Cannot find module 'node:fs'", which was my error, not the harness's: a Worker
+  // tsconfig has no business typechecking Node code, and the honest fix is to stop
+  // pretending one config covers both.
+  //
+  // qa-agent owns packages/testing and should get its own tsconfig with Node lib and
+  // types. Until it does, that tree is unchecked — stated here rather than hidden behind
+  // a passing root typecheck that silently skips it.
+  "include": ["platform/core", "apps", "packages/contracts"],
+  "exclude": ["node_modules", "platform/web", "packages/testing", "**/node_modules"]
+}

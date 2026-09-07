@@ -5,6 +5,14 @@
 - **Applies to:** every event published or consumed anywhere in Dudo.
 - **Depends on:** `CONSTITUTION.md` Rules 5, 10; `MULTITENANCY_STANDARD.md`; `CLOUDFLARE_STANDARD.md` §5.
 - **Machine-readable:** `packages/contracts/registries/event-catalog.yaml`.
+- **Reconciled against the built system 2026-09-06 — nothing in this document is exercised.**
+  No Queue and no Workflow is bound in `wrangler.jsonc`, no module publishes an event, and
+  every entry in `event-catalog.yaml` is `status: proposed`. **So this standard is UNVERIFIED
+  rather than contradicted**, and the distinction is deliberate: none of its rules has been
+  tested against a running consumer. §12 classifies all three open issues — **all still open,
+  all blocked on the same root.** §4's `business_id` confirmation is the one item that closed.
+  **The first event published is where this document is actually reviewed**; run §11's
+  checklist against it rather than assuming it.
 
 Events are how Apps meet without knowing about each other. That decoupling only holds if
 the envelope, the naming, the versioning, and the delivery semantics are the same
@@ -89,8 +97,20 @@ log lines.
   the tenant.
 - **`business_id` is a sub-scope, not an isolation boundary.** Isolation is by
   `tenant_id`. This resolves an ambiguity left open by an envelope that carries both fields
-  without defining either (`CONSTITUTION.md` C1, `MULTITENANCY_STANDARD.md` §2) and needs
-  Team Lead confirmation.
+  without defining either (`CONSTITUTION.md` C1, `MULTITENANCY_STANDARD.md` §2).
+  **CLOSED 2026-09-06 — confirmed, and it no longer needs Team Lead confirmation.**
+  `docs/decisions/0006` (**Accepted**, user, 2026-09-01) §1.1 lists it under *Settled*:
+  *"The tenant is the Organization … `business_id` is an authorization scope inside a tenant,
+  never an isolation boundary."* Built that way — the tenant predicate has one emission point
+  (`platform/core/storage/adapters/sql/sql-compiler.ts:141`) and `business_id` is enforced
+  separately as an **authorization** narrowing through the authorized-business set
+  (`docs/decisions/0020`, `platform/core/authorization/business-scope.ts`), which is precisely
+  the distinction this bullet asserts. **One caveat for whoever writes the first event:**
+  `0025`'s 2026-09-05 amendment records that renaming `business_id` to `workspace_id` is
+  **four changes, not one** — it is a published wire field two clients shipped against and a
+  persisted audit value — and the rename is **deferred**. So two vocabularies for one concept
+  coexist deliberately. **Use `business_id` in the envelope**; it is the name every other
+  surface carries.
 
 ---
 
@@ -223,8 +243,38 @@ attempted.
 
 ## 12. Open questions
 
-| # | Question | Recommendation |
+**Classified 2026-09-06 against the built system**, on the three states defined in
+`CONSTITUTION.md` §7. **All three are still open, all three need an architecture decision from
+the Team Lead, and all three are blocked on the same root: no event exists.**
+
+**State this once rather than three times.** Nothing in this document is exercised, and
+nothing in it is contradicted:
+
+- **No Queue is bound.** `wrangler.jsonc` declares `d1_databases` and one `durable_objects`
+  binding and **no `queues` key at all**. `CONSTITUTION.md` Rule 5 requires events to travel
+  over Cloudflare Queues; there is no producer binding and no consumer binding.
+- **No Workflow is bound**, so §5 of `ARCHITECTURE.md`'s long-running path does not exist
+  either.
+- **Nothing publishes.** No module under `platform/core/**` emits an event or constructs the
+  §3 envelope.
+- **Every catalog entry is `proposed`.** `packages/contracts/registries/event-catalog.yaml`
+  says so in its own header: *"Every entry below is status 'proposed'. No code exists yet, and
+  no event has been accepted … The Team Lead accepts them; `architecture-agent` does not."*
+
+**So this standard is unverified rather than wrong, and that distinction is worth keeping.**
+Its rules have never been tested against a running consumer, which means §9's three delivery
+properties — at-least-once, no ordering, no bounded delivery — are requirements nobody has yet
+had to satisfy. **The first event is where this document is actually reviewed**, and the
+verification checklist in §11 should be run against it rather than assumed.
+
+**One consequence for `SECURITY_STANDARD.md` SE4 and `MULTITENANCY_STANDARD.md` MT4:** those
+rows ask for retention periods covering *"audit records, event history, and logs"*. **There is
+no event history and no log retention question today** — see EV2 below and `wrangler.jsonc`'s
+deliberately disabled `observability`. Those rows reduce to **audit retention alone**, which is
+the tractable part and the part carrying the legal weight.
+
+| # | Question | State, and the recommendation or citation |
 |---|---|---|
-| EV1 | **Queue topology** — one queue for everything, one per consumer, or one per event family. Not addressed by the plan. | One queue per consuming service, with the platform routing by subscription. It isolates a slow consumer from a fast one, which a shared queue cannot. Needs an ADR before Phase 2. |
-| EV2 | **Event retention and replay.** Rebuilding a consumer's state after a bug requires stored events; nothing in the plan says whether events are durable beyond delivery. | Persist published events per tenant with a defined retention window, in Core-owned storage. Needed for audit anyway. Needs an ADR — it has real storage-cost and data-retention consequences. |
-| EV3 | **Cross-tenant platform events** (e.g. a marketplace App version published) have no tenant. | Use a distinct `platform.*` namespace with `tenant_id: "platform"` reserved and explicitly excluded from tenant-scoped consumers. Reserved in the catalog; needs confirmation. |
+| EV1 | **Queue topology** — one queue for everything, one per consumer, or one per event family. Not addressed by the plan. | **STILL OPEN — needs an architecture decision (Team Lead); blocked on nothing, unexercised because no Queue is bound.** Recommendation unchanged: one queue per consuming service, with the platform routing by subscription — it isolates a slow consumer from a fast one, which a shared queue cannot. **Two things to weigh that did not exist when this row was written.** First, **`docs/decisions/0008`'s zero-cost ceiling still binds and `0030` did not lift it**, so the ADR owes a free-tier impact check under `.claude/rules/architecture.md` §6a: which allowance a queue consumes, expected usage, and what happens at the limit. Second, **`0030`'s expandability constraint applies directly** — *"the free tier may cost us CONFIGURATION, never SCHEMA"* — and queue **count** is configuration while an envelope shape chosen to fit one queue is schema. A topology adopted to stay inside an allowance is fine; an envelope narrowed to do so is not. |
+| EV2 | **Event retention and replay.** Rebuilding a consumer's state after a bug requires stored events; nothing in the plan says whether events are durable beyond delivery. | **STILL OPEN — needs an architecture decision (Team Lead), and it has become materially harder.** Recommendation unchanged in shape: persist published events per tenant with a defined retention window, in Core-owned storage. **What changed is the cost side, and it is now the deciding factor.** `0030` names **storage as the one free-tier allowance that does not ebb** — *"a customer with three years of history consumes it while doing nothing, and low traffic never gives it back"* — against **500 MB per database** under one shared D1 (`MULTITENANCY_STANDARD.md` §7.3). An unbounded event store is a growth curve straight at that ceiling and at the §7.5 thresholds. **It also inherits `0014` §A's write budget:** every persisted event is a D1 row-write against a daily allocation, and `0013` exists because one control that wrote a row per occurrence would have become the outage. **This ADR must therefore carry its own bound, not only a retention window** — and it is the same conversation as `SECURITY_STANDARD.md` SE4 and `MULTITENANCY_STANDARD.md` MT4, which need the user. |
+| EV3 | **Cross-tenant platform events** (e.g. a marketplace App version published) have no tenant. | **STILL OPEN — needs Team Lead confirmation, and the surrounding system has since taken a consistent position twice, which strengthens the recommendation rather than deciding it.** Recommendation unchanged: a distinct `platform.*` namespace with `tenant_id: "platform"` reserved and explicitly excluded from tenant-scoped consumers; the catalog's `namePattern` already admits `platform` as a namespace alongside `core`. **The precedent now exists in two places.** `platform/core/identity/pre-auth-registry.ts:91–93` puts the health endpoint in the `platform.` namespace *"deliberately … so it is not swept into a future 'everything under identity may do X'"*, and `0025` gave platform-authority operations **their own log** — `platform_operator_action` — separate from the tenant audit trail *"because an operator action spans tenants by nature."* **That is exactly EV3's problem solved once, for records rather than events, and the answer both times was a separate namespace rather than a null tenant.** ⚠ **The one thing the eventual record must not do** is admit `tenant_id: null` or a wildcard into the §3 envelope. §3 requires `tenant_id` *"Always present. Never null, never a wildcard, never 'system'"*, and `0014` §B and `0021` both refused a null-tenant pseudo-principal for the same reason: an optional tenant on a shared field is how a null Organization ends up sharing a path with a real one. A reserved literal is a value; `null` is a hole. |

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-onboarding:1",
+  "title": "Organization onboarding — wire shapes, version 1",
+  "description": "The machine-readable half of organization-onboarding-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema, so this file is normative and hand-checked, never machine-validated.",
+
+  "$defs": {
+
+    "adminIdentifier": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 254,
+      "pattern": "^[\\x21-\\x7E]*@[\\x21-\\x7E]*$",
+      "description": "The first admin's login identifier — an email address. THE CANONICAL DEFINITION IS urn:dudo:schema:account-identifier:1#/$defs/accountIdentifier, and this is a restatement of it, character-identical by obligation. Restated rather than $ref'd because no URN resolver exists (AS1); a divergence between the two is a contract defect qa-agent checks for.\n\nCORRECTED 2026-09-05. The pattern was ^[!-?A-~]*@[!-?A-~]*$, whose classes are U+0021..U+003F and U+0041..U+007E — printable ASCII with '@' REMOVED — so it required EXACTLY ONE '@' while the description below it said 'at least one'. The prose and the pattern disagreed, and both were stricter than credential-store.ts::isSubmittableIdentifier, which sets a flag on seeing an '@' and never counts them. The correction goes toward Core and toward RFC 5321, which permits a quoted local part containing '@'. It is ADDITIVE: it accepts strictly more than before, so no request that previously succeeded can now fail.\n\nTHE CONSTRAINTS ARE credential-store.ts::isSubmittableIdentifier's, RESTATED RATHER THAN INVENTED: printable ASCII only, no whitespace, no control characters, nothing above U+007E, and at least one '@'. AN INTERNATIONALISED ADDRESS CANNOT BE ENROLLED, which is a real limitation credential-store.ts already records: relaxing it needs a decision record and shared test vectors for every implementation, in that order. Normalisation for storage is NFKC then ASCII-only case folding — NOT toLowerCase(), which differs between JavaScript and Swift for real characters."
+    },
+
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$",
+      "description": "THE ORGANIZATION'S NAME — what an operator reads instead of a 22-character identifier. ADDED 2026-09-07 by organization-identity-v1 and docs/decisions/0031. The canonical definition is urn:dudo:schema:organization-identity:1#/$defs/displayName and this is a restatement of it, character-identical by obligation, restated rather than $ref'd because no URN resolver exists (AS1); a divergence between the two is a contract defect qa-agent checks for.\n\n*** IT IS OPTIONAL IN THIS VERSION AND IT SHOULD NOT BE. TEAM LEAD RULING, 2026-09-07, AND THE REASON IS SEQUENCING RATHER THAN DESIGN. *** Onboarding is how a customer arrives, and A SERVER REQUIRING A FIELD THE DEPLOYED CONSOLE DOES NOT YET SEND IS AN ONBOARDING OUTAGE. A client sending a field the server ignores is harmless; the reverse is not. So the console ships first and Core tightens afterwards.\n\nTHE TIGHTENING IS OWED, NAMED AND OWNED — see the contract's ON-7. It is not a conditional left for somebody to notice: making this `required` is a BREAKING change under API_STANDARD.md §6 and it belongs to the change that follows the console's release. WHY IT MATTERS THAT IT HAPPENS: an optional name makes `display_name: null` reachable for every NEW Organization, and organization-identity-v1's whole argument for a nullable column is that the nameless set is CLOSED AT THE THREE THAT PREDATE IT and shrinks. While this field is optional that argument is false, and the set is open.\n\nOMITTED MEANS NO NAME IS RECORDED — null, not a placeholder. Core must not synthesise one from the identifier, the Template or the Workspace name: an invented name is indistinguishable from one an operator typed, forever.\n\nDO NOT CONFUSE IT WITH `first_workspace_name`, which the console also sends as a fixed placeholder for an unrelated reason — `business` has two columns and Workspace naming belongs to the organization-structure slice. THAT IS A DIFFERENT FIELD ON A DIFFERENT OBJECT AND IT IS NOT FIXED BY THIS CHANGE."
+    },
+
+    "templateId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "The business type this Organization adopts. See template-v1."
+    },
+
+    "workspaceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$",
+      "description": "The first Workspace's name. WHAT THE USER SEES IN PLACE OF THE WORD 'Workspace' COMES FROM THE TEMPLATE's level_labels — a school is prompted for a Campus name, a shop for a Branch name. This field is the VALUE; the Template supplies the LABEL."
+    },
+
+    "derivedValue": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "description": "32 bytes, base64url. REQUIRED SINCE docs/decisions/0026 CLOSED ON-5 AS OPTION B, 2026-09-05: the admin console generates a high-entropy password from a CSPRNG (24 bytes, base64url, ~192 bits, matching tools/seed-principal.ts), derives kdf_output = PBKDF2-SHA256(NFC(password), salt = normalize(admin_identifier), 600000, 32 bytes) exactly as a logging-in client does, and sends ONLY this. THE PASSWORD ITSELF NEVER REACHES THE SERVER, so 0015 §D's central property is preserved exactly — what changed is only WHICH browser derives, and an operator's browser has no 10 ms CPU limit. THE SALT IS AVAILABLE HERE BECAUSE THE OPERATOR TYPED admin_identifier IN THIS SAME REQUEST; credential-reset-v1 has no such luck and needed a different request shape for the same decision (CR-5). The console's KDF must be byte-identical to the web and Apple clients' — a third implementation of the shared test vectors qa-agent already owes."
+    },
+
+    "onboardOrganizationInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_identifier", "template_id", "first_workspace_name", "derived_value"],
+      "description": "NOTE WHAT CANNOT BE SENT, because each absence is a decision: NO organization_id, principal_id or workspace_id — all server-generated, and a caller-chosen tenant identifier is the one input that could collide a new Organization with an existing one's identifier space. NO password — 0017's basis is that entropy protects these accounts, so an operator-chosen password expires that decision. NO role — the bootstrap exception creates exactly one membership at exactly `owner`, and a role field would widen an exception to 0007 D11 into a general grant mechanism. NO permission list, NO membership array, NO apps list.",
+      "properties": {
+        "admin_identifier": { "$ref": "#/$defs/adminIdentifier" },
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "template_id": { "$ref": "#/$defs/templateId" },
+        "first_workspace_name": { "$ref": "#/$defs/workspaceName" },
+        "derived_value": { "$ref": "#/$defs/derivedValue" }
+      }
+    },
+
+    "onboardingWarning": {
+      "type": "string",
+      "enum": ["first_workspace_not_created", "tenant_audit_record_not_written"],
+      "description": "A CLOSED SET OF STABLE TOKENS, never free text. These report the two things that can fail AFTER the Organization irrevocably exists — the step-7 failures. A closed set means a console can render each one specifically and qa-agent can assert them; free text would be a message nobody could branch on and everybody would log."
+    },
+
+    "onboardOrganizationOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "REMOVED 2026-09-05: a plaintext `initial_password`, which was in `required`. There is no tombstone property for it, deliberately — a placeholder left in `properties` would be a PERMITTED OPTIONAL FIELD under additionalProperties:false, which is the same defect one size smaller. The removal is recorded here, in `description`, and in the contract's clientObligations.",
+      "required": ["organization_id", "admin_principal_id", "workspace_id", "warnings"],
+      "description": "NO CREDENTIAL APPEARS IN THIS RESPONSE, AND THAT IS THE POINT. CORRECTED 2026-09-05: this object previously required `initial_password`, a plaintext password, while the prose beside it said the server never sees one. Under docs/decisions/0026 option B THE CONSOLE GENERATES THE PASSWORD AND DERIVES FROM IT, so the server has no way to produce this field — an implementer satisfying the old `required` list would have had to build option A, which is the exact design 0015 §D and 0026 exist to prevent. THE CONSOLE ALREADY HOLDS THE ONLY COPY, so the value never needed the round trip. Cache-Control: no-store still applies: the identifiers here are not secret but they are not cacheable either.",
+      "properties": {
+        "organization_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "Server-generated. The tenant identifier — which makes this the one response body in Dudo that legitimately contains one, because this operation created it rather than reading it from an authenticated context."
+        },
+        "admin_principal_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$"
+        },
+        "workspace_id": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "NULL WHEN warnings CONTAINS first_workspace_not_created. The Organization exists and has no Workspace; an operator must create one before the customer can use the product, and that route does not exist yet."
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/onboardingWarning" },
+          "description": "EMPTY ON A COMPLETE SUCCESS. A 201 WITH WARNINGS IS NOT A FAILURE AND NOT A FULL SUCCESS: the Organization, the admin and the credential exist, and something after them did not. The response is still 201 because the credential is irreplaceable and must reach the operator — failing the request would leave a customer that exists, cannot be entered, and needs a credential reset to rescue. A console MUST render a non-empty warnings array prominently; treating it as an ordinary success is the defect this field exists to prevent."
+        }
+      }
+    }
+  }
+}

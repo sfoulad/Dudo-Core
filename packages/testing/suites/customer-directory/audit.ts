@@ -72,14 +72,73 @@ const FIXTURE_FIELD_VALUES: readonly string[] = [
   'Bruno Alvarez',
 ];
 
+/**
+ * A row flattened to one searchable string, joined by a byte no field value can contain.
+ *
+ * *** THE SEPARATOR IS SPELLED, NOT TYPED, AND THE VALUE IS UNCHANGED. *** Until 2026-09-07 the
+ * `0x01` on the line below was a RAW BYTE in this file. The byte is right — a separator that
+ * cannot occur inside any field is exactly what a leak search wants, so two adjacent columns can
+ * never be mistaken for one value spanning them. **The SPELLING was wrong**, because a control
+ * byte is invisible in an editor and in review, and this class of byte is how a file stops being
+ * greppable and diffable. `0x01` does not disable those tools the way a NUL does — measured, not
+ * assumed — but it is unreadable for the same reason.
+ *
+ * `' ' + 0x01 + ' '` before and after: identical, and the suite below is what proves it.
+ */
 function rowText(row: Record<string, unknown>): string {
+  const SEPARATOR = ` ${String.fromCharCode(1)} `;
   return Object.values(row)
     .map((value) => (value === null || value === undefined ? '' : String(value)))
-    .join('  ');
+    .join(SEPARATOR);
 }
 
 export function buildAuditSuite(makeWorld: MakeWorld): Suite {
   const suite = new TestSuite('audit — the five mutating Actions, their denials, and the read exception');
+
+  suite.test('THE LEAK SEARCH ITSELF: rowText finds a value that IS there, and does not invent one', () => {
+    // =====================================================================================
+    // *** SIX ASSERTIONS BELOW DEPEND ON `rowText`, AND NOTHING PROVED IT COULD FIND ANYTHING. ***
+    // =====================================================================================
+    //
+    // Every leak assertion in this file is of the form `!rowText(row).includes(value)` — a check
+    // that passes when it finds NOTHING. A `rowText` that returned an empty string would satisfy
+    // all six and report a clean audit trail forever. So it is shown to detect first.
+    //
+    // WRITTEN 2026-09-07 WHEN THE SEPARATOR'S SPELLING CHANGED. The raw `0x01` became
+    // `String.fromCharCode(1)` — the same byte, verified identical against the committed version
+    // — and a change to a value that six silent assertions rest on should not be taken on the
+    // strength of the diff looking right.
+    const leaked = rowText({ a: 'harmless', b: 'Carla Osman', c: null, d: 7 });
+    assertTrue(
+      'a value that IS in the row is found',
+      leaked.includes('Carla Osman'),
+      'the leak search cannot find a value sitting in the row it was handed, so every ' +
+        '`!rowText(...).includes(...)` in this file passes by finding nothing',
+    );
+    assertTrue(
+      'and a value that is NOT in the row is not found',
+      !leaked.includes('Bruno Alvarez'),
+      'the leak search reports a value that is absent, so its refusals mean nothing either',
+    );
+
+    // THE SEPARATOR IS LOAD-BEARING, AND THIS IS WHAT IT BUYS. Two adjacent columns must never
+    // read as one value spanning them — otherwise `Carl` beside `a Osman` reports a leak that
+    // did not happen, and the suite goes red for a reason no one can find in the data.
+    const spanning = rowText({ a: 'Carl', b: 'a Osman' });
+    assertTrue(
+      `${ISOLATION} adjacent columns do NOT concatenate into a forbidden value`,
+      !spanning.includes('Carla Osman'),
+      'the separator is not between the columns, so two innocent values spell a third',
+    );
+    // AND THE CONTROL: with an empty separator the same row DOES spell it, so the line above is
+    // a property of the separator rather than of these two strings.
+    assertTrue(
+      'with no separator the identical row DOES spell it — so the check above is not vacuous',
+      ['Carl', 'a Osman'].join('').includes('Carla Osman'),
+      'the constructed inputs do not concatenate into the forbidden value even with no ' +
+        'separator, so the assertion above proves nothing about the separator',
+    );
+  });
 
   suite.test('each of the five in-scope mutating Actions writes exactly one audit record', async () => {
     const world = await makeWorld();

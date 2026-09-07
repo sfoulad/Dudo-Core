@@ -67,7 +67,8 @@ import { sealAuthenticatedPrincipal } from '../../../platform/core/tenancy/tenan
 import type { PipelineDependencies } from '../../../platform/core/action/pipeline.ts';
 import { invokeAction } from '../../../platform/core/action/pipeline.ts';
 import type { AnyActionDefinition } from '../../../platform/core/action/action.ts';
-import { asAnyAction } from '../../../platform/core/action/action.ts';
+// `asAnyAction` IS NO LONGER IMPORTED. `createCustomerRoutes` already applies it per action, so
+// the map below is built from the router's output rather than widening here — see the map.
 import type { Result } from '../../../platform/core/kernel/result.ts';
 import type { RequestCoordinator } from '../../../platform/core/protection/coordination.ts';
 import type {
@@ -83,7 +84,7 @@ import {
 } from '../../../platform/core/protection/write-admission.ts';
 import { createInProcessRequestCoordinator, createInProcessDayWriteBudget } from '../../../platform/core/protection/in-process-coordinator.ts';
 
-import { createCustomerActions } from '../../../apps/customers/api/routes.ts';
+import { createCustomerActions, createCustomerRoutes } from '../../../apps/customers/api/routes.ts';
 import { CUSTOMERS_APP_PERMISSIONS } from '../../../apps/customers/app.ts';
 import { displayNameKey, emailKey, phoneKey } from '../../../apps/customers/domain/search.ts';
 
@@ -627,7 +628,12 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   // with production.
   const budget = createInProcessDayWriteBudget({ ...DAILY_ALLOCATION, ...options.dailyCeilings });
   const coordinatorMode = options.coordinatorMode ?? 'real';
-  const identifierChannel = options.identifierInGroupKey === true ? { current: null } : null;
+  // ANNOTATED RATHER THAN INFERRED. Without the annotation TypeScript narrows the initialiser to
+  // `{ current: null }`, and the assignment further down — where the harness feeds the requested
+  // identifier to the wrapper out of band — is then a type error. `World.identifierChannel`
+  // already declares this exact type; the two agreeing is the point.
+  const identifierChannel: { current: string | null } | null =
+    options.identifierInGroupKey === true ? { current: null } : null;
 
   function buildCoordinator(): RequestCoordinator | null {
     if (coordinatorMode === 'absent') {
@@ -701,9 +707,25 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     coordinator: coordinator as RequestCoordinator,
   };
 
+  // ===========================================================================================
+  // BUILT FROM THE ROUTER RATHER THAN FROM `Object.values(actions)`, AND THE REASON IS A TYPE
+  // ERROR THAT WAS ALSO A FIDELITY POINT.
+  // ===========================================================================================
+  //
+  // `Object.values(actions)` produces a UNION of eight differently-parameterised
+  // `ActionDefinition<I, O>`s, and `asAnyAction<I, O>` cannot infer one `I` from a union — the
+  // diagnostic `npm run typecheck:tests` reports. Every real call site calls it on ONE concrete
+  // action, which is where inference works.
+  //
+  // `createCustomerRoutes` IS ALREADY THAT CALL SITE: it applies `asAnyAction` per action, and
+  // the result is `AnyActionDefinition` with no cast anywhere. So the map is built from what the
+  // ROUTER REGISTERS, which is also the more faithful source — an Action that exists but is not
+  // routed is not reachable in production either.
   const byId = new Map<string, AnyActionDefinition>();
-  for (const action of Object.values(actions)) {
-    byId.set(action.id, asAnyAction(action));
+  for (const route of createCustomerRoutes({ businesses })) {
+    if (route.kind === 'action') {
+      byId.set(route.action.id, route.action);
+    }
   }
 
   return {

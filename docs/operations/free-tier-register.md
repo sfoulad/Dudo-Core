@@ -55,6 +55,232 @@ official source, not the date usage was measured.
 | **GitHub Packages** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not publish packages. Not verified in detail because it is prohibited, not merely unused | Team Lead | 2026-09-01 (prohibited) |
 | **GitHub Codespaces** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not use. Prohibited by `0008` | Team Lead | 2026-09-01 (prohibited) |
 
+> ## ⚠ THE DURABLE OBJECT BUDGET IS SHARED, AND THAT IS A HAZARD, NOT AN ALLOWANCE
+>
+> Added 2026-09-04 from `0017`. The Durable Objects row above states **100,000 requests/day**
+> correctly. What it did not state is that the figure is **account-wide and shared**, and that the
+> sharing has a specific failure mode.
+>
+> `0013`'s coordinator serves the **authenticated** path. A durable pre-auth rate limiter would
+> serve the **unauthenticated** one. A naive one-DO-call-per-request limiter therefore lets **an
+> unauthenticated flood exhaust the allowance the authenticated path depends on** — the rate
+> limiter becomes the denial-of-service vector it was added to prevent.
+>
+> **Consequence for §6a:** a free-tier impact check on a new Durable Object may not stop at "does
+> it fit inside 100,000". It must state **which other consumer it shares with, and what happens to
+> that consumer at the limit.** "Add a DO" is not a design.
+>
+> `0017` defers the durable limiter for exactly this reason. The deferral is not a scheduling
+> convenience — the capacity question is genuinely unanswered.
+
+> ## ⚠ THE LOGIN BUDGET IS A CYCLE, NOT A LOGIN
+>
+> Added 2026-09-04 from `0018`, measured by `core-agent` rather than estimated.
+>
+> `0014` §C's headline figure is **1,000 logins/day platform-wide** (3,000 control-plane row-writes
+> at 3 per login) and 200 per principal. **Read alone, that number misleads by half.**
+>
+> **Logout costs 3 row-writes too.** A `DELETE` removes the row from every index, so the table row,
+> the primary key and `session_by_principal` are each written — identical to a login.
+>
+> **CORRECTED 2026-09-05: A FULL SESSION COSTS 6 OR 9, DEPENDING ON HOW THE ORGANIZATION WAS
+> SELECTED.** Selecting is **not optional** — `login.ts:219` records that a session is created
+> `organization-not-selected` and every business Action answers `failed_precondition` until a
+> selection is made (`0021`).
+>
+> **A full session costs 9 — login + select + logout — with no exception.**
+>
+> | | Charged per full cycle | Platform/day | Per principal/day |
+> |---|---|---|---|
+> | Login only (`0014` §C as written) | 3 | 1,000 | 200 |
+> | Login + logout (`0018`) | 6 | 500 | 100 |
+> | **Full session (`0021`)** | **9** | **333** | **66** |
+>
+> Selection is always a separate request: `0021` records that server-side auto-selection was ruled
+> and then **withdrawn** — a client with one Organization may skip *showing a picker*, but the
+> request is still made and the server still has no fallback.
+>
+> **This number has been published five times in two days: 1,000 → 500 → 333 → 6-or-9 → 333.**
+>
+> The first three corrections were measurement. **The last two were not.** They were one unsettled
+> design question published twice as though it were arithmetic.
+>
+> **The rule this yields, and it is the useful part: a number that depends on an undecided design is
+> not a number yet.** Publishing it as one converts an open question into apparent fact, and the
+> eventual correction then looks like new evidence when it is really the design finally settling.
+> Before quoting a figure from this register, check whether the behaviour it counts is decided.
+>
+> Verified in the harness: revocation reserves exactly 3, while a forged credential, an absent
+> cookie, an unknown session and a replay each reserve **zero** — so failed logout attempts cannot
+> be used to burn the budget.
+
+> ## THE PLATFORM SURFACE — what the super-admin console costs
+>
+> Added 2026-09-05 from `0025` and `0027`. **Both designs are decided**, so by the rule stated
+> immediately above these are numbers rather than estimates awaiting a design.
+>
+> | Operation | Control-plane row-writes | Platform/day against the 3,000 sub-ceiling |
+> |---|---|---|
+> | Any platform route (audit record, `0025` Decision 5) | **4** | — |
+> | Onboarding an Organization (`0024`, `0025`) | **14** | ~**214** |
+> | A confirmed critical operation (`0027`) | **+4** over the operation itself | ~**750** confirmations |
+>
+> **UPDATED 2026-09-07 — `0016` MOVED THE AUDIT RECORD FROM 2 TO 4.** Two indexes on
+> `platform_operator_action` mean each record maintains two index entries as well as the row and its
+> primary key. **Every figure in this table that contains an audit record moved with it**, and the
+> ceiling did not: a platform route costs 4, onboarding 14, and onboarding-per-day falls from 300 to
+> **~214**. Derived from `control-plane-admission.ts`'s constants rather than from the previous row,
+> so an error above does not propagate downward.
+>
+> **AND THE OLD `10` WAS ALREADY WRONG BEFORE `0016` TOUCHED IT — IT OMITTED THE AUDIT RECORD
+> ALTOGETHER.** The five components are `PRINCIPAL 2 + ORGANIZATION 2 + MEMBERSHIP 2 +
+> TENANT_DIRECTORY 2 + PRINCIPAL_CREDENTIAL 2`, and every platform route also writes one audit
+> record, which nothing in this row accounted for. **The true figure was 12 yesterday and is 14
+> today.** `architecture-agent` found the identical omission in `core-object-registry.yaml` during
+> an unrelated sweep, from the opposite direction. **Two independent derivations landing on the same
+> missing term is what makes this a correction rather than a re-estimate.**
+>
+> **The onboarding figure still corrects the code.** `control-plane-admission.ts` records **6** for
+> the operation; it writes **14**. `0025`'s consequences flag this and the constant is still wrong in
+> the source. **A budget constant that under-counts is worse than none** — it spends an allowance
+> nobody is watching, and the failure mode is D1 refusing queries account-wide.
+>
+> **WHY THIS ROW WENT STALE SILENTLY, WHICH IS THE REUSABLE PART.** `0016` was a migration in
+> `platform/core/migrations/`. This is a register in `docs/operations/`. **Nothing connects them**,
+> no build breaks, no test turns red, and the number here stays plausible forever. The measured
+> capacity model beneath this section reads `PLATFORM_OPERATOR_ACTION_ROW_WRITES` **from the live
+> schema**, so it moved on its own and printed 4 without anyone editing it. **This hand-transcribed
+> table did not.** That contrast is the argument for deriving figures rather than restating them,
+> and it is the same argument now under consideration for the ~30 transcribed row-write figures
+> across nine contracts.
+
+> ## ⚠ HOW MANY BUSINESSES FIT — MEASURED 2026-09-06, AND THE ANSWER NEEDS A TIME AXIS
+>
+> **`node packages/testing/run-capacity-model.ts`.** Deliberately outside `npm test`: these
+> figures move when a migration adds an index, which is legitimate, and **a suite that goes
+> red on a legitimate change teaches a team to ignore red.**
+>
+> | Scenario | Binds first | Businesses | 100 businesses last |
+> |---|---|---|---|
+> | **Baseline** — 5 users, 20 audited actions/user/day, 12-month retention | **storage** | **32** | **3.9 months** |
+> | Busier — 10 users, 60 actions/day | storage | 5 | 0.6 months |
+> | Quieter — 3 users, 8 actions/day | storage | 135 | 15.9 months |
+> | Baseline, 5-year retention | storage | 6 | 3.9 months |
+>
+> **STORAGE BINDS FIRST IN EVERY SCENARIO**, against the **500 MB per-database** limit —
+> not the 5 GB total, because `0006` put every tenant in one shared database.
+>
+> **A business-count alone is not an answer.** Transactions recover overnight; **history does
+> not.** Measured by writing 2,000 rows and reading `page_count × page_size`: `audit_event` is
+> **611 bytes** and is the dominant grower, at roughly **1.3 MiB per business per month,
+> essentially all of it audit rows.**
+>
+> **The second limit is also low: D1 row-writes bind at 92 businesses** against Dudo's own
+> 80,000/day self-limit.
+>
+> **The Team Lead's estimate of "100–150 businesses" was wrong**, and instructively so. The
+> per-operation arithmetic was close; **the estimate had no time axis**, and it landed near
+> the *quieter* row — defensible only for very light customers keeping about a year.
+>
+> **The Durable Object ledger is NOT a capacity risk.** 120 calls per business-day binds at
+> **832 businesses**, an order of magnitude above everything else. It remains a single point
+> of failure and a contention risk, so **`PO-4` should now be argued on latency and blast
+> radius rather than on exhaustion** — a better argument than the one it was deferred on.
+>
+> **Every tempting fix here is a `0030` violation, recorded before anyone proposes one:**
+> dropping the per-Action audit row, aggregating audit rows on write, or removing `customer`'s
+> search-key columns. `0030` names the first two; the third bakes a limit into a data shape.
+> **The legitimate levers are all configuration** — ten databases against the 5 GB total,
+> retention as operational policy, or paying. **None requires a schema change.**
+>
+> **Named as unmeasured rather than assumed:** D1's own billing (this is `node:sqlite`) · the
+> adapter step from ledger *calls* to *requests* · multi-row statements (so bulk-delete figures
+> are a lower bound and therefore an **over**-estimate of capacity) · concurrency · and
+> **READ allowances entirely — D1 bills rows read, nothing counts them, and a feed read over a
+> large table is the obvious candidate to bind before writes do.** That is the next gap.
+
+> ## ⚠ THE TABLE ABOVE IS CONTROL-PLANE ONLY, AND THAT OMISSION COST 100% OF A CUSTOMER'S DAY
+>
+> Added 2026-09-05, measured by `core-agent` against the real dispatcher rather than estimated.
+> **Every row above counts control-plane row-writes. A platform route also writes TENANT rows, and
+> those land on the target Organization's `business` allocation — not on the operator's budget.**
+>
+> | Operation | Tenant row-writes | Control-plane |
+> |---|---|---|
+> | `members.resolve` — **hit** | **5** | **4** |
+> | `members.resolve` — **refusal** | **5** | **4** |
+> | `organizations.audit.list` — **with results** | **5** | **4** |
+> | `organizations.audit.list` — **empty** | **5** | **4** |
+> | `audit.list` (platform feed) | **0** | **4** |
+>
+> **The control-plane column was `2` and is `4` as of `0016`** — it is the platform-operator audit
+> record, `PLATFORM_OPERATOR_ACTION_ROW_WRITES`, and every row here carries exactly one.
+> **The tenant column is unmoved: `0016` indexed a control-plane table and `AUDIT_EVENT_ROW_WRITES`
+> is still 5.** Both halves stated, because a figure left alone is otherwise indistinguishable from
+> a figure nobody looked at.
+>
+> **THIS TABLE WAS MISSED BY THE FIRST SWEEP OF THIS FILE, AND HOW IT WAS MISSED IS THE USEFUL
+> PART.** That pass searched for the words *row-write* and for `**N**` beside them, found two stale
+> figures and corrected them. **These numbers are bare cells in a column whose heading is three
+> lines up** — no adjacent keyword, no emphasis, nothing the search was shaped to match. They were
+> found only by a third search over the word *audit*, run because two confirmed instances are weak
+> evidence that two is the population.
+>
+> **That is `workflow.md` §12's shape-driven rule demonstrated on the file that records it:** the
+> obvious search finds the instances that look like the last one you fixed, and **closing the set
+> needs orthogonal shapes whose convergence is what makes the boundary statable.** Here: by keyword
+> (found 2), by derived rate (found 0 new, and that empty result is a real result), by subject
+> word (found this table). **Three shapes, three different answers, and only the union is the
+> sweep.**
+>
+> **The 5 is 1 row + 1 primary key + 3 indexes**, counted from `0001_audit_event.sql` rather than
+> taken from a constant. **Hit and refusal cost the same by design** — that is the anti-enumeration
+> property of `0028` Decision 3 and it must not be "optimised".
+>
+> **What the omission produced:** the tenant write happened *before* the operator's audit record was
+> charged, so once an operator's own 600 was spent, **every further call still wrote 5 tenant rows
+> and then failed at the audit step.** 2,000 calls exhausted **10,000 of 10,000** of one named
+> customer's daily allocation, 85% of it after the attacker's own ceiling was gone. **The attacker
+> was told the call failed; the customer paid for it** — and could not see why, because
+> `core.audit.read` still has no route.
+>
+> **Both fixes are in.** Charging the operator first (`21d6f13`) bounds one operator at **1,500 row-
+> writes, 15%**. The per-Organization platform sub-ceiling (`710b75d`, `30c5593`) bounds **everyone
+> platform-side together at 1,000, 10%** — measured: three operators reach the same 1,000 as one,
+> and the customer still reaches their full 10,000 after the platform share is entirely burned.
+>
+> **The sub-ceiling draws FROM the 10,000, not beside it**, so a customer at 9,600 gives the platform
+> 400. **That is the rule, not a bug** — and the residual is recorded at `write-admission.ts`: *the
+> customer most likely to need support is the one whose usage is spiking, and this design makes them
+> the hardest to support.* **Nothing measures how often that bites.**
+>
+> **The generalisable rule for §6a, which is why this is boxed rather than a table edit:** a
+> free-tier impact check must state **whose allowance is spent, not only how much.** Every number
+> above was correct as a control-plane figure and the design was still broken, because the question
+> nobody asked was *which ledger does this land on.* **An operation that spends someone else's budget
+> is a different risk from one that spends its own, however small the number.**
+>
+> **Why the confirmation cost is affordable for a structural reason rather than a lucky one:** a
+> critical operation requires a human to read a statement and type a password, so **volume is
+> bounded by human attention, not by traffic.** `0013` Control 5's test — *is the population that
+> can force a write bounded by something other than the attacker?* — passes.
+>
+> **The hazard, named in `confirmation-v1` rather than discovered later:** both challenge routes are
+> **writes reachable by any authenticated principal holding a critical permission**, at **6**
+> row-writes each — `CONFIRMATION_ROW_WRITES` **2** for the challenge itself plus the **4** every
+> platform route spends on its audit record (`0016`). **Was stated as 2, which counted only the
+> confirmation row and never the audit record**, so the hazard was understated by a factor of three
+> rather than by the factor of two `0016` alone would explain. An unbounded challenge loop spends the
+> shared ceiling. **`0017`'s in-process limiter does
+> not bound this in a deployed Worker**, because each isolate has its own — so the **durable rate
+> limiter now has two consumers** (pre-auth and confirmation) and has stopped being a
+> single-feature nicety.
+>
+> **Verified by execution 2026-09-05, not by reading:** `0008`–`0010` apply cleanly to a local D1,
+> and all four mutual-exclusion triggers refuse in both directions on INSERT and UPDATE, with the
+> negative controls passing — a principal with no platform row can still be given a membership, and
+> a principal with no membership can still become an operator.
+
 > ## ⚠ D1 DAILY ROW LIMITS ARE ENFORCED, AND EXCEEDING THEM IS AN OUTAGE — NOT A BILL
 >
 > Verified 2026-09-02 against `d1/platform/pricing/`. **These limits are not on the `limits/`

@@ -43,12 +43,25 @@ one passes the four-question inclusion test in `docs/architecture/standards/CORE
 | `validation/` | A zero-dependency input validator |
 | `pagination/` | Signed, tenant-bound cursors |
 | `http/` | The router, the response envelope, and the Worker adapter |
+| `platform/` | The platform route class, platform authority, and the operator action log (`0025`) |
 | `migrations/` | `audit_event`. **Reviewed, not applied** — there is no migration runner |
 
-**Two files may name a Cloudflare type** (`CLOUDFLARE_STANDARD.md` §2):
-`storage/adapters/d1/d1-store.ts` and `http/adapters/worker-entry.ts`. A grep for
-`D1Database`, `R2Bucket`, `Queue`, `DurableObjectNamespace`, `Fetcher`,
-`WorkflowEntrypoint`, `ExecutionContext` or `Env` anywhere else must come back empty.
+> **This table has fallen behind the code and is not repaired here.** `identity/`,
+> `organization/` and `protection/` also exist and are not listed; each arrived with a
+> different slice, and correcting the whole of it touches documentation several agents'
+> work is described by. Reported to the Team Lead rather than half-rewritten. The
+> `platform/` row and the adapter list below are corrected because this slice made them
+> wrong.
+
+**Six files may name a Cloudflare type** (`CLOUDFLARE_STANDARD.md` §2):
+`storage/adapters/d1/d1-store.ts`, `identity/adapters/d1/d1-control-plane-store.ts`,
+`identity/adapters/d1/d1-credential-store.ts`,
+`platform/adapters/d1/d1-platform-store.ts`,
+`protection/adapters/durable-objects/coordinator-object.ts`, and
+`http/adapters/worker-entry.ts`. A grep for `D1Database`, `R2Bucket`, `Queue`,
+`DurableObjectNamespace`, `Fetcher`, `WorkflowEntrypoint`, `ExecutionContext` or `Env`
+anywhere else must come back empty. It said "two" until this slice; four of the six
+arrived with the identity, protection and platform slices.
 
 **The runtime serves nothing, and that is correct.** No authentication mechanism is
 recorded (AZ2) and `TenantDirectoryEntry` is not built, so a deny-all principal resolver
