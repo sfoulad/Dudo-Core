@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-identity:1",
+  "title": "Organization identity — wire shapes, version 1",
+  "description": "The machine-readable half of organization-identity-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema (packages/contracts/README.md: 'Nothing in this directory is executed'), so every constraint here is READ BY A PERSON AND HAND-IMPLEMENTED: a `required` list is an instruction someone will follow literally (.claude/rules/workflow.md §12).\n\nTHREE FIELDS ON AN ORGANIZATION: a display name, a commercial registration and a VAT registration. THE SECOND AND THIRD SHARE ONE DEFINITION, AND THAT SHARING IS THE RULING — see the contract's theCategoryRuling. They are two instances of one category (a government-issued identifier recorded about an Organization) held in two columns rather than a generic table, and the shared shape is what makes a third instance a decision rather than a default.\n\nEVERY REGISTRATION HAS THREE STATES, NOT TWO. `not_recorded` and `not_registered` are different facts and collapsing them destroys the difference between 'we never asked' and 'they told us they have none'.",
+
+  "$comment": "THERE IS DELIBERATELY NO `organizationId` DEFINITION IN THIS FILE. The Organization is a PATH parameter on the one route this contract publishes and appears in no request or response body — repeating it in a body would invite a client to trust the body over the path, which is the precedence hazard `0029` refused when it declined to move a confirmation target into the body. An unused definition is a thing somebody references by accident, so it is absent rather than present-and-unused.",
+
+  "$defs": {
+
+    "principalId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "description": "RFC 3339 UTC, `Z` only, EXACTLY THREE FRACTIONAL DIGITS — the corrected grammar `platform-audit-read-v1` settled on 2026-09-05 after a bound omitting `.sss` was found not to mean its own instant. `kernel/clock.ts::toRfc3339Utc` is `new Date(ms).toISOString()`, which always emits `.sssZ`, so this describes what Core produces rather than narrowing it.\n\nNOTE THE INCONSISTENCY WITH ITS NEIGHBOURS, recorded rather than propagated: `platform-operator-v1`'s `created_at` still says 'RFC 3339, UTC, second precision', which is the stale claim the 2026-09-05 correction struck everywhere it was found. Every timestamp THIS contract introduces uses the corrected grammar. Recorded as `OI-8`."
+    },
+
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$",
+      "description": "WHAT AN OPERATOR READS INSTEAD OF A 22-CHARACTER IDENTIFIER. The customer's own name for itself, as the operator was told it.\n\nNO LEADING OR TRAILING WHITESPACE, and the pattern is `templateName`'s, transcribed rather than invented so the two human-entered names in the platform class agree. `maxLength` is 200 to match the `display_name` already contracted in `organization-detail-v1` and `platform-operator-v1`; those two published the field as always-null and this contract is what makes it carry values, so the bound was already chosen and is not re-opened here.\n\n*** IT IS NOT UNIQUE, AND NOTHING IN DUDO ENFORCES UNIQUENESS ON IT. *** See the contract's theUniquenessRuling: two Organizations legitimately share a name in one market, and a platform-wide constraint would make one customer's choice refuse another's — a cross-tenant coupling, and a rejection that is an existence oracle over the name space.\n\nSTORED AS ENTERED apart from trimming. No case folding, no transliteration, no normalisation for comparison — there is no comparison, because there is no uniqueness. That is not a coincidence: the two rulings are the same ruling seen twice."
+    },
+
+    "registrationNumber": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[A-Za-z0-9]([A-Za-z0-9 -]*[A-Za-z0-9])?$",
+      "description": "*** THERE IS DELIBERATELY NO DIGIT-COUNT AND NO PER-JURISDICTION FORMAT, AND THE ABSENCE IS THE RULING RATHER THAN AN OMISSION. *** See the contract's theFormatRuling.\n\nBahrain VAT account numbers are widely reported as fifteen numeric digits. THAT FIGURE COMES FROM SECONDARY SOURCES, one of which recorded that it was awaiting clarification from the authority, AND IT IS NOT IN THIS PATTERN. A pattern is a refusal: an at-count pattern that is wrong REFUSES A LEGAL REGISTRATION, and the failure lands on a customer who cannot be onboarded and an operator with no remedy but to invent a value. This repository shipped an at-count pattern that was wrong in three contracts on 2026-09-05 and spent a day correcting it.\n\nWHAT THE PATTERN DOES CONSTRAIN, and only this: printable alphanumerics with interior spaces and hyphens, no leading or trailing separator, no control characters, no whitespace runs at the ends. That accepts every national registration format the author is aware of and refuses nothing plausible. IT IS A HYGIENE BOUND, NOT AN IDENTITY CLAIM.\n\nADDING A NARROWER PATTERN IS **BREAKING** under API_STANDARD.md §6 — it narrows an accepted set — so it requires a decision record, and the record must cite the issuing authority's published specification by document and date. That ordering is deliberate: it makes the well-sourced constraint easy and the remembered-figure constraint hard, which is the inverse of the pressure that produced the defect.\n\nONE DEFINITION SERVES BOTH CR AND VAT because Dudo holds an authoritative specification for NEITHER. The day it holds one for either, THAT is the day this definition splits — the format question and theCategoryRuling have the same trigger."
+    },
+
+    "registrationVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified_by_principal_id", "verified_at"],
+      "description": "WHO CHECKED THIS NUMBER AGAINST THE ISSUING REGISTRY, AND WHEN. It makes 'verified' a fact with provenance rather than a boolean somebody set.\n\n*** EVERY FIELD HERE IS SERVER-STAMPED AND NONE IS CALLER-SUPPLIED. *** The acting operator comes from the authenticated platform context and the instant from Core's clock. A caller-supplied provenance value is not provenance — it is the forgery-looking-like-compliance shape `0028`'s amendment names for `target_organization_id`, one object over. The client asserts only that it checked; it never says who or when.\n\nIT NAMES NO REGISTRY, and does not need to: the registry is fixed by which field this sits in — Sijilat for the commercial registration, the National Bureau for Revenue for VAT. A `registry` field would be a vocabulary invented from two known instances, which is the same over-building theCategoryRuling refuses for the table.\n\nAND IT CARRIES NO METHOD AND NO NOTE. There is no free-text field here and none may be added: a note on a customer record is uncontrolled data with no schema, no retention rule and no purge story, and it is where an operator eventually writes something about a person.",
+      "properties": {
+        "verified_by_principal_id": {
+          "$ref": "#/$defs/principalId",
+          "description": "The platform operator who performed the check. THIS IS THE PLATFORM'S OWN RECORD, READ BY OPERATORS, so naming the operator is not the disclosure `audit-read-v1` withholds from a TENANT — that ruling is about what a customer is shown, and this field is not shown to a customer. `0028`: who is acting is not a disclosure among operators."
+        },
+        "verified_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+
+    "registrationRecord": {
+      "description": "ONE GOVERNMENT-ISSUED REGISTRATION, AS RETURNED. A DISCRIMINATED UNION RATHER THAN A NULLABLE NUMBER BESIDE A FLAG, so that `{state: 'not_registered', number: '123'}` is unrepresentable — the device `PlatformActionTarget` uses, for the reason it gives: a state that disagreed with its value would be a record nobody could interpret afterwards, which is the failure mode that matters for something read once, years later, by someone who cannot ask.\n\n*** THE THREE STATES, AND WHY THE THIRD IS NOT OPTIONAL: ***\n  `not_recorded`   NOBODY HAS ASKED, or nobody has entered the answer. The default for every Organization and the only state the three existing ones can be in.\n  `not_registered` THE CUSTOMER STATED THEY HAVE NO SUCH REGISTRATION. A legitimate, permanent, positive fact — below the VAT threshold, or an entity with no commercial registration.\n  `registered`     A NUMBER IS RECORDED, verified or not.\n\nCOLLAPSING THE FIRST TWO IS THE DEFECT THIS SHAPE EXISTS TO PREVENT. Merged, you cannot tell 'they told us they are not registered' from 'we never asked', so you cannot decide whether to prompt and cannot defend the record afterwards. It is the same absent-versus-null distinction `session-route-handlers.ts` already rules on for `display_name` — 'absent-versus-null is a distinction two clients resolve differently' — one level up, where the difference is a fact about the customer rather than about the field.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "description": "NOBODY HAS ASKED. Carries no timestamp, deliberately: there is no event to date. A `not_recorded_at` would be the Organization's creation time wearing a name that suggests somebody decided something.",
+          "properties": {
+            "state": { "const": "not_recorded" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "declared_at"],
+          "description": "THE CUSTOMER STATED THEY HAVE NONE. `declared_at` is what separates this from `not_recorded` in substance as well as in name: an assertion with a date is a fact somebody can be held to, and one without is indistinguishable from a default.\n\nIT CARRIES NO VERIFICATION OBJECT. Confirming that an entity is absent from a registry is a different and harder check than confirming a number is present in one, no operator has been asked to perform it, and a shape for it invented from zero instances would be guessed. Adding one later is additive.",
+          "properties": {
+            "state": { "const": "not_registered" },
+            "declared_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "SERVER-STAMPED when the operator recorded the declaration. It dates DUDO'S RECORD OF THE STATEMENT, not the customer's circumstances — a customer who crosses the VAT threshold tomorrow does not falsify this field, they make it stale, and those are different. A client must not render it as 'not registered since'."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "number", "recorded_at", "verification"],
+          "description": "A NUMBER IS RECORDED. `verification` is REQUIRED AND NULLABLE — null means recorded but unverified, which is a state a client must be able to render distinctly, because 'a number an operator typed' and 'a number an operator checked against the registry' are the two things this whole design exists to keep apart.",
+          "properties": {
+            "state": { "const": "registered" },
+            "number": { "$ref": "#/$defs/registrationNumber" },
+            "recorded_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "SERVER-STAMPED when this NUMBER was set. It is reset whenever the number changes, because it dates the value rather than the field."
+            },
+            "verification": {
+              "oneOf": [{ "$ref": "#/$defs/registrationVerification" }, { "type": "null" }],
+              "description": "*** NULL WHENEVER THE NUMBER CHANGES, WITHOUT EXCEPTION, AND THIS IS THE TRAP IN THE WHOLE SHAPE. *** A verification attests to A SPECIFIC VALUE. Carrying a prior verification across an edited number would make the record confidently wrong — it would say an operator checked a number nobody ever checked, with a real name and a real date attached, which is worse than an unverified number because it defends itself. Core discards the verification on any change to `number`; a client that displays a cached one has reproduced the defect on screen."
+            }
+          }
+        }
+      ]
+    },
+
+    "registrationInput": {
+      "description": "ONE REGISTRATION, AS SUBMITTED. THE SAME THREE STATES AND NONE OF THE SERVER-STAMPED FIELDS — `declared_at`, `recorded_at`, `verified_by_principal_id` and `verified_at` are all set by Core and CANNOT BE SENT. That is not tidiness: provenance a caller supplies is not provenance, and `additionalProperties: false` is what refuses it rather than a rule someone remembers.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "description": "CLEAR THE FIELD BACK TO 'nobody has asked'. Permitted, because an operator must be able to undo a mistake — and it DESTROYS the previous value and its provenance, which the audit trail records as a change without recording what was lost. See the contract's `OI-5`.",
+          "properties": { "state": { "const": "not_recorded" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "description": "RECORD THAT THE CUSTOMER STATED THEY HAVE NONE. `declared_at` is stamped by Core at the moment of the call. Re-sending this state re-stamps the date, which is correct — it records that the customer said it again.",
+          "properties": { "state": { "const": "not_registered" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "number", "verified"],
+          "description": "RECORD A NUMBER. `verified` IS REQUIRED RATHER THAN DEFAULTING TO FALSE, so the operator makes the claim or declines it explicitly and no code path produces a verification by omission.",
+          "properties": {
+            "state": { "const": "registered" },
+            "number": { "$ref": "#/$defs/registrationNumber" },
+            "verified": {
+              "type": "boolean",
+              "description": "TRUE MEANS: *I have just checked this number against the issuing registry.* Core then stamps the acting operator and the current instant. FALSE means recorded-and-unchecked and clears any existing verification.\n\nIT IS A CLAIM BY THE OPERATOR AND CORE CANNOT VERIFY IT. There is no Sijilat API and no NBR API, so nothing on the server can confirm that a check happened — the same class of limit `confirmation-v1` records for whether a client displayed the statement it was given. WHAT MAKES IT WORTH HAVING ANYWAY is that the claim is attributed and dated: an operator who ticks it without looking has put their own principal id against a specific number on a specific day, in a record the customer's own trail shows was edited. It converts an anonymous boolean into a named assertion, which is the whole of what a manual verification can be."
+            }
+          }
+        }
+      ]
+    },
+
+    "organizationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "commercial_registration", "vat_registration"],
+      "description": "THE THREE FIELDS, AS RETURNED. This is the block `organization-detail-v1` embeds and the block the update route returns, so a console re-renders from the update response without a second read — `organization-detail-v1`'s theOnePageOneRequestRule, which matters here for the same reason: in the platform class a read costs writes.\n\nNO `organization_id`. The path parameter already fixed it, and repeating it in a body invites a client to trust the body over the path — the precedence hazard `0029` refused when it declined to move a confirmation target into the body.",
+      "properties": {
+        "display_name": {
+          "oneOf": [{ "$ref": "#/$defs/displayName" }, { "type": "null" }],
+          "description": "REQUIRED AND NULLABLE. Null means NO NAME HAS EVER BEEN RECORDED, which is reachable only for Organizations created before this contract — onboarding makes it required, so the nameless set is closed and shrinking rather than open.\n\nTHE CLIENT OBLIGATION IS UNCHANGED AND IS ALREADY DEPLOYED: render `organization_id` verbatim when this is null. Not a blank, not a dash, not 'Unnamed Organization'. It is stated identically in `organization-detail-v1`, `platform-operator-v1` and `session-route-handlers.ts`, and this contract does not soften it."
+        },
+        "commercial_registration": {
+          "$ref": "#/$defs/registrationRecord",
+          "description": "The Bahrain Commercial Registration (CR), issued through Sijilat. AN OPERATOR-ENTERED, RECORDED FIELD — there is no official Sijilat API and this contract proposes no integration."
+        },
+        "vat_registration": {
+          "$ref": "#/$defs/registrationRecord",
+          "description": "The VAT account number issued by the National Bureau for Revenue. OPERATOR-ENTERED. Bahrain VAT registration is mandatory above an annual-supplies threshold and voluntary below it, which is exactly why `not_registered` is a legitimate PERMANENT state and not a temporary gap."
+        }
+      }
+    },
+
+    "updateOrganizationIdentityInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "PARTIAL. An omitted field is UNCHANGED; a present field is REPLACED WHOLE. There is no merge inside a registration — sending `{state: 'registered', number, verified}` replaces the entire record, which is what keeps a verification from surviving a number it does not attest to.\n\nNO `required` LIST, so the object is trivially satisfiable and `packages/testing/suites/contracts/satisfiability.ts` has nothing to find. `minProperties: 1` DOES THE WORK INSTEAD: an empty body is `invalid_argument`, because a no-op here still writes a platform audit record and FIVE ROW-WRITES INTO THE CUSTOMER'S OWN DAILY ALLOCATION, and a request that spends a customer's budget to change nothing is a request that should not have been accepted.\n\n`display_name` CANNOT BE SET TO NULL. Renaming is permitted; un-naming is not, because null is a legacy state rather than a choice and re-creating it would re-open the set this contract closes.",
+      "properties": {
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "commercial_registration": { "$ref": "#/$defs/registrationInput" },
+        "vat_registration": { "$ref": "#/$defs/registrationInput" }
+      }
+    },
+
+    "updateOrganizationIdentityOutput": {
+      "$ref": "#/$defs/organizationIdentity",
+      "description": "THE WHOLE IDENTITY BLOCK AFTER THE CHANGE, not just the fields that were sent. A console applying a partial response to local state has to guess what the server did with the fields it omitted; a whole block cannot be guessed wrong. It also shows the operator the consequence they are most likely not to expect — that editing a number cleared its verification."
+    },
+
+    "onboardingDisplayNameField": {
+      "$ref": "#/$defs/displayName",
+      "description": "THE FIELD `organization-onboarding-v1` MUST GAIN, restated here rather than authored there because adding a REQUIRED request field to an accepted contract with a deployed consumer is BREAKING and is the Team Lead's to sequence (.claude/rules/architecture.md §1). See the contract's consequentialChanges.\n\nIT IS REQUIRED AT ONBOARDING AND NOT OPTIONAL. An optional name would make `not recorded` reachable for every new Organization, which is the state this contract exists to end — and the operator is talking to the customer at exactly that moment, which is the only moment they reliably know the answer.\n\nDO NOT CONFUSE IT WITH `first_workspace_name`. That field is also sent as a placeholder by the console, for a different reason — `business` has two columns and Workspace naming belongs to the organization-structure slice — and THIS CONTRACT DOES NOT FIX IT."
+    }
+  }
+}
