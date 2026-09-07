@@ -167,7 +167,29 @@ export const TENANT_DIRECTORY_ROW_WRITES = 2;
 export const PLATFORM_OPERATOR_ROW_WRITES = 2;
 
 /**
- * `platform_operator_action` (`0009`): 1 table row + 1 implicit primary-key index.
+ * `platform_operator_action` (`0009`): 1 table row + 1 implicit primary-key index + **2 explicit
+ * indexes from `0016`**.
+ *
+ * ===========================================================================================
+ * *** IT WENT FROM 2 TO 4 ON 2026-09-07, AND THE INSTRUCTION BELOW IS WHY IT MOVED ON TIME. ***
+ * ===========================================================================================
+ *
+ * `0016` added `(occurred_at, action_record_id)` and
+ * `(target_organization_id, occurred_at, action_record_id)` to close a read exposure: both audit
+ * feeds scanned the whole log and sorted it, so a page of 25 read every row, and **D1's row-read
+ * allowance is account-wide and stops queries in every database rather than degrading the feed.**
+ * An operator paging a feed took every tenant's logins down with them.
+ *
+ * **THE DISTRIBUTION OF THIS COST IS COUNTER-INTUITIVE, SO IT IS STATED HERE RATHER THAN LEFT TO
+ * ARITHMETIC.** Against `PER_PRINCIPAL_DAILY_ROW_WRITES` = 600:
+ *
+ *   a pure read route          2 -> 4      300 -> 150 per operator per day   (-50%)
+ *   the scoped audit feed      4 -> 6      150 -> 100
+ *   an onboarding             12 -> 14      50 ->  ~42                       (-14%)
+ *
+ * **THE CHEAP READ ROUTES TAKE THE LARGEST CUT AND ONBOARDING THE SMALLEST**, because the audit
+ * record is the WHOLE cost of a read and a small fraction of an onboarding. Whoever next widens
+ * this number should expect that shape rather than be surprised by it.
  *
  * ===========================================================================================
  * THIS IS THE ONE COST IN THIS FILE THAT REQUEST TRAFFIC ACTUALLY SPENDS ON A **READ**.
@@ -187,11 +209,18 @@ export const PLATFORM_OPERATOR_ROW_WRITES = 2;
  * IF THAT CLASS EVER BECOMES REACHABLE BY A LARGER POPULATION, THE ARGUMENT FAILS AND P4 MUST BE
  * BOUNDED THE WAY D2 BOUNDED SUCCESSFUL READS. Written here because the failure would be silent.
  *
- * WHEN A MIGRATION ADDS AN INDEX — the obvious candidate is `(actor_principal_id, occurred_at)`,
- * for "what has this operator done" — THIS NUMBER MUST MOVE WITH IT. `0009` says the same at the
- * schema.
+ * WHEN A MIGRATION ADDS AN INDEX, THIS NUMBER MUST MOVE WITH IT. `0009` says the same at the
+ * schema, and `0016` is the first time it was owed — **it was paid in the same change, which is
+ * the only reason the reservation still matches the write.** Under-reserving is the dangerous
+ * direction (`0014` §A.12): over-reserving delays a write, under-reserving is an outage.
+ *
+ * **THE REMAINING CANDIDATE IS STILL `(actor_principal_id, occurred_at, action_record_id)`** — "what
+ * has this operator done" — and `0016` DELIBERATELY DID NOT ADD IT. It would take this to 5 and buy
+ * one query shape; the answer to that shape is a mandatory bounded time window on filtered feed
+ * queries, which costs zero row-writes and is `architecture-agent`'s decision. **Do not add it as a
+ * shortcut past that decision.**
  */
-export const PLATFORM_OPERATOR_ACTION_ROW_WRITES = 2;
+export const PLATFORM_OPERATOR_ACTION_ROW_WRITES = 4;
 
 /**
  * `confirmation` (`0011`): 1 table row + 1 implicit primary-key index.
