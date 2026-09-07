@@ -207,11 +207,31 @@ official source, not the date usage was measured.
 >
 > | Operation | Tenant row-writes | Control-plane |
 > |---|---|---|
-> | `members.resolve` — **hit** | **5** | 2 |
-> | `members.resolve` — **refusal** | **5** | 2 |
-> | `organizations.audit.list` — **with results** | **5** | 2 |
-> | `organizations.audit.list` — **empty** | **5** | 2 |
-> | `audit.list` (platform feed) | **0** | 2 |
+> | `members.resolve` — **hit** | **5** | **4** |
+> | `members.resolve` — **refusal** | **5** | **4** |
+> | `organizations.audit.list` — **with results** | **5** | **4** |
+> | `organizations.audit.list` — **empty** | **5** | **4** |
+> | `audit.list` (platform feed) | **0** | **4** |
+>
+> **The control-plane column was `2` and is `4` as of `0016`** — it is the platform-operator audit
+> record, `PLATFORM_OPERATOR_ACTION_ROW_WRITES`, and every row here carries exactly one.
+> **The tenant column is unmoved: `0016` indexed a control-plane table and `AUDIT_EVENT_ROW_WRITES`
+> is still 5.** Both halves stated, because a figure left alone is otherwise indistinguishable from
+> a figure nobody looked at.
+>
+> **THIS TABLE WAS MISSED BY THE FIRST SWEEP OF THIS FILE, AND HOW IT WAS MISSED IS THE USEFUL
+> PART.** That pass searched for the words *row-write* and for `**N**` beside them, found two stale
+> figures and corrected them. **These numbers are bare cells in a column whose heading is three
+> lines up** — no adjacent keyword, no emphasis, nothing the search was shaped to match. They were
+> found only by a third search over the word *audit*, run because two confirmed instances are weak
+> evidence that two is the population.
+>
+> **That is `workflow.md` §12's shape-driven rule demonstrated on the file that records it:** the
+> obvious search finds the instances that look like the last one you fixed, and **closing the set
+> needs orthogonal shapes whose convergence is what makes the boundary statable.** Here: by keyword
+> (found 2), by derived rate (found 0 new, and that empty result is a real result), by subject
+> word (found this table). **Three shapes, three different answers, and only the union is the
+> sweep.**
 >
 > **The 5 is 1 row + 1 primary key + 3 indexes**, counted from `0001_audit_event.sql` rather than
 > taken from a constant. **Hit and refusal cost the same by design** — that is the anti-enumeration
