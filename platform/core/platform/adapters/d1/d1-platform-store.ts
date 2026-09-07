@@ -44,6 +44,12 @@ import type { D1Database } from '../../../storage/adapters/d1/d1-store.ts';
 import type { ControlPlaneWriteReservation } from '../../../identity/control-plane-admission.ts';
 import { consumeControlPlaneWriteReservation } from '../../../identity/control-plane-admission.ts';
 import { toPlatformRole } from '../../platform-permissions.ts';
+import type {
+  OrganizationIdentity,
+  OrganizationRegistration,
+  RegistrationColumns,
+} from '../../organization-identity.ts';
+import { registrationColumns, registrationFromColumns } from '../../organization-identity.ts';
 import type { MembershipRole } from '../../../authorization/roles.ts';
 import type {
   PlatformActionOutcome,
@@ -112,6 +118,74 @@ function organizationStatus(row: SqlRow): PlatformOrganizationStatus | null {
   return ORGANIZATION_STATUSES.includes(value as PlatformOrganizationStatus)
     ? (value as PlatformOrganizationStatus)
     : null;
+}
+
+// =============================================================================================
+// THE IDENTITY BLOCK. `0015_organization_identity.sql` · `organization-identity-v1`.
+// =============================================================================================
+
+/**
+ * The thirteen columns, ONCE, in one order, used by every statement that reads or writes them.
+ *
+ * *** IT IS A CONSTANT BECAUSE THREE STATEMENTS SELECT IT AND ONE WRITES IT, AND THEY MUST AGREE.
+ * *** Two hand-written column lists that drift is the ordinary way a registration comes back with
+ * a VAT number in a commercial-registration field — a swap no type can catch, because both are
+ * strings.
+ */
+const IDENTITY_COLUMNS =
+  'display_name, ' +
+  'commercial_registration_state, commercial_registration_number, ' +
+  'commercial_registration_declared_at, commercial_registration_recorded_at, ' +
+  'commercial_registration_verified_by_principal_id, commercial_registration_verified_at, ' +
+  'vat_registration_state, vat_registration_number, ' +
+  'vat_registration_declared_at, vat_registration_recorded_at, ' +
+  'vat_registration_verified_by_principal_id, vat_registration_verified_at';
+
+const REGISTRATION_STATES: readonly RegistrationColumns[0][] = [
+  'not_recorded',
+  'not_registered',
+  'registered',
+];
+
+/**
+ * One registration out of a row, or `null` if the six columns do not form a state.
+ *
+ * VALIDATED ON READ, like every other stored enumeration in this file, and for the same reason:
+ * a coerced default would be a false statement about a legal identifier rather than a tidy
+ * fallback. `registrationFromColumns` makes the rest of the judgement; this only establishes that
+ * the state column holds one of the three words.
+ */
+function registration(row: SqlRow, prefix: string): OrganizationRegistration | null {
+  const state = text(row, `${prefix}_state`);
+  if (state === null || !REGISTRATION_STATES.includes(state as RegistrationColumns[0])) {
+    return null;
+  }
+  return registrationFromColumns([
+    state as RegistrationColumns[0],
+    text(row, `${prefix}_number`),
+    text(row, `${prefix}_declared_at`),
+    text(row, `${prefix}_recorded_at`),
+    text(row, `${prefix}_verified_by_principal_id`),
+    text(row, `${prefix}_verified_at`),
+  ]);
+}
+
+/** The whole block, or `null` if either registration is unreadable. */
+function identity(row: SqlRow): OrganizationIdentity | null {
+  const commercialRegistration = registration(row, 'commercial_registration');
+  const vatRegistration = registration(row, 'vat_registration');
+  if (commercialRegistration === null || vatRegistration === null) {
+    return null;
+  }
+  return {
+    // `text` RETURNS null FOR BOTH NULL AND THE EMPTY STRING'S ABSENCE; `display_name` uses `text`
+    // rather than `requiredText` because **null is a meaningful value here** — no name has been
+    // recorded — and collapsing it into a failure would make every Organization that predates
+    // `0015` unreadable.
+    displayName: text(row, 'display_name'),
+    commercialRegistration,
+    vatRegistration,
+  };
 }
 
 /**
@@ -375,10 +449,13 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
       // order is arbitrary and stable; ordering by creation time would need an index the schema
       // does not have and would leak the platform's growth curve to anyone paging.
       const sql =
+        // `display_name` ONLY — NOT the registrations. Two registration objects per row would
+        // inflate every page of a listing that needs a label; the detail route is one click away.
+        // `organization-identity-v1`'s ruling, and the reason this is not `IDENTITY_COLUMNS`.
         afterOrganizationId === null
-          ? 'SELECT organization_id, status, created_at FROM organization ' +
+          ? 'SELECT organization_id, status, created_at, display_name FROM organization ' +
             `ORDER BY organization_id ASC LIMIT ${String(limit)}`
-          : 'SELECT organization_id, status, created_at FROM organization ' +
+          : 'SELECT organization_id, status, created_at, display_name FROM organization ' +
             `WHERE organization_id > ? ORDER BY organization_id ASC LIMIT ${String(limit)}`;
       const rows = await selectRows(
         database,
@@ -396,7 +473,15 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
         if (organizationId === null || createdAt === null || status === null) {
           return err(internal());
         }
-        organizations.push({ organizationId, status, createdAt });
+        // `display_name` IS READ WITH `text`, NOT `requiredText`: null is a meaningful value —
+        // no name recorded — and treating it as a failure would make every Organization created
+        // before `0015` unlistable, which is the population the list exists to show.
+        organizations.push({
+          organizationId,
+          status,
+          createdAt,
+          displayName: text(row, 'display_name'),
+        });
       }
       return ok(organizations);
     },
@@ -425,6 +510,7 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
       const rows = await selectRows(
         database,
         'SELECT o.organization_id, o.status, o.created_at, o.template_id, ' +
+          `${IDENTITY_COLUMNS}, ` +
           '(SELECT COUNT(*) FROM organization_membership m ' +
           'WHERE m.organization_id = o.organization_id) AS member_count ' +
           'FROM organization o WHERE o.organization_id = ? LIMIT 1',
@@ -444,6 +530,11 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
       if (id === null || createdAt === null || status === null) {
         return err(internal());
       }
+      // AN UNREADABLE REGISTRATION IS `internal()`, NOT AN EMPTY ONE. See the port method.
+      const block = identity(row);
+      if (block === null) {
+        return err(internal());
+      }
       if (typeof memberCount !== 'number' || !Number.isInteger(memberCount) || memberCount < 0) {
         // A `COUNT(*)` that is not a non-negative integer means the driver returned something this
         // adapter does not understand. `internal()` rather than a coerced `0`, which would render
@@ -458,7 +549,89 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
         // NULL IS A REAL STATE. Organizations predating `0013` have no Template.
         templateId: requiredText(row, 'template_id'),
         memberCount,
+        identity: block,
       });
+    },
+
+    async findOrganizationIdentity(
+      organizationId: string,
+    ): Promise<Result<OrganizationIdentity | null>> {
+      // NO MEMBER COUNT AND THEREFORE NO SECOND TABLE. See the port for why this is not a reuse of
+      // `findOrganizationDetail`.
+      const rows = await selectRows(
+        database,
+        `SELECT ${IDENTITY_COLUMNS} FROM organization WHERE organization_id = ? LIMIT 1`,
+        [organizationId],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      if (rows.value.length === 0) {
+        return ok(null);
+      }
+      const block = identity(rows.value[0]);
+      if (block === null) {
+        return err(internal());
+      }
+      return ok(block);
+    },
+
+    async updateOrganizationIdentity(
+      organizationId: string,
+      block: OrganizationIdentity,
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<OrganizationIdentity>> {
+      // NO ADMISSION, NO WRITE. It throws rather than returning, exactly as every other writer in
+      // this file does: no client can cause it, because clients supply values and never
+      // reservations.
+      consumeControlPlaneWriteReservation(reservation, 1);
+
+      // *** ALL THIRTEEN COLUMNS, FROM ONE UNION VALUE, IN ONE STATEMENT. ***
+      //
+      // This is the layer `0015`'s header calls load-bearing, and `registrationColumns` is the only
+      // producer of the six-tuple — so a partial registration is not something this method can
+      // express. The triggers behind it are the backstop for a path that is not this one.
+      const commercial = registrationColumns(block.commercialRegistration);
+      const vat = registrationColumns(block.vatRegistration);
+
+      try {
+        await database.batch([
+          database
+            .prepare(
+              'UPDATE organization SET display_name = ?, ' +
+                'commercial_registration_state = ?, commercial_registration_number = ?, ' +
+                'commercial_registration_declared_at = ?, commercial_registration_recorded_at = ?, ' +
+                'commercial_registration_verified_by_principal_id = ?, ' +
+                'commercial_registration_verified_at = ?, ' +
+                'vat_registration_state = ?, vat_registration_number = ?, ' +
+                'vat_registration_declared_at = ?, vat_registration_recorded_at = ?, ' +
+                'vat_registration_verified_by_principal_id = ?, vat_registration_verified_at = ? ' +
+                'WHERE organization_id = ?',
+            )
+            .bind(block.displayName, ...commercial, ...vat, organizationId),
+        ]);
+        // =====================================================================================
+        // *** IT DOES NOT REPORT WHETHER A ROW WAS ACTUALLY MATCHED, AND THAT IS A COST OF THE
+        // CLOUDFLARE BOUNDARY RATHER THAN AN OVERSIGHT. ***
+        // =====================================================================================
+        //
+        // An `UPDATE` affecting no rows is indistinguishable here from one affecting a row,
+        // because `D1Database.batch` in `storage/adapters/d1/d1-store.ts` returns `unknown[]` —
+        // Core's own port deliberately does not expose D1's `meta.changes`. Reading it would put a
+        // vendor result shape in domain-adjacent code, which is exactly what
+        // `.claude/rules/architecture.md` §6 keeps out. **The boundary worked and it cost this
+        // check; recording the trade rather than quietly widening the port.**
+        //
+        // SO EXISTENCE IS ESTABLISHED BY THE READ THAT PRECEDES THIS, and the caller must perform
+        // it — `findOrganizationIdentity` returning `null` is the 404. The remaining window is a
+        // row deleted BETWEEN that read and this write, which **nothing in Dudo can do today:
+        // there is no route, port method or statement anywhere that deletes an `organization`
+        // row.** If one is ever added, this method needs a way to report a miss and this comment
+        // is where to start.
+        return ok(block);
+      } catch {
+        return err(unavailable());
+      }
     },
 
     async resolveMemberByIdentifierHash(

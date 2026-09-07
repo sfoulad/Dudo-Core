@@ -221,6 +221,20 @@ const HELD_BUT_UNREACHABLE: readonly string[] = Object.freeze([
   // every operator alive. **The instruction above was written by the person who then skipped it**,
   // one route later. `assertEveryRoutePermissionIsReachable` in `platform-routes.ts` now makes
   // that omission a build failure rather than a comment nobody re-reads.
+  //
+  // ---- ADDED 2026-09-07, AND THIS TIME THE ORDER WAS THE POINT RATHER THAN AN AFTERTHOUGHT.
+  //
+  // `core.platform-organization.update` — the eleventh permission `permission-catalog.yaml` grants
+  // this role, **granted by the user on 2026-09-07 and relayed by the Team Lead**, who does not
+  // approve (`security.md` §8). It arrives HERE rather than straight into the reachable set because
+  // **no route serves it yet**, which is what this list means.
+  //
+  // IT LEAVES THIS LIST IN THE SAME CHANGE THAT REGISTERS THE ROUTE, and neither half can be
+  // forgotten: the envelope guard fails the build if a route's permission is not in the ceiling,
+  // and `assertEveryRoutePermissionIsReachable` fails it if no role holds it. **Getting the order
+  // wrong is a build failure rather than a subtle defect**, which is exactly what the two mistakes
+  // recorded above bought.
+  'core.platform-organization.update',
 ]);
 
 function platformGrant(permissionId: string): PermissionGrant {
@@ -228,18 +242,32 @@ function platformGrant(permissionId: string): PermissionGrant {
 }
 
 /**
- * `platform-admin` — the **ten** permissions `permission-catalog.yaml:914` gives the role.
+ * `platform-admin` — the **eleven** permissions `permission-catalog.yaml` gives the role, at the
+ * `- id: platform-admin` entry.
  *
  * ===========================================================================================
  * IT SAID "THE EIGHT... VERBATIM" AND IT WAS NEITHER. CORRECTED 2026-09-05.
  * ===========================================================================================
+ *
+ * *** AND ON 2026-09-07 IT SAID "TEN" AT LINE 914, WHICH WAS THE RIGHT COUNT AND THE WRONG LINE.
+ * *** The count moved to eleven with `core.platform-organization.update`; the line had already
+ * moved to 1076 without anyone touching this file, because the catalog grew above it.
+ *
+ * **A LINE NUMBER IS THE MOST PERISHABLE CITATION THERE IS** — it goes stale when a file someone
+ * else owns changes somewhere else entirely, and nothing anywhere goes red. The anchor is now the
+ * entry's own key, which moves with it. The COUNT stays, because the paragraph below is right that
+ * a number is checkable in one glance and unfalsifiable prose is how the first version stayed
+ * wrong; it is the *pointer* that had to stop being positional, not the figure.
  *
  * The catalog gives ten; this list held eight. Missing: **`core.platform-audit.read`** and
  * **`core.principal.revoke-platform-scope`**, both added to the catalog on 2026-09-05 and never
  * transcribed here.
  *
  * Both arrive through `HELD_BUT_UNREACHABLE`, which is where they belong — see that constant for
- * why the four entries in it are now two different kinds of unreachable.
+ * why its entries are TWO DIFFERENT KINDS of unreachable — permanent by design, and not built
+ * yet — which is the distinction that matters and does not go stale when the list changes size.
+ * **It said "the four entries" while there were two, and then three.** The kinds are the point;
+ * the count never was.
  *
  * **THIS DIRECTION FAILS CLOSED** — a permission absent from the floor is a permission the role
  * does not hold, so nothing was over-granted and no route was reachable that should not have been.

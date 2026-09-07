@@ -194,8 +194,13 @@ function listOrganizations(dependencies: {
           organization_id: organization.organizationId,
           status: organization.status,
           created_at: organization.createdAt,
-          // PRESENT AND NULL. See the header — never omitted.
-          display_name: null,
+          // PRESENT ALWAYS, NULL ONLY FOR ORGANIZATIONS THAT PREDATE `0015`. Never omitted, and
+          // the client renders `organization_id` verbatim when it is null — not a blank, not a
+          // dash, not "Unnamed Organization".
+          //
+          // IT STOPPED BEING A HARDCODED `null` ON 2026-09-07. The field was contracted from the
+          // start so that a name would be additive; this is that day, and no shape changed.
+          display_name: organization.displayName,
         })),
         next_cursor:
           hasMore && last !== undefined

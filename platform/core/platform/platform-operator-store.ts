@@ -70,6 +70,7 @@ import type { Result } from '../kernel/result.ts';
 import type { PlatformRole } from './platform-permissions.ts';
 import type { MembershipRole } from '../authorization/roles.ts';
 import type { ControlPlaneWriteReservation } from '../identity/control-plane-admission.ts';
+import type { OrganizationIdentity } from './organization-identity.ts';
 
 /**
  * A platform operator, as the control plane holds it.
@@ -107,6 +108,19 @@ export type PlatformOrganizationRecord = {
   readonly status: PlatformOrganizationStatus;
   /** RFC 3339, UTC. */
   readonly createdAt: string;
+  /**
+   * *** NULL MEANS NO NAME HAS EVER BEEN RECORDED, AND THE CLIENT RENDERS `organizationId`
+   * VERBATIM — not a blank, not a dash, not "Unnamed Organization". ***
+   *
+   * Reachable only for Organizations that predate `0015_organization_identity.sql`. Onboarding
+   * takes a name, so **the nameless set is closed and shrinks**; it is a legacy state rather than
+   * a mode, which is why nothing may set it back to null.
+   *
+   * THE REGISTRATIONS ARE DELIBERATELY NOT HERE. Two registration objects per row would inflate
+   * every page of a listing that needs a label, and the detail route is one click away —
+   * `organization-identity-v1`'s ruling, not an omission.
+   */
+  readonly displayName: string | null;
 };
 
 /**
@@ -116,12 +130,20 @@ export type PlatformOrganizationRecord = {
  * `0013_organization_template.sql` have no Template and never can — nobody can say retroactively
  * which business type they are, and a backfill would be inventing an answer.
  *
- * NO `displayName` FIELD, because there is no column. `organization-detail-v1` contracts the wire
- * field as nullable so a name is additive later; the ABSENCE of a field here is what stops this
- * record from implying one exists.
+ * *** IT CARRIES AN `identity` AS OF 2026-09-07, AND THE COMMENT IT REPLACES IS WORTH KEEPING IN
+ * VIEW: *"NO `displayName` FIELD, because there is no column ... the ABSENCE of a field here is
+ * what stops this record from implying one exists."* *** That was correct and it was the
+ * discipline working — the record refused to imply a column the schema did not have.
+ * `0015_organization_identity.sql` supplies the columns and `organization-identity-v1` supplies
+ * the contract, so the absence has stopped being informative and would now be a gap.
  *
  * `memberCount` IS A NUMBER AND THERE IS NO SIBLING HOLDING IDENTITIES. See
  * `findOrganizationDetail`.
+ *
+ * `identity` IS CONTROL-PLANE THROUGHOUT and adds no tenant reach: a name, a commercial
+ * registration and a VAT registration are facts ABOUT an Organization held in the control plane,
+ * not records INSIDE it. `organization-detail-v1`'s test is mechanical and this passes it — *"a
+ * field is available to an operator if and only if reading it requires no tenant store."*
  */
 export type PlatformOrganizationDetailRecord = {
   readonly organizationId: string;
@@ -130,6 +152,7 @@ export type PlatformOrganizationDetailRecord = {
   readonly createdAt: string;
   readonly templateId: string | null;
   readonly memberCount: number;
+  readonly identity: OrganizationIdentity;
 };
 
 /**
@@ -386,6 +409,66 @@ export type PlatformOperatorStore = {
   findOrganizationDetail(
     organizationId: string,
   ): Promise<Result<PlatformOrganizationDetailRecord | null>>;
+
+  /**
+   * ===========================================================================================
+   * ONE ORGANIZATION'S IDENTITY BLOCK, WITHOUT THE MEMBER COUNT.
+   * ===========================================================================================
+   *
+   * *** IT IS A SEPARATE METHOD FROM `findOrganizationDetail` RATHER THAN A REUSE, AND THE REASON
+   * IS THE SUBQUERY. *** The detail read carries a correlated `COUNT(*)` over
+   * `organization_membership`. The update route needs the identity and has no use for the count,
+   * and **making it pay for a second table's scan on every write would be a read nobody asked
+   * for** — `organization-detail-v1`'s point that in this class a read costs writes, applied to
+   * the read itself.
+   *
+   * `null` FOR AN UNKNOWN ORGANIZATION, rendered by the route as the argument-free 404.
+   *
+   * *** A ROW WHOSE REGISTRATION COLUMNS DO NOT FORM ONE OF THE THREE STATES IS `internal()`, NOT
+   * AN EMPTY REGISTRATION. *** Defaulting an unreadable row to `not-recorded` would render "we
+   * never asked" over a row that says something else — a confident wrong answer about a legal
+   * identifier. It is reachable only by a row `0016`'s triggers never saw: a restore, a partial
+   * migration, or a write that predates `0015`. `0024`'s population.
+   */
+  findOrganizationIdentity(
+    organizationId: string,
+  ): Promise<Result<OrganizationIdentity | null>>;
+
+  /**
+   * ===========================================================================================
+   * REPLACE ONE ORGANIZATION'S IDENTITY BLOCK. ALL THIRTEEN COLUMNS, IN ONE STATEMENT.
+   * ===========================================================================================
+   *
+   * *** IT TAKES A WHOLE `OrganizationIdentity` AND NOT A PATCH, WHICH IS THE ENFORCEMENT RATHER
+   * THAN A STYLE. *** The incoherent rows `0015`'s triggers refuse — a number on a
+   * `not_registered` row, a verification with no number, a verification older than the number it
+   * attests to — are all rows somebody assembled a column at a time. A method that cannot express
+   * a partial registration cannot write one.
+   *
+   * THE MERGE HAPPENS ABOVE THIS PORT, in `applyRegistration`, which is a pure function of what is
+   * stored and what was submitted. So the transition rule is testable without a database and this
+   * method has no rule in it at all.
+   *
+   * **LAST WRITER WINS, AND THERE IS NO VERSION COLUMN.** Two operators editing one Organization
+   * in the same second is a lost update, and the losing edit is invisible in the result while
+   * being fully visible in BOTH audit trails. That is a real limit rather than a hidden one; it
+   * needs an optimistic-concurrency token to close and that is a contract change, not a local fix.
+   *
+   * *** IT RETURNS NO `null`, AND THE CALLER MUST HAVE ESTABLISHED EXISTENCE FIRST. *** This is a
+   * precondition rather than a convenience: the D1 adapter cannot tell an `UPDATE` that matched a
+   * row from one that matched none, because `D1Database.batch` returns `unknown[]` and Core's port
+   * deliberately withholds D1's `meta.changes` (`architecture.md` §6 — no vendor result shape in
+   * domain-adjacent code). **The boundary held and this check is what it cost.** See the adapter.
+   *
+   * So `findOrganizationIdentity` returning `null` is the 404, and the only window left is a row
+   * deleted between that read and this write — which **nothing in Dudo can do today**, there being
+   * no delete path for an `organization` row anywhere in the repository.
+   */
+  updateOrganizationIdentity(
+    organizationId: string,
+    identity: OrganizationIdentity,
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<OrganizationIdentity>>;
 
   /**
    * ===========================================================================================
