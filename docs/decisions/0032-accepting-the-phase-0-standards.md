@@ -1,6 +1,6 @@
 # 0032 — Accepting the Phase 0 standards
 
-**Status:** proposed — **awaiting the user's milestone acceptance**
+**Status:** ACCEPTED by the user, 2026-09-07
 **Recommended by:** Dudo Team Lead, 2026-09-07
 **Governs:** the nineteen documents in `docs/architecture/standards/`
 **Required by:** `0005` (the Foundation Gate) as amended by `0030`; these documents have carried
