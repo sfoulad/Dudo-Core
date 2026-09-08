@@ -62,6 +62,7 @@ import { buildAuditAnchorSuite } from './suites/platform-operator/audit-anchor.t
 import { buildAuditReadCostSuite } from './suites/platform-operator/audit-read-cost.ts';
 import { buildMemberResolveRenameSuite } from './suites/platform-operator/member-resolve-rename.ts';
 import { buildContractSatisfiabilitySuite } from './suites/contracts/satisfiability.ts';
+import { buildContractYamlStructureSuite } from './suites/contracts/yaml-structure.ts';
 import { buildCredentialResetSuite } from './suites/platform-operator/credential-reset.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
 import { buildTemplatesSuite } from './suites/platform-operator/templates.ts';
@@ -170,6 +171,11 @@ async function main(): Promise<void> {
     // executed it. Runs in the primary set and in no negative control, for the same reason as the
     // two below: there is no runtime port to break.
     buildContractSatisfiabilitySuite(),
+    // The other contract-set sweep, and the only structural check over the YAML itself. Nothing
+    // in this repository parses YAML, and `architecture-agent` — which authors every contract —
+    // cannot run a parser, so this is the one place a swallowed key can be caught by something
+    // other than its author's re-read. Builds no world; runs in the primary set only.
+    buildContractYamlStructureSuite(),
     // The two standing controls. Neither builds a world: one reads the contract registry and
     // compares it with Core's frozen transcriptions, the other greps `platform/core/**`. They run
     // in the primary set and in no negative control, because neither has a runtime port to break.
