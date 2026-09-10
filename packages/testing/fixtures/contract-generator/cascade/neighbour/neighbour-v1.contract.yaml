@@ -1,0 +1,42 @@
+---
+# THE OVER-REFUSAL CONTROL — "does the cascade apply to the RIGHT modules?"
+#
+# The cascade refusing a module that DOES depend on a refused one is the easy direction and was
+# proven first. **The interesting failure is the opposite one**: a fixed-point walk that
+# over-approximates its dependency edges would refuse this contract too, and that would look like
+# strictness rather than a bug.
+#
+# THIS CONTRACT IMPORTS A GOOD SHARED SCHEMA and never the bad one. It sits in the same tree as a
+# refused module and two cascade-refused modules. IT MUST BE DELIVERED.
+#
+# IT IMPORTS SOMETHING ON PURPOSE. A contract importing nothing never exercises a dependency edge,
+# so it passes whether the cascade is precise or never looked at edges at all — green either way,
+# which is the same class as a floor reporting success on an empty input.
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: cascade
+status: proposed
+updated: "2026-09-09"
+documentsExistingImplementation: none
+
+tenancy:
+  scope: >-
+    NONE. A generator test input. It binds to no route and reaches no store.
+
+operations:
+
+  - id: fixture.CascadeNeighbour
+    title: "An operation whose dependency is fine"
+    description: >-
+      Imports urn:dudo:schema:cascadefine:1 and nothing else. Delivery is the assertion.
+    request: { schemaRef: "urn:dudo:schema:cascadeneighbour:1#/$defs/neighbourInput" }
+    response: { schemaRef: "urn:dudo:schema:cascadeneighbour:1#/$defs/neighbourOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.cascade.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

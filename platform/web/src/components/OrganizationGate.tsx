@@ -33,8 +33,8 @@
  * about it would be someone asking which one is theirs.
  */
 
-import { Panel, StateBlock, ErrorBlock } from '@/components/StateBlock';
-import { Button, Spinner } from '@/components/ui/button';
+import { Button, Panel, Spinner, StateBlock } from '@dudo/ui';
+import { ErrorBlock } from '@/components/ErrorBlock';
 import type { OrganizationSelection } from '@/lib/use-organization';
 import type { ReactNode } from 'react';
 

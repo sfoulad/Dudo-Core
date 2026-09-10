@@ -62,6 +62,11 @@ import { buildAuditAnchorSuite } from './suites/platform-operator/audit-anchor.t
 import { buildAuditReadCostSuite } from './suites/platform-operator/audit-read-cost.ts';
 import { buildMemberResolveRenameSuite } from './suites/platform-operator/member-resolve-rename.ts';
 import { buildContractSatisfiabilitySuite } from './suites/contracts/satisfiability.ts';
+import { buildErrorCodePartitionSuite } from './suites/contracts/error-code-partition.ts';
+import { buildGeneratorBehaviourSuite } from './suites/contracts/generator-behaviour.ts';
+import { buildGeneratorGateSuite } from './suites/contracts/generator-gate.ts';
+import { buildRequestClassCheckSuite } from './suites/contracts/request-class-check.ts';
+import { buildEnumPolicyConsistencySuite } from './suites/contracts/enum-policy-consistency.ts';
 import { buildContractYamlStructureSuite } from './suites/contracts/yaml-structure.ts';
 import { buildCredentialResetSuite } from './suites/platform-operator/credential-reset.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
@@ -176,6 +181,39 @@ async function main(): Promise<void> {
     // cannot run a parser, so this is the one place a swallowed key can be caught by something
     // other than its author's re-read. Builds no world; runs in the primary set only.
     buildContractYamlStructureSuite(),
+    // The third contract-set sweep, and the narrowest. `common/error-envelope.schema.json`
+    // discriminates every error body on `code` through two enum subsets that must partition the
+    // canonical list — an invariant JSON Schema cannot express, which the schema itself says is
+    // "checked by eye". A code in neither subset is unreachable and SILENT; a code in both breaks
+    // `oneOf` for every response carrying it. Builds no world; runs in the primary set only.
+    buildErrorCodePartitionSuite(),
+    // The `0037` generator's own behaviours, driven against `fixtures/contract-generator/`.
+    // EVERY CASE HERE IS VERIFIED BY NOTHING ELSE: no shipped contract imports a refused module,
+    // no shipped schema carries a `$ref` beside a shape keyword, and none collides a root type
+    // with a `$defs` key. `architecture-agent` said of one of these fixes, "if that mutant is ever
+    // deleted, this fix goes untested and looks fine" — it lived in a scratchpad until now.
+    buildGeneratorBehaviourSuite(),
+    // *** WHAT THE GATE NEEDS FROM THE GENERATOR, WHICH ITS EXIT CODE DELIBERATELY DOES NOT CARRY.
+    // `generate-types.mjs --check` stays OUT of `npm test` as a command with meaningful exit codes
+    // (2 corpus wrong, 3 migration due), because a trigger that prints and exits 0 inside a passing
+    // run is one line nobody reads. **Exit codes are for humans running a tool; suite assertions are
+    // for gates.** Two things are gated here: zero drifted modules, and each phase condition
+    // asserted directly so the day one becomes due, a case goes RED naming the constant to flip.
+    // It replaces a phase trigger that was UNREACHABLE — its true arm had never executed in any run
+    // by anyone, and an unreachable branch and an unmet condition render identically: silence.
+    buildGeneratorGateSuite(),
+    // `0039`'s route-class checker, driven through its EXPORTED pure half so these cases exercise
+    // the same implementation the real run does. The reader is first because that is where the
+    // defect was: a one-character bug made every extracted id malformed, all three known-failing
+    // inputs passed because they fed `compare` directly, and the run reported AGREEMENT — a
+    // malformed id compares clean against everything.
+    buildRequestClassCheckSuite(),
+    // `0041`: the same wire field is defined in several contracts, and each copy carries its own
+    // `enumPolicy`. THREE COPIES CAN CARRY THREE POLICIES AND EMIT THREE CLIENT TYPES FOR ONE
+    // FIELD. Stricter than the eventual `$ref` collapse rather than throwaway work ahead of it: a
+    // `$ref` unifies enums somebody already wired together; this catches two that are semantically
+    // the same and were never wired at all.
+    buildEnumPolicyConsistencySuite(),
     // The two standing controls. Neither builds a world: one reads the contract registry and
     // compares it with Core's frozen transcriptions, the other greps `platform/core/**`. They run
     // in the primary set and in no negative control, because neither has a runtime port to break.

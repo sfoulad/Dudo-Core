@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:zephyr:1",
+  "title": "DELIBERATELY UNPARSEABLE — a missing comma, the exact defect of 2026-09-10."
+  "$comment": "THE COMMA AFTER `title` IS MISSING ON PURPOSE. Do not fix this file. It is the input for GEN_REF_UNRESOLVABLE_INDEX_INCOMPLETE, which had never executed. The repaired form is `carrier.schema.json.repaired`, which the suite copies over this one in the clean run. THE FILENAME AND THE `$id` SHARE NO TOKEN, DELIBERATELY: `carrier` vs `zephyr`. A refusal is allowed to name the URN it could not resolve and must NOT name the file it could not read, and if the two shared a word no assertion could tell those apart.",
+  "$defs": {
+    "thing": { "type": "string" }
+  }
+}

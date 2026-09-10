@@ -59,9 +59,31 @@ contractVersion: 1
 apiVersion: null            # These are absolute /auth/** paths. See login-v1 versioning.LG-6.
 namespace: core
 domain: identity
-status: proposed
-updated: "2026-09-05"
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-08. Unblocked by docs/decisions/0021, which is Accepted and which
+  created the session request class these two routes belong to — the class that "resolves a
+  session and STOPS: no tenant, no permission" — and which states that "widening it is a
+  decision, not a refactor". The class was decided by an accepted record; this contract
+  describes its two members.
+  ACCEPTED SEPARATELY FROM login-v1 ON ITS OWN EVIDENCE, not as part of a batch. The two share
+  a shape — an accepted ADR decided the substance and the contract describes it — and they do
+  not share an ADR.
+updated: "2026-09-09"
 documentsExistingImplementation: partial   # See PROVENANCE above. Per operation, below.
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. THIS CONTRACT IS THE ONE THAT PROVED THE FIELD NECESSARY.
+# ---------------------------------------------------------------------------
+# `session`: docs/decisions/0021's class. Authenticated at SESSION level only — no principal-scoped
+# authorization, no tenant, no permission.
+#
+# *** IT USES `operations:`, THE SAME BLOCK KEY THE PLATFORM CLASS USES, AND THAT COLLISION IS WHY
+# `0039` EXISTS. *** Four request classes share three block keys. A reader inferring the class from
+# the key reads `operations:` and concludes `platform` — which is wrong here and right for ten
+# other contracts, with nothing in either file to say which. The Team Lead's ruling that the three
+# keys mapped cleanly onto three classes was falsified by this contract specifically.
+requestClass: session
 #
 # =========================================================================================
 # TWO CORRECTIONS, 2026-09-05. BOTH FOUND BY web-agent WHILE IMPLEMENTING. READ BEFORE THE BODY.
@@ -565,6 +587,55 @@ autoSelection:
 # ---------------------------------------------------------------------------
 # operations
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# theOPERATIONIDRULING — docs/decisions/0039, 2026-09-09. Read before adding a route here.
+# ---------------------------------------------------------------------------
+theOPERATIONIDRULING:
+  ruling: >-
+    *** `.session` NAMES THE SESSION RESOURCE. IT NEVER NAMES THE REQUEST CLASS. ***
+    The two ids below are `identity.organizations.list` and `identity.organization.select`. Core's
+    route table carried `identity.session.organizations.list` and
+    `identity.session.organization.select`; THE ROUTE TABLE DROPS `.session` AND ALIGNS TO THIS
+    CONTRACT. Both halves land in one change.
+  whyTHECONTRACTFORMWINS_ANDITISNOTPRECEDENCE: >-
+    NOTHING PERSISTS EITHER FORM, so `0025`'s rule that a persisted value is not renamed to match a
+    document does not fire and the choice was free. Established structurally rather than by search:
+    `SessionRouteDependencies` has exactly two fields — `handlers` and `readSessionId` — and NO
+    AUDIT PORT, so a session-route handler has nothing to write a record with. Three tables carry
+    an `action_id` column (`audit_event`, `denial_summary`, `platform_operator_action`) and none is
+    reachable from this class.
+  theACTUALREASON_ANDTHETEAMLEADSFIRSTONEWASWRONG: >-
+    The ruling was first argued as "an id containing `.session` encodes its request class, which is
+    the implicit encoding `0039` refused when it declined a fourth block-key name". THAT PREMISE IS
+    FALSE, and the measurement is why the conclusion survives on better grounds.
+    `.session` APPEARS IN FOUR IDS ACROSS TWO CLASSES. `identity.session.refresh` and
+    `identity.session.revoke` are PRE-AUTHENTICATION ENTRY POINTS (`0014` §B, `pre-auth-registry.ts`),
+    and in those two `.session` is THE RESOURCE BEING ACTED ON — the session that is refreshed or
+    revoked. A route changing class would never have made them stale, because they were never
+    saying anything about class.
+    SO THE DEFECT IS NOT AN ENCODED CLASS. IT IS ONE SEGMENT CARRYING TWO MEANINGS IN ONE
+    NAMESPACE, WITH NOTHING TO TELL A READER WHICH — `architecture.md` §1a arriving in an
+    IDENTIFIER instead of a request field. §1a was written about a field name a cross-cutting
+    mechanism injects; the hazard is the same wherever a namespace is shared and no document owns it.
+    AFTER THIS CHANGE EVERY SURVIVING `.session` IS THE RESOURCE NOUN AND NONE IS A CLASS MARKER.
+  theRULEFORTHENEXTROUTE_ANDWHYITISSTATEDHERE: >-
+    *** DO NOT ADD `.session` TO A SESSION-CLASS ROUTE ID. *** Whoever adds the next one will look
+    at `identity.session.refresh`, see a session-class-adjacent id carrying `.session`, and copy
+    it — and the copy will look like consistency rather than like a defect. THAT IS WHY THE RULE IS
+    AT THE SITE AND NOT ONLY IN `0039`: a defect that reads as tidiness is the hardest kind to
+    refuse in review.
+    `identity.` STAYS. It is a MODULE namespace, not a class token, and it is load-bearing:
+    `platform.organizations.list` and `identity.organizations.list` are different operations that
+    differ only by that segment. WHAT GOES IS THE CLASS SEGMENT, NEVER THE NAMESPACE.
+  whatWASCHECKED: >-
+    COLLISION: none. No id in any class, in code or in any contract, is `identity.organizations.list`
+    or `identity.organization.select` other than these two.
+    NOT SWEPT, AND DELIBERATELY: the corpus runs two id conventions — dotted lowercase here and in
+    the platform class, PascalCase verbs in the Action pipeline (`core.ListAuthorizedBusinesses`,
+    `customers.CreateCustomer`). The split falls on Action-pipeline versus everything else, it is
+    possibly deliberate, and NOBODY HAS WRITTEN IT DOWN. Reported in `0039` as reported-not-decided;
+    harmonising it by search is the look-alike sweep `workflow.md` §12 warns against.
+
 operations:
 
   # =======================================================================================
@@ -573,6 +644,12 @@ operations:
     method: GET
     path: "/auth/session/organizations"
     surface: public
+    # NO PERMISSION IS EVALUATED, DECLARED RATHER THAN LEFT ABSENT. The session class resolves a
+    # session and STOPS — no tenant, no permission — and docs/decisions/0021 states that
+    # "widening it is a decision, not a refactor". It is the SECOND of the two closed, Core-owned
+    # sets `permission-catalog.yaml` admits; the first is 0014 §B's pre-auth registry.
+    permission: none
+    permissionExemption: "docs/decisions/0021 — the session request class"
     provenance: >-
       THE UNDERLYING METHOD EXISTS AND IS TRANSCRIBED: SessionResolver.listEnterableOrganizations
       (session-resolution.ts:432-451). THE ROUTE AND THE WIRE SHAPE ARE NEW.
@@ -614,6 +691,14 @@ operations:
     method: POST
     path: "/auth/session/organization"
     surface: public
+    # NO PERMISSION, AND THIS IS THE ROUTE WHERE THAT IS MOST WORTH STATING: it is the one place in
+    # Dudo where a caller NAMES A TENANT. It is safe without a permission because the named
+    # Organization is validated against the caller's own membership rows — selection cannot widen
+    # what a principal may enter, only choose among it. A permission here would be one every
+    # authenticated principal necessarily holds, deniable to nobody: the ceremony
+    # `platform-operator-v1` refused for `whoami` and `0021` refused for selection.
+    permission: none
+    permissionExemption: "docs/decisions/0021 — the session request class"
     provenance: >-
       THE UNDERLYING METHOD EXISTS AND IS TRANSCRIBED: SessionResolver.selectOrganization
       (session-resolution.ts:453-491), INCLUDING ITS ORDERING RULE. THE ROUTE AND THE WIRE SHAPE

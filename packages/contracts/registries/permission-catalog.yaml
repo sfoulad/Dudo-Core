@@ -56,9 +56,22 @@ model:
         docs/decisions/0021's session class, which resolves a session and STOPS — no tenant, no
           permission, and `0021` states that "widening it is a decision, not a refactor".
       *** docs/decisions/0025's PLATFORM CLASS IS NOT AN EXCEPTION AND MUST NOT BE LISTED AS
-      ONE. *** All fourteen of its routes DECLARE a permission, and
-      `assertEveryRoutePermissionIsReachable` fails the build if one declares a permission no
-      role can reach. What distinguishes that class is that it evaluates a permission WITHOUT A
+      ONE. *** EVERY route in that class declares a permission — stated as a property rather
+      than as a count, because THIS SENTENCE SAID "ALL FOURTEEN" AND THE CLASS IS FIFTEEN.
+      `platform.organizations.identity.update` landed 2026-09-07 and the figure rotted the same
+      day; the CLAIM stayed true, which is exactly why nobody noticed. Measured 2026-09-08 by
+      counting `id:` entries in `platform-routes.ts`'s frozen ROUTES array: fifteen.
+      THE PROPERTY DOES NOT ROT AND IT IS ALREADY ENFORCED, WHICH IS WHY THE NUMBER WAS NEVER
+      LOAD-BEARING: `platform-routes.ts::assertEveryRoutePermissionIsReachable` fails the build
+      if a route declares a permission no role can reach, and `PlatformRoute.permission` is a
+      REQUIRED field, so a route with no declared permission does not typecheck.
+      NAMING WHICH SIDE THAT IS TRUE OF, because a dismissal that does not is how these survive
+      review (.claude/rules/architecture.md §3b): it is true of DECLARATION. The `from-body`
+      variant can still RESOLVE to no permission at request time — `platform.confirmations.request`
+      does exactly that for an unknown `action_id` — and the dispatcher then refuses with
+      `invalid_argument` rather than falling back to a permission of its own. Declaration is what
+      this rule is about; resolution is refused separately.
+      A COUNT HERE ADDS NOTHING THAT A REQUIRED FIELD AND A BUILD FAILURE DO NOT ALREADY SAY. What distinguishes that class is that it evaluates a permission WITHOUT A
       TENANT, which is an exception to tenant scoping and not to this rule. A PERMISSIONLESS
       PLATFORM ROUTE IS NOT LEGITIMATE AND CORE REFUSES TO BUILD ONE.
       *** THIS ENTRY PREVIOUSLY READ: "An entry point with no declared permission is
@@ -1013,11 +1026,27 @@ defaultRoles:
   # from ten to eleven; the PROPERTY above needed no edit at all.
   #
   # THE RECONCILIATION, because two counts disagreed and both were right about different
-  # things. Grepping this file for the literal 'scopes: [platform]' finds FOURTEEN occurrences:
-  # ELEVEN are permission entries and THREE are prose inside comments — this block and the
-  # two-line omission note above 'business-owner'. THE ENTRY COUNT IS THE NUMBER THAT MEANS
-  # ANYTHING. Recorded because "count the string" and "count the entries" will keep giving
-  # different answers to whoever checks next.
+  # things: "count the string 'scopes: [platform]'" and "count the permission entries" will keep
+  # giving different answers to whoever checks next, since the string also appears in prose
+  # inside comments — this block among them. THE ENTRY COUNT IS THE NUMBER THAT MEANS ANYTHING.
+  #
+  # STATED IN docs/decisions/0033's FORM, because this figure has already moved once and will
+  # move again. 0033 governs row-write costs; the device is general and this is the same failure
+  # it was accepted for — a transcribed number in a file that cannot read its own source.
+  #   shape:            the count of entries in `permissions` whose own `scopes` includes
+  #                     `platform`. The entries are the source; this line is not.
+  #   figureOn_2026-09-08: 11 — derived by enumerating those entries, not by counting a string.
+  #   ifTheyDISAGREE:   THE ENTRIES ARE RIGHT AND THIS NOTE IS WRONG. Correct the note.
+  #
+  # WHAT WOULD MAKE THE NEXT DRIFT FAIL LOUDLY, since a figure nobody must move is a figure
+  # nobody moves: nothing here can, and that is the honest answer — no YAML parser exists in this
+  # repository, so this file cannot check itself. THE CHECK BELONGS WHERE A PARSER ALREADY RUNS.
+  # `platform-permissions.ts` holds the same set twice over in TypeScript — PLATFORM_PERMISSION_
+  # ENVELOPE (9) plus HELD_BUT_UNREACHABLE (2) — and 9 + 2 = 11 is an arithmetic identity a suite
+  # CAN assert. qa-agent's registry-coherence.ts is where it goes, with the two guards this
+  # repository has learned to demand: a floor that fails loudly when either list parses as empty,
+  # and a known-failing input — a fixture with a twelfth platform permission in neither list,
+  # which must go RED.
   #
   # *** THE READING THE OLD COMMENT INVITED WAS THE DANGEROUS PART, NOT THE ARITHMETIC. ***
   # "Only two" leaves a reader concluding the operator surface is tiny. It is not, and two of
@@ -1032,6 +1061,165 @@ defaultRoles:
   # INVARIANT — do not turn it into a set-equality check. This file already anticipates a
   # break-glass responder role holding REVOKE without GRANT, and a platform permission
   # deliberately withheld from platform-admin is precisely what that would look like.
+  #
+  # =====================================================================================
+  # *** WITHDRAWN 2026-09-10, BEFORE IT WAS EVER IN FORCE. DO NOT IMPLEMENT ANY OF IT. ***
+  # =====================================================================================
+  # A CO-HOLDING INVARIANT (`coHoldingRequired`) WAS PROPOSED HERE ON 2026-09-09 AND WAS
+  # REJECTED BY THE TEAM LEAD ON 2026-09-10 AFTER SECURITY REVIEW. IT IS KEPT RATHER THAN
+  # DELETED BECAUSE THE TWO REJECTION ARGUMENTS ARE REUSABLE AND THE PROPOSAL IS NOT.
+  # Nothing below is a request, an obligation, or a design. `coHoldingRequired` and
+  # `coHoldingReason` ARE NOT KEYWORDS OF THIS FILE and no entry declares them.
+  #
+  # WHY IT WAS REJECTED — TWO ARGUMENTS, AND THE SECOND IS THE ONE TO CARRY ANYWHERE ELSE:
+  #
+  # (1) THE SUBJECT SET WAS WRONG AND IT WOULD HAVE PASSED ITS OWN GUARD. `organizations_using`
+  #     is the declared response of FOUR operations under THREE permissions, not one. The
+  #     invariant declared on one. Shipped as written it would have examined ONE declared pair,
+  #     SATISFIED THE VACUITY GUARD ITS AUTHOR HAD INSISTED ON, printed a population of 1, and
+  #     PASSED — covering a third of the surface while reading as complete. The guard catches a
+  #     check handed NOTHING; this was a check handed HALF (workflow.md §11a).
+  #     AND THE RATIONALE FAILED ONE LEVEL UP FROM WHERE IT LOOKED: the proposal argued
+  #     declared-and-derived because a hardcoded pair is a transcribed fact. WHICH PERMISSIONS
+  #     MUST DECLARE IT IS ITSELF A HAND-TRANSCRIBED FACT ABOUT A CONTRACT, in a file that
+  #     cannot see that contract — the same defect the argument was written to avoid.
+  #
+  # (2) *** IT WAS A ROLE-COMPOSITION LINT, NOT AN AUTHORIZATION CONTROL, AND ITS RED STATE IS
+  #     CLEARED BY GRANTING MORE. *** A co-holding REQUIREMENT can only ever be satisfied by
+  #     WIDENING A ROLE. Someone defining a legitimately narrow role hits a red check and the
+  #     mechanical fix in front of them is "add the other permission too". A CONTROL WHOSE
+  #     REMEDY IS A BROADER GRANT PUSHES AGAINST LEAST PRIVILEGE, and the proposal never named
+  #     that. security.md §2 puts the decision in Core, on every call; this was a checker over a
+  #     YAML file at build time. The documentation-trigger benefit was real and it is the
+  #     benefit of a TRIGGER, not of a CONTROL, and it must not be recorded as the latter.
+  #
+  # WHAT REPLACED IT: a dedicated permission, `core.template-adoption.read` at `sensitive`,
+  # proposed by template-lifecycle-v1. Decided in Core on every call, fails as `forbidden`
+  # under deny-by-default, and CLEARING A REFUSAL MEANS GRANTING THE COUNT DELIBERATELY rather
+  # than widening a role. Opposite remedy, same finding.
+  #
+  # AND IF THE KEYWORD IS EVER REVIVED FOR SOMETHING ELSE, IT INHERITS A COVERAGE LIMIT NOBODY
+  # HAD NAMED: platform roles are a FROZEN LIST Core maps from `platform_operator.platform_role`,
+  # and docs/decisions/0007 D16 clause 3 stops a tenant principal ever holding a platform
+  # permission — so a check over `defaultRoles` is coextensive with reality TODAY. That is a
+  # property of the current design, not of the check. THE DAY PLATFORM ROLES BECOME DATA RATHER
+  # THAN A FROZEN LIST, SUCH A CHECK SILENTLY STOPS COVERING THEM.
+  #
+  # ------------------------------------------------------------------------------------
+  # THE ORIGINAL PROPOSAL FOLLOWS, UNEDITED, AS HISTORY. IT IS NOT IN FORCE.
+  # ------------------------------------------------------------------------------------
+  # PROPOSED 2026-09-09 by architecture-agent, on a Team Lead ruling, arising from
+  # template-lifecycle-v1's platform.templates.usage route. IT IS A PERMISSION-MODEL
+  # CONSTRAINT AND THEREFORE A SECURITY DECISION: it goes to security-agent with that
+  # contract's three proposed permissions and it is NOT IN FORCE UNTIL IT IS APPROVED
+  # AND MOVED OUT OF THIS COMMENT (security.md §8; 0007 rule 4's reasoning, applied to a
+  # constraint rather than to a permission). NOTHING BELOW BINDS ANYTHING TODAY.
+  #
+  # THE FINDING IT ANSWERS — A PAIR DISCLOSES WHAT NEITHER MEMBER DISCLOSES ALONE.
+  # platform.templates.usage returns a COUNT of Organizations adopting one Template. It is
+  # gated by core.template.read and adds no new permission. A holder of core.template.read
+  # WITHOUT core.organization.list therefore learns a LOWER BOUND on how many Organizations
+  # exist — a fact about the platform's customer base, reached through a Template route.
+  # NO RULE IS BROKEN AT EITHER STEP. Reading a Template is permitted; returning a count is
+  # permitted; the disclosure is a property of the two being held together.
+  # organization-detail-v1 records the identical shape in its
+  # soTHEDISCLOSUREISNOTINEITHERPERMISSIONALONE, as reasoning rather than as a mechanism.
+  #
+  # WHY A CONDITION IN A COMMENT IS NOT GOOD ENOUGH, WHICH IS THE WHOLE RULING.
+  # The safety rests on a property of TODAY'S ROLE SET — platform-admin is the only role
+  # holding core.template.read and it also holds core.organization.list. ROLE SETS CHANGE,
+  # and NOTHING GOES RED the day a role is created holding one and not the other. The person
+  # creating that role is reading THIS FILE, not a usage route's contract.
+  # architecture.md §3a and §3a-i both rule the same way: prefer the mechanism, and prefer
+  # the guard whose DEFAULT catches the new case.
+  #
+  # THE PROPOSED SHAPE — DECLARED ON THE ENTRY, DERIVED BY THE CHECK, NEVER TRANSCRIBED.
+  #   A permission entry may declare:
+  #       coHoldingRequired: [<permission id>, ...]
+  #       coHoldingReason:   "<why the pair discloses what neither does alone>"
+  #   THE INVARIANT: for every entry declaring coHoldingRequired, every role holding that
+  #   permission also holds every permission it names.
+  #   FOR THIS CASE: core.template.read would declare coHoldingRequired:
+  #   [core.organization.list], reason: "platform.templates.usage returns an aggregate over
+  #   the Organization population; without the ability to enumerate Organizations, the count
+  #   is a disclosure rather than a summary of what the holder may already see."
+  #
+  # WHY DECLARED-AND-DERIVED RATHER THAN A HARDCODED PAIR IN THE CHECK. A check holding the
+  # pair itself is a second copy of a fact, in a file that cannot see the first — the same
+  # class as a transcribed row-count or a transcribed line number (workflow.md §12), and it
+  # goes stale the moment a permission is renamed. Deriving the pairs FROM THIS FILE also
+  # scales: the next aggregate route declares its pair here and the check needs no edit.
+  #
+  # *** `coHoldingRequired` IS DIRECTIONAL. IT IS NOT `enumPolicyDivergence` AND MUST NEVER
+  # BE MADE SYMMETRIC. ***
+  # The two keywords arrive in the same week, do adjacent-sounding jobs — "these two
+  # declarations are related, do not flag them" — and will sit near each other in a reader's
+  # mind. THEY REQUIRE OPPOSITE THINGS AND HARMONISING THEM WOULD BE A REAL DEFECT:
+  #
+  #   enumPolicyDivergence   MUTUAL, and the mutuality is the safety. It SUPPRESSES a
+  #                          finding, so a one-sided marker would be a suppression the other
+  #                          file never agreed to — self-service silencing of a check.
+  #   coHoldingRequired      ONE-WAY, and the asymmetry is the meaning. "Holding
+  #                          core.template.read requires also holding core.organization.list"
+  #                          is an implication, not an equivalence. It CREATES a finding
+  #                          rather than suppressing one, so there is nothing for a second
+  #                          party to consent to.
+  #
+  # WHAT SYMMETRY HERE WOULD ACTUALLY DO, stated concretely because "it would be wrong" is
+  # not an argument anyone can act on: core.organization.list DOES NOT REQUIRE
+  # core.template.read AND MUST NOT BE MADE TO. Forcing the reverse implication would give
+  # the narrower permission a claim on the broader one and change the role model — every
+  # role that may enumerate Organizations would be obliged to read Templates, which nobody
+  # decided and which no disclosure argument supports. The aggregate leaks in ONE direction:
+  # the count is a disclosure to a holder who cannot already enumerate. The reverse is not a
+  # disclosure at all.
+  #
+  # THE MECHANICAL FORM, so a check cannot get this wrong by reading the prose: the relation
+  # is a DIRECTED EDGE from the declaring entry to each id it names. A check that builds an
+  # undirected pair set has already lost the meaning. And a cycle — two entries each naming
+  # the other — is LEGAL and means genuine mutual requirement; it must not be special-cased
+  # into symmetry for every pair.
+  # (architecture.md §1a: this is a name read across a boundary. Two keywords, adjacent, one
+  # mutual and one not, is exactly the shape somebody tidies into agreement.)
+  #
+  # *** THE VACUITY GUARD, AND IT IS NOT OPTIONAL: NO ENTRY DECLARES THIS FIELD TODAY. ***
+  # A check shipped now would examine ZERO pairs and pass, perfectly and meaninglessly, and
+  # a run where nothing was declared would render identically to one where every pair held.
+  # SO THE CHECK MUST REPORT THE POPULATION OF DECLARED PAIRS AND SAY LOUDLY WHEN IT IS ZERO
+  # (workflow.md §11a). ITS KNOWN-FAILING INPUT: a fixture role holding core.template.read
+  # and not core.organization.list, which must go RED.
+  #
+  # *** AND IF THE INVARIANT IS WRONG, THE CHECK IS STILL THE RIGHT OUTCOME. *** If a
+  # legitimate future role should read Templates and NOT enumerate Organizations, then the
+  # disclosure is real for that role and the usage route needs a different answer — a
+  # separate permission, or a count withheld. THE CHECK IS WHAT FORCES SOMEBODY TO HAVE
+  # THAT ARGUMENT INSTEAD OF QUIETLY CREATING THE ROLE. That is the point of it failing
+  # rather than being remembered, and it is why "the invariant might be wrong" is not an
+  # objection to proposing it.
+  #
+  # NOT PROPOSED HERE, DELIBERATELY: whether organization-detail-v1's pair deserves the same
+  # mechanism. It is the same shape and it is a different analysis, and folding it in would
+  # be this proposal growing scope on its own authority. Named so it is not lost.
+  #
+  # *** AND THE SHARPER REASON, ADDED WITH THE WITHDRAWAL: THE TWO DISCLOSURES ARE INVERSES,
+  # SO ONE KEYWORD COULD NEVER HAVE EXPRESSED BOTH. ***
+  #   template usage        arises from holding template-read WITHOUT organization-list
+  #                         -> the remedy is a co-holding REQUIREMENT
+  #   organization-detail   arises from holding organization-list TOGETHER WITH a member-list
+  #                         read -> the remedy is a co-holding PROHIBITION
+  # `coHoldingRequired` is a DIRECTED EDGE THAT CREATES A FINDING. A mutual exclusion is the
+  # OPPOSITE POLARITY, and folding them together would have been exactly the harmonisation
+  # architecture.md §1a warns about — one layer above the enumPolicyDivergence/coHoldingRequired
+  # pair the proposal already worried about. TWO KEYWORDS THAT LOOK RELATED AND REQUIRE OPPOSITE
+  # THINGS IS THE SHAPE SOMEBODY TIDIES INTO AGREEMENT.
+  #
+  # AND THE RIGHT INSTRUMENT FOR THAT ONE IS NOT A PERMISSION CONSTRAINT AT ALL. The prohibition
+  # is a RESERVATION — "there is no GET /organizations/{id}/members in this contract and one must
+  # not be added" — so it belongs as a ROUTE-TABLE ASSERTION: no platform route returns a set of
+  # principals for an Organization. That is core-agent's and the Team Lead is routing it
+  # separately. TODAY IT LIVES ONLY IN CONTRACT PROSE, and workflow.md §12 is explicit that prose
+  # describes while assertions instruct.
+  # =====================================================================================
   #
   # *** THE HELD-BY-NOBODY STATE LASTED ONE DAY. *** On 2026-09-07 this said
   # `core.platform-organization.update` was declared and granted to nobody, "deliberate and
@@ -1148,16 +1336,60 @@ defaultRoles:
     status: proposed
     description: "Builds and submits extensions."
     permissions: [core.developer.register, core.marketplace.submit, core.app.read]
-  # Every permission below declares 'organization' among its own 'scopes'. This is the
-  # former "core.*" expanded and then intersected with the role's scope: 59 of the 62
-  # CORE permissions. The three core permissions omitted, and why:
-  #   core.principal.grant-platform-scope  scopes: [platform] — CRITICAL escalation. A
-  #                                        tenant role must never reach platform scope.
-  #   core.marketplace.moderate            scopes: [platform] — same reason.
-  #   core.notification.read               scopes: [own] — held at 'own', not at
-  #                                        'organization'. Reading one's own
-  #                                        notifications is not an organization-scope
-  #                                        power; see the note in openQuestions AZ5.
+  # ===========================================================================================
+  # THE PROPERTY, AND IT REPLACED THREE COUNTS ON 2026-09-08
+  # ===========================================================================================
+  #
+  # *** EVERY PERMISSION BELOW DECLARES 'organization' AMONG ITS OWN 'scopes'. ***
+  # That is the whole of what this role promises, it is the only half that is a SAFETY property,
+  # and it does not rot.
+  #
+  # WHAT WAS HERE BEFORE, AND WHY IT IS INSTRUCTIVE RATHER THAN EMBARRASSING. This comment read
+  # "59 of the 62 CORE permissions", listed "the three core permissions omitted", and closed
+  # "Total for this role: 68 of the 71 catalogued permissions". MEASURED 2026-09-08: there are
+  # 71 core and 9 customers = 80 catalogued, this role holds 68, and it omits TWELVE core
+  # permissions, not three. ALL THREE FIGURES ROTTED AND THE ROLE NEVER CHANGED — 0025 through
+  # 0031 added platform-scope permissions above, and every one of them widened the gap between
+  # "core permissions that exist" and "core permissions this role may hold".
+  #
+  # *** THE PART WORTH KEEPING: THE FIX WAS ALREADY APPLIED ONE BLOCK UP AND WAS NOT PROPAGATED
+  # HERE. *** The defaultRoles preamble above replaced a count with a property and said so in
+  # terms — "A COUNT IN A COMMENT IS AN ASSERTION THAT ROTS EVERY TIME A DECISION ADDS AN ENTRY,
+  # AND NOTHING GOES RED WHEN IT DOES". The identical construct twenty lines below it was left
+  # alone. .claude/rules/workflow.md §12: BUDGET FOR MORE HOMES THAN YOU FIND — a claim worth
+  # stating once is a claim somebody restated, and the instance you did not fix is the one the
+  # next reader finds.
+  #
+  # THE TWELVE OMITTED, ENUMERATED RATHER THAN COUNTED, because a category absorbs the entry
+  # that does not belong to it:
+  #   ELEVEN declared scopes: [platform] — a tenant role must never reach platform scope, and
+  #   this is the CRITICAL escalation the preamble's invariant exists to forbid:
+  #     core.principal.grant-platform-scope   core.marketplace.moderate
+  #     core.organization.create              core.organization.list
+  #     core.platform-organization.update     core.template.read
+  #     core.template.list                    core.template.create
+  #     core.principal.revoke-platform-scope  core.platform-audit.read
+  #     core.credential.reset
+  #   ONE declared scopes: [own] — core.notification.read. Held at 'own', not at 'organization'.
+  #   Reading one's own notifications is not an organization-scope power; see openQuestions AZ5.
+  #
+  # *** THE TWO DIRECTIONS ARE NOT THE SAME CLAIM, AND CONFLATING THEM IS WHAT THE COUNT DID. ***
+  # A count asserts both at once and can be satisfied by neither being checked.
+  #   SAFETY (this role over-grants nothing):    every permission listed here declares
+  #     'organization' among its own scopes. A SAFETY INVARIANT. It fails loudly the day someone
+  #     adds a platform-scoped permission to this list, and qa-agent can assert it today.
+  #   COMPLETENESS (this role holds everything eligible): every organization-scoped permission
+  #     appears here. THIS IS A PRODUCT POLICY, NOT AN INVARIANT, and it must NOT be turned into
+  #     a check without a decision — doing so would AUTO-GRANT every future organization-scoped
+  #     permission to the most privileged tenant role, which is a grant nobody made. It happens
+  #     to hold today; see the note below on why that is an observation.
+  #
+  # OWED AS A MECHANICAL CHECK — qa-agent, registry-coherence.ts, THE SAFETY DIRECTION ONLY:
+  #   For every permission named in this role, assert it resolves in `permissions` and declares
+  #   'organization' among its own scopes. REPORT THE POPULATION EXAMINED and fail when it is
+  #   zero. THE KNOWN-FAILING INPUT IT MUST SHIP WITH: a fixture business-owner holding one
+  #   platform-scoped permission — core.template.list will do — which must turn it RED. A check
+  #   handed only passing input has been observed, not verified (workflow.md §11a).
   #
   # PLUS ALL NINE customers.* PERMISSIONS, added on 2026-09-02 on the Team Lead's accepted
   # seed-role ruling. Every one of the nine declares 'organization' among its own scopes, so
@@ -1167,7 +1399,20 @@ defaultRoles:
   # somebody must be able to authorize an erasure request. Holding the permission is still
   # not sufficient to invoke the Action — the confirmation mechanism §7 requires for a
   # critical Action does not exist, so DeleteCustomer remains unreachable.
-  # Total for this role: 68 of the 71 catalogued permissions.
+  #
+  # *** THE STATEMENT ABOVE IS NOW MORE PRECISE THAN IT WAS, AND THE CORRECTION MATTERS. ***
+  # The Action-side gate DOES exist: `action/pipeline.ts` branches on
+  # `requiresConfirmation(action.permission)` and its `confirmations?` dependency is fail-closed
+  # — "ABSENT MEANS EVERY `critical` OPERATION IS REFUSED". What does not exist is the
+  # ACTION-CLASS CHALLENGE ROUTE, so no tenant caller can OBTAIN a confirmation to present.
+  # `confirmation-v1` §whereItLIVES.theTWOCHALLENGEROUTES requires TWO — "one Action, one
+  # platform route" — and only the platform one is registered. DeleteCustomer is unreachable
+  # because the key cannot be minted, not because the lock is missing.
+  #
+  # THIS COMMENT ENDED "Total for this role: 68 of the 71 catalogued permissions" AND THE FIGURE
+  # ROTTED: 80 are catalogued, and 68 is still the size of the list below. Deleted rather than
+  # corrected — the list IS the source, and a total restated beside it is a second copy that can
+  # disagree with the first. See the property block above this role for the check that is owed.
   - id: business-owner
     scope: organization
     status: proposed

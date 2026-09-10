@@ -46,8 +46,55 @@ acceptedNote: >-
   the audit model and the two routes. IT DOES NOT ACCEPT THE THREE CONTRACTS THAT INHERIT THIS
   CLASS — template-v1 is unblocked, and organization-onboarding-v1 and credential-reset-v1 remain
   `proposed` with real blockers of their own (ON-5/CR-5, ON-6/CR-1).
-updated: "2026-09-05"
+updated: "2026-09-09"
 documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. DECLARED, NEVER INFERRED FROM THE BLOCK KEY.
+# ---------------------------------------------------------------------------
+# `platform`: docs/decisions/0025 decision 3. Principal-level authentication, a permission
+# evaluated against a Core-owned envelope, and NO TENANT.
+#
+# THIS CONTRACT IS WHY THE FIELD IS NEEDED. `operations:` covers BOTH this class and the session
+# class — `organization-selection-v1` uses the same key for `0021` routes that evaluate no
+# permission and resolve no tenant. Two classes, one key, and nothing distinguishing them: a
+# reader inferring the class from the block key gets one of the two wrong.
+requestClass: platform
+
+# ---------------------------------------------------------------------------
+# tenancy — THE CLASS HAS NO TENANT, AND THAT IS THE DEFINING PROPERTY RATHER THAN AN OMISSION
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-09. This contract had no `tenancy:` block at all, and the absence was read as an
+# oversight by every tool that looked — because an absent section and a deliberate one are the
+# same character. It is the same defect as an absent `permission:` key, one level up.
+tenancy:
+  scope: >-
+    NONE. A platform route obtains no tenant store, resolves no Organization, and emits no tenant
+    predicate. `PlatformRouteDependencies` carries no `TenantStoreResolver` and there is no field
+    on it from which one could be built.
+  whyNotAnOmission: >-
+    THE ABSENCE OF A TENANT IS WHAT DEFINES THIS CLASS. docs/decisions/0025 decision 3 created it
+    precisely because neither existing class fitted: an Action ALWAYS has a tenant, and 0021's
+    session class evaluates NO permission. A platform route sits between them — a permission
+    without a tenant — and 0021's own sentence is the reason it is a class rather than a branch:
+    "the invariant that an Action always has a tenant is worth more than the code it saves."
+  howItIsEnforced: >-
+    STRUCTURALLY, AND NOT BY THIS SENTENCE. A platform operator holds a `platform_operator` row and
+    ZERO `organization_membership` rows (docs/decisions/0024), so the chain is mechanical: no
+    membership, no Organization selection, no `TenantStoreResolver` handle, no `whereWithTenant`
+    predicate, no rows. The refusal is at AUTHENTICATION rather than at authorization or at the
+    router.
+  theOneExceptionANDITISBOUNDED: >-
+    THE PLATFORM MAY WRITE A CUSTOMER'S RECORD OF WHAT WAS DONE TO THEM. IT MAY NOT READ WHAT THEY
+    HAVE. Five platform routes write into a customer's tenant database — onboarding, the member
+    resolve, the credential reset, the Organization audit feed and the identity update — through
+    three modules that live OUTSIDE `platform/core/platform/**` and each hold a bounded handle for
+    one operation. EVERY ONE WRITES; NONE READS. docs/decisions/0025's amendment states the line
+    and states where to stop trusting it: "not at a count — at the first component that resolves a
+    store in order to READ."
+  whatThisContractItselfTouches: >-
+    NEITHER of this contract's two routes is one of those five. `platform.organizations.list` and
+    `platform.session.whoami` read the control plane only and write no tenant row at all.
 
 # ---------------------------------------------------------------------------
 # theClass — READ FIRST. Every other platform contract inherits this and restates none of it.

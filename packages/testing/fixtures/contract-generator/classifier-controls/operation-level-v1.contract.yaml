@@ -1,0 +1,13 @@
+---
+# CONTROL 2 of 3, AND IT IS THE ONE WITH TEETH. DECLARES PER-OPERATION AND NOWHERE ELSE.
+#
+# *** A SWEEP WRITTEN AS `^requestClass:` FINDS NOTHING HERE AND REPORTS THIS CONTRACT AS LACKING
+# *** THE FIELD. *** That is a false positive in the direction that makes a migration look
+# incomplete — the PESSIMISTIC rot direction `workflow.md` §11a records is believed indefinitely,
+# because acting on it always looks like the safe choice. The sweep must NOT return this file.
+
+contractVersion: 1
+
+operations:
+  - id: fixture.ClassifierControlsOperationLevel
+    requestClass: action

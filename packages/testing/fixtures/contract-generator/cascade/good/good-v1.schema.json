@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:cascadegood:1",
+  "title": "THE FLOOR. Imports nothing; must always be delivered.",
+  "$defs": {
+    "goodInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": { "value": { "type": "string" } }
+    },
+    "goodOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:cascadebad:1",
+  "title": "A SHARED schema that REFUSES. No contract sits beside it, exactly like common/pagination.",
+  "$comment": "`xyzzy` is in neither the shape list nor the constraint list, so this node must be refused. That refusal is the INPUT to the cascade test: a module that imports it must not be written. If a future keyword list ever admits `xyzzy`, this fixture stops testing anything and the cascade cases go green for the wrong reason — pick another name that is in neither list rather than deleting the case.",
+  "$defs": {
+    "badThing": {
+      "xyzzy": 1
+    }
+  }
+}

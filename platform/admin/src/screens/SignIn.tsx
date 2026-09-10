@@ -9,7 +9,7 @@
  * four seconds on a laptop, longer on a phone — before a single byte is sent.
  * With no indication, that reads as a dead button, and a person's response to a
  * dead button is to press it again. So the progress bar is driven by a real
- * timed calibration on this device (`api/kdf-worker.ts`), it is LABELLED an
+ * timed calibration on this device (`@dudo/client-kdf/worker`), it is LABELLED an
  * estimate because that is what it is, and it never claims completion before the
  * derivation returns.
  *
@@ -41,11 +41,11 @@
  */
 
 import { useCallback, useRef, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { errorBody, errorTitle, toApiError, type ApiError } from '@/api/errors';
-import { identifierRefusal, CredentialDerivationError } from '@/api/kdf';
-import type { DerivationProgress } from '@/api/kdf-client';
+import { identifierRefusal, CredentialDerivationError } from '@dudo/client-kdf';
+import type { DerivationProgress } from '@dudo/client-kdf/client';
 import type { AuthClient } from '@/api/auth';
 
 export interface SignInProps {
@@ -113,7 +113,7 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
              * THE PASSWORD IS DROPPED THE MOMENT IT IS NO LONGER NEEDED. It was
              * held in component state for the lifetime of the submit and nowhere
              * else: not in a ref that outlives the screen, not in storage, and
-             * not in the result. `api/kdf-client.ts` terminates the worker on
+             * not in the result. `@dudo/client-kdf/client` terminates the worker on
              * every path, which drops the worker's copy with the thread.
              */
             setPassword('');

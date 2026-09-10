@@ -1,5 +1,19 @@
 @import "tailwindcss" source(none);
 
+/*
+ * The shared primitives' own stylesheet. `@dudo/ui`'s `table.tsx` emits plain
+ * component classes — `data-table`, `cell-value`, `cell-label` — that are not
+ * Tailwind utilities and therefore cannot be produced by scanning. **A
+ * primitive's styling travels with the primitive**; duplicating it here would be
+ * the divergence ADR 0040 exists to end, one layer down and harder to see,
+ * because two stylesheets drifting apart produce no type error.
+ *
+ * A relative path rather than a `node_modules` specifier, for the same reason as
+ * the `@source` line below: this points at the source of truth rather than at
+ * however npm laid the tree out this morning.
+ */
+@import "../../../../packages/ui/src/styles.css";
+
 /* ---------------------------------------------------------------------------
    WHAT TAILWIND IS ALLOWED TO SCAN, AND WHY IT IS RESTRICTED
    ---------------------------------------------------------------------------
@@ -27,6 +41,25 @@
 
 @source "../**/*.{ts,tsx}";
 @source "../../index.html";
+
+/* ---------------------------------------------------------------------------
+   THE SHARED PRIMITIVES, WHICH ARE NOT IN THIS PACKAGE
+   ---------------------------------------------------------------------------
+   ADR 0040 moved the presentation primitives into `@dudo/ui`. With `source(none)`
+   above, Tailwind scans exactly the paths named here and nothing else — so
+   WITHOUT THIS LINE every class in every primitive is purged.
+
+   That failure is silent and total: `npm run build` exits 0, `tsc` exits 0, and
+   the console renders unstyled. It was not reasoned about — the line was added
+   AFTER `verify:css` was extended to cover the package, and the check reported
+   `42 class(es) produced NO rule` on the tree without it.
+
+   A RELATIVE PATH RATHER THAN `node_modules/@dudo/ui`, deliberately: the
+   workspace link is a symlink, and a scanner that follows one is a scanner
+   whose behaviour depends on how npm chose to lay out the tree that morning.
+   This points at the source of truth.
+   --------------------------------------------------------------------------- */
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
 
 /* ---------------------------------------------------------------------------
    Dudo platform administration — design tokens

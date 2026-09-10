@@ -10,7 +10,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@dudo/ui';
 import { errorBody, errorTitle, isRetryable, type ApiError } from '@/api/errors';
 
 export function LoadingBlock({ label }: { label: string }) {

@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+/*
+ * The shared primitives' own stylesheet (ADR 0040). `@dudo/ui`'s `table.tsx`
+ * emits plain component classes — `data-table`, `cell-value`, `cell-label` —
+ * which are not Tailwind utilities and so can never be produced by scanning.
+ * **A primitive's styling travels with the primitive.**
+ *
+ * A relative path rather than a `node_modules` specifier: the workspace link is
+ * a symlink, and a build that resolves through one depends on how npm laid the
+ * tree out rather than on where the source is.
+ */
+@import "../../../../packages/ui/src/styles.css";
+
+/*
+ * AND TAILWIND IS TOLD TO SCAN THE PACKAGE EXPLICITLY.
+ *
+ * This console uses automatic content detection, which reaches this project's
+ * own files. `@dudo/ui` is outside them, reachable only through a symlinked
+ * `node_modules` entry — and "automatic detection probably follows a workspace
+ * symlink" is exactly the kind of thing that is true until it is not, with a
+ * failure mode of every primitive class silently purged while the build exits 0.
+ *
+ * Naming it removes the question. `platform/admin` needs the same line for a
+ * harder reason: it uses `source(none)` and scans only what it is told.
+ */
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
+
 /* ---------------------------------------------------------------------------
    Dudo — design tokens
    ---------------------------------------------------------------------------
@@ -113,142 +139,26 @@
 }
 
 /* ---------------------------------------------------------------------------
-   The directory table
+   THE DATA TABLE'S RULES MOVED TO `@dudo/ui`, 2026-09-09 (ADR 0040)
    ---------------------------------------------------------------------------
-   Plain CSS rather than utilities, deliberately. Turning a semantic <table>
-   into a stack of record cards means changing `display` on five elements and
-   re-placing two of them on a grid; expressed as arbitrary Tailwind variants it
-   is both unreadable and — as this build proved — easy to get wrong. These
-   exact rules were verified working in the zero-dependency build and are
-   carried over unchanged in behaviour.
+   They are now `packages/ui/src/styles.css`, imported at the top of this file.
 
-   Logical properties throughout: padding-inline, text-align: start,
-   margin-inline-end. Nothing here needs editing for RTL.
+   MOVING THE COMPONENT WITHOUT ITS CSS WAS HALF A MOVE, and it was caught rather
+   than foreseen. `table.tsx` emits `data-table`, `cell-value` and `cell-label` —
+   plain component classes, not Tailwind utilities, so nothing about scanning
+   would ever have produced them. They lived here and nowhere else, which meant
+   the shared component depended on host CSS that exactly one host had:
+   `platform/admin` would have rendered the table with no borders, no header
+   treatment and no card behaviour on a phone.
+
+   `platform/admin`'s `verify:css`, extended to cover the package, is what said
+   so — reporting those three classes as producing no rule. The build exited 0
+   throughout, and `tsc` has no opinion about CSS.
+
+   THE RULE: a primitive's styling travels with the primitive. Duplicating the
+   block into the second host would have been the divergence 0040 exists to end,
+   one layer down and harder to see.
    --------------------------------------------------------------------------- */
-
-@layer components {
-  .directory {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-  }
-
-  .directory thead th {
-    padding: var(--spacing, 0.25rem) 0;
-    padding-block: 0.75rem;
-    padding-inline: 1rem;
-    background: var(--color-sunk);
-    border-bottom: 1px solid var(--color-line);
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--color-ink-muted);
-    text-align: start;
-    white-space: nowrap;
-  }
-
-  .directory tbody tr {
-    border-bottom: 1px solid var(--color-line);
-    cursor: pointer;
-  }
-  .directory tbody tr:last-child { border-bottom: 0; }
-  .directory tbody tr:hover,
-  .directory tbody tr:focus-within { background: var(--color-navy-50); }
-
-  .directory td {
-    padding-block: 0.75rem;
-    padding-inline: 1rem;
-    vertical-align: middle;
-    color: var(--color-ink-soft);
-  }
-
-  .cell-label { display: none; }
-
-  /* Email and Business may be shortened in the directory — the whole value is
-     on the record, one click away, and a row that grows to three lines makes
-     the directory harder to scan than a shortened value does. */
-  .directory td.cell-email > .cell-value,
-  .directory td.cell-business > .cell-value {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .directory td.cell-phone { white-space: nowrap; }
-
-  /* Below the table breakpoint each row becomes a record card carrying its own
-     labels, so no column meaning is lost when the header row disappears. The
-     labels are real DOM rather than CSS pseudo-content, so they stay in the
-     accessibility tree. */
-  @media (max-width: 55rem) {
-    .directory,
-    .directory tbody,
-    .directory tr,
-    .directory td {
-      display: block;
-      width: 100%;
-    }
-
-    .directory colgroup { display: none; }
-
-    .directory thead {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-    }
-
-    .directory tbody tr {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 0.25rem 0.75rem;
-      padding: 1rem;
-    }
-
-    /* min-width: 0 on both the cell and its value is what stops a long email
-       address — a single unbreakable token — from forcing the whole page wider
-       than the phone it is being read on. */
-    .directory td {
-      display: flex;
-      align-items: baseline;
-      gap: 0.5rem;
-      padding: 0;
-      min-width: 0;
-    }
-    .directory td > .cell-value {
-      min-width: 0;
-      overflow: visible;
-      white-space: normal;
-      overflow-wrap: anywhere;
-    }
-
-    .directory td.cell-name { grid-column: 1; grid-row: 1; }
-    .directory td.cell-status {
-      grid-column: 2;
-      grid-row: 1;
-      justify-self: end;
-    }
-    .directory td.cell-type,
-    .directory td.cell-email,
-    .directory td.cell-phone,
-    .directory td.cell-business {
-      grid-column: 1 / -1;
-    }
-
-    .cell-label {
-      display: inline;
-      flex: none;
-      min-width: 4.5rem;
-      font-size: 0.75rem;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--color-ink-faint);
-    }
-  }
-}
 
 /* The route-change progress bar in AppShell. Named rather than inlined so the
    reduced-motion rule below can reach it. */

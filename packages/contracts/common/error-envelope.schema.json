@@ -2,77 +2,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:dudo:schema:error-envelope:1",
   "title": "Dudo Error Envelope",
-  "description": "The one error shape returned by every Dudo API, internal and public alike. This schema is a transcription of API_STANDARD.md §8 into a machine-readable form; it introduces no new decision and no new code. It is platform-wide rather than App-owned because an error shape that varies per module is not a shape. NOT EXECUTED: no JSON Schema implementation exists in this repository (AS1, TS1), so this document is normative and hand-checked, not machine-validated.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["error"],
-  "properties": {
-    "error": {
+  "description": "The one error shape returned by every Dudo API, internal and public alike. This schema is a transcription of API_STANDARD.md §8 into a machine-readable form; it introduces no new decision and no new code. It is platform-wide rather than App-owned because an error shape that varies per module is not a shape.\n\nNOT VALIDATED: no JSON Schema implementation exists in this repository (AS1, TS1), so this document is normative and hand-checked, never machine-validated. IT IS NOW GENERATED FROM, WHICH IS A DIFFERENT THING AND THE DISTINCTION IS THE POINT — `packages/contracts/generator/generate-types.mjs` (docs/decisions/0037) reads this file and emits TypeScript types from it, and `renderRef` resolves `urn:` references. So a client's error type is DERIVED here even though nothing VALIDATES here.",
+  "$comment": "THE PRESENCE RULE FOR `retry_after_seconds`, AND WHY THIS SCHEMA IS SHAPED THE WAY IT IS. Both branch definitions point here.\n\n*** IT LIVES AT THE ROOT RATHER THAN IN `$defs`, AND THAT IS A RULING RATHER THAN A PREFERENCE. *** It was first written as a `$defs` entry called `thePresenceRule` — an object whose only key was `$comment`, so it constrained nothing and could not be sent — purely so both branches could `$ref`-anchor to it. THE GENERATOR REFUSED IT: a `$def` declaring no shape has no type to emit, so the whole module fell. THE FIX WAS NOT TO TEACH THE GENERATOR TO SKIP SHAPELESS DEFINITIONS. That rule is one keyword wide and FAILS OPEN — the same shape as the constraint-only classifier that silently dropped shape-bearing members, which was replaced hours earlier by a two-list classifier that refuses anything it does not recognise. 'Except when it looks like documentation' reopens exactly that door, and the next thing through it is not a comment. THE ASYMMETRY THAT DECIDES IT: `$defs` is for DEFINITIONS, and an argument is not a definition — the prose was not a schema node with no shape, it was not a schema node at all. What is lost is the `$ref` anchor; what it was FOR is kept, because the argument is still in the file and both branches still cite it.\n\nREWRITTEN 2026-09-09 FROM `if`/`else` TO A DISCRIMINATED `oneOf`. WHAT IT WAS: an `allOf` carrying `if: {code in [rate_limited, quota_exceeded]}` with `else: {not: {required: [retry_after_seconds]}}`. Valid draft 2020-12, and it decided the rule correctly.\n\nWHY IT CHANGED: *** NOTHING IN THIS REPOSITORY EXECUTES JSON SCHEMA, SO THE `if`/`else` WAS ENFORCING EXACTLY NOTHING. *** A discriminated `oneOf` expresses the same rule in a form the type generator renders, so it becomes a compile-time impossibility IN EVERY CONSUMER — the web client, Core, and the Apple client once its emitter exists. THE ENVELOPE'S OWN WORDS FOR WHY THAT MATTERS: a retry time appearing beside `not_found` would be A CHANNEL. Under `if`/`else` that was forbidden by a sentence nothing ran. Under `oneOf` it does not typecheck. A RULE ENFORCED NOWHERE, REPLACED BY ONE ENFORCED IN EVERY CONSUMER, IS THE BETTER CONTRACT — NOT A WORKAROUND, and being renderable is the smaller half of the argument.\n\nWHAT IS LOST, STATED RATHER THAN GLOSSED: the `if`/`else` was one construct and this is two nearly-identical branch objects, so THE COMMON PROPERTIES ARE DUPLICATED BETWEEN THEM. `workflow.md` §12 is explicit that a duplicated constraint is the shape a citation-driven sweep cannot find, which is why it is named here and cited from both branches. The alternative — one `errorBodyCommon` composed into both with `allOf` — was considered and REFUSED: `additionalProperties: false` only sees SIBLING `properties`, never those arriving through an `allOf` branch, so composing that way would make every branch reject every field it inherited. A real JSON Schema trap rather than a stylistic preference, and IT WOULD BITE THE DAY A VALIDATOR EXISTS — a defect that waits for its own remedy to arrive. IF A MERGE MECHANISM EVER EXISTS, THIS IS THE FIRST THING TO REVISIT.",
+  "$ref": "#/$defs/errorEnvelope",
+  "$defs": {
+    "errorEnvelope": {
+      "$comment": "*** THE WRAPPER LIVES IN `$defs` AND THE ROOT IS A `$ref` TO IT, SO THAT CONSUMERS CAN NAME IT. *** Moved here 2026-09-09 when the first contracts wired the reference. A cross-file reference resolves `urn:...#/$defs/<name>` to an IMPORTED NAMED TYPE; a pointer into `#/properties/...` resolves to a shape rendered INLINE, which would make every consumer re-declare the envelope — exactly the defect docs/decisions/0037 requirement 2 exists to remove. The root keeps no `properties` of its own, so nothing emits twice.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message", "request_id"],
+      "required": ["error"],
+      "description": "The complete error response body: one property, `error`, carrying exactly one of two shapes discriminated on `code`.",
       "properties": {
-        "code": { "$ref": "#/$defs/errorCode" },
-        "message": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 500,
-          "description": "For a developer. NEVER contains business data, another tenant's identifiers, a stack trace, a query, a hostname, a library version, or internal structure (API_STANDARD.md §8, SECURITY_STANDARD.md §7). For a given code and a given failing condition the message is a fixed string that does not vary with the data involved — a message that varies with the record is a disclosure channel."
-        },
-        "details": {
-          "type": "array",
-          "description": "Machine-readable detail, under the same restriction as 'message'. Names the offending field and a stable issue token; never the offending value.",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["field", "issue"],
-            "properties": {
-              "field": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 120,
-                "description": "The request field, in wire form (snake_case), optionally dotted for nesting."
-              },
-              "issue": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
-                "description": "A stable machine token, e.g. must_not_be_blank. Not a sentence, not the rejected value."
-              }
-            }
-          }
-        },
-        "request_id": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{8,64}$",
-          "description": "Returned on every response, success or error. It is what makes a support conversation possible without asking a customer to share their data (API_STANDARD.md §11). It is the ONLY identifier an error message carries — never a tenant id, never a resource id (MULTITENANCY_STANDARD.md §4 carrier 11)."
-        },
-        "retry_after_seconds": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Seconds until the caller may retry. PRESENT ONLY ON 'rate_limited' AND 'quota_exceeded'. On every other code it is ABSENT — not null, not zero, absent — and that is enforced structurally by the 'allOf' below rather than left to be honoured. It is OPTIONAL even on those two codes: a value is not always knowable (a degraded coordinator does not have one), and a required field would be a field someone invents a number for. WHERE IT COMES FROM, AND THIS IS THE WHOLE OF WHY IT IS SAFE: it is derived from a FIXED WINDOW BOUNDARY — the end of the 60-second rate window, or the next 00:00 UTC reset — so it is THE SAME VALUE FOR EVERY CALLER ON THE PLATFORM AT THAT INSTANT, computable from a clock alone, and it carries no information about any Organization. It does not reveal which rate-limit level refused the request, because all levels share one window length. PROHIBITED, AND THIS IS THE CONSTRAINT AN OPTIMISER BREAKS: this value MUST NEVER be derived from observed usage, remaining budget, queue depth, current load, attempt count, or anything else a caller can vary. A retry time that reflects how much budget is left is a side channel on other tenants' activity — the same shape as the evaluation-position oracle closed one level up in customer-directory-v1.contract.yaml authorizationModel.budgetExhaustion, and reachable the same way, by a caller who deliberately drives the input it controls. A retry time that is a function of the calendar discloses nothing; a retry time that is a function of the system's state discloses the system's state. Only the first is permitted. This field also pays the debt API_STANDARD.md §10 records for 'rate_limited', which platform/core/http/api.ts names as owed and unpaid: the HTTP adapter emits the 'Retry-After' header DERIVED FROM THIS FIELD, so the envelope stays the single source of truth and internal, SDK and MCP callers — none of which see HTTP headers — receive the same value."
+        "error": {
+          "$comment": "Why this is a `oneOf` rather than the `if`/`else` it replaced on 2026-09-09, and why the branch properties are duplicated: THIS SCHEMA'S ROOT-LEVEL `$comment`.",
+          "description": "EXACTLY ONE OF TWO SHAPES, DISCRIMINATED ON `code`. See `$defs/errorBodyWithRetryAfter` and `$defs/errorBodyWithoutRetryAfter`.",
+          "enumPolicy": "closed",
+          "$comment": "`closed`, and docs/decisions/0041 settles it in its own text: *\"It does not reopen `errorCode`.\"* Extended to variant sets, the reasoning is if anything stronger here than on the enum. THE WHOLE VALUE OF THIS UNION IS THAT THE COMPILER REFUSES THE COMBINATION THE CONTRACT FORBIDS — a retry time beside `not_found`. An unknown-variant arm would be a third shape with no `retry_after_seconds` rule attached to it, so a client could satisfy the type with a body the envelope does not permit, and the discriminated union would have been gutted by the mechanism written to protect unions.\n\nThe two branches are not a lifecycle that grows: they PARTITION `errorCode`, `qa-agent`'s check asserts that partition, and a new branch is only reachable by adding a code — which is already a decision under 0041 rather than an evolution. A variant set whose membership is derived from a closed enum inherits that enum's answer.",
+          "oneOf": [
+            { "$ref": "#/$defs/errorBodyWithRetryAfter" },
+            { "$ref": "#/$defs/errorBodyWithoutRetryAfter" }
+          ]
         }
-      },
-      "allOf": [
-        {
-          "$comment": "Presence rule for retry_after_seconds, expressed rather than described. Draft 2020-12 can decide this — 'if' with only 'else' is valid — and AUTHORIZATION_STANDARD.md §4 records what it cost the last time an expressible constraint was written up as prose. A retry time appearing beside 'not_found' would be a channel; here it cannot validate. NOT EXECUTED: no JSON Schema implementation exists in this repository (AS1, TS1), so like the rest of this document it is normative and hand-checked, not machine-validated.",
-          "if": {
-            "required": ["code"],
-            "properties": {
-              "code": { "enum": ["rate_limited", "quota_exceeded"] }
-            }
-          },
-          "else": {
-            "not": { "required": ["retry_after_seconds"] }
-          }
-        }
-      ]
-    }
-  },
-  "$defs": {
+      }
+    },
+
     "errorCode": {
       "type": "string",
-      "description": "The closed taxonomy from API_STANDARD.md §8. An Action declares the subset it may return; anything outside that subset is a defect in the Action, not a new code.",
+      "description": "The closed taxonomy from API_STANDARD.md §8. An Action declares the subset it may return; anything outside that subset is a defect in the Action, not a new code.\n\nIT REMAINS THE CANONICAL LIST even though the envelope now discriminates on two subsets of it: `codeCarryingRetryAfter` and `codeWithoutRetryAfter` PARTITION this enum, and the partition is checked by eye against this list rather than derived, because JSON Schema cannot express a set difference. THE TWO SUBSETS MUST UNION TO EXACTLY THIS SET — a code in neither is unreachable through the envelope, and a code in both makes `oneOf` fail for every response carrying it.",
       "enum": [
         "invalid_argument",
         "unauthenticated",
@@ -86,7 +42,105 @@
         "not_implemented",
         "unavailable",
         "timeout"
-      ]
+      ],
+      "enumPolicy": "closed"
+    },
+
+    "codeCarryingRetryAfter": {
+      "type": "string",
+      "description": "The two codes that MAY carry `retry_after_seconds`. A strict subset of `errorCode`; see that definition for the partition obligation.\n\n*** NAMED FOR THE FIELD, NOT FOR 'RETRYABLE', AND THAT IS A CORRECTION MADE BEFORE ANYTHING CONSUMED IT. *** These were first called `retryableErrorCode` and `nonRetryableErrorCode`. THAT WAS `architecture.md` §1a IN A TYPE NAME: API_STANDARD.md §8 describes `unavailable` as 'Dependency down; RETRYABLE' — so under the first naming, `unavailable` is a retryable code sitting in `nonRetryableErrorCode`, which is not wrong so much as unreadable. TWO SENSES OF ONE WORD: 'the caller may try again' (API_STANDARD's, which is true of `unavailable`, `timeout` and `internal`) and 'may carry a retry-after VALUE' (this schema's, which is true of exactly two). The second is a statement about the WIRE SHAPE and has no opinion about whether retrying is sensible.\n\nCaught by reading API_STANDARD.md §8 to confirm the twelve-code total rather than by review, and repaired while the only consumer was a generator nobody had run — which is the cheapest this fix will ever be. `§1a`'s rule is that a name which does not say WHICH sense is a name two readers can both use correctly and mean different things by; naming these for the field they gate leaves 'retryable' free to keep API_STANDARD's meaning.",
+      "enum": ["rate_limited", "quota_exceeded"],
+      "enumPolicy": "closed"
+    },
+
+    "codeWithoutRetryAfter": {
+      "type": "string",
+      "description": "Every other code in `errorCode`. A response carrying one of these CANNOT carry `retry_after_seconds`: the property is absent from `errorBodyWithoutRetryAfter` and that object is `additionalProperties: false`, so the field is unsendable rather than merely forbidden. That is stronger than the `not: {required: [...]}` it replaced and it is simpler — the field does not exist on that shape at all.",
+      "enum": [
+        "invalid_argument",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "failed_precondition",
+        "internal",
+        "not_implemented",
+        "unavailable",
+        "timeout"
+      ],
+      "enumPolicy": "closed"
+    },
+
+    "errorMessage": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "For a developer. NEVER contains business data, another tenant's identifiers, a stack trace, a query, a hostname, a library version, or internal structure (API_STANDARD.md §8, SECURITY_STANDARD.md §7). For a given code and a given failing condition the message is a fixed string that does not vary with the data involved — a message that varies with the record is a disclosure channel."
+    },
+
+    "errorDetails": {
+      "type": "array",
+      "description": "Machine-readable detail, under the same restriction as 'message'. Names the offending field and a stable issue token; never the offending value.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "issue"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "The request field, in wire form (snake_case), optionally dotted for nesting."
+          },
+          "issue": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 80,
+            "description": "A stable machine token, e.g. must_not_be_blank. Not a sentence, not the rejected value."
+          }
+        }
+      }
+    },
+
+    "errorRequestId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "Returned on every response, success or error. It is what makes a support conversation possible without asking a customer to share their data (API_STANDARD.md §11). It is the ONLY identifier an error message carries — never a tenant id, never a resource id (MULTITENANCY_STANDARD.md §4 carrier 11)."
+    },
+
+    "retryAfterSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Seconds until the caller may retry. PRESENT ONLY ON 'rate_limited' AND 'quota_exceeded', which is now structural rather than asserted: this property appears ONLY on `errorBodyWithRetryAfter`, and `errorBodyWithoutRetryAfter` is `additionalProperties: false`, so on every other code it is UNSENDABLE — not null, not zero, unrepresentable.\n\nIt is OPTIONAL even on those two codes: a value is not always knowable (a degraded coordinator does not have one), and a required field would be a field someone invents a number for.\n\nWHERE IT COMES FROM, AND THIS IS THE WHOLE OF WHY IT IS SAFE: it is derived from a FIXED WINDOW BOUNDARY — the end of the 60-second rate window, or the next 00:00 UTC reset — so it is THE SAME VALUE FOR EVERY CALLER ON THE PLATFORM AT THAT INSTANT, computable from a clock alone, and it carries no information about any Organization. It does not reveal which rate-limit level refused the request, because all levels share one window length.\n\nPROHIBITED, AND THIS IS THE CONSTRAINT AN OPTIMISER BREAKS: this value MUST NEVER be derived from observed usage, remaining budget, queue depth, current load, attempt count, or anything else a caller can vary. A retry time that reflects how much budget is left is a side channel on other tenants' activity — the same shape as the evaluation-position oracle closed one level up in customer-directory-v1.contract.yaml authorizationModel.budgetExhaustion, and reachable the same way, by a caller who deliberately drives the input it controls. A retry time that is a function of the calendar discloses nothing; a retry time that is a function of the system's state discloses the system's state. Only the first is permitted.\n\nThis field also pays the debt API_STANDARD.md §10 records for 'rate_limited', which platform/core/http/api.ts names as owed and unpaid: the HTTP adapter emits the 'Retry-After' header DERIVED FROM THIS FIELD, so the envelope stays the single source of truth and internal, SDK and MCP callers — none of which see HTTP headers — receive the same value."
+    },
+
+    "errorBodyWithRetryAfter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "request_id"],
+      "$comment": "The common properties are DUPLICATED with `errorBodyWithoutRetryAfter` rather than composed with `allOf`. The reason, and the JSON Schema trap that forces it, are in THIS SCHEMA'S ROOT-LEVEL `$comment`.",
+      "description": "The error body for a code that MAY carry a retry time.",
+      "properties": {
+        "code": { "$ref": "#/$defs/codeCarryingRetryAfter" },
+        "message": { "$ref": "#/$defs/errorMessage" },
+        "details": { "$ref": "#/$defs/errorDetails" },
+        "request_id": { "$ref": "#/$defs/errorRequestId" },
+        "retry_after_seconds": { "$ref": "#/$defs/retryAfterSeconds" }
+      }
+    },
+
+    "errorBodyWithoutRetryAfter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "request_id"],
+      "$comment": "The common properties are DUPLICATED with `errorBodyWithRetryAfter` rather than composed with `allOf`. The reason, and the JSON Schema trap that forces it, are in THIS SCHEMA'S ROOT-LEVEL `$comment`.",
+      "description": "The error body for every other code. IT HAS NO `retry_after_seconds` PROPERTY AND IT IS `additionalProperties: false`, which is the presence rule made structural.",
+      "properties": {
+        "code": { "$ref": "#/$defs/codeWithoutRetryAfter" },
+        "message": { "$ref": "#/$defs/errorMessage" },
+        "details": { "$ref": "#/$defs/errorDetails" },
+        "request_id": { "$ref": "#/$defs/errorRequestId" }
+      }
     }
   }
 }

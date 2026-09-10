@@ -1,15 +1,30 @@
 # Release 001 — AZ2 Login and the Customer Directory shell
 
-**Status: NOT RELEASED.** Nothing is deployed, nothing is committed, no build exists.
+> **HEADER CORRECTED 2026-09-08 BY THE TEAM LEAD. The three sentences it replaced were
+> false, and they were false in the most misleading direction available** — the document
+> opened by asserting that nothing was deployed, over a body that then reported results
+> **verified against the live deployment**. A reader who stopped at the first line got the
+> opposite of what the document knew. This is `workflow.md` §12's residue arriving in a
+> release record: the header described the world on the day it was written and nothing goes
+> red when that world moves.
+>
+> **What is actually true, and the distinction is the whole point of `workflow.md` §11:**
+> the Worker is **deployed and reachable on the real `dudo.work` hostnames**, and it has
+> been probed there. **It is NOT deployed to a staging environment, because no staging
+> environment exists** — neither `wrangler.jsonc` nor `wrangler.admin.jsonc` defines one,
+> and `package.json`'s `deploy:staging` script points `--env staging` at a target that is
+> not in either config. **So "deployed to a test environment, never production" is not
+> what happened**, and calling this release "staged" would round the result up. It is
+> raised as a finding for the user rather than resolved here.
 
-This is the **gate step 6 package written in advance** — release notes and test checklist, ready
-so that deployment is the only remaining work rather than deployment plus paperwork. The two
-fields step 6 requires and this document cannot yet contain are marked `PENDING`.
+**Status: DEPLOYED to the live `dudo.work` hostnames; NOT ACCEPTED.** Milestone acceptance
+belongs to the user alone and has not been given (`workflow.md` §10). The `Dudo-Apple`
+half is **not** delivered — see the TestFlight row.
 
 | Field | Value |
 |---|---|
 | **Web URL** | **https://app.dudo.work** — the application **and its API**, same origin |
-| Admin | **https://admin.dudo.work** (`0010`) — serves, no admin interface built yet |
+| Admin | **https://admin.dudo.work** (`0010`) — **an admin console now exists here** and serves the platform identity screens (`7b529a8`, `fac918f`). The line that said "no admin interface built yet" was true when written and false from `7b529a8` onward |
 | Machine API | **https://api.dudo.work** — non-browser clients, `Authorization: Bearer` (`0022`) |
 | Worker version | `baa833a6-70f8-4b4a-a19c-a7d8735d77c3` |
 

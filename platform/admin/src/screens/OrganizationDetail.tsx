@@ -91,15 +91,17 @@
  * every edit for information already in hand.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { useCallback, useState, type FormEvent } from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { OrganizationIdentityPanel } from '@/components/OrganizationIdentity';
 import { ResetCredential } from '@/screens/ResetCredential';
-import { cn } from '@/lib/cn';
-import { buildHash, organizationAuditPath, ROUTES } from '@/lib/router';
-import { identifierRefusal } from '@/api/kdf';
+import { cn } from '@dudo/ui';
+import { Link } from '@tanstack/react-router';
+import { identifierRefusal } from '@dudo/client-kdf';
+import { useOrganizationDetail, useMergeOrganizationIdentity } from '@/lib/queries';
+import { platformClient } from '@/lib/clients';
 import {
   TEMPLATE_LEVELS,
   isKnownMembershipRole,
@@ -132,8 +134,9 @@ const REFUSAL =
  * FROM THE SERVER REFUSAL ON PURPOSE.
  * ===========================================================================
  *
- * `identifierRefusal` lives in `api/kdf.ts`, is shared with the sign-in and
- * onboarding screens, and is BYTE-COMPARED against `platform/web` — so it is not
+ * `identifierRefusal` lives in `@dudo/client-kdf`, is shared with the sign-in and
+ * onboarding screens, and is now THE SAME FUNCTION `platform/web` calls rather
+ * than a byte-compared copy of it (ADR 0040) — so it is not
  * editable here even if it were the right place. Its non-ASCII sentence is
  * phrased in terms of signing the reader in, which is correct where somebody is
  * signing in and WRONG HERE: nobody is being signed in, and an operator reading
@@ -253,43 +256,38 @@ type Lookup =
   | { readonly kind: 'forbidden'; readonly error: ApiError }
   | { readonly kind: 'failed'; readonly error: ApiError };
 
-export function OrganizationDetail({
-  platform,
-  organizationId,
-}: {
-  platform: PlatformClient;
-  organizationId: string;
-}) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
-  const [nonce, setNonce] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform.readOrganization(organizationId).then(
-      (detail) => {
-        if (!cancelled) setLoad({ kind: 'loaded', detail });
-      },
-      (thrown: unknown) => {
-        if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-    // `nonce` only ever changes when a person presses Try again. There is no
-    // interval and no focus listener here, and adding one would be a budget
-    // defect rather than a refresh.
-  }, [platform, organizationId, nonce]);
+export function OrganizationDetail({ organizationId }: { organizationId: string }) {
+  /*
+   * THE DETAIL READ IS A QUERY, AND THE `nonce` IS GONE.
+   *
+   * It was `useEffect` + `let cancelled` + a nonce bumped only by Try again.
+   * `Load` is derived, never stored, so the screen cannot hold a state the
+   * query disagrees with.
+   *
+   * `isFetching` reproduces the previous behaviour exactly — the effect set
+   * `{ kind: 'loading' }` at the top of every run, which is what made Try again
+   * visibly do something. `lib/queries.ts` records why that is safe on this
+   * console: nothing here fetches unless an operator caused it. **There is still
+   * no interval and no focus listener, and adding one would be a budget defect
+   * rather than a refresh.**
+   */
+  const detailQuery = useOrganizationDetail(organizationId);
+  const mergeIdentity = useMergeOrganizationIdentity();
+  const load: Load =
+    detailQuery.isPending || detailQuery.isFetching
+      ? { kind: 'loading' }
+      : detailQuery.error !== null
+        ? { kind: 'failed', error: detailQuery.error }
+        : { kind: 'loaded', detail: detailQuery.data };
 
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-3xl">
-      <a
-        href={buildHash(ROUTES.organizations)}
+      <Link
+        to="/organizations"
         className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
       >
         &larr; All Organizations
-      </a>
+      </Link>
 
       {/*
         THE NAME IS THE HEADING WHEN THERE IS ONE, AND THE IDENTIFIER IS
@@ -332,26 +330,119 @@ export function OrganizationDetail({
 
       {load.kind === 'failed' ? (
         <div className="mt-5">
-          <ErrorBlock
-            error={load.error}
-            onRetry={() => {
-              setNonce((value) => value + 1);
-            }}
-          >
-            {load.error.code === 'not_found' ? (
-              <p className="mt-2 leading-relaxed text-ink-soft">
-                No Organization has this identifier. It may have been mistyped, or the address may
-                be stale.
+          {/*
+            ===================================================================
+            THREE OUTCOMES, RENDERED AS THREE THINGS. `not_found` IS A STATE,
+            NOT AN ERROR.
+            ===================================================================
+
+            `platform.organizations.read` declares `forbidden` AND `not_found`
+            as separate errors, and its own `notFound` block settles what this
+            console may say:
+
+              "An unknown organization_id returns the argument-free 404. THERE
+               IS NO ORACLE CONCERN HERE... every caller who can reach this
+               route can already enumerate every Organization from
+               platform.organizations.list, so a distinction discloses nothing
+               to a population that could not obtain it one screen away."
+
+            *** THAT REASONING IS SPECIFIC TO THIS ROUTE CLASS AND THE CONTRACT
+            SAYS SO IN THE SAME BREATH: "must not be copied to a route reachable
+            by a tenant principal." ***
+
+            So this pattern is PLATFORM-CONSOLE-ONLY. A tenant-facing screen on
+            `app.dudo.work` distinguishing "absent" from "not yours" IS an
+            oracle — the exemption here rests entirely on the enumeration being
+            one screen away FOR THE SAME CALLER. **Nothing below may become a
+            shared not-found component across the two administrations**; that
+            is `CLAUDE.md`'s structural split arriving as a component boundary.
+
+            AND NOTE WHAT SITS SIXTEEN LINES BELOW IT IN THE SAME CONTRACT: the
+            member resolve's `notFoundCOLLAPSE` — "five cases, one answer, no
+            distinguishing field" — which is the OPPOSITE ruling for the
+            OPPOSITE reason. One file, two routes, two answers. Anchor to the
+            operation id, never to a line number (`architecture.md` §3c).
+          */}
+          {load.error.code === 'not_found' ? (
+            <div
+              role="status"
+              className="rounded-[12px] border border-line-strong bg-sunk p-5 text-[0.9375rem] leading-relaxed text-ink sm:p-6"
+            >
+              <h2 className="text-base font-bold text-ink">This Organization does not exist</h2>
+              <p className="mt-2 text-ink-soft">
+                Nothing on the platform has the identifier{' '}
+                <code className="font-mono break-all text-ink">{organizationId}</code>. It may have
+                been mistyped, or the address may be from a business that was never created.
               </p>
-            ) : null}
-          </ErrorBlock>
+              {/*
+                A WAY BACK, NOT A RETRY. Asking again spends another audited read
+                — 2 row-writes — to receive the same answer, so no retry control
+                is offered and `isRetryable` would refuse one anyway. The
+                directory is where the operator can see what does exist.
+              */}
+              <Link
+                to="/organizations"
+                className="mt-4 inline-block text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
+              >
+                &larr; Back to all Organizations
+              </Link>
+            </div>
+          ) : load.error.code === 'forbidden' ? (
+            /*
+              A DIFFERENT FACT, AND MERGING IT WITH THE ABOVE WOULD MISLEAD.
+              `forbidden` means this operator may not read Organizations at all;
+              `not_found` means this one is not there. An operator who was shown
+              "does not exist" for a permission failure would go and tell a
+              colleague their business had been deleted.
+            */
+            <div
+              role="alert"
+              className="rounded-[12px] border border-scarlet-600 bg-scarlet-50 p-5 sm:p-6"
+            >
+              <h2 className="text-base font-bold text-scarlet-700">
+                You may not read this Organization
+              </h2>
+              <p className="mt-2 leading-relaxed text-ink-soft">
+                Core refused the call itself, which is not the same as the Organization being
+                missing. This needs the Organization-list permission. Raise it rather than
+                retrying — nothing here will change until the grant does.
+              </p>
+              {load.error.request_id ? (
+                <p className="mt-3 font-mono text-xs break-all text-ink-muted">
+                  Reference {load.error.request_id}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            /*
+              TRY AGAIN IS `refetch` — one call, the same cost as the nonce bump
+              it replaces. `retry: false` in `lib/query-client.ts` is what keeps
+              it one; the library default would spend four reads, at 2 row-writes
+              each, on a single press. `ErrorBlock` offers the control only for
+              codes `isRetryable` allows, so a settled answer never gets one.
+            */
+            <ErrorBlock
+              error={load.error}
+              onRetry={() => {
+                void detailQuery.refetch();
+              }}
+            />
+          )}
         </div>
       ) : null}
 
       {load.kind === 'loaded' ? (
         <>
+          {/*
+            `platformClient` IS PASSED DOWN BECAUSE THESE TWO ARE NOT CONVERTED
+            YET. `OrganizationIdentityPanel` and `ResetCredential` still hold
+            their own request state; they are outside this group's scope. It is
+            the module singleton from `lib/clients.ts` either way, so there is
+            still exactly one client — the prop is transitional, not a second
+            route to it.
+          */}
           <OrganizationIdentityPanel
-            platform={platform}
+            platform={platformClient}
             organizationId={load.detail.organization_id}
             identity={{
               display_name: load.detail.display_name,
@@ -364,13 +455,19 @@ export function OrganizationDetail({
              * nothing to ask for again. `member_count`, `status`, `template`
              * and `created_at` are untouched by this route and keep their
              * loaded values.
+             *
+             * IT NOW MERGES INTO THE CACHE RATHER THAN INTO LOCAL STATE, which
+             * is the same operation against the one copy that exists — and
+             * `useMergeOrganizationIdentity` is `setQueryData`, deliberately NOT
+             * `invalidateQueries`. An invalidation here would re-read the
+             * Organization and double the cost of every edit.
              */
             onSaved={(identity) => {
-              setLoad({ kind: 'loaded', detail: { ...load.detail, ...identity } });
+              mergeIdentity(load.detail.organization_id, identity);
             }}
           />
           <DetailCard detail={load.detail} />
-          <MemberLookup platform={platform} organizationId={load.detail.organization_id} />
+          <MemberLookup platform={platformClient} organizationId={load.detail.organization_id} />
         </>
       ) : null}
     </section>
@@ -442,12 +539,13 @@ function DetailCard({ detail }: { detail: Detail }) {
         The cost is named here so the operator knows before they click.
       */}
       <div className="mt-5 border-t border-line pt-4">
-        <a
-          href={buildHash(organizationAuditPath(detail.organization_id))}
+        <Link
+          to="/organizations/$organizationId/audit"
+          params={{ organizationId: detail.organization_id }}
           className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
         >
           What has the platform done to this business? &rarr;
-        </a>
+        </Link>
         <p className="mt-1 text-[0.8125rem] leading-relaxed text-ink-muted">
           Their own audit trail, including which person each action named. Reading it writes to it,
           against this business&rsquo;s daily allowance — so it opens without loading anything.
@@ -505,6 +603,35 @@ function TemplateBlock({ template }: { template: Detail['template'] }) {
  * lookup-as-you-type, no debounce, no prefetch, no retry-on-blur and no
  * automatic retry. An operator who wants to try again presses the button again,
  * and the customer sees each attempt.
+ *
+ * ===========================================================================
+ * THIS ONE IS NOT A QUERY AND NOT A MUTATION, AND THAT IS THE DECISION RATHER
+ * THAN THE PART NOBODY GOT TO
+ * ===========================================================================
+ *
+ * Every other read on this console moved to TanStack Query. This did not, for
+ * two reasons that are specific to the collapsed refusal.
+ *
+ * **NOT A QUERY, BECAUSE A CACHE HIT IS A LOOKUP THE CUSTOMER NEVER SEES.** The
+ * record written into the tenant's log is not a side effect of this call — for
+ * accountability it IS the call. Serving the second press from cache would show
+ * the operator an answer while the business's audit trail recorded one attempt
+ * where two happened. **A cached answer is also an answer that arrives at a
+ * different speed from an uncached one**, which is a distinguishing signal
+ * between two lookups on a path whose whole design is that five outcomes are
+ * indistinguishable.
+ *
+ * **NOT A MUTATION EITHER, AND THIS IS THE SUBTLER HALF.** `useMutation` would
+ * fire on every press and cache nothing, which is correct — but it RETAINS the
+ * error it caught, in state any code in this component can read. The `Lookup`
+ * union below is built so that `refused` carries NOTHING: *"there is nothing
+ * downstream that could branch on the cause because nothing downstream has
+ * it."* **A hook holding the 404 puts the cause back within reach**, and the
+ * next person to render `error.request_id` "for support" rebuilds the oracle
+ * Core removed. The type is the enforcement, and a mutation would quietly widen
+ * what the type is protecting.
+ *
+ * So the call stays direct and the error stays in a closure that discards it.
  */
 function MemberLookup({
   platform,

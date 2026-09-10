@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:template-lifecycle:1",
+  "title": "Template lifecycle and Organization re-assignment — wire shapes, version 1",
+  "description": "The machine-readable half of template-lifecycle-v1.contract.yaml. BOTH ARE NORMATIVE TOGETHER. Nothing in this repository executes JSON Schema, so this file is normative and hand-checked, never machine-validated.\n\nIT DEFINES NO TEMPLATE SHAPE OF ITS OWN. `templateOutput`, `templateName`, `levelLabels` and `templateId` are referenced by URN into `urn:dudo:schema:template:1`, which remains their only definition. A second copy of a Template's shape, in the contract that EDITS Templates, is the duplicated constraint workflow.md §12 is about — and it would be the copy most likely to drift, because this is where the field list changes.",
+
+  "$defs": {
+
+    "updateTemplateInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "WHAT MAY BE EDITED, AND THE OMISSIONS ARE THE CONTENT. No `template_id` — it is the path, and a body that could disagree with the path is a shape with two answers. No `status` — retirement is its own route with its own permission, and a status field here would make one permission able to perform the other's act. No `created_at`. Nothing server-stamped, for the reason organization-identity-v1's registrationInput gives: provenance a caller supplies is not provenance.\n\nEVERY FIELD IS OPTIONAL AND AT LEAST ONE MUST BE PRESENT — see the `anyOf`. An absent field is NOT a request to clear it: `name` cannot be cleared (a Template with no name is unchoosable) and `level_labels` cannot be cleared to nothing (the response is always fully populated). Absent means unchanged, and that is stated rather than left to a reader who has met PATCH semantics elsewhere.",
+      "properties": {
+        "name": {
+          "$ref": "urn:dudo:schema:template:1#/$defs/templateName",
+          "description": "The new name. UNIQUENESS IS RE-CHECKED ON EVERY UPDATE, under the same NFKC-plus-ASCII-case-folding comparison create uses — renaming 'Dental Clnic' to 'Dental Clinic' must conflict if a 'Dental Clinic' already exists, and an update that skipped the check would be the one way to create the duplicate that create refuses. Renaming a Template to its OWN current name is not a conflict; the comparison excludes the row being updated."
+        },
+        "level_labels": {
+          "$ref": "urn:dudo:schema:template:1#/$defs/levelLabels",
+          "description": "PARTIAL AND MERGING, NOT REPLACING. Supplying `{workspace: 'Campus'}` changes the workspace label and leaves `organization` and `branch` as they were. It does NOT reset the unsupplied keys to their platform defaults.\n\nTHAT DIFFERS FROM CREATE, WHERE AN ABSENT KEY TAKES THE DEFAULT, and the difference is stated because the two routes share this exact `$ref` and a reader will assume one rule. On create there is nothing to preserve; on update there is, and silently resetting two labels because an operator edited a third is a change with reach the operator did not ask for."
+        }
+      },
+      "anyOf": [
+        { "required": ["name"] },
+        { "required": ["level_labels"] }
+      ],
+      "$comment": "AT LEAST ONE FIELD. An empty body is refused with invalid_argument rather than accepted as a no-op, because a no-op on this route still writes an audit record — an audit trail containing 'the operator updated this Template' entries that changed nothing is a trail that costs a row-write to say nothing, and it makes a real change harder to find.\n\nON architecture.md §3a-i, WHICH ASKS FOR A PREDICATE KEYED ON THE EXCEPTION RATHER THAN ON MEMBERS: this alternation IS member-keyed and there is no exception form for 'at least one of', because the safe default here is refusal rather than permission. SO THE COVERAGE IS ASSERTED INSTEAD, and it is exhaustive by construction: `additionalProperties: false` closes the property set, so adding a third editable field means adding it to `properties` AND to this `anyOf`. FORGETTING THE SECOND FAILS CLOSED — an update supplying only the new field matches neither branch and is refused. That is the direction §3a-i cares about, reached by a different mechanism, and it is recorded here rather than left for a reviewer to re-derive."
+    },
+
+    "templateUsageOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template", "organizations_using"],
+      "description": "A TEMPLATE PLUS HOW MANY ORGANIZATIONS HAVE ADOPTED IT. Returned by every write in this contract so the operator sees the reach of what they just did.\n\n*** IT WRAPS `templateOutput` RATHER THAN EXTENDING IT, AND THAT IS FORCED BY JSON SCHEMA. *** `templateOutput` is `additionalProperties: false`, so `allOf: [{$ref: templateOutput}, {properties: {organizations_using}}]` FAILS VALIDATION on every instance — the referenced branch refuses the added property. common/error-envelope.schema.json's root `$comment` records the same trap and answers it by duplicating properties; this answers it by nesting, which is available here because the count is ABOUT a Template rather than PART of one. Duplicating `templateOutput`'s six fields into this file would put the Template's field list in two places, and this is the file where that list is most likely to be edited.\n\nTM-1 IS WHAT THIS FIELD ANSWERS. template-v1 deferred update because 'editing a label that Organizations are already rendering is a change with reach — it silently alters what every adopting tenant sees'. This is the mechanism that makes the reach VISIBLE rather than remembered.",
+      "properties": {
+        "template": { "$ref": "urn:dudo:schema:template:1#/$defs/templateOutput" },
+        "organizations_using": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "HOW MANY ORGANIZATIONS CURRENTLY REFERENCE THIS TEMPLATE. A count over the control-plane `organization` table's `template_id`, which is platform metadata about the platform's own configuration — NOT a tenant read, nothing behind whereWithTenant, and no store handle is resolved to produce it.\n\nIT DISCLOSES NO ORGANIZATION AND MUST NOT GROW A LIST. A caller reaching this route already holds core.template.read and can already enumerate Organizations with core.organization.list, so the count adds no disclosure. A `organizations` ARRAY here would be a different thing — the transpose docs/decisions/0028 Decision 1 refuses — and it is named in the negative because 'show me which ones' is the obvious next request.\n\nZERO IS A REACHABLE, ORDINARY VALUE and means the Template may be retired with nothing stranded. It is not an error and not an empty state."
+        }
+      }
+    },
+
+    "setOrganizationTemplateInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_id"],
+      "description": "REQUIRED AND NULLABLE, NEVER ABSENT. The operator states the intent rather than expressing it by omission: `{template_id: null}` clears the assignment, and an absent field is refused. Absent-versus-null is a distinction two clients resolve differently — the same rule organization-selection-v1 states for a nullable display name, applied to a request rather than a response.",
+      "properties": {
+        "template_id": {
+          "oneOf": [
+            { "$ref": "urn:dudo:schema:template:1#/$defs/templateId" },
+            { "type": "null" }
+          ],
+          "description": "The Template this Organization adopts, or null to clear it.\n\nNULL RETURNS THE ORGANIZATION TO THE PLATFORM DEFAULT LABELS — 'Organization', 'Workspace', 'Branch'. It is a real operation and not a hole: an Organization onboarded onto the wrong Template must be able to get back to a neutral state, and today every Organization that predates Templates is already in it.\n\nA RETIRED TEMPLATE IS REFUSED WITH failed_precondition. Retirement means 'hides it from new adoption' (template-v1 lifecycle), and an assignment route that accepted one would be the hole that sentence exists to close. THE SCHEMA CANNOT ENFORCE THIS — it cannot see the referenced Template's status — so it is a Core obligation, stated here and in the contract, and it is exactly the kind of rule that is expressed in one place and enforced in none unless someone tests it.\n\nAN ORGANIZATION ALREADY ON A TEMPLATE THAT IS LATER RETIRED KEEPS IT. Retirement blocks NEW adoption and leaves existing references intact; that is template-v1's ruling and this route does not revisit it."
+        }
+      }
+    },
+
+    "organizationTemplateOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organization_id", "template", "updated_at"],
+      "description": "THE ASSIGNMENT AS IT NOW STANDS. Deliberately NOT the full Organization detail: this route changes one field, and returning a whole Organization would make a narrow write look like a broad read and would put fields on this response that the caller's permission does not gate.",
+      "properties": {
+        "organization_id": { "$ref": "urn:dudo:schema:organization-detail:1#/$defs/organizationId" },
+        "template": {
+          "oneOf": [
+            { "$ref": "urn:dudo:schema:template:1#/$defs/templateOutput" },
+            { "type": "null" }
+          ],
+          "description": "The Template now adopted, RESOLVED AND EMBEDDED, or null if the assignment was cleared. Embedded for the reason organization-detail-v1 gives for embedding it there: a Template is tenant-independent platform configuration, identical for every caller, so it copies nothing sensitive and creates no staleness a client could act on wrongly.\n\nPRESENT AND NULL, NEVER ABSENT."
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "SERVER-STAMPED at the moment of the change. It dates THIS assignment, not the Organization."
+        }
+      }
+    }
+  }
+}

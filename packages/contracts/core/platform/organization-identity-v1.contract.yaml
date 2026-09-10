@@ -35,8 +35,22 @@ contractVersion: 1
 apiVersion: 1
 namespace: core
 domain: platform
-status: proposed
-updated: "2026-09-07"
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-08. Unblocked by docs/decisions/0031, which is Accepted and which
+  decided this contract's substance — what a Template does, and the two console rulings — and by
+  the user's grant of `core.platform-organization.update` to `platform-admin` on 2026-09-07,
+  relayed by the Team Lead, who does not approve (security.md §8). The permission is declared,
+  granted, transcribed into `platform-permissions.ts`, and served by exactly the one route this
+  contract publishes.
+  THE ORDERING THIS CONTRACT REQUIRED WAS COMPLETED BEFORE ACCEPTANCE, WHICH IS WHY IT IS
+  ACCEPTABLE NOW: declared in the catalog, granted by the user, transcribed into Core's envelope,
+  route registered — and the permission left `HELD_BUT_UNREACHABLE` in the same change that
+  registered the route, which is what `assertEveryRoutePermissionIsReachable` exists to force.
+  ACCEPTANCE DOES NOT CLOSE OI-1. The customer still cannot enter or correct their own name, CR
+  or VAT number, and OI-1 stays open with its recommendation intact. What acceptance settles is
+  that the PLATFORM-SIDE route is the agreed shape, not that the asymmetry is resolved.
+updated: "2026-09-08"
 documentsExistingImplementation: none
 
 # ---------------------------------------------------------------------------

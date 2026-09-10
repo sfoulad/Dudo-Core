@@ -624,23 +624,36 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
       return err(internal());
     }
     // =========================================================================================
-    // *** EXACTLY ONE OF `target_identifier` AND `identifier`. PHASE 1 OF A TWO-PHASE RENAME. ***
+    // *** PHASE 3 HAS LANDED. `identifier` IS NO LONGER DECLARED ON THE ROUTE, SO IT CANNOT
+    // *** REACH THIS FUNCTION — AND THE REFUSAL BELOW IS KEPT ANYWAY, DELIBERATELY.
+    // `docs/decisions/0034`, discharging `OD-5`. Corrected 2026-09-09; the paragraph this replaces
+    // said *"both are declared on the route"*, which stopped being true in the same change.
     // =========================================================================================
     //
-    // `target_identifier` is the destination; `identifier` is deprecated and its removal is `OD-5`.
-    // Both are declared on the route because the class refuses an undeclared field before
-    // authentication, so publishing only the new name would refuse the field the deployed console
-    // sends.
+    // WHAT IS TRUE NOW: `platform-routes.ts` declares `fields: ['target_identifier']` and the
+    // platform class refuses an undeclared field BEFORE authentication. So `body.identifier` is
+    // `undefined` on every request that reaches here, `legacy` is always `undefined`, and the
+    // both-present branch cannot fire. **A straggler sending the old name is refused by the class
+    // with `invalid_argument` — loud, recoverable and immediately diagnosable**, which is the
+    // residual risk `0034` priced rather than assumed away.
+    //
+    // *** SO WHY IS THE DEAD BRANCH STILL HERE. IT IS NOT AN OVERSIGHT AND IT IS NOT TIDINESS
+    // *** DEFERRED. *** Deleting it and reading `body.target_identifier` directly would be fewer
+    // lines and would change what happens if `identifier` ever returned to the route table: the
+    // field would be **silently ignored** instead of refused. On the route that leads to a
+    // credential reset, *"if the two values differ, choosing silently is choosing which principal
+    // to resolve"* — and ignoring is choosing. **This branch costs one comparison and converts a
+    // future silent-wrong into a loud refusal, so it is a second layer rather than dead weight.**
     //
     // **BOTH PRESENT IS REFUSED. NEITHER PRESENT IS REFUSED. NEITHER IS SILENTLY PREFERRED.**
-    // A route that quietly prefers one lets a client send the wrong name forever and never learn —
-    // and **if the two values differ, choosing silently is choosing which principal to resolve**,
-    // on the route that leads to a credential reset. Refusing has a known-failing input; preferring
-    // is a behaviour nobody would ever write a case for.
+    // The first of those three is now unreachable; the second and third are live and are what the
+    // shape check below enforces.
     //
-    // THE CONTRACT'S `oneOf` EXPRESSES THIS AND DOES NOT ENFORCE IT — nothing here executes JSON
-    // Schema (`packages/contracts/README.md`). It is mechanical and diffable where prose is
-    // neither, **and it is still a rule this function has to be.**
+    // WHAT THE CONTRACT SAYS AFTER PHASE 3: `resolveMemberInput` publishes one property and
+    // `required: ["target_identifier"]`. The `oneOf` that expressed exactly-one over two names came
+    // out in the same change, per `OD-5`. It never executed here in any case — nothing in this
+    // repository runs JSON Schema (`packages/contracts/README.md`) — so the refusal was always a
+    // rule this function had to write, and still is.
     const target = body.target_identifier;
     const legacy = body.identifier;
     if (target !== undefined && legacy !== undefined) {
@@ -664,7 +677,19 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
       // IT ALSO MEANS A MALFORMED IDENTIFIER COSTS NO TENANT WRITE, which is the difference
       // between a validation floor and a rate limit and is worth being clear about — it bounds
       // garbage, not probing.
-      return err(invalidArgument([detail('identifier', 'must_be_a_submittable_identifier')]));
+      //
+      // *** THE FIELD NAME IS `target_identifier`, AND IT SAID `identifier` UNTIL 2026-09-09. ***
+      // That was a live client-facing defect rather than documentation rot: after phase 3 the only
+      // field this route accepts is `target_identifier`, so a caller sending a malformed one — or
+      // an empty body — was told that a field it cannot send and has never heard of was bad. An
+      // error naming a field outside the request shape is unactionable, and it is exactly the kind
+      // of residue `workflow.md` §12 is about: nothing turned red, because the assertion covering
+      // it was green ON THE OLD NAME.
+      //
+      // IT COVERS BOTH REMAINING FAILURE MODES AND THE NAME IS RIGHT FOR EACH: a present-but-
+      // malformed `target_identifier`, and NEITHER FIELD PRESENT — where `target_identifier` is
+      // the only field there is to name.
+      return err(invalidArgument([detail('target_identifier', 'must_be_a_submittable_identifier')]));
     }
 
     const resolved = await dependencies.members.resolve({

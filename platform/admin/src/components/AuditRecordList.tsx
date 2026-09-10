@@ -65,7 +65,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { cn } from '@/lib/cn';
+import { cn } from '@dudo/ui';
 import { isKnownAuditOutcome, isKnownPlatformRole, type AuditRecordCommon } from '@/api/platform';
 
 export interface AuditRecordListProps<T extends AuditRecordCommon> {

@@ -76,14 +76,32 @@ import {
   generateAdminPassword,
   GENERATED_PASSWORD_LENGTH,
 } from '../src/api/generate-password.ts';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+
+/**
+ * Comment-stripping, so a rule quoted in prose is not read as code.
+ *
+ * HOISTED TO THE TOP 2026-09-09, AFTER IT BIT THE AUTHOR OF THE WARNING ABOUT
+ * IT. It was declared beside `readScreen` in section 10 and used for the first
+ * time in section 2, which is a temporal-dead-zone `ReferenceError` at run time
+ * rather than a compile error — the same shape that produced a blank admin
+ * console when `route-tree` and `root-layout` formed a cycle, and the same one
+ * this file's `queriesSource` comment warns about **twelve hundred lines below
+ * where the mistake was then made.**
+ *
+ * **Knowing the rule did not confer the ability to see the case**, which is
+ * `workflow.md` §11a's point about skip-sets, and it was caught only because
+ * the run crashed loudly. A shared helper belongs above every user of it.
+ */
+const strip = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 /*
  * The shared identifier check, imported so the non-ASCII sentinel below is
  * derived from the real function rather than from a copied sentence. `kdf.ts`
  * imports nothing, so a bare loader resolves it.
  */
-import { identifierRefusal } from '../src/api/kdf.ts';
+import { identifierRefusal } from '@dudo/client-kdf';
 import { ApiError, ERROR_CODES, writeIsCertainlyAbsent } from '../src/api/errors.ts';
 import {
   MAX_WINDOW_DAYS,
@@ -307,6 +325,92 @@ check(
   }).data[0].status,
   'archived',
 );
+
+/*
+ * ===========================================================================
+ * NO TYPE GUARD MAY NARROW TO AN `extensible` WIRE TYPE
+ * ===========================================================================
+ *
+ * `0041` splits every extensible enum in two: the WIRE type carries
+ * `(string & {})` because an unlearned value may arrive, and the KNOWN SUBSET
+ * is what this build understands. **A guard must narrow to the second.**
+ *
+ * **Narrowing to the wire type proves nothing and nothing goes red.** The
+ * `(string & {})` arm absorbs every string, so `value is PlatformRole` against
+ * the generated union is a predicate that always holds — the branch after it is
+ * BELIEVED rather than checked, the compiler is satisfied, and every existing
+ * case here still passes because they test values, not types.
+ *
+ * **The trap is one import away and it looks like a correction.** The contract
+ * exports `PlatformRole`, `TemplateStatus`, `MembershipRole` and
+ * `OrganizationStatus` — the names these guards USED to narrow to — so
+ * "shouldn't this use the generated type?" is the natural next edit and it is
+ * exactly wrong. Hence the `Known` prefix, and hence this check.
+ */
+{
+  const source = strip(
+    readFileSync(join(import.meta.dirname, '..', 'src', 'api', 'platform.ts'), 'utf8'),
+  );
+  const guards = [
+    ...source.matchAll(/export function (isKnown\w+)\([^)]*\):\s*\w+\s+is\s+(\w+)/gu),
+  ].map((match) => ({ guard: match[1], narrowsTo: match[2] }));
+
+  console.log(
+    `  … ${String(guards.length)} type guard(s): ${guards.map((g) => `${g.guard} -> ${g.narrowsTo}`).join(', ')}`,
+  );
+  /*
+   * THE FLOOR. An empty list satisfies "none narrows wrongly" perfectly, so a
+   * regex that stopped matching would report success having examined nothing.
+   */
+  checkTrue('the type-guard population is not empty', guards.length >= 4);
+
+  /*
+   * ⚠ THE FIRST VERSION OF THIS ASSERTION WAS KEYED ON THE `Known` PREFIX AND
+   * WAS WRONG. It failed three guards that are entirely correct —
+   * `isKnownAuditOutcome`, `isKnownRegistrationState`, `isKnownOnboardingWarning`
+   * — because **a CLOSED enum has no wire/known split at all**, so its guard
+   * legitimately narrows to the exact union and a `Known` prefix there would
+   * distinguish it from nothing.
+   *
+   * **It was checking a naming convention while claiming to check a property**
+   * — `workflow.md` §11a's "derive the subject, never transcribe it", and the
+   * transcribed thing here was my own new convention, which is the easiest kind
+   * to mistake for a rule.
+   *
+   * **THE ACTUAL PROPERTY: a guard must narrow to a type this file DECLARES,
+   * never to one it IMPORTS from `@dudo/contracts`.** That is what makes the
+   * hazard checkable without a convention: an imported enum type may carry the
+   * `(string & {})` arm, which absorbs every string, so the predicate would
+   * always hold and the branch after it would be believed rather than checked.
+   * A locally declared literal union cannot do that.
+   *
+   * It also catches the case the prefix rule would have missed entirely — a
+   * guard narrowing to an imported CLOSED enum, which compiles, reads as
+   * tidier, and quietly couples a client's branch set to a contract that may
+   * widen later.
+   */
+  const importedTypes = new Set(
+    [...source.matchAll(/import type \{([^}]*)\} from '@dudo\/contracts[^']*'/gu)]
+      .flatMap((match) => match[1].split(','))
+      .map((name) => name.trim().split(/\s+as\s+/u).pop())
+      .filter((name) => name !== undefined && name !== ''),
+  );
+  const locallyDeclared = new Set(
+    [...source.matchAll(/export (?:type|interface) (\w+)[\s=<{]/gu)].map((match) => match[1]),
+  );
+  console.log(
+    `  … ${String(locallyDeclared.size)} type(s) declared here · ${String(importedTypes.size)} imported from @dudo/contracts`,
+  );
+  checkTrue('both type populations are non-empty', locallyDeclared.size >= 10 && importedTypes.size >= 1);
+  check(
+    'no guard narrows to a type imported from the contract package',
+    guards
+      .filter((g) => importedTypes.has(g.narrowsTo) || !locallyDeclared.has(g.narrowsTo))
+      .map((g) => `${g.guard} -> ${g.narrowsTo}`)
+      .join(','),
+    '',
+  );
+}
 
 /* =========================================================================
    3. THE REQUEST
@@ -1612,12 +1716,20 @@ console.log('\n=== The screens: structural guarantees ===\n');
 
 const readScreen = (name) =>
   readFileSync(join(import.meta.dirname, '..', 'src', 'screens', name), 'utf8');
-const strip = (source) =>
-  source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
 const platformScreen = strip(readScreen('PlatformAudit.tsx'));
 const orgAuditScreen = strip(readScreen('OrganizationAudit.tsx'));
 const operatorsScreen = strip(readScreen('Operators.tsx'));
+/*
+ * The server-state layer, read once here rather than twice further down. It is
+ * declared BEFORE its first use deliberately: a `const` referenced above its
+ * declaration is a temporal-dead-zone `ReferenceError` at run time, not a
+ * compile error — the same failure mode that produced a blank admin console
+ * when `route-tree` and `root-layout` formed a cycle.
+ */
+const queriesSource = strip(
+  readFileSync(join(import.meta.dirname, '..', 'src', 'lib', 'queries.ts'), 'utf8'),
+);
 const auditList = strip(
   readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'AuditRecordList.tsx'), 'utf8'),
 );
@@ -1655,15 +1767,153 @@ for (const [label, source] of [
  * from a customer's daily allowance, so arriving at the address — or landing
  * there from a mistyped link — must cost them nothing.
  */
+/*
+ * ===========================================================================
+ * THIS CHECK USED TO GREP FOR `if (nonce === 0) return` AND WENT RED ON A
+ * CORRECT CHANGE. REWRITTEN 2026-09-09 TO ASSERT THE PROPERTY.
+ * ===========================================================================
+ *
+ * `workflow.md` §11a: a check that holds a name of its own goes stale when the
+ * name moves — **it had transcribed the IMPLEMENTATION rather than asserting
+ * the GUARANTEE.** The screen now reads through a mutation, which cannot fire
+ * until it is called, and the old regex could not see that this is strictly
+ * stronger than the guard it was looking for.
+ *
+ * **The property has two halves and BOTH are asserted, because either alone is
+ * satisfiable by something that fetches on mount:**
+ *
+ *   1. the screen runs NO EFFECT — an effect is the only thing that can start
+ *      work because a component mounted;
+ *   2. it consumes NONE of the auto-fetching query hooks, and that set is
+ *      DERIVED from `lib/queries.ts` rather than listed here, so a hook added
+ *      later is covered without anyone remembering to add it.
+ *
+ * A screen with no effect that called `useOrganizationList` would still fetch
+ * on arrival; a screen using the mutation but keeping an effect could still
+ * fire from one. Neither half is redundant.
+ */
+const autoFetchingHooks = [
+  ...queriesSource.matchAll(
+    /export function (use\w+)[\s\S]{0,400}?return (useQuery|useMutation)</gu,
+  ),
+]
+  .filter((match) => match[2] === 'useQuery')
+  .map((match) => match[1]);
+
+console.log(
+  `  … ${String(autoFetchingHooks.length)} auto-fetching hook(s) derived from lib/queries.ts: ${autoFetchingHooks.join(', ')}`,
+);
+/*
+ * A FLOOR. If the pattern above stops matching, the list is empty, "no
+ * forbidden hook appears" passes vacuously, and the check reports success
+ * having examined nothing (`workflow.md` §11a).
+ */
+checkTrue('the auto-fetching hook set is not empty', autoFetchingHooks.length >= 5);
+
 checkTrue(
-  'the Organization feed does not load until a person asks',
-  /if\s*\(\s*nonce\s*===\s*0\s*\)\s*return/.test(orgAuditScreen),
+  'the Organization feed runs no effect that could fetch on mount',
+  !/useEffect\s*\(/.test(orgAuditScreen),
+);
+check(
+  'the Organization feed consumes no auto-fetching query hook',
+  autoFetchingHooks.filter((hook) => new RegExp(`\\b${hook}\\s*\\(`, 'u').test(orgAuditScreen)).join(','),
+  '',
+);
+checkTrue(
+  'and its read is a mutation, which cannot fire until it is called',
+  /export function useOrganizationAuditRead\(\)[\s\S]{0,900}?return useMutation</.test(
+    queriesSource,
+  ),
 );
 check(
   'the Organization feed offers no actor filter',
   /actor_principal_id/.test(orgAuditScreen),
   false,
 );
+
+/*
+ * ===========================================================================
+ * THE DETAIL SCREEN DISTINGUISHES `not_found` FROM `forbidden`, AND THAT
+ * PERMISSION DOES NOT TRAVEL
+ * ===========================================================================
+ *
+ * `platform.organizations.read`'s own `notFound` block licenses saying plainly
+ * that an Organization does not exist: *"THERE IS NO ORACLE CONCERN HERE...
+ * every caller who can reach this route can already enumerate every
+ * Organization from platform.organizations.list."*
+ *
+ * **AND IT BOUNDS ITSELF IN THE SAME SENTENCE:** *"THIS REASONING IS SPECIFIC
+ * TO THIS CLASS and must not be copied to a route reachable by a tenant
+ * principal."*
+ *
+ * **So there are two things to assert and the second is the one that will
+ * decay.** The first — that the console does distinguish them — is visible the
+ * moment anyone opens the screen. The second — that no tenant-facing surface
+ * copies the pattern — is invisible from inside this package and is exactly
+ * what a shared component would quietly undo.
+ *
+ * **Scoped to the TREE, not to the paths that exist today** (`§2b`): a
+ * path-scoped version is correct now and silently wrong the first time a
+ * component lands somewhere else.
+ */
+{
+  const detail = strip(readScreen('OrganizationDetail.tsx'));
+  checkTrue(
+    'the detail screen renders not_found as its own state',
+    /error\.code === 'not_found'/.test(detail),
+  );
+  checkTrue(
+    'and forbidden as a different one',
+    /error\.code === 'forbidden'/.test(detail),
+  );
+  /*
+   * NO RETRY ON A SETTLED ANSWER. `isRetryable` already refuses `not_found`, so
+   * this asserts the screen does not route it through a control of its own —
+   * two layers, and the outer one is where a future "helpful" retry would land.
+   */
+  /*
+   * THE WINDOW IS 1200 CHARACTERS AND WAS 2000, TIGHTENED AFTER A NEGATIVE
+   * CONTROL SHOWED HOW LOOSE IT WAS. The screen carries a SECOND
+   * `to="/organizations"` — the back-link at the top — and a window wide enough
+   * to reach an unrelated link is a window that would keep passing after the
+   * panel's own link was deleted. The branch and its link are 18 lines apart.
+   */
+  checkTrue(
+    'not_found offers a way back rather than a retry',
+    /error\.code === 'not_found'[\s\S]{0,1200}to="\/organizations"/.test(detail),
+  );
+
+  /*
+   * THE RESERVATION. `platform/web` is the tenant-facing administration; it must
+   * not acquire this pattern. Asserted as an ABSENCE over the whole tree, so it
+   * goes red the day a component carries it across rather than when someone
+   * remembers to look.
+   */
+  const webRoot = join(import.meta.dirname, '..', '..', 'web', 'src');
+  const webFiles = [];
+  const walk = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) webFiles.push(path);
+    }
+  };
+  walk(webRoot);
+  console.log(`  … ${String(webFiles.length)} file(s) scanned in platform/web for the pattern`);
+  /* A floor: a walk that reached nothing would report "no leak" perfectly. */
+  checkTrue('the tenant-facing tree was actually walked', webFiles.length >= 20);
+  check(
+    'platform/web does NOT distinguish absent from not-yours (it would be an oracle there)',
+    webFiles
+      .filter((path) => {
+        const source = strip(readFileSync(path, 'utf8'));
+        return /code === 'not_found'/.test(source) && /does not exist/i.test(source);
+      })
+      .map((path) => path.slice(webRoot.length + 1))
+      .join(','),
+    '',
+  );
+}
 
 /* The two ceilings must be rendered as different statements. */
 const ceiling = strip(
@@ -1701,21 +1951,86 @@ checkTrue(
 );
 checkTrue('the operators screen uses the confirmation gate', /ConfirmationGate/.test(operatorsScreen));
 /*
- * EXACTLY ONE CALL SITE, and the next check pins where it is. Counting rather
- * than forbidding: the call inside the gate's `submit` handler is the correct
- * one, so a check that banned the identifier outright — as the first version of
- * this did — would have failed on the right implementation.
+ * EXACTLY ONE CALL SITE, and the next checks pin where it is. Counting rather
+ * than forbidding: the call reached from the gate's `submit` handler is the
+ * correct one, so a check that banned the identifier outright — as the first
+ * version of this did — would have failed on the right implementation.
+ *
+ * ===========================================================================
+ * THE CALL SITE MOVED WHEN THE SCREEN MOVED TO TANSTACK QUERY, AND THE
+ * POPULATION IS WIDENED RATHER THAN THE ASSERTION RELAXED
+ * ===========================================================================
+ *
+ * `Operators.tsx` used to call `platform.revokeOperator(...)` inside the gate's
+ * `submit`. It now calls `revoke.mutateAsync(...)`, and the client method is
+ * reached once, from `useRevokeOperator`'s `mutationFn` in `lib/queries.ts`.
+ *
+ * **The property being protected is unchanged: revoke is reachable only through
+ * the confirmation gate, carrying the three fields.** So rather than pointing
+ * the old regex at the new file, the count is taken over EVERY screen — the two
+ * audit screens above were the only ones previously checked for absence — and
+ * the single permitted site is pinned to the hook.
  */
+const screenNames = readdirSync(join(import.meta.dirname, '..', 'src', 'screens'))
+  .filter((name) => name.endsWith('.tsx'))
+  .sort();
+/*
+ * The population, printed against an independently derived total, because
+ * "0 screens call revoke" and "0 screens were read" render identically
+ * (`workflow.md` §11a). The floor is the screens that exist on disk today; a
+ * glob that stopped matching would take this to zero and fail here rather than
+ * pass quietly downstream.
+ */
+console.log(`  … ${String(screenNames.length)} screen(s) examined: ${screenNames.join(', ')}`);
+checkTrue('the screen population is not empty', screenNames.length >= 9);
+
+const revokeCallsInScreens = screenNames.flatMap((name) => {
+  const matches = strip(readScreen(name)).match(/revokeOperator\(/g) ?? [];
+  return matches.map(() => name);
+});
+check(
+  'no screen calls the revoke client method directly',
+  revokeCallsInScreens.join(','),
+  '',
+);
+
 check(
   'revoke has exactly one call site',
-  (operatorsScreen.match(/revokeOperator\(/g) ?? []).length,
+  (queriesSource.match(/revokeOperator\(/g) ?? []).length,
   1,
 );
 checkTrue(
-  'revoke is submitted from inside the gate, carrying a confirmation',
-  /submit=\{[\s\S]{0,400}revokeOperator\([\s\S]{0,300}\.\.\.confirmation/.test(
-    strip(readScreen('Operators.tsx')),
+  'and that call site is the revoke mutation, not a loose helper',
+  /useRevokeOperator\(\)[\s\S]{0,600}mutationFn:[\s\S]{0,200}platformClient\.revokeOperator\(/.test(
+    queriesSource,
   ),
+);
+/*
+ * The mutation is what re-reads the roster, so a revoke cannot succeed and
+ * leave a revoked operator on screen. It was a `nonce` bump in the component
+ * before; asserting it here is what stops the invalidation being dropped as
+ * "nothing reads this".
+ */
+checkTrue(
+  'a successful revoke invalidates the operator roster',
+  /useRevokeOperator\(\)[\s\S]{0,900}onSuccess:[\s\S]{0,200}invalidateQueries\([\s\S]{0,120}queryKeys\.operators/.test(
+    queriesSource,
+  ),
+);
+checkTrue(
+  'revoke is submitted from inside the gate, carrying a confirmation',
+  /submit=\{[\s\S]{0,400}mutateAsync\([\s\S]{0,300}\.\.\.confirmation/.test(operatorsScreen),
+);
+/*
+ * ONE SCREEN MAY REVOKE, AND IT IS THE ONE WITH THE GATE. `ConfirmedSubmission`
+ * already makes a gateless call fail to compile — it demands the three fields —
+ * but the type says nothing about where they came from, and a screen could
+ * assemble them itself. This says which file is allowed to hold the mutation.
+ */
+check(
+  'only the operators screen holds the revoke mutation',
+  screenNames.filter((name) => /useRevokeOperator\(/.test(strip(readScreen(name)))).join(','),
+  'Operators.tsx',
 );
 
 /* =========================================================================
@@ -2070,6 +2385,37 @@ checkTrue(
 );
 
 /* =========================================================================
+   11b. THE LEAF MODULE, AND WHY A ONE-LINE CHECK EARNS ITS PLACE HERE
+   =========================================================================
+   `lib/routes.ts` holds the four section paths. It exists because putting them
+   in `routes/route-tree.tsx` — beside the routes that use them, which is where
+   they read as belonging — created a cycle:
+
+       route-tree -> root-layout -> AdminShell -> route-tree
+
+   THE CONSOLE RENDERED A BLANK PAGE, and `tsc`, `vite build` and 584 assertions
+   in this very file were all green while it did. A module cycle is a property of
+   the IMPORT GRAPH rather than of any file, so nothing here could see it.
+
+   THIS CHECK CANNOT SEE A CYCLE EITHER. What it can do is hold the one property
+   that prevents this one: the module at the bottom of the graph imports nothing.
+   It is not a substitute for `npm run smoke`, which loads the page; it is the
+   cheap half that fails in milliseconds instead of after a build and a browser.
+   ========================================================================= */
+
+console.log('\n=== The section paths live in a module that imports nothing ===\n');
+
+{
+  const routesSource = readFileSync(join(import.meta.dirname, '..', 'src', 'lib', 'routes.ts'), 'utf8');
+  const imports = (strip(routesSource).match(/^\s*import\b/gm) ?? []).length;
+  check('lib/routes.ts has zero imports, so it cannot be in a cycle', imports, 0);
+  checkTrue(
+    'and it is what actually declares the section paths',
+    /export const ROUTES\s*=/.test(routesSource) && /organizations|templates|operators|audit/.test(routesSource),
+  );
+}
+
+/* =========================================================================
    12. ACCESSIBILITY — structure, roles and focus, asserted from the source
    =========================================================================
    WHAT THESE CAN AND CANNOT DO, STATED HERE SO THE COUNT IS NOT MISREAD.
@@ -2088,8 +2434,21 @@ console.log('\n=== Buttons: an untyped button inside a form SUBMITS it ===\n');
  * both re-auth fields filled it would have carried out the destructive action
  * the operator had just declined.
  */
+/*
+ * THE BUTTON MOVED TO `@dudo/ui` (ADR 0040), AND THIS ASSERTION FOLLOWED IT.
+ *
+ * A CHANGE OF SUBJECT, NOT A WEAKENING — AND IT IS STRICTLY STRONGER NOW. The
+ * `type="button"` default this checks used to belong to this console alone;
+ * `platform/web`'s copy did NOT have it, which is why web carries five call
+ * sites that each write `type="button"` by hand. There is one Button now, so
+ * this assertion protects both consoles.
+ *
+ * Read from `packages/ui/src/` rather than through `node_modules/@dudo/ui`: the
+ * workspace link is a symlink, and a check that reads through one is asserting
+ * about however npm laid the tree out rather than about the source.
+ */
 const buttonSource = readFileSync(
-  join(import.meta.dirname, '..', 'src', 'components', 'ui', 'button.tsx'),
+  join(import.meta.dirname, '..', '..', '..', 'packages', 'ui', 'src', 'button.tsx'),
   'utf8',
 );
 checkTrue(
@@ -2213,8 +2572,12 @@ console.log('\n=== Every form control has a programmatic label ===\n');
  * so a control rendered through it cannot be unlabelled. The check is that
  * nothing bypasses it.
  */
+// `Field` moved to `@dudo/ui` with the button — see the note above.
 const fieldSource = strip(
-  readFileSync(join(import.meta.dirname, '..', 'src', 'components', 'ui', 'field.tsx'), 'utf8'),
+  readFileSync(
+    join(import.meta.dirname, '..', '..', '..', 'packages', 'ui', 'src', 'field.tsx'),
+    'utf8',
+  ),
 );
 checkTrue('Field renders a real <label for>', /<label\s+htmlFor=\{id\}/.test(fieldSource));
 checkTrue('Field joins hint and error into aria-describedby', /aria-describedby/.test(fieldSource));

@@ -1,7 +1,17 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from '@/App';
+import { RouterProvider } from '@tanstack/react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { router } from '@/routes/route-tree';
+import { createQueryClient } from '@/lib/query-client';
 import '@/styles/index.css';
+
+/*
+ * ONE QUERY CLIENT, CREATED ONCE, OUTSIDE RENDER. A second one silently halves
+ * the cache and re-issues every read — and on this console a re-issued read is
+ * an audit row describing nothing an operator did.
+ */
+const queryClient = createQueryClient();
 
 /**
  * Entry point.
@@ -32,7 +42,9 @@ if (container === null) {
 try {
   createRoot(container).render(
     <StrictMode>
-      <App />
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
     </StrictMode>,
   );
 } catch (thrown) {

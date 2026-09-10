@@ -757,30 +757,53 @@ permission list `whoami` returns is for rendering only and nothing branches on i
 
 ## Layout
 
+> **⚠ THIS BLOCK WAS WRONG IN NINE PLACES AND WAS REBUILT FROM `find` ON 2026-09-09.**
+> It named `api/kdf*.ts`, `components/ui/*`, `lib/router.ts` and `lib/cn.ts` — **all four
+> deleted** by the router migration and the `@dudo/ui` / `@dudo/client-kdf` moves — and it
+> was **missing** `lib/clients.ts`, `lib/queries.ts`, `lib/query-client.ts`, `lib/routes.ts`,
+> the whole `routes/` directory, three components and `scripts/smoke.mjs`.
+>
+> **A FILE LISTING GOES STALE IN A WAY NO SWEEP FOR A DELETED PATH CAN FIND.** Grepping for a
+> removed path finds prose that NAMES it — that is how `verify-kdf.mjs` was caught on the line
+> below. **It cannot find an entry that should be here and is not**, because a missing line
+> matches nothing. A listing is stale on two axes and the search only covers one.
+>
+> **So this block is derived from `find`, not maintained by hand**, and the count is stated so
+> that a listing which has stopped tracking the tree says so instead of reading as complete:
+> **43 files.**
+
 ```
 src/
   api/
-    kdf.ts kdf-client.ts kdf-worker.ts   copies of platform/web's, drift-checked
     auth.ts                              sign-in and sign-out against login-v1
     platform.ts                          the platform route class; parses, never casts
     platform-session.ts                  the probe, and its four answers
     confirmation.ts                      the binding: body-minus-three UNION path params
+    audit-window.ts                      the window rule, shared by both audit screens
     generate-password.ts                 24 CSPRNG bytes; split out so it is testable
     onboarding-credential.ts             generates and derives; the server sees neither
     config.ts                            build config; refuses a cross-origin API
     errors.ts                            the shared error envelope, console wording
   components/
     AdminShell.tsx                       header, sidebar, main; drawer below lg
+    AdminField.tsx                       Field with announce="assertive" defaulted once
     StateBlock.tsx                       loading / error / empty, drawn once
     AuditRecordList.tsx                  the seven shared fields; layout only, never scope
     CeilingNotice.tsx                    rate_limited vs quota_exceeded, never merged
+    WindowRefusal.tsx                    the three window tokens, kept distinct
     ConfirmationGate.tsx                 verbatim statement, re-auth, echoed token
+    OrganizationIdentity.tsx             name and the two registrations; not gated
     NotBuiltYet.tsx                      the honest "not built" state
-    ui/button.tsx ui/field.tsx           shadcn copy-in source
   lib/
-    router.ts                            ~80-line hash router; see the file for why
+    clients.ts                           ONE of each client, at module scope — whoami audits
+    queries.ts                           every read and write; the audited-call accounting
+    query-client.ts                      the four request-adding defaults, off, with reasons
+    routes.ts                            the section paths; a LEAF module, imports nothing
+    operator-context.tsx                 whoami for rendering; useWhoami() throws, never null
     use-session.ts                       the operator session state machine
-    cn.ts
+  routes/
+    route-tree.tsx                       TanStack Router, code-based, path routing
+    root-layout.tsx                      the shell around every section
   screens/
     SignIn.tsx                           sign-in with measured KDF progress
     Organizations.tsx                    LIVE — the Organization list, with onboarding above it
@@ -791,10 +814,17 @@ src/
     PlatformAudit.tsx                    LIVE — the oversight feed; no principal target
     Operators.tsx                        LIVE — the roster, with the gated revoke
     ResetCredential.tsx                  LIVE — gated reset; refused vs unknown outcomes
-scripts/verify-kdf.mjs                   normative checks + the cross-client drift check
+  main.tsx  styles/index.css  vite-env.d.ts
 scripts/verify-platform.mjs              the platform client against Core's real shapes
+scripts/verify-css.mjs                   every class candidate produces a rule
+scripts/smoke.mjs                        a real Chrome; NOT RUN, loudly, when absent
 scripts/node-resolve-*.mjs               dev-only ESM hooks so the scripts import real modules
 ```
+
+**The KDF is not in this tree.** `api/kdf.ts`, `kdf-client.ts` and `kdf-worker.ts` moved into
+**`@dudo/client-kdf`** (ADR 0040), and the button, field and other primitives into
+**`@dudo/ui`**. There is no host-local copy of either and
+`packages/testing/suites/az2-login/enrolment-round-trip.ts` goes red if one reappears.
 
 ## The accessibility pass — what is asserted, and what is not
 

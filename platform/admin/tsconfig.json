@@ -14,17 +14,34 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    // PERMISSIVE, NOT MANDATORY — extensionless imports still resolve, and all
-    // but one file uses them. It is enabled so that `src/api/generate-password.ts`
-    // can carry an explicit `.ts`, which is what lets a bare Node loader (with no
-    // resolve hook) import the real password generator instead of copying it into
-    // a fixture. See that file's header; the entropy it produces is the control
-    // ADR 0017 leans on, so it must be assertable from the shared suite.
+    // `allowImportingTsExtensions` WAS HERE AND WAS REMOVED 2026-09-09. The
+    // removal is recorded rather than left as an absence, because the next
+    // person to want an explicit `.ts` import needs to know it was deliberate.
     //
-    // Legal here because `noEmit` is true. The rest of the tree must STAY
-    // extensionless: `api/kdf-client.ts` and `api/kdf-worker.ts` are byte-identical
-    // copies of `platform/web`'s and are compared character for character.
-    "allowImportingTsExtensions": true,
+    // ITS COMMENT HAD BEEN FALSE IN BOTH HALVES. It said the option existed "so
+    // that `src/api/generate-password.ts` can carry an explicit `.ts`" — that
+    // file's only import is `@dudo/client-kdf`, extensionless, and the approach
+    // was abandoned for `scripts/node-resolve-hooks.mjs`, whose header says
+    // plainly that "writing `./errors.ts` in the source is not an option
+    // either". It then said the tree must stay extensionless because
+    // `api/kdf-client.ts` and `api/kdf-worker.ts` are byte-compared against
+    // `platform/web`'s copies — BOTH MOVED INTO `@dudo/client-kdf` (ADR 0040)
+    // and the comparison went with them, since one module cannot be compared
+    // with itself (`workflow.md` §2b).
+    //
+    // That second half is the half-move §2b describes, and it is instructive
+    // that it survived: THE ASSERTION WAS CAUGHT BECAUSE IT WAS AN ASSERTION;
+    // THE COMMENT SURVIVED BECAUSE IT ONLY DESCRIBED. A config comment naming
+    // files by path is a consumer of those paths.
+    //
+    // MEASURED BEFORE REMOVING, with a negative control proving the measurement
+    // could have come out the other way:
+    //
+    //   this config minus the option, over src/   ->  exit 0, ZERO diagnostics
+    //   a fixture that DOES import "./helper.ts"  ->  with: 0 | without: TS5097
+    //
+    // Then re-run after removal: typecheck 0, verify 0, smoke 0 — so neither the
+    // Node loader nor Vite depended on it in a way `tsc` alone could not show.
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,

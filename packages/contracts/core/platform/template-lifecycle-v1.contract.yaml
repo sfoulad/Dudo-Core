@@ -1,0 +1,1002 @@
+---
+# Template lifecycle and Organization re-assignment — contract of record, version 1
+#
+# PA-16 (edit / retire a Template) and PA-17 (re-assign an Organization's Template), the last two
+# rows of Milestone 1 and the only two that were NOT YET AUTHORED.
+#
+# The machine-readable half is template-lifecycle-v1.schema.json. BOTH ARE NORMATIVE TOGETHER.
+#
+# THESE ARE OPERATIONS IN THE PLATFORM ROUTE CLASS. platform-operator-v1 defines that class and its
+# four binding properties, and this contract RESTATES NONE OF THEM. Read it first.
+#
+# Governed by: docs/decisions/0025 (Template) · docs/decisions/0026 and 0027 (sensitivity and
+#                confirmation) · docs/decisions/0028 (what a tenant may see of platform action)
+#                platform-operator-v1 (the class) · template-v1 (the object)
+# Owner:       architecture-agent authors; Team Lead accepts. THE FOUR PERMISSIONS BELOW ARE
+#                PROPOSED AND NOT GRANTED — security.md §8: an agent may not grant itself
+#                capability, and a Team Lead instruction is not user approval. security-agent
+#                reviews before anything integrates.
+#
+# PROVENANCE: ALL NEW WORK. No route in platform/core/** sets a Template's status or an
+# Organization's template_id after onboarding. template-v1's own TM-1 and TM-2 record both gaps.
+
+contractVersion: 1
+apiVersion: 1
+namespace: core
+domain: platform
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-10, after a security review returning PASS WITH FINDINGS — no Critical, no
+  High — and after reading the final three edits rather than a report of them. Verified at
+  acceptance: check:schema-parse 0 over 22 files, contracts admitted 16, REFUSED 0, modules DRIFTED
+  0, root npm test 0 (4/4), root typecheck 0.
+acceptedNote: >-
+  *** ACCEPTANCE OF THIS CONTRACT IS NOT A GRANT OF ITS PERMISSIONS, AND THE DISTINCTION IS THE MOST
+  IMPORTANT SENTENCE IN THIS BLOCK. *** `core.template.update`, `core.template.retire`,
+  `core.platform-organization.set-template` and `core.template-adoption.read` REMAIN PROPOSED,
+  UNGRANTED, AND THE USER'S ALONE (security.md §8; docs/decisions/0007 rule 4 — a permission does not
+  exist until it is in permission-catalog.yaml). NONE IS IN THE CATALOGUE. The evidence is a suite
+  rather than a claim: registry-coherence asserts the platform envelope is exactly NINE
+  platform-scope permissions and refuses a tenth, and it is green.
+  WHAT ACCEPTANCE DOES: this is an agreed contract under architecture.md §1. core-agent may implement
+  against it, qa-agent may bind tests to it, and both clients may build PA-16 and PA-17 against its
+  shapes.
+  WHAT IT DOES NOT DO: make anything built. FIVE OPERATIONS ARE AUTHORED AND CORE REGISTERS NONE OF
+  THEM. scripts/check-request-class.mjs lists all five as "contracts may lead implementation —
+  UNCHECKED, NOT AGREED", which is the honest state and not a gap to be closed by editing the
+  checker. `templateStatus`'s "no route sets it" and template-v1's TM-2 are both still TRUE of the
+  deployed system and become false when the retire route LANDS — not today.
+  THREE FINDINGS REMAIN OPEN AND NONE IS ARCHITECTURE'S: SR-11 (a route-table reservation — no
+  platform route returns a set of principals for an Organization) and SR-12 (a stale hand-maintained
+  count in write-admission.ts) go to core-agent WITH the implementation rather than as standalone
+  errands; SR-13 goes to plugin-agent when the App runtime lands.
+updated: "2026-09-10"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. DECLARED, NEVER INFERRED FROM THE BLOCK KEY.
+# ---------------------------------------------------------------------------
+# `platform`: docs/decisions/0025 decision 3. Principal-level authentication, a permission
+# evaluated against a Core-owned envelope, and NO TENANT on the request path.
+#
+# DECLARED AT THE CONTRACT LEVEL BECAUSE ALL FIVE OPERATIONS SHARE IT. The block key below is
+# `operations:`, which `0039` records is shared between the `platform` and `session` classes — so
+# the key cannot decide this and the declaration is not redundant with it.
+#
+# *** AND THIS GENERATOR CANNOT VERIFY IT, WHICH IS STATED RATHER THAN LEFT TO BE DISCOVERED. ***
+# Only a comparison against the route tables decides a request class, and the contract generator
+# reads none. scripts/check-request-class.mjs is the checker, and it will report these five as
+# UNCHECKED until Core registers the routes — which is a different result from agreement.
+requestClass: platform
+
+# ---------------------------------------------------------------------------
+# theHomeRuling — WHY FIVE OPERATIONS ACROSS TWO OBJECTS ARE ONE CONTRACT
+# ---------------------------------------------------------------------------
+theHomeRuling:
+  theQuestion: >-
+    PA-16 acts on a Template. PA-17 acts on an Organization. Three homes were available and none of
+    them was obviously right, so the choice is recorded rather than left to look inevitable.
+  whyNOTInTemplateV1: >-
+    template-v1 IS ACCEPTED AND ITS RULINGS ARE ITS CONTENT. It states "THERE IS NO DELETE AND NO
+    UPDATE IN VERSION 1" and "retirement IS NOT IN VERSION 1 EITHER", each with the reasoning that
+    made it correct at the time. Editing those sentences to add the routes would REWRITE AN ACCEPTED
+    RECORD rather than supersede it — and the reasoning is not wrong, it is answered. A superseding
+    contract leaves the argument legible; an in-place edit leaves a file that has always agreed with
+    itself and teaches nobody why update was deferred.
+  whyNOTInOrganizationDetailV1: >-
+    The write that changes an Organization's Template would sit beside the read that shows it, which
+    is a real argument. IT LOSES TO THE WORKFLOW ONE: retiring a Template and moving its adopters
+    are two halves of a single act, and splitting them across two contracts puts the two halves of
+    one argument in two files. A reader arriving at "may I retire this" needs "and what happens to
+    the forty Organizations using it" in the same document.
+  theRULING: >-
+    ONE CONTRACT, FIVE OPERATIONS, TWO OBJECTS, AND THE OBJECT BOUNDARY IS NOT THE CONTRACT
+    BOUNDARY. The unit is the capability — a Template's life after creation — and PA-17 is part of
+    it because retirement without re-assignment strands adopters and re-assignment without
+    retirement has no trigger.
+  whatThisContractDOESNOTREDEFINE: >-
+    IT DEFINES NO TEMPLATE SHAPE. Every Template field is referenced by URN into
+    urn:dudo:schema:template:1, which remains the only definition. A second copy of the shape, in
+    the contract that EDITS the shape, is the duplicated constraint workflow.md §12 is about and
+    would be the copy most likely to drift.
+
+# ---------------------------------------------------------------------------
+# theBoundary — Core stays small, and this contract adds no new claim to it
+# ---------------------------------------------------------------------------
+theBoundary:
+  theTest: >-
+    CORE_BOUNDARIES.md §2's four questions were answered for Templates in template-v1 ->
+    theBoundary.whyARegistryOfBusinessTypesIsCoreAtAll, and the answer was four yeses. THIS
+    CONTRACT ADDS NO NEW BOUNDARY CLAIM: editing and retiring a record that already belongs in Core
+    is the same record in the same place, and assigning one to an Organization writes a
+    control-plane column that organization-onboarding-v1 already writes at creation.
+  theRuleISUNCHANGEDANDSTILLBINDING: >-
+    A TEMPLATE MAY NAME Apps AND CARRY LABELS. IT MAY NEVER CONTAIN LOGIC. An update route is the
+    obvious place for that rule to erode, because "just one conditional label" is a small edit to a
+    field that already exists. NO IDENTIFIER IN platform/core/** MAY NAME A BUSINESS TYPE, and the
+    update route makes that check due again rather than settled.
+  aLABELCHANGESNOAUTHORIZATION: >-
+    RESTATED HERE BECAUSE THIS IS THE CONTRACT THAT CHANGES LABELS. `workspace` remains the scope
+    identifier in permission-catalog.yaml and in the scope ladder whatever a Template calls it on
+    screen. An Action's declared scope is never read from a Template, and editing a label must not
+    become a route by which configuration decides authorization (0007 D1).
+
+# ---------------------------------------------------------------------------
+# theReachRuling — WHAT template-v1's TM-1 DEFERRED TO THIS CONTRACT
+# ---------------------------------------------------------------------------
+theReachRuling:
+  whatWasOwed: >-
+    template-v1 deferred update with a specific obligation rather than a shrug: "editing a label
+    that Organizations are already rendering is a change with reach — it silently alters what every
+    adopting tenant sees — and it deserves its own thinking about notification rather than arriving
+    as a PATCH nobody discussed." THIS SECTION IS THAT THINKING.
+  theOPTIONSCONSIDERED:
+    notifyAdoptingOrganizations: >-
+      REJECTED, AND NOT ON COST. There is no notification mechanism to build on:
+      core.notification.read is declared at `own` scope and is openQuestions AZ5, and nothing
+      delivers anything to a tenant today. Designing a notification here means designing it against
+      imagination, which is the same reason template-v1 declined to design the Apps list.
+    blockTheEditWhileInUse: >-
+      REJECTED. It makes the common case — fixing a typo in a name nobody has adopted yet —
+      impossible as soon as one Organization adopts, and it would push operators toward retire-and-
+      recreate, which is worse: it strands the adopters AND consumes the unique name.
+    makeTheREACHVISIBLE: >-
+      ADOPTED. Every write in this contract returns `organizations_using`, so the operator sees how
+      many Organizations the change reached, in the response to the act itself.
+  theLIMITTHATWASFOUNDANDTHENCLOSED: >-
+    *** THE FIRST DRAFT SHIPPED THE COUNT ONLY IN THE RESPONSE TO A WRITE, SO IT WAS VISIBLE AFTER
+    THE ACT AND NOT BEFORE IT. THE TEAM LEAD REFUSED THAT AND WAS RIGHT TO. ***
+    The argument for leaving it: the gap is survivable because retirement is reversible — the
+    operator retires, sees "40", and restores.
+    THE ARGUMENT THAT BEAT IT: an operator making a decision that FEELS irreversible, blind, and
+    learning the reach by having done it. The reversibility makes the mistake recoverable; it does
+    not make the decision informed. And the cost of closing it was near zero — read-only, the
+    existing core.template.read, no new permission, and the output shape already existed.
+    SO platform.templates.usage SHIPS WITH RETIRE RATHER THAN AFTER IT.
+    *** AND CLOSING IT DECOUPLED TWO OPEN QUESTIONS THAT WERE SILENTLY LOAD-BEARING ON EACH OTHER —
+    see TL-1 and TL-3, which now name each other. *** While the gap existed, TL-1's whole mitigation
+    was TL-3's reversibility, and TL-3 proposed removing it. Neither question said so.
+    THE SCOPE LESSON, RECORDED BECAUSE IT WAS MINE: the operation was left out to hold the surface to
+    the four that were asked for. That was the right instinct about scope and the wrong answer about
+    safety — the scope was the Team Lead's to set, not mine to protect on their behalf.
+  theWRITEPATHDISCLOSURE_ACCEPTED: >-
+    *** update, retire AND restore RETURN `organizations_using` UNDER THEIR OWN PERMISSIONS, AND THAT
+    IS AN ACCEPTED DISCLOSURE RATHER THAN AN UNEXAMINED CONSEQUENCE. *** Team Lead ruling, 2026-09-10.
+    A holder of core.template.update who lacks core.organization.list DOES learn the count. It is not
+    gated by core.template-adoption.read and it must not become so.
+    WHY IT IS ACCEPTED ON THE MERITS: the caller already holds a MUTATING permission over the
+    Template, and the reach of a mutation is the thing they are entitled to see. THIS IS
+    theReachRuling WORKING AS DESIGNED — an operator changing what forty Organizations render must be
+    told it is forty. Stripping the count to close the disclosure would REOPEN TL-1, which is closed
+    for a stronger reason than this one is open.
+    WHY IT IS SAID HERE RATHER THAN LEFT IMPLICIT: this contract argued the disclosure question at
+    length for the READ route and nowhere for the three WRITE routes, which reads as the question
+    having been asked once. An unexamined consequence and a considered one are indistinguishable to
+    the next reader, and the whole of SR-4 is that shape one field over.
+    WHAT THE ASYMMETRY ACTUALLY IS, STATED SO IT IS NOT READ AS AN INCONSISTENCY: the census vector
+    is ENUMERATION PLUS SUMMATION — list every Template, read every count. THE WRITE ROUTES DO NOT
+    OFFER IT: you cannot sum across Templates by mutating them, because each call changes the record
+    and writes an audited trail of having done so. THE READ ROUTE IS THE ONLY CHEAP, REPEATABLE,
+    SIDE-EFFECT-FREE WAY TO POLL, WHICH IS WHY IT IS THE ONE THAT NEEDED A PERMISSION.
+  whatVISIBLEDOESNOTMEAN: >-
+    A COUNT IS NOT CONSENT AND MUST NOT BE READ AS ONE. Nothing in this contract asks an adopting
+    Organization whether its labels may change, and NOTHING TELLS IT THAT THEY DID.
+    *** THE AUDIT RECORD IS NOT THE ANSWER TO THAT AND THIS SENTENCE USED TO IMPLY IT WAS — SR-9. ***
+    It said "nothing tells it that they did BEYOND THE AUDIT RECORD 0028 REQUIRES", which reads as
+    the record being a channel to the tenant. IT IS NOT ONE YET: `core.audit.read` is at organization
+    scope and has no route (`PA-3`), so the record is written into the tenant's database and the
+    tenant cannot read it. The record is written so the customer CAN see it when a route exists.
+    SO THE STATEMENT IS STRONGER THAN IT WAS, NOT WEAKER: an adopting Organization is not asked, is
+    not notified, and TODAY CANNOT EVEN LOOK IT UP AFTERWARDS. That is stated so "the operator was
+    shown the reach" is not later quoted as though the tenant had been.
+
+# ---------------------------------------------------------------------------
+# theRetirementRuling — REVERSIBLE, AND THE REASON IS A TRAP RATHER THAN A PREFERENCE
+# ---------------------------------------------------------------------------
+theRetirementRuling:
+  theRULING: "RETIREMENT IS REVERSIBLE. There is a retire route and a restore route, and one permission gates both."
+  whyREVERSIBLE: >-
+    *** BECAUSE ONE-WAY RETIREMENT CREATES A DEAD NAME, AND THE TRAP IS EXACT. *** Template names are
+    UNIQUE under NFKC-plus-ASCII-case-folding comparison, and template-v1 keeps that uniqueness
+    deliberately: "two Templates called School are indistinguishable to the operator choosing one,
+    and the choice is permanent for every Organization that adopts the wrong one."
+    SO AN OPERATOR WHO RETIRES "School" BY MISTAKE CANNOT CREATE "School" AGAIN — the retired row
+    still holds the name — AND CANNOT UN-RETIRE IT. The name is spent, permanently, by a single
+    click. Retirement was designed as the SAFE alternative to deletion and one-way retirement would
+    make it a quieter deletion with the same permanence.
+  theALTERNATIVEREJECTED: >-
+    EXCLUDING RETIRED ROWS FROM THE UNIQUENESS INDEX would also free the name, and it is rejected:
+    it permits two Templates called "School", one retired and one active, which is the exact
+    ambiguity the index exists to prevent — and it would put the ambiguity into the list an operator
+    reads while choosing.
+  oneCONFIRMATIONNOTTWO:
+    ruling: "core.template.retire gates BOTH directions. There is no separate restore permission."
+    why: >-
+      The field is a reversible, non-destructive toggle on platform configuration. A separate
+      restore permission could only ever be held alongside retire — nobody sensible holds the power
+      to withdraw a Template and not the power to undo their own mistake — so it would be a split
+      with no decision in it, which is §3.2's splitting discipline read in the direction it is
+      usually read backwards.
+    theTRIGGERTHATWOULDREOPENIT: >-
+      IF A RETIREMENT EVER CARRIES A REASON THAT MUST NOT BE UNDONE — a Template withdrawn because
+      it was legally wrong, rather than because it was superseded — RESTORE BECOMES A SEPARATE
+      ARGUMENT AND A SEPARATE PERMISSION. Stated as the condition rather than as a verdict, so it
+      does not read as an instruction the day someone adds a reason field.
+    theBREAKGLASSCOUNTEREXAMPLE_SR7_20260910: >-
+      *** THE MERGE STANDS FOR VERSION 1 AND THE ARGUMENT ABOVE IS WRONG. RECORDED SO THE NEXT READER
+      INHERITS THE TESTED VERSION RATHER THAN RE-DERIVING THE FLAWED ONE. ***
+      THE FLAW: "nobody sensible holds the power to withdraw a Template and not the power to undo
+      their own mistake" REASONS ABOUT retire-WITHOUT-restore — the direction nobody wants — AND
+      CONCLUDES ABOUT THE PAIR. The other direction was never examined, and it has a live precedent
+      in this platform's own catalogue.
+      `core.principal.revoke-platform-scope` EXISTS AS A SEPARATE PERMISSION FROM ITS GRANT TWIN FOR
+      EXACTLY THIS REASON: "a break-glass responder role can hold REVOKE without GRANT, so the person
+      reachable at 3am can cut off a compromised operator without themselves being able to create
+      one."
+      TRANSPOSED: AN ON-CALL RESPONDER WHO CAN UNDO A MISTAKEN OR HOSTILE RETIREMENT WITHOUT BEING
+      ABLE TO PERFORM ONE. Restore is the RECOVERY half, retire is the DAMAGING half, and splitting
+      them would let the safe half be granted broadly and the dangerous half narrowly — which is what
+      least privilege is for. THE SPLIT IS NOT A COST; IT IS A CAPABILITY THE MERGE FORECLOSES.
+      WHAT THE MERGE COSTS, RECORDED RATHER THAN IMPLIED: *** ANYONE WHO MAY RESTORE MAY ALSO
+      RETIRE. *** That is the escalation direction, and A LOW-PRIVILEGE RECOVERY ROLE CANNOT EXIST
+      WHILE IT HOLDS.
+      WHY IT STANDS ANYWAY, FOR VERSION 1: restore is not purely benign (it returns a Template to
+      choosability, which is a real act), the responder role does not exist, and TL-3 is unbuilt. THE
+      TRIGGER ABOVE IS UNCHANGED AND IS NOW ONE OF TWO — a reason that must not be undone, OR a
+      break-glass role that needs recovery without destruction. Either one reopens this.
+  retirementDOESNOTCASCADE: >-
+    ORGANIZATIONS ALREADY ON A RETIRED TEMPLATE KEEP IT, AND KEEP RENDERING ITS LABELS. Retirement
+    blocks NEW adoption. This is template-v1's ruling — "retirement hides it from new adoption and
+    leaves existing references intact" — and it is restated because a reader meeting a retire route
+    will reasonably wonder what happened to the adopters. NOTHING HAPPENS TO THEM. Moving them is
+    PA-17, performed deliberately, one Organization at a time.
+
+# ---------------------------------------------------------------------------
+# permissionsProposed — FOUR. PROPOSED, NEVER ADDED, NEVER GRANTED.
+#
+# IT WAS THREE UNTIL 2026-09-10, WHEN SECURITY REVIEW OVERTURNED THE USAGE ROUTE'S REUSE OF
+# core.template.read. A count in a heading is an assertion nothing derives; this one moved within a
+# day of being written, which is the argument rather than an embarrassment.
+# ---------------------------------------------------------------------------
+permissionsProposed:
+  theSTATUSOFTHISBLOCK: >-
+    *** THESE ARE REQUESTS FOR CATALOGUE ENTRIES AND NOTHING MORE. *** docs/decisions/0007 rule 4:
+    a permission does not exist until it is in permission-catalog.yaml. This contract does not put
+    it there, architecture-agent does not put it there, and a Team Lead instruction to author this
+    contract is not approval of anything in this block (security.md §8). security-agent reviews
+    before integration. Every entry below is `status: proposed`, `phase: 1`, `scopes: [platform]`.
+  theNAMINGCORRECTIONFIRST: >-
+    *** THE MATRIX AND THE MILESTONE PLAN BOTH SAY `core.template.archive`. THIS CONTRACT PROPOSES
+    `core.template.retire` INSTEAD, AND THE CHANGE IS DELIBERATE. *** A permission named `archive`
+    gating a route that sets a status called `retired` is two words for one act, in the two places a
+    reader looks — and the two vocabularies would then have to be held together by memory. Customer
+    records archive; Templates retire; the object's own vocabulary wins. The matrix rows are
+    corrected in the same change rather than left to disagree.
+  entries:
+    - id: core.template-adoption.read
+      group: platform
+      sensitivity: sensitive
+      scopes: [platform]
+      gates: "platform.templates.usage"
+      addedLATE: >-
+        ADDED 2026-09-10 ON SECURITY REVIEW. The usage route originally reused core.template.read and
+        this contract argued a new permission "would be a split with no decision in it" — WHILE THE
+        NEXT KEY SPENT THIRTY LINES IDENTIFYING THE DECISION. So the count is now four proposed
+        permissions, not three, and nothing in this block is granted.
+      whyTHENAME_ANDITISNOTcoreTemplateUsageRead: >-
+        *** PERMISSIONS ARE GRANTED BY FAMILY, AND THAT IS WHAT DECIDES THE NAME. *** Called
+        `core.template.usage-read` it would sit in `core.template.*` beside create, list and read —
+        THREE PERMISSIONS ABOUT THE TEMPLATE RECORD. Anyone composing a role that "can read Templates"
+        reaches for that family, and A CENSUS PERMISSION WOULD ARRIVE WITH IT SILENTLY, looking like a
+        fourth member of a set the grantor had already decided about.
+        THE WHOLE POINT OF THIS PERMISSION IS THAT READING A TEMPLATE AND COUNTING ITS ADOPTERS ARE
+        DIFFERENT DECISIONS. A NAME THAT FILES THEM TOGETHER UNDOES THE SPLIT IT EXISTS TO MAKE.
+        The resource is also genuinely different: this reads the Template-to-Organization ADOPTION
+        RELATION, not a Template attribute. `core.platform-organization.update` is the precedent for a
+        hyphenated compound resource and it exists for the same reason.
+      whyThisSENSITIVITY: >-
+        SENSITIVE, and the rungs disagreeing with each other is the argument. core.organization.list —
+        which discloses the Organization population — is `sensitive`. This discloses an AGGREGATE OVER
+        THAT SAME POPULATION, and at `read` it would have been the first count in the platform surface
+        reachable at `read` sensitivity. A LADDER THAT FILES A DISCLOSURE BELOW THE POPULATION IT
+        DISCLOSES HAS STOPPED SORTING ANYTHING.
+        See the route's theDISCLOSURE_ANDITISACENSUSRATHERTHANABOUND for why it is a census rather
+        than a bound, and theRATELIMITPOSITION for why a rate limit is not a substitute.
+      whatITDOESNOTGATE: >-
+        IT DOES NOT GATE THE COUNT ON THE WRITE ROUTES. update, retire and restore return
+        organizations_using under their own permissions, DELIBERATELY — see
+        theWRITEPATHDISCLOSURE_ACCEPTED. A caller mutating a Template is entitled to see how far the
+        change reached, and gating that would reopen TL-1.
+    - id: core.template.update
+      group: platform
+      sensitivity: sensitive
+      scopes: [platform]
+      gates: "platform.templates.update"
+      whyThisSENSITIVITY: >-
+        SENSITIVE, matching core.template.create, and the argument is create's own: "a Template
+        shapes what every Organization adopting it renders, so it is configuration with reach."
+        UPDATE HAS STRICTLY MORE REACH THAN CREATE — a create reaches nobody until something adopts
+        it, an update reaches every Organization already adopting. It is above `write` for that
+        reason.
+      whyNOTCritical: >-
+        docs/decisions/0026's ladder grades what the OPERATION does. Nothing is destroyed, no money
+        moves, NO AUTHORITY CHANGES — a label alters no scope, which is theBoundary's whole point —
+        and a wrong value is fixed by the same route that set it. This is 0031 Decision 2's
+        reasoning, and core.platform-organization.update reaches the same rung by the same argument.
+      whyNOTFoldedIntoCreate: >-
+        §3.2's splitting discipline, applied before rather than after. An operator who may add a
+        business type is not automatically an operator who may change one forty Organizations are
+        rendering. Two permissions rather than one widened one.
+      theBELOWCRITICALTRIGGER_ADDED20260910_ANDITISTHELARGEROFTHETWO: >-
+        *** THIS TRIGGER WAS RECORDED AGAINST set-template ONLY AND BELONGED HERE MORE. *** Security
+        review, 2026-09-10.
+        The `sensitive` rung above rests entirely on a Template carrying LABELS AND NOTHING ELSE —
+        "a label alters no scope", theBoundary's whole point. THE apps LIST IS DEFERRED, NOT
+        FORBIDDEN: createTemplateInput's own description says so and theBoundary says a Template
+        "MAY NAME Apps AND CARRY LABELS". So the guard rests on a field that is expected to arrive.
+        WITH AN apps LIST, EDITING A TEMPLATE CHANGES WHICH Apps EVERY ADOPTING ORGANIZATION HAS.
+        AN INSTALLED App IS NOT A LABEL — it is code with permissions, reaching data.
+        AND IT IS LARGER THAN set-template's SAME TRIGGER, WHICH IS WHY RECORDING IT ONLY THERE WAS
+        THE WRONG WAY ROUND: set-template reaches ONE Organization per call; update reaches EVERY
+        ADOPTER IN ONE CALL. The blast radius of the two operations inverts the moment a Template
+        carries anything executable.
+        THE TRIGGER IS ALSO ON template-v1.schema.json's createTemplateInput AND templateOutput,
+        because the person who adds the field is reading a SHAPE and not a permission proposal
+        (architecture.md §3a — the guard belongs where the act happens). A revisit is a security
+        decision and goes to security-agent; it is not a consequence an implementer absorbs while
+        adding a field.
+    - id: core.template.retire
+      group: platform
+      sensitivity: sensitive
+      scopes: [platform]
+      gates: "platform.templates.retire AND platform.templates.restore — see theRetirementRuling.oneCONFIRMATIONNOTTWO"
+      whyThisSENSITIVITY: >-
+        SENSITIVE. Retirement withdraws a business type from every future onboarding, which is
+        configuration with reach in the same sense as create and update. It is NOT critical: nothing
+        is destroyed, existing adopters are untouched, and the operation is reversible by design.
+      whySEPARATEFROMUPDATE: >-
+        THEY ARE DIFFERENT AUTHORITIES OVER DIFFERENT THINGS. Update changes what a Template SAYS;
+        retire changes whether it may be CHOSEN. An operator correcting a typo across the catalogue
+        does not thereby acquire the power to withdraw business types, and a single
+        core.template.write covering both would grant exactly that.
+    - id: core.platform-organization.set-template
+      group: platform
+      sensitivity: sensitive
+      scopes: [platform]
+      gates: "platform.organizations.set-template"
+      whyNOTcorePlatformOrganizationUpdate: >-
+        *** ITS CATALOGUE ENTRY RULES ITSELF OUT, IN TERMS. *** core.platform-organization.update is
+        scoped to "an Organization's display name, its commercial registration and its VAT
+        registration", and states: "IT DOES NOT COVER STATUS. Not suspension, not deletion, not
+        activation. A suspend route, when it exists, is a separate permission and a separate
+        argument — §3.2's splitting discipline applied before rather than after."
+        A TEMPLATE IS NOT IDENTITY. Name, CR and VAT are facts ABOUT the Organization that the
+        platform records on its behalf; a Template decides what every user in that Organization
+        READS AS THE NAME OF THEIR OWN STRUCTURE. Reusing the identity permission would widen it by
+        adoption rather than by decision, which is precisely what its own entry refused to allow for
+        status.
+      whyTHENAME: >-
+        `core.platform-organization.` follows the existing convention — the resource carries
+        `platform-` where a tenant twin exists or could — and `set-template` names the act rather
+        than the field, because the act is an assignment and the field is a foreign key.
+      whyThisSENSITIVITY: >-
+        SENSITIVE, on core.platform-organization.update's own ladder argument: a platform principal
+        editing a record inside a customer's own identity is not an ordinary record edit, and it is
+        not critical because nothing is destroyed, no authority changes, and the same route corrects
+        a wrong value.
+      theARGUMENTAGAINSTCRITICAL_STATEDBECAUSEITISCLOSE: >-
+        THIS ONE IS CLOSER TO THE LINE THAN THE OTHER TWO AND SAYING SO IS BETTER THAN ASSERTING THE
+        RUNG. It changes what every user in one named Organization sees, without their involvement,
+        and they cannot change it back themselves. What keeps it below critical is that it alters
+        LABELS AND NOTHING ELSE — no scope, no permission, no money — and 0026's ladder grades the
+        operation rather than the surprise. IF A TEMPLATE EVER CARRIES ANYTHING BUT LABELS, THIS RUNG
+        IS THE FIRST THING TO REVISIT, and theBoundary is what keeps that from happening quietly.
+      theNODATAQUALIFICATION_SR6_20260910: >-
+        *** THIS CLAUSE SAID "no data" AND THAT IS TRUE OF READS AND FALSE OF WRITES. THE WORD IS
+        REMOVED ABOVE RATHER THAN QUALIFIED IN PLACE, BECAUSE A TWO-WORD ABSOLUTE IN A LIST OF
+        ABSOLUTES IS READ AS ONE. ***
+        WHAT IS TRUE: this permission reads NOTHING of the customer's — no customer, no invoice, no
+        business record, nothing behind whereWithTenant.
+        WHAT IS ALSO TRUE AND WAS BEING SWALLOWED BY THE SAME SENTENCE: *** IT WRITES INTO THE
+        CUSTOMER'S OWN DATABASE, FIVE ROW-WRITES FROM THAT ORGANIZATION'S OWN DAILY ALLOCATION *** —
+        the docs/decisions/0028 audit record. "No tenant reach" is a claim about READS and it does
+        not survive being applied to WRITES.
+        THE CATALOGUE ALREADY HAD TO LEARN THIS ONCE, ON THE PERMISSION THIS ONE IS MODELLED ON.
+        core.platform-organization.update's grant note carries the identical correction — the write
+        is FOR the customer rather than at their expense, and it is "the kind of detail an approval
+        should contain rather than acquire". THIS ENTRY INHERITED THE MODEL AND NOT THE CORRECTION,
+        which is workflow.md §12's duplicated constraint: the qualification was made once, in a file
+        that cannot see this one, and the copy drifted back to the unqualified form.
+        IT DOES NOT MOVE THE RUNG. `sensitive` was argued on what the operation DOES and that is
+        unchanged; what changes is that the argument no longer rests on a false absolute. See the
+        route's theBUDGETMECHANISM_SR4_20260910 for the control that bounds the write.
+
+# ---------------------------------------------------------------------------
+# operations — five, all in the platform route class
+#
+# THE COUNT WAS FOUR UNTIL 2026-09-09, WHEN THE TEAM LEAD RULED THE USAGE READ SHIPS WITH RETIRE
+# RATHER THAN AFTER IT. Six sentences in this file said "four" and every one of them was correct
+# when written. They are corrected here rather than left, because a count in prose is an assertion
+# that rots the moment an operation is added and nothing goes red when it does (workflow.md §12) —
+# and this file's author is the person least likely to re-read them.
+# ---------------------------------------------------------------------------
+basePath: "/api/v1/platform"
+
+operations:
+
+  # =======================================================================================
+  - id: platform.templates.usage
+    title: "Read how many Organizations have adopted a Template"
+    method: GET
+    path: "/templates/{template_id}/usage"
+    surface: platform
+    provenance: "NEW WORK. TEAM LEAD RULING, 2026-09-09 — it ships WITH retire rather than after it."
+    description: >-
+      The Template and the number of Organizations currently adopting it. The read an operator
+      performs BEFORE retiring, so the decision is not made blind.
+    permission: core.template-adoption.read
+    scope: platform
+    request: "Path parameter `template_id` only. No body, no query parameters."
+    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, unavailable]
+    maxRowWrites: 2
+    audit: required
+    whyITHASITSOWNPERMISSION_ANDTHEFIRSTDRAFTGOTTHISWRONG: >-
+      *** THIS ROUTE ORIGINALLY REUSED core.template.read AND ARGUED THAT A NEW PERMISSION "would be
+      a split with no decision in it". SECURITY REVIEW OVERTURNED THAT AND THE CONTRADICTION WAS
+      INTERNAL: the very next key spent thirty lines identifying the decision. *** §3.2's splitting
+      discipline is invoked correctly for update-versus-create in this same file and was declined
+      here for a case with MORE decision in it, not less.
+      READING A TEMPLATE AND COUNTING ITS ADOPTERS ARE DIFFERENT DECISIONS, and that is the whole
+      reason this permission exists.
+    theDISCLOSURE_ANDITISACENSUSRATHERTHANABOUND:
+      whatItIs: >-
+        *** THE FIRST DRAFT CALLED THIS "a LOWER BOUND on how many Organizations exist" AND THAT
+        UNDERSTATED IT IN THE DIRECTION THAT MATTERS. *** core.template.list is ALSO `read`, so a
+        holder of template read-plus-list ENUMERATES EVERY TEMPLATE AND SUMS THE COUNTS — obtaining
+        the exact number of Organizations holding any Template. THAT IS A CUSTOMER-BASE CENSUS.
+        POLL IT OVER TIME AND IT IS A CUSTOMER GROWTH RATE, which is commercially sensitive in a way
+        a static number is not.
+      whyTHERUNGISsensitive: >-
+        THE RUNGS DISAGREED WITH EACH OTHER AND THAT IS WHAT DECIDES IT. core.organization.list — which
+        discloses the Organization population — is `sensitive`. A permission disclosing an AGGREGATE
+        OVER THAT SAME POPULATION at `read` would have been the first count in the platform surface
+        reachable at `read` sensitivity.
+        UNDER docs/decisions/0007 D15, `read` needs permission only and `sensitive` needs permission
+        PLUS an audit event. platform-operator-v1 P4 forces the audit here anyway, SO THE PRACTICAL
+        GAP IS SMALL — the classification is the point: a ladder that files a disclosure below the
+        population it discloses has stopped sorting anything.
+      andTHEPERMISSIONCLOSESTHECENSUSVECTOR: >-
+        SUMMING ACROSS TEMPLATES NOW REQUIRES A GRANT OF ITS OWN rather than arriving free with
+        core.template.read. That is the mechanism, and it is why this is a permission rather than a
+        note.
+    theRATELIMITPOSITION_STATEDBECAUSEANUNMENTIONEDCONTROLREADSASACONSIDEREDONE:
+      whatEXISTS: >-
+        The route declares `rate_limited` and the platform route class's own limits apply to it. No
+        route-specific limit exists and none is proposed.
+      rateLimitingISTHEWRONGCONTROLHERE_ANDMUSTNOTBESUBSTITUTEDFORTHEPERMISSION: >-
+        THE CENSUS VECTOR IS LONGITUDINAL, NOT BURST. One call a day for a year is rate-limited by
+        nothing and yields a growth curve. A limit that bounds requests per minute bounds a scrape
+        and does not bound SAMPLING OVER MONTHS — they are different attacks and only one of them is
+        what makes this route sensitive.
+        SO THE PERMISSION IS THE CONTROL. *** A FUTURE PROPOSAL TO "ADD A RATE LIMIT INSTEAD" IS
+        ANSWERING A DIFFERENT ATTACK, AND NAMING THE ATTACK IT DOES NOT ANSWER IS WHAT STOPS THE
+        SUBSTITUTION. *** A rate limit ADDED ALONGSIDE is fine and closes the scrape; it does not
+        license relaxing the rung.
+      whatNEITHERCONTROLREACHES: >-
+        A HOLDER WHO IS LEGITIMATELY GRANTED THIS PERMISSION CAN STILL BUILD THE GROWTH CURVE. Nothing
+        here prevents that and nothing is claimed to. What the permission buys is that the grant is
+        DELIBERATE and the reads are AUDITED under P4 — the trail is the detection, not the gate.
+      theCOHOLDINGINVARIANTISWITHDRAWN_ANDTHEREASONISREUSABLE: >-
+        *** AN EARLIER DRAFT ANSWERED THIS DISCLOSURE WITH A CO-HOLDING INVARIANT — "no role may hold
+        core.template.read without also holding core.organization.list", declared in
+        permission-catalog.yaml. IT IS WITHDRAWN, 2026-09-10, AND NOTHING SHOULD BE BUILT FROM IT. ***
+        TWO REASONS, AND THE SECOND GENERALISES. (1) The subject set was wrong: organizations_using is
+        the response of FOUR operations under THREE permissions and the invariant declared on ONE, so
+        it would have examined one pair, SATISFIED ITS OWN VACUITY GUARD, and passed while covering a
+        third of the surface. (2) *** IT WAS A ROLE-COMPOSITION LINT, NOT AN AUTHORIZATION CONTROL,
+        AND ITS RED STATE IS CLEARED BY GRANTING MORE. *** A co-holding REQUIREMENT can only be
+        satisfied by WIDENING a role, so someone defining a legitimately narrow role meets a red check
+        whose mechanical fix is "grant the other permission too". A CONTROL WHOSE REMEDY IS A BROADER
+        GRANT PUSHES AGAINST LEAST PRIVILEGE.
+        THE DEDICATED PERMISSION ABOVE HAS THE OPPOSITE REMEDY, WHICH IS THE POINT: it is decided in
+        Core on every call (security.md §2), fails as forbidden under deny-by-default, and CLEARING A
+        REFUSAL MEANS GRANTING THE COUNT DELIBERATELY. The withdrawn block is kept in
+        permission-catalog.yaml as history with both arguments; it is not in force and its keywords
+        are not keywords of that file.
+    notes: >-
+      maxRowWrites IS 2 ON A READ, and that is not an error: platform-operator-v1 P4 requires every
+      platform route to write an audit record, so a "read" route in this class always writes. Same
+      reasoning template-v1's list operation records.
+      not_found IS AN HONEST not_found, for template-v1 -> platform.templates.read's reason.
+      ZERO IS THE ORDINARY ANSWER AND NOT AN EMPTY STATE. It means the Template may be retired with
+      nothing stranded, which is the most useful thing this route can say.
+
+  # =======================================================================================
+  - id: platform.templates.update
+    title: "Edit a Template"
+    method: PATCH
+    path: "/templates/{template_id}"
+    surface: platform
+    provenance: "NEW WORK. template-v1 TM-1."
+    description: "Change a Template's name, its level labels, or both. Not its status — that is retire and restore."
+    permission: core.template.update
+    scope: platform
+    request: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/updateTemplateInput" }
+    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, conflict, failed_precondition, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 4
+    audit: required
+    writes: >-
+      ONE ROW UPDATED IN `template` (1 row + the uniqueness index on the normalised name = 2) PLUS
+      the platform-operator audit record. Charged 4 conservatively, per 0014 §A.12 and matching
+      create — over-reserving delays a write, under-reserving is a platform outage.
+    conflict:
+      whenItIsReturned: "The new name collides with another Template's, compared after NFKC normalisation and ASCII-only case folding."
+      theSELFCOMPARISONISEXCLUDED: >-
+        RENAMING A TEMPLATE TO ITS OWN CURRENT NAME IS NOT A CONFLICT, and it is not a no-op either
+        when `level_labels` accompanies it. The uniqueness comparison excludes the row being
+        updated. Stated because the obvious implementation — "does any row have this normalised
+        name" — returns the row itself and refuses every edit that keeps the name.
+    failedPrecondition:
+      whenItIsReturned: "The Template is `retired`."
+      why: >-
+        A RETIRED TEMPLATE IS NOT EDITED. It is withdrawn from choice, and existing adopters are
+        rendering its labels; changing those labels would alter what a tenant sees on a Template the
+        platform has already stopped standing behind. Restore it first, edit it, retire it again —
+        three deliberate acts, each audited, rather than one that quietly reaches adopters of a
+        withdrawn configuration.
+    notes: >-
+      not_found IS AN HONEST not_found, for template-v1 -> platform.templates.read's reason: Templates
+      are tenant-independent configuration every caller here may already enumerate, so there is no
+      population to protect and nothing a distinction could leak. Copy the reasoning, not the habit.
+
+  # =======================================================================================
+  - id: platform.templates.retire
+    title: "Retire a Template"
+    method: POST
+    path: "/templates/{template_id}/retire"
+    surface: platform
+    provenance: "NEW WORK. template-v1 TM-2 — the route that makes `retired` reachable for the first time."
+    description: "Withdraw a Template from new adoption. Existing adopters keep it and keep rendering its labels."
+    permission: core.template.retire
+    scope: platform
+    request: "Path parameter `template_id` only. NO BODY."
+    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 3
+    audit: required
+    writes: "ONE ROW UPDATED IN `template` (1 row, no index touched — status is not indexed) PLUS the platform-operator audit record. Charged 3."
+    whyAROUTERATHERTHANAPATCHOFStatus:
+      ruling: "THE TRANSITION IS THE ROUTE. There is no `status` field in any request shape in this contract."
+      why: >-
+        THREE REASONS, AND THE THIRD IS THE ONE THAT DECIDES IT.
+        (1) A `status` in a PATCH body would make core.template.update able to perform
+        core.template.retire's act, which is the permission split undone by a field.
+        (2) The route names the intent, so the audit record says "retired" rather than "updated
+        status to retired", and an operator reading a trail sees acts rather than field writes.
+        (3) *** IT AVOIDS TRANSMITTING A LIFECYCLE VOCABULARY AT ALL. *** A status a client SENDS is
+        a request enum and must be `closed` (0041 amendment 1) while the same vocabulary read on the
+        way back is `extensible` — one value set, two policies, and a duplicate-policy check that is
+        wrong to complain. THAT SPLIT IS UNAVOIDABLE FOR THE LIST FILTER AND IS AVOIDABLE HERE, so
+        it is avoided here. A transition named by a route needs no vocabulary.
+    failedPrecondition:
+      whenItIsReturned: "The Template is already `retired`."
+      why: >-
+        REFUSED RATHER THAN TREATED AS IDEMPOTENT, because a silent success writes an audit record
+        saying an operator retired something that was already retired, and a trail whose entries do
+        not correspond to changes is a trail that has to be read twice. THE OPERATOR LEARNS THE
+        STATE, which is what they were checking.
+
+  # =======================================================================================
+  - id: platform.templates.restore
+    title: "Restore a retired Template"
+    method: POST
+    path: "/templates/{template_id}/restore"
+    surface: platform
+    provenance: "NEW WORK. Required by theRetirementRuling — without it a mistaken retirement spends the Template's unique name permanently."
+    description: "Return a retired Template to `active`, so it may be chosen again."
+    permission: core.template.retire
+    scope: platform
+    request: "Path parameter `template_id` only. NO BODY."
+    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 3
+    audit: required
+    writes: "As retire. ONE ROW UPDATED PLUS the audit record. Charged 3."
+    notes: >-
+      IT SHARES A PERMISSION WITH RETIRE AND HAS ITS OWN ROUTE AND ITS OWN AUDIT ENTRY. Sharing the
+      permission is theRetirementRuling's decision; sharing a ROUTE would have meant a toggle, and a
+      toggle's audit record cannot say which direction it went without reading the previous state.
+    failedPrecondition:
+      whenItIsReturned: "The Template is already `active`."
+      why: "As retire, in the mirror. The operator learns the state rather than writing a no-op into the trail."
+
+  # =======================================================================================
+  - id: platform.organizations.set-template
+    title: "Set or clear an Organization's Template"
+    method: PATCH
+    path: "/organizations/{organization_id}/template"
+    surface: platform
+    provenance: "NEW WORK. PA-17. organization-onboarding-v1 sets template_id AT CREATION and nothing changes it afterwards."
+    description: >-
+      Change which Template an Organization has adopted, or clear it back to the platform default
+      labels. The operation an operator performs after retiring a Template, to move its adopters.
+    permission: core.platform-organization.set-template
+    scope: platform
+    request: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/setOrganizationTemplateInput" }
+    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/organizationTemplateOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
+    maxRowWrites: 8
+    audit: required
+    writes: >-
+      ONE ROW UPDATED IN THE CONTROL-PLANE `organization` TABLE, PLUS the platform-operator audit
+      record, PLUS AN AUDIT RECORD IN THAT ORGANIZATION'S OWN DATABASE.
+      *** THE THIRD WRITE IS THE ONE TO NOTICE AND IT IS NOT OPTIONAL. *** It is charged at the same
+      conservative five row-writes core.platform-organization.update's catalogue entry records for
+      the identical pattern, which with the two control-plane writes is 7; charged 8.
+      IT SPENDS THAT ORGANIZATION'S DAILY ALLOCATION AND READS NOTHING FROM IT. The write is
+      performed FOR the customer rather than at their expense — see theTENSEOFTHE0028CLAIM below,
+      which is the sentence that had to be corrected rather than repeated.
+    theTENSEOFTHE0028CLAIM_SR9_20260910: >-
+      *** THE WRITE IS RIGHT AND STAYS. THE SENTENCE CLAIMING THE CUSTOMER BENEFITS FROM IT WAS NOT
+      YET TRUE, AND THE TENSE IS THE WHOLE CORRECTION. ***
+      THE ORIGINAL, VERBATIM: "docs/decisions/0028 requires the customer to be able to see what the
+      platform did to them." THAT DESCRIBES A CONTROL THAT DOES NOT YET REACH THE CUSTOMER.
+      `core.audit.read` is declared at ORGANIZATION scope and HAS NO ROUTE — `PA-3`. So the record is
+      written into the tenant's database and THERE IS NO WAY FOR THE TENANT TO READ IT. An unread
+      audit record is detection nobody performs.
+      *** THE CORRECT TENSE: THE RECORD IS WRITTEN SO THE CUSTOMER CAN SEE IT WHEN A ROUTE EXISTS. ***
+      Today it cannot be read by the party it is for. That is not a reason to withhold the write —
+      writing it late would mean the trail begins after the acts it is supposed to cover, and every
+      set-template performed before `PA-3` lands would be invisible forever.
+      AND 0028's OWN AMENDMENT OF 2026-09-05 PREDICTED THIS EXACT SENTENCE: "a future reader citing
+      0028 for the proposition that operator actions are visible to tenants would be quoting a
+      control that has never worked." THIS CONTRACT WAS THAT FUTURE READER. The citation was accurate
+      about what 0028 REQUIRES and wrong about what the platform DELIVERS, which is workflow.md §12's
+      expressed-versus-enforced on the liveness axis — the requirement is real, nothing executes it
+      end to end, and a citation naming the requirement reads as though something did.
+      THE OBLIGATION, ASSIGNED RATHER THAN LEFT IMPLICIT: when `PA-3` gives `core.audit.read` a
+      route, this paragraph and every other future-tense 0028 citation become plain present tense.
+      Until then no document may claim the customer CAN see what the platform did.
+    theBUDGETMECHANISM_SR4_20260910:
+      whyThisSECTIONEXISTS: >-
+        *** SECURITY REVIEW SR-4: THIS CONTRACT DESCRIBED THE TENANT-SIDE COST AT LENGTH AND NAMED
+        NONE OF THE CONTROLS THAT BOUND IT — WHICH READS AS BUDGETING FULLY CONSIDERED. *** An
+        unmentioned control is indistinguishable from a considered one, and `freeTierImpact.writes`
+        below discussing the cost made the omission look like a decision.
+      theCONTROL: >-
+        `PLATFORM_ORIGINATED_DAILY_ROW_WRITES = 1_000`, declared at
+        platform/core/protection/write-admission.ts:319. IT BOUNDS THE VICTIM RATHER THAN THE
+        ATTACKER: a platform-originated write is checked against this per-Organization sub-ceiling
+        *** AS WELL AS *** that Organization's own 10,000, so an operator cannot spend more than a
+        bounded share of a customer's day however many operators there are. A customer's OWN
+        mutations pass `'tenant'` and are checked against the 10,000 alone, so they cannot be refused
+        by a counter they cannot increment.
+        THE PROPERTY TO TEST IS THE FILE'S OWN AND IT IS THE ONE qa-agent SHOULD ASSERT: "if a
+        customer can still experience their own product breaking because of platform activity, this
+        has not worked."
+      itISNOTAUTOMATIC_ANDTHATISTHEWHOLEPOINTOFNAMINGIT: >-
+        *** NOTHING MAKES A ROUTE INHERIT THE SUB-CEILING. *** `RequestCoordination.reserveWrites`
+        (platform/core/protection/coordination.ts:679) takes the origin as a REQUIRED SECOND
+        PARAMETER WITH NO DEFAULT, and its own comment says why: "IT IS REQUIRED SO THE CHEAP SIDE
+        CANNOT BE INHERITED BY OMISSION."
+        THERE ARE THREE HAND-WRITTEN `'platform'` CALL SITES TODAY — onboarding-service.ts:434,
+        reset-service.ts:329, member-resolution.ts:458. A FOURTH ROUTE THAT FORGETS THE ARGUMENT
+        DOES NOT FAIL; IT IS CHARGED AS THOUGH THE CUSTOMER HAD DONE IT, and the sub-ceiling silently
+        does not apply to it. That is the failure mode this section exists to make un-forgettable for
+        set-template, which would be the fourth.
+      whatSETTEMPLATEMUSTDO: >-
+        IT MUST GO THROUGH `MemberResolutionPort.recordOrganizationAccess`
+        (platform/core/directory/member-resolution.ts:186), WHICH MAKES THE BUDGET A MECHANISM RATHER
+        THAN A CONVENTION. That port requires a `charge: OperatorWriteCharged` — "PROOF THE
+        OPERATOR'S WRITE BUDGET WAS CHARGED FIRST. REQUIRED." It is unforgeable and names its
+        subject: `dispatchPlatformRoute` is the only producer and `consumeOperatorCharge` compares it
+        against the actor being recorded.
+        SO A ROUTE ROUTED THROUGH THAT PORT INHERITS THE CEILING BY CONSTRUCTION — omitting the
+        charge does not compile. architecture.md §3a exactly: the check's output is an argument of
+        the write. THE OBLIGATION ON set-template IS THEREFORE 'USE THIS PORT', NOT 'REMEMBER TO
+        RESERVE', and a hand-rolled tenant write in this route would bypass a guard the other three
+        platform-originated writes are behind.
+        THE RECEIPT'S OWN LIMIT IS INHERITED AND NOT RESTATED: architecture.md §3a records that a
+        receipt certifies a fact that can go stale between the mint and the write. That applies here
+        as it does everywhere else and is not special to this route.
+      whatITDOESNOTCLAIM: >-
+        NOTHING HERE ASSERTS THAT CORE DOES THIS TODAY. set-template is not built; no route exists.
+        This is a CONTRACT OBLIGATION on the implementation and a check on the DOCUMENT, not a report
+        about the running system (architecture.md §3b — naming which side). THE PORT-LEVEL ASSERTION
+        IS qa-agent'S AND IS OWED: no platform-originated tenant write reaches the store without an
+        `OperatorWriteCharged` minted for the acting operator.
+        AND THE READ IS HONESTLY SCOPED: these citations were read from the named files rather than
+        transcribed from a report.
+        *** THE CALL-SITE COUNT IS A MEASUREMENT AND NOT A LOWER BOUND. EXACTLY THREE. *** This
+        sentence originally said "a LOWER BOUND rather than a proof there is no fourth", because
+        `platform/core/**` contains NUL bytes and architecture-agent's search tool cannot read past
+        one — so it could report what it found and could not claim absence.
+        THE TEAM LEAD CLOSED IT ON 2026-09-10 with a binary-safe search (`/usr/bin/grep -a`, which
+        reads those files where the ordinary tool returns a silent no-match): THREE `'platform'` origin
+        arguments in the whole repository, and the only other non-definition call site is
+        pipeline.ts:885 passing `'tenant'`, which is the Action pipeline and correct.
+        THE CAVEAT IS REMOVED RATHER THAN LEFT BECAUSE A PESSIMISTIC STALE NUMBER IS BELIEVED
+        INDEFINITELY (workflow.md §11a): nobody ever relies on a caveat in the direction that would
+        break it, so it narrows scopes and weakens claims forever while reading as diligence. It was
+        right to write and wrong to keep.
+    failedPrecondition:
+      whenItIsReturned: "The named Template is `retired`."
+      why: >-
+        RETIREMENT MEANS "HIDES IT FROM NEW ADOPTION" (template-v1 lifecycle). An assignment route
+        that accepted a retired Template is the hole that sentence exists to close, and it is the
+        one an operator is MOST likely to hit — because the workflow that brings them here is "I
+        retired the old Template, now let me move everyone", and the old one is the retired one.
+      whatItDoesNOTREFUSE: >-
+        AN ORGANIZATION ALREADY HOLDING A RETIRED TEMPLATE IS NOT FORCED OFF IT, and clearing to
+        null is always permitted regardless of the current Template's status. The precondition is
+        about what may be ADOPTED, never about what is held.
+    theSCHEMACANNOTENFORCETHIS: >-
+      *** STATED SEPARATELY BECAUSE IT IS THE CLASS OF RULE THIS REPOSITORY KEEPS GETTING WRONG. ***
+      JSON Schema cannot see the referenced Template's status — it is a value in another table — so
+      the precondition above is EXPRESSED HERE AND ENFORCED IN CORE, and nothing in this repository
+      executes the schema anyway. Two axes, both open: not covered by the schema, and nothing runs
+      the schema (workflow.md §12). qa-agent's case is named in testRequirements and is the only
+      thing that closes it.
+    notes: >-
+      not_found COLLAPSES "no such Organization" WITH NOTHING, because a platform operator reaching
+      this route may already enumerate every Organization with core.organization.list — the same
+      reasoning template-v1 records, and the OPPOSITE of every tenant-facing not_found in this
+      platform. It does NOT collapse "no such Template": a bad template_id is invalid_argument or
+      not_found on the Template, and distinguishing them tells the operator which of the two
+      identifiers they got wrong.
+
+# ---------------------------------------------------------------------------
+# amendmentToTemplateV1 — ONE ADDITIVE CHANGE, FLAGGED FOR TEAM LEAD REVIEW
+# ---------------------------------------------------------------------------
+amendmentToTemplateV1:
+  theCHANGE: >-
+    platform.templates.list GAINS ONE OPTIONAL QUERY PARAMETER, `status`, referencing
+    urn:dudo:schema:template:1#/$defs/templateStatusFilter. Absent means unfiltered, which is
+    exactly today's behaviour.
+  whyItIsNEEDEDBYTHISCONTRACT: >-
+    THE MOMENT `retired` BECOMES REACHABLE, A LIST THAT MIXES RETIRED AND ACTIVE TEMPLATES
+    RECREATES THE DEFECT NAME-UNIQUENESS EXISTS TO PREVENT — "two Templates called School are
+    indistinguishable to the operator choosing one" becomes "an active and a retired School are
+    indistinguishable in a picker". Retire without a filter is a half-built feature.
+  whyItIsADDITIVEANDNOTBREAKING: >-
+    THE SERVER DEFAULT DOES NOT CHANGE. Unfiltered stays unfiltered, so a caller that has shipped
+    against this route sees nothing different. THE DEFAULT THAT MATTERS MOVES TO THE CLIENT, stated
+    normatively in the schema: an operator-facing list SENDS status=active. That is a presentation
+    decision, it belongs where presentation decisions belong, and putting it in the contract is what
+    stops the two clients choosing differently.
+    THE ALTERNATIVE — changing the server default to `active` — was rejected. It is a semantic change
+    to a published operation, and although it is unobservable TODAY (every Template is active), it
+    would become observable the first time this contract's own retire route is used. A change that is
+    invisible until the feature that makes it visible ships is not a safe change; it is a delayed one.
+  theREVIEWITNEEDS: >-
+    architecture.md §1: additive changes may proceed, and this one is additive. IT IS FLAGGED RATHER
+    THAN ASSUMED because it touches an ACCEPTED contract, and because `templateStatusFilter` is the
+    live instance of docs/decisions/0041 amendment 1 — the same value set as `templateStatus`
+    carrying the opposite policy, which the duplicate-policy check is expected to flag and is wrong
+    to. See theEnumPolicyDivergence.
+
+# ---------------------------------------------------------------------------
+# theEnumPolicyDivergence — 0041 amendment 1, LIVE, AND THE CHECK GOES RED
+# ---------------------------------------------------------------------------
+theEnumPolicyDivergence:
+  thePAIR: >-
+    urn:dudo:schema:template:1#/$defs/templateStatus is `extensible`. #/$defs/templateStatusFilter
+    is `closed`. THEY CARRY THE IDENTICAL VALUE SET — exactly ["active","retired"], no more and no
+    fewer — and both policies are correct.
+  whyBOTHARECORRECT: >-
+    docs/decisions/0041 amendment 1: `extensible` is a claim about what the SERVER sends, so a
+    REQUEST enum is always `closed`. A client reading a status must survive one it was never taught;
+    a client FILTERING on a status may not invent one, because the tolerant reading would have Core
+    accepting an unrecognised value from a caller and deciding what to do with it.
+  thePREDICTION: >-
+    *** THE DUPLICATE-POLICY CHECK WILL GO RED ON THIS PAIR, ON A CORRECT CHANGE, AND THAT IS
+    EXPECTED RATHER THAN A DEFECT. *** It asserts that identical value sets carry identical policies,
+    and this is the one case amendment 1 identifies where that assertion is wrong.
+  theEXEMPTIONISDECLAREDANDMUTUAL: >-
+    Both defs carry `enumPolicyDivergence: {counterpart, reason}` NAMING EACH OTHER. THE MUTUALITY IS
+    THE POINT: one side cannot exempt itself, so a unilateral divergence — someone flipping one
+    policy and adding a marker — still fails.
+  whatTheCHECKMUSTDO: >-
+    OWED, AND IT IS NOT MINE TO WRITE — scripts/** is the Team Lead's. The rule: two enums with
+    IDENTICAL value sets and DIFFERENT policies are a FINDING, unless (a) each names the other as
+    its `enumPolicyDivergence.counterpart`, AND (b) their policies are exactly one `extensible` and
+    one `closed`. Any other combination, including two markers both naming a third def or two
+    `closed` policies with markers, is still a finding.
+    *** IT MUST SHIP WITH A KNOWN-FAILING INPUT (workflow.md §11a): a pair where only ONE side
+    carries the marker. That case must stay RED. *** A check that has only ever seen the exempted
+    pair has been observed, not verified — and this exemption is the first mechanism in the corpus
+    whose whole purpose is to make a check stop complaining, which is the highest-suspicion kind of
+    change there is.
+  theGENERATORCHANGETHISREQUIRED: >-
+    `enumPolicyDivergence` is a new keyword and the contract generator refuses any keyword in
+    neither of its two lists. It is added to CONSTRAINT_KEYWORDS rather than to SHAPE_KEYWORDS, and
+    the distinction matters because the two names look like a pair: `enumPolicy` DECIDES THE EMITTED
+    TYPE and is shape-bearing; this one decides nothing about the type and is an annotation.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: none-on-the-request-path
+  theTHREEPAOPERATIONSONTEMPLATES: >-
+    IDENTICAL TO template-v1's RULING AND FOR ITS REASONS. A Template is tenant-independent, the
+    routes are in a class that cannot reach a tenant (platform-operator-v1 P1), and no request or
+    response shape here contains an organization_id in either direction.
+  theSETTEMPLATEOPERATIONISDIFFERENTANDTHEDIFFERENCEMUSTNOTBEBLURRED:
+    whatItTOUCHES: >-
+      IT NAMES AN ORGANIZATION AND WRITES INTO THAT ORGANIZATION'S DATABASE — the 0028 audit record.
+      It is the only operation in this contract that does, and calling this contract
+      "tenant-independent" without the qualification would be false.
+    whatItSTILLDOESNOTDO: >-
+      IT READS NOTHING BEHIND whereWithTenant. No customer, no invoice, no business record. The
+      Organization's Template is a CONTROL-PLANE column, and the tenant write is an audit record the
+      platform authors for the customer's benefit.
+    docs0024ISUNAFFECTED: >-
+      *** THE MUTUAL EXCLUSION IS NOT WEAKENED BY THIS ROUTE AND THE MECHANISM IS WORTH RESTATING,
+      BECAUSE "a platform operator writes into a tenant database" IS EXACTLY THE SENTENCE THAT
+      SOUNDS LIKE IT IS. *** A platform_operator holds zero organization_membership rows, so no
+      store handle is resolved for them and no tenant-scoped read is reachable. The audit write is
+      performed by Core on the platform's behalf through the audit path, not by the operator holding
+      a tenant handle. IF AN IMPLEMENTATION EVER RESOLVES A TENANT STORE FOR A PLATFORM PRINCIPAL TO
+      PERFORM THIS WRITE, THAT IS A CRITICAL DEFECT AND NOT AN IMPLEMENTATION DETAIL.
+  theISOLATIONTESTFORTHISCONTRACT: >-
+    THE STANDARD "tenant A must not read tenant B" TEST IS NOT APPLICABLE TO THE FOUR TEMPLATE
+    ROUTES — there is no tenant on either side — and qa-agent must report it as NOT APPLICABLE WITH
+    THAT REASONING rather than as passing. A green isolation result on a surface with no tenants is
+    a test that asserted nothing.
+    IT IS FULLY APPLICABLE TO platform.organizations.set-template, and there it is a real test: the
+    audit record must land in the named Organization's database AND IN NO OTHER, and a second
+    Organization's trail must show nothing.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: "NO NEW TABLE AND NO NEW COLUMN. Every field written here already exists: `template.status`, `template.name`, `template.level_labels` and `organization.template_id`."
+  writes: >-
+    4 row-writes per update, 3 per retire or restore, 8 per set-template (of which 5 land in one
+    tenant's database). At operator volume this is tens of writes a day against the 3,000/day
+    control-plane sub-ceiling. THE TENANT-SIDE WRITE IS THE ONE WITH A SECOND BUDGET: it spends the
+    named Organization's allocation, and a bulk re-assignment across many Organizations spends many
+    allocations. See TL-2.
+    *** THE CONTROL THAT BOUNDS THAT SECOND BUDGET IS NAMED IN THE OPERATION AND NOT HERE: SEE
+    platform.organizations.set-template -> theBUDGETMECHANISM_SR4_20260910. *** This block discussed
+    the cost at length and named no control, which is SR-4's finding — an unmentioned control reads
+    as a considered one. COST BELONGS IN THIS BLOCK; THE MECHANISM BELONGS BESIDE THE WRITE IT
+    BOUNDS, where an implementer is standing when it matters.
+  reads: >-
+    `organizations_using` IS AN AGGREGATE OVER THE CONTROL-PLANE `organization` TABLE, one COUNT per
+    write response. Bounded by the number of Organizations, which is bounded by operator effort.
+    IT MUST BE A COUNT AND NEVER A FETCH-AND-LENGTH — reading every row to count them is the same
+    number on the wire and a different number against d1-rows-read.
+  atTheLimit: "Refused with quota_exceeded and Retry-After to the next 00:00 UTC. Nothing degrades for any tenant; no tenant depends on this surface, and the one tenant-side write is an audit record whose absence is itself a defect to be surfaced rather than a degradation to be accepted."
+  cost: "USD 0 / BD 0 per month. No new table, no new service, no new binding."
+
+# ---------------------------------------------------------------------------
+# testRequirements
+# ---------------------------------------------------------------------------
+testRequirements:
+  authorization:
+    - "A tenant principal holding `owner` receives forbidden on all five routes."
+    - "A principal with no platform_operator row receives forbidden on all five."
+    - "A platform operator holding core.template.read and NOTHING ELSE from this contract receives 200 on platform.templates.usage and forbidden on the other four. The usage read reuses an existing permission and must not become a back door into the write routes."
+    - "A platform operator holding core.template.update but NOT core.template.retire receives 200 on update and forbidden on retire AND on restore. The two permissions are genuinely separate and a role holding one must not get the other."
+    - "A platform operator holding core.platform-organization.update but NOT core.platform-organization.set-template receives forbidden on set-template. THIS IS THE CASE THE WHOLE PERMISSION ARGUMENT RESTS ON — if the identity permission opens this route, the split exists only on paper."
+    - "A platform operator holding core.template.retire but not core.template.update receives forbidden on update: the pair is not a ladder and neither implies the other."
+  theRetirementTrap:
+    - "*** THE DEAD-NAME CASE, AND IT IS THE ONE THAT JUSTIFIES RESTORE EXISTING. *** Create 'School', retire it, then attempt to create 'School' again: the create must return conflict. Then restore the retired one and confirm it is active and choosable. A suite that omits this tests retirement without testing the reason it is reversible."
+    - "Retire twice: the second returns failed_precondition, not 200."
+    - "Restore an active Template: failed_precondition."
+    - "An Organization already adopting a Template that is then retired continues to resolve that Template and render its labels on organization-detail-v1."
+  shapes:
+    - "An update with an empty body `{}` returns invalid_argument. It must NOT return 200 with no change."
+    - "An update supplying only `level_labels: {workspace: 'Campus'}` leaves `organization` and `branch` AT THEIR PREVIOUS VALUES and does not reset them to platform defaults. THIS IS THE PARTIAL-MERGE CASE AND IT DIFFERS FROM CREATE, where an absent key takes the default — the two routes share a `$ref` and the suite must prove they do not share the rule."
+    - "Renaming a Template to its own current name, together with a label change, returns 200 and not conflict."
+    - "Renaming to a name differing from another Template's only by case, or by full-width versus ASCII characters, returns conflict."
+    - "`set-template` with the field absent returns invalid_argument; with `{template_id: null}` returns 200 and a null template. Absent and null are different requests."
+  theRetiredTemplateIsUnadoptable:
+    - "set-template naming a retired Template returns failed_precondition. THE SCHEMA CANNOT EXPRESS THIS and no validator runs here, so this test is the only thing that enforces it."
+    - "organization-onboarding-v1's create must refuse a retired Template on the same terms. IT IS A DIFFERENT ROUTE IN A DIFFERENT CONTRACT AND THE RULE IS THE SAME ONE — a check written only against set-template leaves the front door open, and onboarding is the front door."
+  tenantIsolation:
+    - "set-template on Organization A writes the 0028 audit record into A's database and into no other. ASSERT IT AT THE STORE, NOT THROUGH A TENANT-FACING READ — there is no route that returns this record to a tenant (`core.audit.read` has none; `PA-3`), so a test phrased as 'Organization B's audit feed shows nothing' would be reading a feed that does not exist and would pass by construction on both Organizations."
+    - "NO PLATFORM PRINCIPAL RESOLVES A TENANT STORE HANDLE ON THIS PATH. Assert it at the port, not by observing that no business data came back — an absence of leaked data is what a correct implementation and a broken assertion both look like."
+  audit:
+    - "All five routes write a platform-operator audit record, INCLUDING the read — platform-operator-v1 P4, and it is why maxRowWrites is 2 on a route that changes nothing."
+    - "A REFUSED OPERATION WRITES THE REFUSAL, NOT THE ACT. A failed_precondition retire produces an audit entry recording a REFUSED attempt and must NOT produce one recording a retirement. Stated as its own case because the two are one row apart and a suite that only counts audit rows passes on either."
+    - "The retire and restore entries are distinguishable in the trail without reading the previous state. This is why they are two routes rather than a toggle."
+  theBoundary:
+    - "NO IDENTIFIER IN platform/core/** NAMES A BUSINESS TYPE, re-run against the update route's implementation. The update path is where a `switch (template.name)` would first look reasonable."
+  crossClient:
+    - "Both clients send `status=active` on the operator-facing Template list. A client that omits it and renders retired Templates in a picker is the defect templateStatusFilter exists to prevent."
+    - "Both clients render an unrecognised `status` neutrally. `templateStatus` is `extensible` and this contract is what makes an unrecognised value REACHABLE for the first time — until now the tolerant branch was untestable because every Template was active."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TL-1
+    question: >-
+      An operator cannot see `organizations_using` BEFORE acting. The count is in the response to the
+      write, so the decision to retire is made blind and the reach is learned afterwards.
+    status: >-
+      *** CLOSED IN THIS VERSION, 2026-09-09, BY TEAM LEAD RULING. *** platform.templates.usage ships
+      WITH retire rather than after it: read-only, the EXISTING core.template.read, no new permission.
+      The entry is kept rather than deleted because the argument that nearly left the gap open is
+      worth more than a tidy list — "the gap is survivable because retirement is reversible" is true
+      and it is not sufficient, and the distinction it misses is between a mistake being RECOVERABLE
+      and a decision being INFORMED.
+    itsMITIGATIONWASTL3S_REVERSIBILITY_ANDTHATISTHECOUPLING: >-
+      *** READ TL-3 BEFORE ACTING ON ANYTHING HERE. *** While this gap was open, TL-1's ONLY mitigation
+      was that retirement is reversible — and TL-3 proposes a change that would remove reversibility
+      for some holders. NEITHER QUESTION SAID SO, and each read as a self-contained proposal with a
+      sound argument. That is a relationship between two individually-correct declarations, which is
+      the class architecture.md §3a-i records.
+      CLOSING THIS DECOUPLES THEM: the usage read no longer depends on reversibility, so TL-3 becomes
+      a clean question about legal withdrawal instead of one that quietly removes a safety net
+      somewhere else. THAT DECOUPLING IS THE SECOND REASON FOR THE RULING, not a side effect of it.
+    blocks: "Nothing. It is closed."
+  - id: TL-2
+    question: >-
+      Moving many Organizations off a retired Template is one call each, and each spends five
+      row-writes from a DIFFERENT Organization's daily allocation.
+    recommendation: >-
+      NO BULK ROUTE IN VERSION 1, and the reason is not caution about the shape. A bulk re-assignment
+      is an operation whose blast radius is every Organization it names, and 0027's confirmation
+      question would have to be reopened for it — a single call that changes what thousands of users
+      read is a different rung from a call that changes one. Left out deliberately rather than
+      forgotten.
+    blocks: "Nothing at current scale. It becomes real at tens of Organizations on one retired Template."
+  - id: TL-3
+    question: >-
+      Retirement carries no REASON. The trail records that a Template was retired and by whom, never
+      why.
+    recommendation: >-
+      Additive later. It is deliberately absent because a reason field is the thing that would make
+      restore a separate permission (see theRetirementRuling.oneCONFIRMATIONNOTTWO), and adding the
+      field without reopening that question would leave a withdrawal marked "legally wrong" that any
+      holder of core.template.retire can silently undo.
+    whatACTIONINGTHISWOULDHAVECANCELLED_READBEFOREPROCEEDING: >-
+      *** THIS QUESTION USED TO REMOVE TL-1's ENTIRE MITIGATION AND SAID NOTHING ABOUT IT. ***
+      Splitting restore into its own permission means a principal holding core.template.retire
+      WITHOUT it is back to a one-way retirement. WHILE TL-1 WAS OPEN that also made the retirement
+      BLIND — the operator could not see the reach beforehand and could no longer undo it afterwards
+      — so a sound, self-contained proposal here would have silently cancelled a safety net recorded
+      three questions away. WHOEVER PICKED THIS UP WOULD NOT HAVE KNOWN.
+      IT IS SAFE TO PROCEED NOW, AND ONLY BECAUSE TL-1 IS CLOSED. platform.templates.usage means the
+      decision is informed before the act regardless of who may undo it, so this is now a clean
+      question about legal withdrawal. THAT DEPENDENCY IS STATED AS A FACT RATHER THAN AS A
+      PERMISSION SLIP: if TL-1 ever reopens — if the usage route is dropped, deferred or gated
+      differently — THIS QUESTION IS COUPLED AGAIN and must not be actioned alone.
+      RECORDED IN BOTH DIRECTIONS BY TEAM LEAD RULING, because a conditional that strands an
+      obligation is read as normative by whoever arrives after the condition resolves
+      (workflow.md §12).
+    blocks: "Nothing today. It blocks a legal-withdrawal use case that nobody has asked for."
+  - id: TL-4
+    question: >-
+      `templateStatus` remains `extensible` while this contract makes `retired` reachable, so a third
+      status is anticipated and none is proposed.
+    recommendation: >-
+      Leave it `extensible`. A `draft` status — a Template that exists but may not yet be adopted —
+      is the plausible third, and it is exactly the kind of value that arrives without a version
+      bump. THE CLIENT TOLERANCE THIS ASSUMES IS NOW TESTABLE FOR THE FIRST TIME and is in
+      testRequirements.crossClient; until this contract ships it was an untestable claim.
+    blocks: "Nothing."
+  - id: TL-5
+    question: >-
+      The duplicate-policy check has no exemption mechanism, and `enumPolicyDivergence` is a marker
+      this contract declares that nothing yet reads.
+    recommendation: >-
+      *** THIS IS A REFUSAL THAT NAMES A REMEDY, AND THE REMEDY MUST BE MADE TO EXIST IN THE SAME
+      CHANGE OR THE CHECK BECOMES A DEAD END. *** The marker is declared here with its exact
+      semantics and its known-failing input; scripts/** is the Team Lead's and the check half is
+      owed there. UNTIL IT LANDS THE CHECK GOES RED ON A CORRECT PAIR — which is visible and
+      annoying rather than silent, and that is the right direction for the gap to fail.
+    blocks: "The gate, once templateStatusFilter is in the corpus. It is the one item here that is not merely a limitation."

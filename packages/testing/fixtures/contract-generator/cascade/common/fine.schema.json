@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:cascadefine:1",
+  "title": "A SHARED schema that is perfectly fine. The over-refusal control depends on this existing.",
+  "$comment": "A contract importing THIS must still be delivered. A contract that imports NOTHING is weak evidence the cascade does not over-approximate, because it never exercises a dependency edge at all — it would be green whether the cascade is precise or never looked at edges. This one does exercise an edge.",
+  "$defs": {
+    "fineThing": { "type": "string" }
+  }
+}

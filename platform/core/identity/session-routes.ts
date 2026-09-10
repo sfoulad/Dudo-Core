@@ -58,10 +58,57 @@ import type { PreAuthBody } from './pre-auth-admission.ts';
  * A CLOSED UNION OF LITERALS, exactly as `PreAuthEntryPointId` is, and for the same reason: a
  * third value is not expressible without editing this file, which lives in `platform/core/**` and
  * which no App may edit.
+ *
+ * ===========================================================================================
+ * *** NORMATIVE, AND READ IT BEFORE YOU ADD THE THIRD ID: `.session` NAMES THE SESSION
+ * *** RESOURCE. IT NEVER NAMES THE REQUEST CLASS.
+ * `docs/decisions/0039`, resolved 2026-09-09.
+ * ===========================================================================================
+ *
+ * THE ANALOGY TRAP IS THE WHOLE REASON THIS PARAGRAPH EXISTS. Whoever adds the next session-class
+ * route will look for a sibling to copy, find `identity.session.refresh`, and reach for
+ * `identity.session.<thing>`. **That would be wrong, and it would look like consistency**, which
+ * is why the rule is stated here rather than left to be inferred from the two ids below.
+ *
+ * `identity.session.refresh` and `identity.session.revoke` are **pre-auth entry points**
+ * (`0014` §B), not members of this class. Their `.session` is **the thing being refreshed and the
+ * thing being revoked** — a resource in the path of a name, exactly as `.organization` is in
+ * `identity.organization.select`. It says nothing whatever about which class they belong to, and a
+ * route changing class would never have made those two stale.
+ *
+ * SO THE SEGMENT CARRIED TWO MEANINGS IN ONE NAMESPACE WITH NOTHING TO DISTINGUISH THEM — the
+ * resource in half its occurrences, the class in the other half. **That is `architecture.md` §1a's
+ * shape (one name, two meanings) arriving in an IDENTIFIER instead of in a request field**, and
+ * §1a's hazard is not specific to request fields: it is what happens wherever a namespace is
+ * shared and no document owns it.
+ *
+ * DROPPING IT FROM THESE TWO REMOVES THE AMBIGUITY RATHER THAN REMOVING A CLASS TOKEN. Every
+ * surviving `.session` in the corpus now means exactly one thing:
+ *
+ *     identity.login.start        identity.login.complete       pre-auth
+ *     identity.session.refresh    identity.session.revoke       pre-auth — .session is the RESOURCE
+ *     identity.organizations.list identity.organization.select  session class — THIS FILE
+ *
+ * AND THE CLASS IS NOT ENCODED IN THE ID AT ALL, DELIBERATELY. `0039` is the decision that a
+ * contract DECLARES its request class in a `requestClass:` field and that nobody infers it from a
+ * key name or an id segment. An id that spelled its class would be the same implicit encoding one
+ * level down, and would go stale the first time a route changed class.
+ *
+ * `identity.` IS LOAD-BEARING AND IS NOT INERTIA. `platform.organizations.list` and
+ * `identity.organizations.list` differ only by that segment and are genuinely different operations
+ * — every Organization on the platform, versus the caller's own. **The namespace does real work at
+ * exactly the point the class token did not.**
+ *
+ * NOTHING PERSISTED EITHER FORM, WHICH IS WHY THIS RENAME WAS AVAILABLE AT ALL. `0025`'s rule that
+ * a persisted value is not renamed to match a document never fired here, and the evidence is
+ * structural rather than a negative search: `SessionRouteDependencies` below has two fields —
+ * `handlers` and `readSessionId` — with **no audit sink, no store and no admission port**, so a
+ * session-route handler has nothing it *could* write a record with. Three tables carry an
+ * `action_id` column and none is reachable from this class.
  */
 export type SessionRouteId =
-  | 'identity.session.organizations.list'
-  | 'identity.session.organization.select';
+  | 'identity.organizations.list'
+  | 'identity.organization.select';
 
 export type SessionRouteMethod = 'GET' | 'POST';
 
@@ -95,17 +142,24 @@ export type SessionRoute = {
  * collection and `/organization` is the singular selection. The contract requires GET on the
  * singular path and POST on the plural path to be **404 rather than 405** — answering 405 would
  * confirm the path exists — and that falls out of matching method and path together.
+ *
+ * *** THE PATHS KEEP `/session/` AND THE IDS DO NOT. THAT IS NOT AN OVERSIGHT — DO NOT HARMONISE
+ * *** THEM. *** `0039` ruled on operation IDS, which are internal names nothing persists. **A URL
+ * is a published wire surface the deployed console calls**, so moving it is the outage direction
+ * `0034` and `0031` both sequenced around, and it would buy nothing: `/auth/session/` is also what
+ * `isReservedPreAuthPath` reserves, which is what stops an App claiming these paths. The id and
+ * the path answer to different rules and are allowed to disagree.
  */
 const ROUTES: readonly SessionRoute[] = Object.freeze([
   Object.freeze({
-    id: 'identity.session.organizations.list' as const,
+    id: 'identity.organizations.list' as const,
     method: 'GET' as const,
     path: '/auth/session/organizations',
     // No body. A GET with a body is refused like any other undeclared input.
     fields: Object.freeze([]),
   }),
   Object.freeze({
-    id: 'identity.session.organization.select' as const,
+    id: 'identity.organization.select' as const,
     method: 'POST' as const,
     path: '/auth/session/organization',
     // EXACTLY ONE FIELD, matching `selectOrganizationInput`'s `additionalProperties: false`.

@@ -39,7 +39,7 @@
  * invisible sidebar.
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DIST_ASSETS = join(import.meta.dirname, '..', 'dist', 'assets');
@@ -399,14 +399,75 @@ function escapeClass(token) {
   return token.replace(/[:.[\]/(),%!#*+?^$|{}\\]/g, (character) => `\\${character}`);
 }
 
-const tsxFiles = [];
-(function walk(directory) {
+/* -------------------------------------------------------------------------
+   THE POPULATION IS TWO ROOTS NOW, AND THE SECOND ONE IS WHY THIS BLOCK EXISTS
+   -------------------------------------------------------------------------
+   ADR 0040 moved the presentation primitives into `@dudo/ui`, OUTSIDE this
+   console's `src/`. This check asserted "all N class candidates in src/ produced
+   a rule" — and the moment the primitives left `src/`, that sentence stayed true
+   while saying nothing about them.
+
+   THE FAILURE IT WOULD HAVE MISSED IS TOTAL AND SILENT. `src/styles/index.css`
+   uses `source(none)`, so Tailwind scans exactly the `@source` paths it is given
+   and nothing else. Miss the package and EVERY class in every primitive is
+   purged: the build exits 0, `tsc` is happy, and the console renders unstyled.
+   There is no other instrument in this package positioned to see that.
+
+   So the walk covers both roots, and EACH ROOT CARRIES ITS OWN FLOOR. A combined
+   total cannot distinguish "the package shrank" from "the package stopped being
+   found", and the second is the whole hazard — a root that silently contributes
+   zero files would make this check report a confident green over half its
+   subject. That is `workflow.md` §11a's population half, in the one place where
+   its absence is invisible from the outside.
+
+   VERIFIED THE ONLY WAY THAT MEANS ANYTHING: this extension was written and run
+   BEFORE the `@source` line was added, against a tree where the package was real
+   and unscanned. It went red on 100+ primitive classes. The failing input was
+   the actual defect rather than a constructed one.
+   ------------------------------------------------------------------------- */
+
+const SCAN_ROOTS = [
+  { label: "this console's src/", dir: join(import.meta.dirname, '..', 'src'), minimum: 20 },
+  {
+    label: '@dudo/ui',
+    dir: join(import.meta.dirname, '..', '..', '..', 'packages', 'ui', 'src'),
+    minimum: 8,
+  },
+];
+
+function walk(directory, into) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const full = join(directory, entry.name);
-    if (entry.isDirectory()) walk(full);
-    else if (/\.tsx?$/.test(entry.name)) tsxFiles.push(full);
+    if (entry.isDirectory()) walk(full, into);
+    else if (/\.tsx?$/.test(entry.name)) into.push(full);
   }
-})(join(import.meta.dirname, '..', 'src'));
+}
+
+const tsxFiles = [];
+const rootCounts = [];
+for (const root of SCAN_ROOTS) {
+  const collected = [];
+  if (!existsSync(root.dir)) {
+    fail(
+      `scan root missing: ${root.label} (${root.dir})`,
+      '        THIS IS NOT A PASS. A root that is not there contributes no class\n' +
+        '        candidates, so every class in it would be reported as fine by silence.',
+    );
+    rootCounts.push(`${root.label} MISSING`);
+    continue;
+  }
+  walk(root.dir, collected);
+  if (collected.length < root.minimum) {
+    fail(
+      `scan root ${root.label} yielded ${String(collected.length)} file(s), below its floor of ${String(root.minimum)}`,
+      '        Either the directory moved, or the extension filter stopped matching.\n' +
+        '        A root that quietly contributes nothing makes this check green over\n' +
+        '        a subject it never examined.',
+    );
+  }
+  tsxFiles.push(...collected);
+  rootCounts.push(`${root.label} ${String(collected.length)}`);
+}
 
 const used = new Set();
 for (const file of tsxFiles) {
@@ -424,10 +485,14 @@ for (const token of used) {
 }
 
 if (missing.length === 0) {
-  pass(`all ${String(used.size)} class candidates in src/ produced a rule`);
+  pass(
+    `all ${String(used.size)} class candidates produced a rule ` +
+      `(${String(tsxFiles.length)} files: ${rootCounts.join(' · ')})`,
+  );
 } else {
   fail(
-    `${String(missing.length)} class(es) used in src/ produced NO rule`,
+    `${String(missing.length)} class(es) produced NO rule ` +
+      `(scanned ${String(tsxFiles.length)} files: ${rootCounts.join(' · ')})`,
     missing
       .sort()
       .map(

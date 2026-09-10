@@ -1,0 +1,41 @@
+---
+# THE REFERRER. Its URN IS declared — by a file that will not parse.
+#
+# This contract is ADMISSIBLE on its own terms. Nothing about it is wrong. It refuses only because
+# `carrier.schema.json` is unreadable, and the code it refuses under is the whole subject:
+#
+#   PASS = GEN_REF_UNRESOLVABLE_INDEX_INCOMPLETE, authored `derived`
+#   FAIL = GEN_UNRESOLVABLE_REF, which asserts "no file in the corpus declares this `$id`" —
+#          a claim the tool is not entitled to make while it could not read one of the files.
+#
+# On the clean run this contract must be DELIVERED. That is the floor: without it, "phantom-v1 was
+# refused" cannot be told apart from "nothing was emitted at all".
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: indexincomplete
+status: proposed
+updated: "2026-09-10"
+documentsExistingImplementation: none
+requestClass: platform
+
+tenancy:
+  scope: >-
+    NONE. A generator test input. It binds to no route and reaches no store.
+
+operations:
+
+  - id: fixture.IndexIncompleteReferrer
+    title: "An operation whose request type resolves into an unreadable schema"
+    description: >-
+      Its input `$ref`s a URN that a file in this corpus declares and that no run can read.
+    request: { schemaRef: "urn:dudo:schema:referrer:1#/$defs/referrerInput" }
+    response: { schemaRef: "urn:dudo:schema:referrer:1#/$defs/referrerOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.indexincomplete.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

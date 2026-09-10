@@ -528,34 +528,35 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // It is the same device the confirmation challenge uses: a caller cannot obtain a step toward
     // something it may not do.
     permission: fixedPermission('core.credential.reset'),
-    // THE IDENTIFIER THE OPERATOR WAS GIVEN, UNDER EITHER OF TWO NAMES. THERE IS NO
-    // `principal_id` — that is what this route produces, not what it takes — and no `role`, no
-    // `status`, no `q`.
+    // THE IDENTIFIER THE OPERATOR WAS GIVEN, UNDER ITS ONE NAME. THERE IS NO `principal_id` —
+    // that is what this route produces, not what it takes — and no `role`, no `status`, no `q`.
     //
     // ===========================================================================================
-    // *** PHASE 1 OF A TWO-PHASE RENAME. EXACTLY ONE OF THE TWO, ENFORCED IN THE HANDLER. ***
+    // *** PHASE 3 OF THE RENAME, LANDED. `identifier` IS GONE AND MAY NOT COME BACK. ***
+    // `docs/decisions/0034`, discharging `OD-5` in `organization-detail-v1`.
     // ===========================================================================================
     //
-    // `target_identifier` IS THE DESTINATION; `identifier` is deprecated and its removal is owed as
-    // `OD-5`. Both are declared here because **the class refuses an undeclared field before
-    // authentication**, so declaring only the new name would refuse the field the deployed console
-    // sends — the outage direction, hit twice already today.
+    // THE SEQUENCE WAS: Core accepts both -> the console switches -> Core drops `identifier`.
+    // Phases 1 and 2 are what made this phase safe; this is the breaking one, and `0034` prices
+    // the residual risk rather than assuming it away — **a straggler now receives
+    // `invalid_argument` from the class, before authentication, which is a loud, recoverable and
+    // immediately diagnosable failure rather than a silent one.**
     //
-    // THE SEQUENCE IS: Core accepts both -> the console switches -> Core drops `identifier`.
+    // *** DO NOT RE-ADD `identifier` HERE, AND NOT ONLY BECAUSE IT IS RETIRED. ***
+    // `architecture.md` §1a reserves the bare word platform-wide: a name that does not say WHOSE
+    // is a name two contracts can both use correctly while meaning different things by it, which
+    // is the defect that would have made `credential-reset-v1` return `forbidden` on every
+    // well-formed request. `target_identifier` means THE TARGET'S — the principal being resolved.
+    // The deprecation alias was an old name being retired, which is a different act from
+    // introducing a new one, and the reservation was never lifted.
     //
-    // *** DECLARING A FIELD HERE IS NOT ACCEPTING BOTH AT ONCE. *** This list is the class's
-    // pre-auth allow-list and nothing more. **Exactly-one is `resolveMember`'s job**, and both-
-    // present is refused there rather than silently preferred — if the two values differ, choosing
-    // silently is choosing which principal to resolve.
+    // THIS LIST IS THE CLASS'S PRE-AUTH ALLOW-LIST AND NOTHING MORE. It decides which names reach
+    // a handler at all; it decides nothing about what the handler then requires.
     //
-    // THE `oneOf` IN THE CONTRACT EXPRESSES THAT RULE AND DOES NOT ENFORCE IT: nothing in this
-    // repository executes JSON Schema. It is mechanical and diffable where prose is neither, and it
-    // is still a rule Core has to write.
-    //
-    // **WHEN `OD-5` IS DISCHARGED, THE CONTRACT PROPERTY AND THIS ENTRY COME OUT IN ONE CHANGE.**
-    // `scripts/check-route-fields.mjs` compares them and goes red if they are split — which is the
-    // check working rather than an obstacle to route around.
-    fields: Object.freeze(['identifier', 'target_identifier']),
+    // **THE CONTRACT PROPERTY AND THIS ENTRY COME OUT IN ONE CHANGE**, per `OD-5` and `0034`.
+    // `scripts/check-route-fields.mjs` compares them in both directions and goes red while only
+    // one half has landed — which is the check working rather than an obstacle to route around.
+    fields: Object.freeze(['target_identifier']),
     objectFields: Object.freeze([]),
     queryParameters: Object.freeze([]),
     successStatus: 200 as const,

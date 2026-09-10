@@ -44,13 +44,15 @@
     "tenantScope": {
       "type": "string",
       "enum": ["organization", "business", "branch", "team", "own", "resource"],
-      "description": "The scope the permission was evaluated at.\n\n*** `platform` IS DELIBERATELY ABSENT AND ITS ABSENCE IS THE SECURITY PROPERTY OF THIS SHAPE. *** `authorization/scope.ts` declares seven values and `platform` is the widest. A record in a tenant's `audit_event` carrying `scope: 'platform'` was written BY THE PLATFORM operating on this Organization, never by one of the Organization's own principals — no tenant role holds a platform-scope permission, because `permission-catalog.yaml`'s intersection rule excludes every one of them from every tenant role. Those records are the OTHER feed's, with a different shape and a different disclosure rule.\n\nA RECORD WHOSE `scope` IS NOT IN THIS ENUM MUST NOT BE RENDERED BY THIS SHAPE. If one ever appears here, the discriminator has failed and the contract is what must change — not the enum."
+      "enumPolicy": "closed",
+      "description": "The scope the permission was evaluated at.\n\n`closed` (docs/decisions/0041), AND THE ONE PRESSURE TO ADD A SCOPE WAS EXAMINED AND ROUTED ELSEWHERE. `permission-catalog.yaml` AZ10 asked whether relationship-based access — a parent over one student's records — is a new scope, and ruled that it is NOT: every scope in the §4 ladder is a STRUCTURAL CONTAINER, a parent-student link is neither structural nor a container, and the answer is an explicit delegation edge 'evaluated by Core as a fourth input alongside role and scope rather than smuggled into either'. So the ladder is not awaiting a seventh member; the case that looked like one is deliberately outside it.\n\nAND THE LAST LINE OF THIS DESCRIPTION IS WHY `extensible` WOULD BE WRONG HERE RATHER THAN MERELY CAUTIOUS: a record whose scope is not in this enum must NOT be rendered by this shape. An unknown arm would invite a client to render one.\n\n*** `platform` IS DELIBERATELY ABSENT AND ITS ABSENCE IS THE SECURITY PROPERTY OF THIS SHAPE. *** `authorization/scope.ts` declares seven values and `platform` is the widest. A record in a tenant's `audit_event` carrying `scope: 'platform'` was written BY THE PLATFORM operating on this Organization, never by one of the Organization's own principals — no tenant role holds a platform-scope permission, because `permission-catalog.yaml`'s intersection rule excludes every one of them from every tenant role. Those records are the OTHER feed's, with a different shape and a different disclosure rule.\n\nA RECORD WHOSE `scope` IS NOT IN THIS ENUM MUST NOT BE RENDERED BY THIS SHAPE. If one ever appears here, the discriminator has failed and the contract is what must change — not the enum."
     },
 
     "decision": {
       "type": "string",
       "enum": ["allowed", "denied"],
-      "description": "`platform/core/audit/audit.ts`: 'FAILURES ARE AUDITED, NOT ONLY SUCCESSES. An attack looks like a long run of failures, and a log containing only successes cannot show one.'"
+      "enumPolicy": "closed",
+      "description": "`closed`, and it is the one enum in this corpus where that needs no argument from the route table: an authorization decision is binary BY CONSTRUCTION. There is no third outcome to add, so `extensible` would be an arm for a case that cannot exist.\n\n`platform/core/audit/audit.ts`: 'FAILURES ARE AUDITED, NOT ONLY SUCCESSES. An attack looks like a long run of failures, and a log containing only successes cannot show one.'"
     },
 
     "denialReason": {
@@ -66,7 +68,8 @@
             "conflict",
             "rate_limited",
             "quota_exceeded"
-          ]
+          ],
+          "enumPolicy": "closed"
         },
         { "type": "null" }
       ],
@@ -76,7 +79,8 @@
     "principalType": {
       "type": "string",
       "enum": ["user", "team", "service-account", "ai-agent", "iot-device"],
-      "description": "Transcribed from `AuthenticatedPrincipal.principalType` (`tenancy/tenant-context.ts`). IT IS ON THE WIRE BECAUSE `ai-agent` AND `service-account` ARE THE ANSWERS A READER MOST NEEDS: 'a machine did this' and 'a person did this' are different facts, and a trail that renders both as a bare identifier makes the tenant work them out from the id."
+      "enumPolicy": "extensible",
+      "description": "`extensible`, and it is the one enum in this file that is not closed. A principal TYPE is a model concept that grows: `permission-catalog.yaml` lists these five today, `core-object-registry.yaml` carries `AiAgentPrincipal` and `IotDevicePrincipal` at phase 8 and 5, and `CO6` proposes a first-class delegation object binding one principal to another — the kind of thing that arrives as a sixth type rather than as a sixth scope. A client rendering an audit trail must not break when one appears.\n\nCONTRAST WITH `tenantScope` ABOVE, WHICH IS CLOSED FOR THE OPPOSITE REASON: the ladder's one candidate addition was examined and deliberately routed out of it. Same file, same shape, different answers, and the difference is whether a named future thing produces a new value.\n\nTranscribed from `AuthenticatedPrincipal.principalType` (`tenancy/tenant-context.ts`). IT IS ON THE WIRE BECAUSE `ai-agent` AND `service-account` ARE THE ANSWERS A READER MOST NEEDS: 'a machine did this' and 'a person did this' are different facts, and a trail that renders both as a bare identifier makes the tenant work them out from the id."
     },
 
     "targetResourceId": {

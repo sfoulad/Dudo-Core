@@ -25,23 +25,38 @@
  * across suites is exactly the kind of reasoning that survives right up until the login screen.
  *
  * ===========================================================================================
- * AND THE PART THAT IS NOT COVERED AT ALL: THE ADMIN CONSOLE
+ * THE ADMIN CONSOLE — AND WHAT THIS SECTION USED TO SAY, WHICH IS THE POINT
  * ===========================================================================================
  *
- * `kdf-vectors.ts` compares the web client, the enrolment tool and the reference. It says "ONE
- * CONTRACT SET, THREE IMPLEMENTATIONS" — and there are now FOUR in this repository, because
- * `platform/admin/src/api/kdf.ts` exists and is a deliberate copy of the web client's.
+ * ~~*"there are now FOUR implementations in this repository, because
+ * `platform/admin/src/api/kdf.ts` exists and is a deliberate copy of the web client's"*~~
  *
- * *** THE ADMIN CONSOLE IS THE CLIENT THE FIRST LIVE SIGN-IN WILL USE. *** The platform-operator
- * surface is served on `admin.dudo.work`, the first thing anyone does after the deploy is sign in
- * there, and until this file that copy had never been compared to anything by any test in
- * `packages/testing/**`.
+ * ~~*"**IT IS NOT UNGUARDED** — `platform/admin/scripts/verify-kdf.mjs` compares the two files'
+ * normative regions character for character"*~~
  *
- * IT IS NOT UNGUARDED — `platform/admin/scripts/verify-kdf.mjs` compares the two files' normative
- * regions character for character, which is a strong check and a DIFFERENT one: it proves the TEXT
- * matches, not that the OUTPUT does. A copy that is byte-identical below the banner and diverges
- * through, say, a differing constant above it would pass that script. The cases below run both
- * clients over the same inputs and compare the derived values.
+ * *** ALL THREE FILES THOSE SENTENCES NAMED WERE DELETED BY `0040`, AND THE PROSE SURVIVED THEM. ***
+ * `platform/web/src/api/kdf.ts`, `platform/admin/src/api/kdf.ts` and
+ * `platform/admin/scripts/verify-kdf.mjs` are all gone; there is **one** module,
+ * `@dudo/client-kdf`, and **three** implementations rather than four — the fourth was the copy the
+ * merge removed.
+ *
+ * **THE SECOND SENTENCE IS THE DANGEROUS ONE AND IT IS WHY THIS IS STRUCK RATHER THAN EDITED
+ * AWAY.** *"It is not unguarded"* exists to **stop the next reader looking for the guard** — and
+ * the guard was deleted. Somebody auditing coverage on the login path would read it, conclude the
+ * byte-comparison had this covered, and move on. **`architecture.md` §3c's unfalsifiable variant:
+ * a comment citing a control is a claim about that control, and this one could not be checked by
+ * opening the file, because there was no file.**
+ *
+ * **WHAT GUARDS IT NOW, and the shape of the guarantee changed rather than weakened.** The two
+ * consoles cannot derive differently because **there is nothing left to diverge** — a mechanism
+ * rather than a discipline (`architecture.md` §3a). What keeps that true is asserted in this file:
+ * *"AND NO HOST HAS RE-FORKED THE KDF"* walks both console trees and goes red the day a host-local
+ * `kdf` module reappears, **which is the only way the drift can return.**
+ *
+ * *** THE ADMIN CONSOLE IS STILL THE CLIENT THE FIRST LIVE SIGN-IN WILL USE. *** The
+ * platform-operator surface is served on `admin.dudo.work` and signing in there is the first thing
+ * anyone does after a deploy. **That is why the round-trip cases below are named by SURFACE and no
+ * longer by function**: one module serves both, so a second alias would say there are two.
  *
  * ===========================================================================================
  * WHY THE NEGATIVE CONTROLS PERTURB THE STORAGE SIDE
@@ -68,8 +83,10 @@
  */
 
 import { pbkdf2Sync } from 'node:crypto';
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-import { Suite, assertEqual, assertTrue, expectOk } from '../../harness/runner.ts';
+import { ISOLATION, Suite, assertEqual, assertTrue, expectOk } from '../../harness/runner.ts';
 import {
   createControlPlaneDatabase,
   readCredentialRow,
@@ -94,8 +111,23 @@ import {
   createCredentialVerifier,
 } from '../../../../platform/core/identity/credential-verifier.ts';
 import { buildSeedRows } from '../../../../platform/core/identity/tools/seed-principal.ts';
-import { deriveLoginCredential as webDerive } from '../../../../platform/web/src/api/kdf.ts';
-import { deriveLoginCredential as adminDerive } from '../../../../platform/admin/src/api/kdf.ts';
+// ONE MODULE SINCE `0040`, AND NOW ONE NAME FOR IT.
+//
+// This file imported both host copies and compared them. When they merged I struck the assertions
+// that they agree — those had become `a === a` — **and left two aliases naming one function**,
+// arguing that a call site standing in for a console was still worth distinguishing.
+//
+// *** THAT WAS WRONG, AND THE TEAM LEAD WAS RIGHT TO PUSH BACK. *** Eleven call sites split
+// between `webDerive` and `adminDerive`, and **six of them were in cases with no host dimension at
+// all** — identifier normalisation and the stored-row negative controls, which had inherited an
+// alias from history rather than from meaning. **A case invoking `adminDerive` read as exercising
+// the admin surface while exercising the same function as the case above it.** Not a false
+// assertion — a false impression, which is why nothing went red, and it is the coverage
+// overstatement this suite exists to prevent elsewhere.
+//
+// **The host distinction survives where it is checkable: in the case TITLES, and structurally in
+// the fork guard.** An identifier claiming a second implementation does not.
+import { deriveLoginCredential as clientDerive } from '@dudo/client-kdf';
 
 /** Synthetic throughout. Invented address, invented password, reused from nowhere. */
 const EMAIL = 'Platform.Operator@Example.Invalid';
@@ -215,29 +247,98 @@ export function buildEnrolmentRoundTripSuite(): Suite {
   // The four implementations agree, INCLUDING the one nothing has ever checked.
   // =========================================================================================
 
-  suite.test('the web client, the admin console and the reference derive the same value', async () => {
-    const web = await webDerive(EMAIL, PASSWORD);
-    const admin = await adminDerive(EMAIL, PASSWORD);
+  suite.test('the shipped browser client matches the independent reference', async () => {
+    // ===================================================================================
+    // *** THIS CASE USED TO COMPARE TWO HOST COPIES. `0040` MERGED THEM, AND A NAIVE REPOINT
+    // *** WOULD HAVE LEFT IT COMPARING A FUNCTION WITH ITSELF — PASSING FOREVER, MEASURING
+    // *** NOTHING, AND LOOKING EXACTLY LIKE THE CHECK STILL WORKING.
+    // ===================================================================================
+    //
+    // What it asserted: `platform/web/src/api/kdf.ts` and `platform/admin/src/api/kdf.ts` derive
+    // the same value. Both now resolve to `@dudo/client-kdf`, so `admin === web` is `a === a`.
+    // **The guarantee was not weakened — it moved from a test into the file layout**, which is a
+    // mechanism rather than a discipline (`architecture.md` §3a) and is strictly stronger: the
+    // drift is now impossible to express rather than merely detectable. `web-agent`'s
+    // `check:suite-parity` had found 17 real gaps between the copies before they merged.
+    //
+    // **The three self-comparisons are struck rather than repointed**, because a `§12` sweep of a
+    // withdrawn guarantee has to remove the assertions it left behind, not keep them passing. What
+    // survives is the comparison against an INDEPENDENT implementation, which is the part that was
+    // never about the two copies.
+    const client = await clientDerive(EMAIL, PASSWORD);
     const reference = referenceClientValue(PASSWORD, normalizeIdentifier(EMAIL));
 
-    // Compared pairwise rather than all-at-once, so a failure names WHICH pair diverged. A single
-    // three-way assertion would say only that they are not all equal.
-    assertEqual('the web client matches the independent reference', web.derived_key, reference);
-    assertEqual('the ADMIN CONSOLE matches the independent reference', admin.derived_key, reference);
-    assertEqual('and the two shipped clients match each other', admin.derived_key, web.derived_key);
-
-    // The normalised identifier travels with the derived value and is the salt. If the two clients
-    // disagreed here they would derive different keys AND look up different accounts.
-    assertEqual('both clients normalise the identifier identically', admin.email, web.email);
-    assertEqual('and it is Core\'s normalisation', web.email, normalizeIdentifier(EMAIL));
+    assertEqual('the shipped client matches the independent reference', client.derived_key, reference);
+    // The normalised identifier travels with the derived value and IS the salt, so a disagreement
+    // here would mean a different key AND a different account looked up.
+    assertEqual('and it normalises the identifier as Core does', client.email, normalizeIdentifier(EMAIL));
 
     // The control: the derivation discriminates. Without it, every assertion above would be
-    // satisfied by three implementations that all return a constant.
-    const different = await webDerive(EMAIL, `${PASSWORD}-different`);
+    // satisfied by two implementations that both return a constant.
+    const different = await clientDerive(EMAIL, `${PASSWORD}-different`);
     assertTrue(
       'a different password derives a different value',
-      different.derived_key !== web.derived_key,
+      different.derived_key !== client.derived_key,
       'two distinct passwords derived the same key, so the comparisons above are vacuous',
+    );
+  });
+
+  suite.test('*** AND NO HOST HAS RE-FORKED THE KDF — the guard that replaced the comparison ***', () => {
+    // ===================================================================================
+    // THE REPLACEMENT FOR THE STRUCK ASSERTIONS. `§12`: sweeping a withdrawn guarantee means
+    // leaving something watching, or saying plainly that nothing needs watching.
+    // ===================================================================================
+    //
+    // Something does. **The merged package makes drift impossible only for as long as there is one
+    // copy**, and the single edit that undoes `0040`'s guarantee is someone adding a host-local
+    // `kdf` module back — for a quick fix, a build constraint, or a divergent requirement. That is
+    // exactly how the two copies arose in the first place.
+    //
+    // This is the reservation pattern: it asserts the ABSENCE that carries the guarantee, so the
+    // day a fork reappears the suite goes red and names it, rather than a merged package quietly
+    // becoming two again with a self-comparison passing beside it.
+    const hosts = ['platform/web/src', 'platform/admin/src'];
+    const forks: string[] = [];
+    for (const host of hosts) {
+      const root = fileURLToPath(new URL(`../../../../${host}/`, import.meta.url));
+      const walk = (directory: string): void => {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const path = `${directory}${entry.name}`;
+          if (entry.isDirectory()) {
+            if (entry.name !== 'node_modules') walk(`${path}/`);
+          } else if (/^kdf(-[a-z]+)?\.(ts|tsx|mjs|js)$/.test(entry.name)) {
+            forks.push(`${host}/${path.slice(root.length)}`);
+          }
+        }
+      };
+      walk(root);
+    }
+
+    // THE FLOOR: the walk must have reached something, or "no forks" means "no files examined".
+    let examined = 0;
+    for (const host of hosts) {
+      const root = fileURLToPath(new URL(`../../../../${host}/`, import.meta.url));
+      const count = (directory: string): void => {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            if (entry.name !== 'node_modules') count(`${directory}${entry.name}/`);
+          } else examined += 1;
+        }
+      };
+      count(root);
+    }
+    console.log(`        kdf fork guard: ${String(examined)} files across ${String(hosts.length)} hosts`);
+    assertTrue(
+      `${ISOLATION} both host trees were walked`,
+      examined >= 20,
+      `only ${String(examined)} files were examined across ${hosts.join(' and ')}; a collapsed ` +
+        'walk would report "no forks" for a tree it never opened',
+    );
+
+    assertEqual(
+      `${ISOLATION} neither console carries its own kdf module — both consume @dudo/client-kdf`,
+      forks.join(' · '),
+      '',
     );
   });
 
@@ -253,7 +354,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
         iterations: SERVER_KDF_ITERATIONS,
         salt: enrolment.rows.salt,
       });
-      const submitted = await webDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       const outcome = await enrolment.verify(EMAIL, submitted.derived_key);
       assertEqual('the web client signs in', outcome.kind, 'verified');
       assertEqual('as the enrolled principal', outcome.principalId, PRINCIPAL);
@@ -273,24 +374,31 @@ export function buildEnrolmentRoundTripSuite(): Suite {
         iterations: SERVER_KDF_ITERATIONS,
         salt: enrolment.rows.salt,
       });
-      const submitted = await adminDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       const outcome = await enrolment.verify(EMAIL, submitted.derived_key);
       assertEqual('the admin console signs in', outcome.kind, 'verified');
       assertEqual('as the enrolled principal', outcome.principalId, PRINCIPAL);
 
-      // ---- AND THE CASE IS SENSITIVE TO THE ADMIN CLIENT'S OWN PARAMETERS.
+      // ---- AND THE CASE IS SENSITIVE TO THE CLIENT'S OWN PARAMETERS.
       //
-      // Without this, "the admin console signs in" is a green line that would stay green if the
-      // assertion were consuming something other than the admin implementation's real output.
-      // `deriveLoginCredential` takes the iteration count as its third argument, so a client-side
-      // divergence — the single likeliest way the copied file could drift, since the constant sits
-      // ABOVE the region `verify-kdf.mjs` compares — is reproducible here without editing
-      // `platform/admin/**`.
-      const drifted = await adminDerive(EMAIL, PASSWORD, 599_999);
+      // *** ITS ORIGINAL JUSTIFICATION IS GONE AND THE ASSERTION SURVIVES ON A DIFFERENT ONE. ***
+      // It used to read: *the constant sits ABOVE the region `verify-kdf.mjs` compares*, so a
+      // client-side drift was the likeliest way the copied file could diverge undetected.
+      // **`verify-kdf.mjs` is deleted and there is no copied file** — that argument is retired.
+      //
+      // **What it still does is the reason to keep it:** without this, *"the console signs in"* is
+      // a green line that would stay green if the assertion were consuming a constant rather than
+      // the real implementation's output. `deriveLoginCredential` takes the iteration count as its
+      // third argument, so passing a different one **must** change the result. **It is a
+      // discrimination control, not a drift detector**, and re-deriving it that way is `§12`'s
+      // *check whether an argument was resting on what you withdrew* — the conclusion held, the
+      // premise did not.
+      const drifted = await clientDerive(EMAIL, PASSWORD, 599_999);
       assertTrue(
         'a one-iteration client-side drift produces a different value',
         drifted.derived_key !== submitted.derived_key,
-        'the admin client ignored its iteration count, so this case cannot detect drift',
+        'the client ignored its iteration count, so this case is consuming something other than ' +
+          'the real derivation and "the console signs in" above proves nothing',
       );
       assertEqual(
         'and that value is REFUSED — the round trip detects a client-side divergence',
@@ -307,7 +415,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
     // account looked up and the key derived. Enrolled under one casing, signed in under another.
     const enrolment = await enrol();
     try {
-      const submitted = await adminDerive(EMAIL_OTHER_CASING, PASSWORD);
+      const submitted = await clientDerive(EMAIL_OTHER_CASING, PASSWORD);
       assertEqual(
         'the client normalises to the same identifier it was enrolled under',
         submitted.email,
@@ -334,7 +442,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
         iterations: perturbed,
         salt: enrolment.rows.salt,
       });
-      const submitted = await adminDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       const outcome = await enrolment.verify(EMAIL, submitted.derived_key);
       assertEqual(
         'a correct derived value is refused when the stored iteration count is wrong',
@@ -349,7 +457,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
     // this the refusal above would be satisfied by a verifier that refuses everything.
     const clean = await enrol();
     try {
-      const submitted = await adminDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       assertEqual(
         'the identical value verifies against an unperturbed row',
         (await clean.verify(EMAIL, submitted.derived_key)).kind,
@@ -416,7 +524,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
         credentials: futureAlgorithm,
         identifiers: await createHmacIdentifierHasher(LOOKUP_KEY),
       });
-      const submitted = await adminDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       const outcome = expectOk(
         'the verification call itself succeeds — it denies, it does not throw',
         await verifier.verify(EMAIL, submitted.derived_key),
@@ -447,7 +555,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
         otherSalt !== enrolment.rows.salt,
         'the control did not perturb anything',
       );
-      const submitted = await adminDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       assertEqual(
         'a correct derived value is refused when the stored salt is wrong',
         (await enrolment.verify(EMAIL, submitted.derived_key)).kind,
@@ -474,7 +582,7 @@ export function buildEnrolmentRoundTripSuite(): Suite {
 
     const enrolment = await enrol({ identifierHash: rawHash });
     try {
-      const submitted = await adminDerive(EMAIL, PASSWORD);
+      const submitted = await clientDerive(EMAIL, PASSWORD);
       assertEqual(
         'the account cannot be found, so a correct credential is refused',
         (await enrolment.verify(EMAIL, submitted.derived_key)).kind,

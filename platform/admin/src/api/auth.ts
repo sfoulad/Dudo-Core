@@ -81,7 +81,7 @@
 
 import { ApiError } from './errors';
 import { CONFIG } from './config';
-import { deriveLogin, type DerivationProgress } from './kdf-client';
+import { deriveLogin, type DerivationProgress } from '@dudo/client-kdf/client';
 
 /** The two fields `login-v1` declares. Undeclared fields are refused by Core. */
 export const IDENTIFIER_FIELD = 'email';

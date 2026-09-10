@@ -37,7 +37,7 @@
  * allocation" on the platform feed would name a party that is not involved.
  */
 
-import { Button } from '@/components/ui/button';
+import { Button } from '@dudo/ui';
 import type { ApiError, ErrorCode } from '@/api/errors';
 
 /** The two codes this component exists for. Anything else is an ordinary error. */

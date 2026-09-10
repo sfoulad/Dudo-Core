@@ -1,48 +1,49 @@
 /**
  * ===========================================================================================
- * `platform.organizations.members.resolve` — PHASE 1 OF A TWO-PHASE FIELD RENAME.
+ * `platform.organizations.members.resolve` — THE RENAME IS COMPLETE. `0034` PHASE 3 LANDED
+ * 2026-09-09, AND THIS FILE IS WHAT REPLACED THE PHASE-1 SUITE RATHER THAN DELETING IT.
  * ===========================================================================================
  *
- * The route declared `identifier`; the contract published `target_identifier`; **the deployed
- * console sent `identifier` and the route worked.** It worked because the client had been written
- * against the CODE rather than against the contract — which is `workflow.md` §12's stated
- * consequence arriving in practice: *"once one client has done that successfully, the contract has
- * stopped being the source of truth for everyone."*
- *
- * The sequence is **Core accepts both -> the console switches -> Core drops `identifier`** (`OD-5`).
- * This file is the suite for the middle state, and the middle state is the one nobody writes cases
- * for because it is temporary.
- *
- * ===========================================================================================
- * WHY THE INTERESTING CASE IS THE ONE THAT REFUSES
- * ===========================================================================================
- *
- * Accepting two spellings is easy and almost writes itself. **The hazard is what happens when both
- * arrive**, and Core's answer is to refuse rather than to prefer:
- *
- * > *"if the two values differ, choosing silently is choosing which principal to resolve"* — on the
- * > route that leads to a credential reset.
- *
- * A route that quietly prefers one also lets a client send the wrong name forever and never learn,
- * so the deprecation never completes. **Refusing has a known-failing input; preferring is a
- * behaviour nobody would ever write a case for.**
+ * **WHAT THIS FILE USED TO ASSERT, kept because a withdrawn guarantee should leave a record and
+ * not a gap.** The route declared `identifier`, the contract published `target_identifier`, and
+ * the deployed console sent the old name — a client written against the CODE rather than the
+ * contract, which is `workflow.md` §12's stated consequence arriving in practice. The sequence was
+ * ~~Core accepts both~~ → ~~the console switches~~ → **Core drops `identifier`**, and all three
+ * steps are now done. Three cases exercised the middle state and are struck: both spellings
+ * resolving the same member, both-names-at-once being refused rather than silently preferred, and
+ * the `??` trap where an explicit `null` fell through to the legacy value. **None of them can be
+ * expressed any more — there is no second spelling to send.**
  *
  * ===========================================================================================
- * *** WHAT THIS SUITE CANNOT ASSERT, AND IT IS THE THING PHASE 3 NEEDS. ***
+ * *** WHY THIS IS NOT SIMPLY A DELETION, WHICH IS THE HALF THAT IS EASY TO GET WRONG ***
  * ===========================================================================================
  *
- * `resolveMember` collapses the two names into one local value before it does anything else, and
- * **nothing downstream records which spelling arrived** — not the action log, not the response,
- * not a counter. So the question *"is any client still sending the old name"* has no answer in
- * this system.
+ * The old phase-3 tripwire said, in its own text, *"delete this case and the two above it."*
+ * **Following that literally would have left nothing watching this field name at all**, and
+ * `§12`'s point is that sweeping a withdrawn guarantee's assertions is the easy instruction while
+ * leaving something still watching is the one nobody is prompted to do.
  *
- * That matters because `OD-5` — dropping `identifier` — is the change that breaks whichever client
- * is still sending it, and **without that evidence the cutover is an assumption rather than a
- * measurement.** The console is not the only possible caller: the Apple client and any script are
- * the ones nobody would remember to check.
+ * **So the question was: what is the next irreversible step here? There isn't one — phase 3 WAS
+ * the last step.** That is a real answer rather than an excuse, and it changes what the guard
+ * should be. What remains at risk is not another step in a sequence; it is **the reserved name
+ * itself**. `architecture.md` §1a reserves `identifier` platform-wide with exactly one meaning,
+ * precisely because it is *"the most natural name for the most common kind of field"* and will be
+ * reached for again. **The guard below is that reservation, enforced across every route in the
+ * class rather than on this one route** — so a fourth spelling, or the old name returning on any
+ * route, lands on a red case instead of on nobody.
  *
- * Reported to the Team Lead rather than built here: recording it is Core's, and a test cannot
- * assert a fact the system does not keep.
+ * ===========================================================================================
+ * MEASURED END STATE, 2026-09-09 — every value below was observed, not expected
+ * ===========================================================================================
+ *
+ *   { target_identifier: <member> }   ->  ok, principal resolved
+ *   { identifier: <member> }          ->  invalid_argument  identifier / unknown_field
+ *   { target_identifier: null }       ->  invalid_argument  target_identifier / must_be_a_primitive
+ *   { }                               ->  invalid_argument  target_identifier / must_be_a_submittable_identifier
+ *
+ * **THE LAST LINE READ `identifier` FOR ABOUT AN HOUR — a residue in `platform-route-handlers.ts`,
+ * found by this suite and repaired by `core-agent` the same day.** The rename reached the route
+ * table and the contract and missed the handler's error detail. **Three places, two swept.**
  */
 
 import { ISOLATION, Suite, assertEqual, assertTrue, expectError, expectOk } from '../../harness/runner.ts';
@@ -58,6 +59,9 @@ import { platformRoutes } from '../../../../platform/core/platform/platform-rout
 
 const ROUTE = 'platform.organizations.members.resolve';
 
+/** The reserved name `architecture.md` §1a forbids as a field name platform-wide. */
+const RESERVED = 'identifier';
+
 async function resolve(world: PlatformWorld, body: Record<string, unknown>) {
   return world.call(ROUTE, {
     sessionId: SESSION_ADMIN,
@@ -67,151 +71,192 @@ async function resolve(world: PlatformWorld, body: Record<string, unknown>) {
 }
 
 export function buildMemberResolveRenameSuite(make: MakePlatformWorld = createPlatformWorld): Suite {
-  const suite = new Suite('members.resolve — the two-phase rename, and the state nobody tests');
+  const suite = new Suite('members.resolve — the rename is complete, and what still guards the name');
 
-  suite.test('BOTH SPELLINGS RESOLVE THE SAME MEMBER — the phase-1 guarantee', async () => {
+  suite.test('THE SURVIVING SPELLING RESOLVES — the floor for everything below', async () => {
+    // WITHOUT THIS, the refusals below prove nothing: a route that refused EVERY request would
+    // satisfy all three of them. The positive case is what makes the negatives mean something.
     const world = await make();
     try {
-      // THE NEW NAME, which the contract publishes and the console does not yet send.
-      const modern = expectOk(
+      const resolved = expectOk(
         'target_identifier resolves',
         await resolve(world, { target_identifier: TENANT_OWNER_IDENTIFIER }),
       ) as { principal_id: string; role: string };
-
-      // THE DEPRECATED NAME, which the deployed console DOES send. If this ever goes red, the
-      // console is broken in production and `OD-5` was discharged out of order.
-      const legacy = expectOk(
-        'identifier — the deprecated spelling the deployed console sends — still resolves',
-        await resolve(world, { identifier: TENANT_OWNER_IDENTIFIER }),
-      ) as { principal_id: string; role: string };
-
-      // AND THEY AGREE. Two spellings accepted is not the guarantee; two spellings meaning the
-      // SAME THING is. A route that accepted both and resolved them differently would pass a
-      // pair of "it returns 200" assertions and be the exact defect the refusal below prevents.
-      assertEqual(
-        `${ISOLATION} the two spellings resolve to the same principal`,
-        modern.principal_id,
-        legacy.principal_id,
-      );
-      assertEqual('and to the same role', modern.role, legacy.role);
       assertTrue(
-        'the resolution actually found somebody — so the agreement above is not two nulls',
-        typeof modern.principal_id === 'string' && modern.principal_id.length > 0,
-        `no principal was resolved: ${JSON.stringify(modern)}`,
+        'and it actually found somebody, so this is not a green assertion over an empty answer',
+        typeof resolved.principal_id === 'string' && resolved.principal_id.length > 0,
+        `no principal was resolved: ${JSON.stringify(resolved)}`,
       );
+      assertEqual('the resolved role is the seeded one', resolved.role, 'owner');
     } finally {
       world.close();
     }
   });
 
-  suite.test('*** BOTH NAMES AT ONCE IS REFUSED, NOT SILENTLY PREFERRED ***', async () => {
+  suite.test('*** THE DEPRECATED SPELLING IS NOW REFUSED — this is what phase 3 MEANS ***', async () => {
+    // ===================================================================================
+    // THE ASSERTION THAT REPLACED "BOTH SPELLINGS RESOLVE THE SAME MEMBER".
+    // ===================================================================================
+    //
+    // The old case proved the deprecated name still worked. This one proves it no longer does,
+    // which is the same fact from the other side and is the evidence that phase 3 actually landed
+    // rather than being reported as landed.
+    //
+    // THE CLASS REFUSES AN UNDECLARED FIELD BEFORE AUTHENTICATION, which is why the answer is
+    // `unknown_field` rather than anything from the handler — and why the rename had to be
+    // two-phase in the first place: publishing only the new name while the console sent the old
+    // one would have refused every request the console made.
     const world = await make();
     try {
-      // THE VALUES ARE DELIBERATELY DIFFERENT. If they were identical, a route that silently
-      // preferred one would return the same answer as a route that refused, and this case would
-      // pass against the behaviour it exists to forbid.
       expectError(
-        `${ISOLATION} both spellings present is an argument error`,
+        `${ISOLATION} the removed spelling is rejected as an unknown field`,
+        await resolve(world, { [RESERVED]: TENANT_OWNER_IDENTIFIER }),
+        expectedInvalidArgument(RESERVED, 'unknown_field'),
+      );
+      // AND SENDING BOTH IS REFUSED FOR THE SAME REASON NOW, not for the old both-present reason.
+      // Recorded because the ERROR CHANGED: a client that used to see `must_not_send_both_names`
+      // now sees `unknown_field`, and a case asserting the old issue would be red for a correct
+      // route. That is the shape of stale assertion this file exists to have swept.
+      expectError(
+        'both names at once is refused as an unknown field, not as both-present',
         await resolve(world, {
           target_identifier: TENANT_OWNER_IDENTIFIER,
-          identifier: 'someone.else@example.invalid',
+          [RESERVED]: TENANT_OWNER_IDENTIFIER,
         }),
-        expectedInvalidArgument('target_identifier', 'must_not_send_both_names'),
-      );
-
-      // AND NEITHER IS ACCEPTED EITHER. "Exactly one" has two failure modes and a suite that
-      // asserts only the first would pass on a route that accepted an empty body.
-      expectError(
-        'neither spelling present is refused too',
-        await resolve(world, {}),
-        expectedInvalidArgument('identifier', 'must_be_a_submittable_identifier'),
+        expectedInvalidArgument(RESERVED, 'unknown_field'),
       );
     } finally {
       world.close();
     }
   });
 
-  suite.test('THE `??` TRAP: an explicit null does NOT fall through to the legacy value', async () => {
-    // ===================================================================================
-    // THE CONSTRUCTED FAILING INPUT FOR A ONE-CHARACTER DEFECT THAT WOULD NEVER LOOK WRONG.
-    // ===================================================================================
-    //
-    // Core's handler comments name this precisely: `??` treats an explicit `null` as absent, so
-    // `{"target_identifier": null, "identifier": "x"}` would slip past the both-present refusal
-    // and then resolve the LEGACY value — a request that names the new field and is answered from
-    // the old one. `!== undefined` is the distinction, and **nothing about reading the code makes
-    // the difference visible; only this input does.**
-    //
-    // *** IT IS REFUSED A LAYER EARLIER THAN THE HANDLER, AND THAT IS WORTH RECORDING RATHER
-    // THAN SMOOTHING OVER. *** I expected `must_be_a_submittable_identifier` from the handler's
-    // own shape check, which is what Core's comment describes — *"a present-but-null field falls
-    // through to the shape check below and is refused there."* The measured answer is
-    // `must_be_a_primitive` on `target_identifier`, from the CLASS's body validation, which runs
-    // before the handler does.
-    //
-    // So the handler's `!== undefined` is **defence in depth rather than the operative guard for
-    // this input**, and the class check is what actually refuses it. Both are correct and the
-    // outcome is safe either way. It is recorded because `workflow.md` §11a's point about layered
-    // enforcement applies directly: **if the class check were relaxed, this case would still pass
-    // via the handler and nothing would report that a layer had gone.** The case below asserts the
-    // outer layer's exact answer, which is the one a client actually receives.
+  suite.test('an explicit null is still refused on its own terms', async () => {
+    // THE SURVIVING HALF OF THE `??` TRAP. The trap itself is gone — there is no legacy value for
+    // a null to fall through TO — but the layered refusal it exposed is still worth asserting.
+    // `workflow.md` §11a: this is answered by the CLASS's body validation, one layer above the
+    // handler's own `!== undefined` check, so the handler's guard is defence in depth here and
+    // not the operative one. If the class check were relaxed this case would still pass via the
+    // handler, and nothing would report that a layer had gone.
     const world = await make();
     try {
       expectError(
-        `${ISOLATION} a null target_identifier beside a legacy identifier is refused`,
-        await resolve(world, { target_identifier: null, identifier: TENANT_OWNER_IDENTIFIER }),
+        `${ISOLATION} a null target_identifier is refused as a non-primitive`,
+        await resolve(world, { target_identifier: null }),
         expectedInvalidArgument('target_identifier', 'must_be_a_primitive'),
       );
-      // THE MIRROR, so the refusal above is about the null rather than about the pair. With the
-      // null replaced by a real value, the SAME two fields are refused as both-present — a
-      // different error, which is what shows the null was handled on its own terms.
-      expectError(
-        'and with a real value in its place the pair is refused as both-present instead',
-        await resolve(world, {
-          target_identifier: TENANT_OWNER_IDENTIFIER,
-          identifier: TENANT_OWNER_IDENTIFIER,
-        }),
-        expectedInvalidArgument('target_identifier', 'must_not_send_both_names'),
-      );
     } finally {
       world.close();
     }
   });
 
-  suite.test('THE PHASE-3 TRIPWIRE: the deprecated name is still declared, and its removal is a two-file change', () => {
+  suite.test('EVERY REFUSAL NAMES THE FIELD THE CONTRACT PUBLISHES — the third place the rename had to reach', async () => {
     // ===================================================================================
-    // *** THIS CASE IS SUPPOSED TO GO RED WHEN `OD-5` IS DISCHARGED. THAT IS ITS PURPOSE. ***
+    // *** WRITTEN AGAINST THE CORRECTED BEHAVIOUR, AND THE REASON IS THE POINT. ***
     // ===================================================================================
     //
-    // A deprecation with no expiry is a permanent second name. This asserts the CURRENT state so
-    // that removing `identifier` is a deliberate act that lands on a case saying what else must
-    // move with it — rather than a quiet edit to a frozen array that nothing notices.
+    // A RESIDUE LIVED HERE FOR ABOUT AN HOUR. The rename completed in the route table and in the
+    // contract, and `platform-route-handlers.ts` went on emitting `detail('identifier', …)` — so
+    // a refusal named a field the route no longer declares and the contract no longer publishes,
+    // sending a client to look for something that does not exist. **Two files were swept and the
+    // third was not, which is `workflow.md` §12 in one line.** `core-agent` has repaired it.
     //
-    // WHEN IT GOES RED: check that the contract's `oneOf` came out in the same change, that the
-    // console no longer sends the old name, and that `harness/platform-fixture.ts`'s
-    // `successfulCallFor` — which sends `identifier` today — was moved too. Then delete this case
-    // and the two above it that exercise the legacy spelling.
+    // MY FIRST VERSION OF THIS CASE ASSERTED THE RESIDUE — `identifier` — so that it would go red
+    // when Core fixed it. **That was the wrong way round and the Team Lead corrected it.** It is
+    // the same defect this suite's sibling met this morning: `audit-anchor.ts`'s reader called a
+    // CORRECT repair a defect, because it had been built around the broken state. **A check
+    // written against what the code does today turns somebody else's correct fix into a red
+    // build**, and the person who then has to prove they did nothing wrong is the one who fixed
+    // it. Assert the destination, not the current position.
+    //
+    // MEASURED 2026-09-09, AFTER THE REPAIR — every one of these answers `target_identifier`:
+    //   {}                        empty body
+    //   { target_identifier: '' } too short
+    //   'no-at-sign'              malformed
+    //   42                        wrong type
+    // The `null` case answers `must_be_a_primitive` from the class one layer above, and is
+    // asserted separately in the case before this one.
+    const world = await make();
+    try {
+      // A TABLE RATHER THAN ONE INPUT, because the residue was reachable by several routes into
+      // the same detail and a single case would have proved only that one of them was swept.
+      for (const [label, value] of [
+        ['an empty body', undefined],
+        ['an empty string', ''],
+        ['a value that is too short', 'ab'],
+        ['a value with no "@"', 'no-at-sign'],
+        ['a value of the wrong type', 42],
+      ] as ReadonlyArray<readonly [string, unknown]>) {
+        expectError(
+          `${ISOLATION} ${label} is refused, naming target_identifier`,
+          await resolve(world, value === undefined ? {} : { target_identifier: value }),
+          expectedInvalidArgument('target_identifier', 'must_be_a_submittable_identifier'),
+        );
+      }
+    } finally {
+      world.close();
+    }
+  });
+
+  suite.test('*** THE RESERVATION: no route in the platform class declares `identifier` ***', () => {
+    // ===================================================================================
+    // THIS IS WHAT REPLACED THE PHASE-3 TRIPWIRE, AND IT IS DELIBERATELY WIDER THAN IT WAS.
+    // ===================================================================================
+    //
+    // The old tripwire asserted the CURRENT state of ONE route so that removing the name would be
+    // deliberate. That job is done and cannot be done twice. **What outlives it is
+    // `architecture.md` §1a's platform-wide reservation**, whose whole argument is that
+    // `identifier` is the most natural name for the most common kind of field and will be reached
+    // for again — by an author who was not here for the rename and has no reason to know.
+    //
+    // SCOPE IS THE POINT: every route in the class, not this one. §1a is explicit that a
+    // reservation scoped to "the contracts that compose with it today" is *"correct the day it was
+    // written and silently wrong the first time a route changed sensitivity."*
     const routes = platformRoutes();
+
+    // THE FLOOR, FIRST. An empty or collapsed route table would satisfy every assertion below by
+    // examining nothing — the failure `§11a` records as the most confident wrong answer available.
+    assertTrue(
+      `${ISOLATION} the route table was read and is populated`,
+      routes.length >= 10,
+      `only ${String(routes.length)} platform routes were found; there were 15 on 2026-09-09. A ` +
+        'smaller table means this check is drawing from an empty population and reporting success',
+    );
     const route = routes.find((entry) => entry.id === ROUTE);
     assertTrue(
-      'the route is registered at all — the floor for everything below',
+      'and the route under test is registered',
       route !== undefined,
-      `${ROUTE} is not in platformRoutes, so this case is asserting nothing`,
+      `${ROUTE} is not in platformRoutes, so the assertions below assert nothing`,
     );
+
     assertEqual(
-      'the route declares exactly the two spellings, in this order',
+      `${ISOLATION} ${ROUTE} declares the new name and only the new name`,
       [...route!.fields].join(','),
-      'identifier,target_identifier',
+      'target_identifier',
     );
-    // AND THE CLASS-LEVEL FACT THAT FORCED BOTH TO BE DECLARED: the platform route class refuses
-    // an undeclared field BEFORE authentication, so publishing only the new name would have
-    // refused the field the deployed console sends. That is the outage direction, and it is why
-    // the rename is two-phase rather than one edit.
+
+    // THE RESERVATION ITSELF. Reported by name rather than as a count, so a failure says WHICH
+    // route reintroduced it rather than that some route did.
+    const offenders = routes
+      .filter((entry) => entry.fields.includes(RESERVED))
+      .map((entry) => entry.id);
+    assertEqual(
+      `${ISOLATION} no platform route declares the reserved name '${RESERVED}'`,
+      offenders.join(' · '),
+      '',
+    );
+
+    // AND THE POPULATION THE RESERVATION WAS CHECKED OVER, against a count derived elsewhere.
+    // "No route declares it" and "no route was examined" render identically without this.
+    const fieldCount = routes.reduce((sum, entry) => sum + entry.fields.length, 0);
+    console.log(
+      `        reservation: '${RESERVED}' absent from ${String(fieldCount)} declared fields ` +
+        `across ${String(routes.length)} platform routes`,
+    );
     assertTrue(
-      'and no other route in the class declares the deprecated spelling',
-      routes.filter((entry) => entry.fields.includes('identifier')).length === 1,
-      'a second route now declares `identifier`, so OD-5 is no longer a one-route change and ' +
-        'this tripwire is understating the work',
+      'and those routes declare a substantial number of fields between them',
+      fieldCount >= 10,
+      `only ${String(fieldCount)} fields are declared across the whole class; the reservation was ` +
+        'checked against almost nothing, which is not the same as finding nothing',
     );
   });
 

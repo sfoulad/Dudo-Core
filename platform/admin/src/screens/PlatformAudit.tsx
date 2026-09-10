@@ -46,9 +46,9 @@
  * IT.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { useCallback, useState, type FormEvent } from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { AuditRecordList } from '@/components/AuditRecordList';
 import { EmptyBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
@@ -61,15 +61,14 @@ import {
   windowRefusal,
   type WindowDraft,
 } from '@/api/audit-window';
+import { usePlatformAudit } from '@/lib/queries';
 import {
-  PLATFORM_DEFAULT_PAGE_SIZE,
   toUtcExclusiveDayEnd,
   toUtcDayStart,
   type PlatformFeedFilters,
   type PlatformFeedOutput,
-  type PlatformClient,
 } from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'loading' }
@@ -86,7 +85,7 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { actor: '', action: '', since: '', until: '' };
 
-export function PlatformAudit({ platform }: { platform: PlatformClient }) {
+export function PlatformAudit() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   /** The filters actually in force. Changing them resets the cursor. */
   const [applied, setApplied] = useState<PlatformFeedFilters>({});
@@ -100,32 +99,48 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
   const [appliedWindowDraft, setAppliedWindowDraft] = useState<WindowDraft | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
-  const [nonce, setNonce] = useState(0);
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
   /** A local refusal, shown instead of spending a request that would be refused. */
   const [windowError, setWindowError] = useState<string | null>(null);
 
   const appliedWindow = appliedWindowDraft === null ? null : describeWindow(appliedWindowDraft);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform
-      .listPlatformAudit({ pageSize: PLATFORM_DEFAULT_PAGE_SIZE, cursor, filters: applied })
-      .then(
-        (page) => {
-          if (!cancelled) setLoad({ kind: 'loaded', page });
-        },
-        (thrown: unknown) => {
-          if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-        },
-      );
-    return () => {
-      cancelled = true;
-    };
-    // No interval, no focus listener, no reconnect listener. `nonce` moves only
-    // when a person presses Refresh.
-  }, [platform, cursor, applied, nonce]);
+  /*
+   * ===================================================================
+   * THE FEED IS A QUERY, KEYED ON THE CURSOR AND THE FILTERS
+   * ===================================================================
+   *
+   * The filters are part of the key because a filter change is a DIFFERENT
+   * QUESTION rather than a refresh of the old one — which is also why a cursor
+   * cannot survive one, and why applying filters still resets it below.
+   *
+   * `isFetching` reproduces the effect this replaces, which set
+   * `{ kind: 'loading' }` at the top of every run. No interval, no focus
+   * listener, no reconnect listener — see `lib/query-client.ts`.
+   *
+   * ⚠ ONE BEHAVIOUR CHANGED, IN THE CHEAPER DIRECTION, AND IT IS STATED RATHER
+   * THAN LEFT TO BE NOTICED. Pressing "Apply filters" with NOTHING CHANGED used
+   * to fire a fresh request: `applied` was rebuilt into a new object on every
+   * submit and the effect compared it by reference. The key is compared
+   * structurally, so an unchanged filter set now spends nothing.
+   *
+   * **That is the behaviour this screen argues for elsewhere in its own file** —
+   * every window is 2 control-plane row-writes against a 600/day ceiling — and
+   * the operator still sees the answer they asked for, because it is the answer
+   * already on screen. **Retrying a FAILURE is unaffected**: the retry controls
+   * call `refetch` and always spend a request.
+   */
+  const feed = usePlatformAudit(cursor, applied);
+  const load: Load =
+    feed.isPending || feed.isFetching
+      ? { kind: 'loading' }
+      : feed.error !== null
+        ? { kind: 'failed', error: feed.error }
+        : { kind: 'loaded', page: feed.data };
+
+  /** One audited call, the same cost as the nonce bump it replaces. */
+  const retry = useCallback(() => {
+    void feed.refetch();
+  }, [feed]);
 
   /*
    * A CURSOR IS BOUND TO THE QUERY SHAPE, so changing a filter invalidates it.
@@ -366,13 +381,7 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
 
       {load.kind === 'failed' ? (
         isCeilingCode(load.error.code) ? (
-          <CeilingNotice
-            error={load.error}
-            scope="platform"
-            onRetry={() => {
-              setNonce((value) => value + 1);
-            }}
-          />
+          <CeilingNotice error={load.error} scope="platform" onRetry={retry} />
         ) : (
           /*
            * THE THREE WINDOW TOKENS STAY DISTINCT. Someone who omitted a window
@@ -382,12 +391,7 @@ export function PlatformAudit({ platform }: { platform: PlatformClient }) {
            * member-lookup refusal: a collapsed message where the causes are
            * genuinely different is a message that helps nobody.
            */
-          <WindowOrOtherError
-            error={load.error}
-            onRetry={() => {
-              setNonce((value) => value + 1);
-            }}
-          />
+          <WindowOrOtherError error={load.error} onRetry={retry} />
         )
       ) : null}
 

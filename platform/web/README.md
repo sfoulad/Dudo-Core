@@ -55,10 +55,16 @@ justified:
 
 **Deliberately NOT installed**, and each is a decision rather than an omission:
 
-- **No component library as a package.** shadcn/ui is copy-in source — `src/components/ui/`
-  is ours to edit. `0016` is explicit about this.
-- **No router.** Five routes, and `src/lib/router.ts` is about ninety lines. If admin
-  standardises on one, that file is the thing to replace.
+- **No component library as a package.** shadcn/ui is copy-in source, `0016` is explicit
+  about it, and **the copies now live in `packages/ui` (`@dudo/ui`) rather than in
+  `src/components/ui/`** — ADR 0040 merged this console's versions with the admin console's
+  so the two cannot drift. Still ours to edit; one copy instead of two.
+- ~~**No router.**~~ **SUPERSEDED.** This said *"five routes, and `src/lib/router.ts` is
+  about ninety lines. If admin standardises on one, that file is the thing to replace."*
+  **Admin did, and it was.** ADR 0036 approved `@tanstack/react-router`; both consoles are on
+  it, `src/lib/router.ts` is deleted, and the routes live in `src/routes/route-tree.tsx`
+  with path — not hash — history. **The sentence predicted its own replacement and nothing
+  came back to strike it**, which is why it is struck here rather than removed.
 - **No Radix.** Native `input`, `textarea` and `select` are already accessible and already
   use the phone's system picker. When a rich combobox is genuinely needed, that is the
   moment to add Radix.
@@ -86,11 +92,20 @@ The **Customer Directory**, contract `customer-directory-v1`, plus **sign-in** a
 |---|---|---|
 | Sign in | shown by `AuthGate` when not authenticated | `identity.login.complete` |
 | Sign out | header control, when signed in | `identity.session.revoke` |
-| Directory | `#/customers` | `ListCustomers`, `SearchCustomers` |
-| Record | `#/customers/{id}` | `GetCustomer`, `ArchiveCustomer`, `RestoreCustomer` |
-| New customer | `#/customers/new` | `CreateCustomer` |
-| Edit customer | `#/customers/{id}/edit` | `GetCustomer`, `UpdateCustomer` |
+| Directory | `/customers` | `ListCustomers`, `SearchCustomers` |
+| Record | `/customers/{id}` | `GetCustomer`, `ArchiveCustomer`, `RestoreCustomer` |
+| New customer | `/customers/new` | `CreateCustomer` |
+| Edit customer | `/customers/{id}/edit` | `GetCustomer`, `UpdateCustomer` |
 | Not found | any other address | — |
+
+**These were `#/customers` until 2026-09-09.** `0036`'s amendment ruled for path routing,
+because `0035` puts Organization administration at `app.dudo.work/settings` — a path, which
+hash history cannot deliver. Deep links work because both wrangler files set
+`not_found_handling: "single-page-application"`.
+
+The directory's filters live in the query string and are parsed by
+`routes/customer-list-search.ts`: `?q=`, `?status=`, `?business=`, `?cursor=`. An absent
+`status` means `active`, so the plain directory carries no query string at all.
 
 `MoveCustomerToBusiness` has a client method and no screen. `DeleteCustomer` and
 `RestoreDeletedCustomer` have **neither** — they are contracted and deliberately out of
@@ -118,10 +133,18 @@ Nothing fails on its own — a directory that failed at random would teach peopl
 through real problems. Faults are injected explicitly from the query string:
 
 ```
-/?fault=list#/customers
-/?fault=detail&faultCode=forbidden#/customers/cus_7Kq2mVx4
-/?fault=write#/customers/new
+/customers?fault=list
+/customers/cus_7Kq2mVx4?fault=detail&faultCode=forbidden
+/customers/new?fault=write
 ```
+
+These are read once at start-up by `main.tsx`, before the router mounts, and they configure
+module state that the fixture transport reads on every call. **Measured, because the answer
+is not obvious:** a cold load leaves the parameter in the address bar, so a reload still
+carries the switch; the first in-app navigation drops it from the URL, and the switch stays
+live for the rest of the page. They are stripped from the route's own search on purpose —
+a demonstration switch adopted as screen state would be echoed into every link and could
+not be turned off.
 
 `fault` is one of `list`, `detail`, `write`, `all`. `faultCode` is any platform error
 code; it defaults to `unavailable`.
@@ -146,28 +169,44 @@ index.html                       Vite entry
 public/dudo-mark.png             the identity — the scarlet macaw from the app icon
 public/favicon-{16,32}.png       browser tab, downscaled from the same 1254 px source
 public/apple-touch-icon.png      iOS home screen (180 px)
-src/main.tsx                     entry point
-src/App.tsx                      route table
+src/main.tsx                     entry point; router + query provider
+src/routes/route-tree.tsx        TanStack Router, code-based, PATH history
+src/routes/root-layout.tsx       the shell around every route
+src/routes/customer-list-search.ts  the list's search-param schema (all optional)
 src/styles/index.css             Tailwind v4 @theme tokens + the directory table rules
-src/lib/                         cn(), hash router, last-list memory
+src/lib/queries.ts               every read and write, through TanStack Query
+src/lib/query-client.ts          the four request-adding defaults, off, with reasons
+src/lib/clients.ts               ONE client for the life of the application
+src/lib/business-label.ts        the tenant's word for a business
+src/lib/last-list.ts             where "back to the list" returns to
 src/contracts/                   contract-derived TYPES, field rules, formatting
 src/api/config.ts                transport selection, validated at start-up
 src/api/client.ts                the Customer Directory client, transport-agnostic
 src/api/fixture-transport.ts     in-memory Core stand-in
 src/api/http-transport.ts        the real one, per the contracts' httpBinding
-src/api/kdf.ts                   NORMATIVE client-side KDF (ADR 0015 §D)
-src/api/kdf-worker.ts            the derivation, off the main thread
-src/api/kdf-client.ts            worker lifetime, measured progress, fallback
 src/api/auth.ts                  login, logout, session probing, the session hint
+src/api/organization.ts          business-read; the tenant's own labels
 src/api/session-signal.ts        the 401 notification
 src/lib/use-session.ts           the session state machine (unknown/auth/anon)
-src/components/ui/               copy-in shadcn-style primitives
+src/lib/use-organization.ts      the selected business
 src/components/AuthGate.tsx      login-or-app, and it is presentation only
-src/components/                  shell, toaster, state blocks
-src/screens/                     the five screens, including Login
+src/components/                  shell, badges, error block, organization gate
+src/screens/                     the five screens, plus NotFound
 scripts/verify-*.mjs             dependency-free verification (see Verifying)
+scripts/smoke.mjs                a real Chrome; NOT RUN, loudly, when absent
+scripts/lib/browser-harness.mjs  the CDP driver, shared with the admin console
 reference/vanilla/               the zero-dependency build (see below)
 ```
+
+> **THE KDF AND THE PRIMITIVES ARE NOT IN THIS TREE, AND THAT IS THE CHANGE THIS BLOCK KEPT
+> MISSING.** `src/api/kdf.ts`, `kdf-worker.ts` and `kdf-client.ts` moved to
+> **`@dudo/client-kdf`**; `src/components/ui/` moved to **`@dudo/ui`**; `src/App.tsx` and
+> `src/lib/router.ts` were deleted by the router migration and `src/lib/cn.ts` went with the
+> primitives (ADR 0036, ADR 0040).
+>
+> **A file listing goes stale on two axes and a sweep only covers one.** Grepping for a
+> deleted path finds prose that names it; **nothing finds an entry that should be here and is
+> not.** This block was rebuilt from `find` rather than edited line by line.
 
 ## `reference/vanilla/`
 

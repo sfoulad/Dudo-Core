@@ -38,9 +38,9 @@
  * cursors are not interchangeable.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { useCallback, useState, type FormEvent } from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { AuditRecordList } from '@/components/AuditRecordList';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
@@ -53,16 +53,15 @@ import {
   windowRefusal,
   type WindowDraft,
 } from '@/api/audit-window';
-import { buildHash, organizationDetailPath } from '@/lib/router';
+import { Link } from '@tanstack/react-router';
+import { useOrganizationAuditRead } from '@/lib/queries';
 import {
-  PLATFORM_DEFAULT_PAGE_SIZE,
   toUtcExclusiveDayEnd,
   toUtcDayStart,
   type OrganizationFeedFilters,
   type OrganizationFeedOutput,
-  type PlatformClient,
 } from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'idle' }
@@ -78,13 +77,7 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { action: '', since: '', until: '' };
 
-export function OrganizationAudit({
-  platform,
-  organizationId,
-}: {
-  platform: PlatformClient;
-  organizationId: string;
-}) {
+export function OrganizationAudit({ organizationId }: { organizationId: string }) {
   /*
    * ===================================================================
    * IT DOES NOT LOAD ON MOUNT. THE FIRST PAGE IS ALSO A DELIBERATE ACT.
@@ -96,7 +89,6 @@ export function OrganizationAudit({
    * link, must not cost them anything. The operator presses Read, having been
    * told what it costs.
    */
-  const [load, setLoad] = useState<Load>({ kind: 'idle' });
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [applied, setApplied] = useState<OrganizationFeedFilters>({});
   /** The window in force, as typed. `null` means none was applied. */
@@ -107,42 +99,72 @@ export function OrganizationAudit({
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [requests, setRequests] = useState(0);
-  /** Incremented only by an explicit press. Nothing else triggers a fetch. */
-  const [nonce, setNonce] = useState(0);
 
-  useEffect(() => {
-    if (nonce === 0) return;
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform
-      .listOrganizationAudit(organizationId, {
-        pageSize: PLATFORM_DEFAULT_PAGE_SIZE,
-        cursor,
-        filters: applied,
-      })
-      .then(
-        (page) => {
-          if (cancelled) return;
-          setLoad({ kind: 'loaded', page });
-          setRequests((value) => value + 1);
-        },
-        (thrown: unknown) => {
-          if (cancelled) return;
-          setLoad({ kind: 'failed', error: toApiError(thrown) });
-          // A refused request still consumed the attempt from the operator's
-          // point of view; counting it keeps the tally honest rather than
-          // flattering.
-          setRequests((value) => value + 1);
+  /*
+   * ===================================================================
+   * A MUTATION, FOR A READ. `lib/queries.ts` CARRIES THE FULL ARGUMENT.
+   * ===================================================================
+   *
+   * In short: this read spends FIVE WRITES FROM A CUSTOMER'S OWN DAILY
+   * ALLOCATION, so it must not fire on mount, every press must fire even when
+   * nothing changed, and a refusal still counts as an attempt. A cache would
+   * defeat the middle one — serving a repeat press from memory shows the
+   * operator an answer while the business's log records fewer reads than
+   * happened.
+   *
+   * **`useMutation`'s four states ARE this screen's four states**, which is the
+   * clearest sign it is the right mapping rather than a workaround:
+   *
+   *     idle    -> nothing has been asked, and nothing has been spent
+   *     pending -> loading
+   *     error   -> failed
+   *     success -> loaded
+   *
+   * So `Load` is derived here too, and the `nonce` that armed the old effect is
+   * gone: a mutation does not fire until it is called, which is the property
+   * the `if (nonce === 0) return;` guard was simulating.
+   */
+  const feed = useOrganizationAuditRead();
+  const load: Load =
+    feed.status === 'idle'
+      ? { kind: 'idle' }
+      : feed.status === 'pending'
+        ? { kind: 'loading' }
+        : feed.status === 'error'
+          ? { kind: 'failed', error: feed.error }
+          : { kind: 'loaded', page: feed.data };
+
+  /*
+   * ONE PRESS, ONE REQUEST — and the cursor and filters are passed EXPLICITLY
+   * rather than read from state at call time.
+   *
+   * The old effect re-ran when `cursor` or `applied` changed, so a caller could
+   * set state and let the dependency array carry the new value. A mutation
+   * fires immediately, and `setCursor` has not landed yet when the handler runs
+   * — reading state here would send the PREVIOUS page's cursor and spend a
+   * customer's write on the wrong question.
+   *
+   * The tally is incremented on SETTLE rather than on press, and it counts
+   * refusals: a refused request still consumed the attempt from the operator's
+   * point of view, and counting only successes would flatter the number.
+   */
+  const fire = useCallback(
+    (nextCursor: string | null, nextFilters: OrganizationFeedFilters) => {
+      feed.mutate(
+        { organizationId, cursor: nextCursor, filters: nextFilters },
+        {
+          onSettled: () => {
+            setRequests((value) => value + 1);
+          },
         },
       );
-    return () => {
-      cancelled = true;
-    };
-  }, [platform, organizationId, cursor, applied, nonce]);
+    },
+    [feed, organizationId],
+  );
 
   const read = useCallback(() => {
-    setNonce((value) => value + 1);
-  }, []);
+    fire(cursor, applied);
+  }, [applied, cursor, fire]);
 
   /* A cursor is bound to the query shape, so a filter change resets it. */
   const applyFilters = useCallback(
@@ -182,9 +204,10 @@ export function OrganizationAudit({
       );
       setCursor(null);
       setDepth(1);
-      setNonce((value) => value + 1);
+      // Fired with `next` directly. `applied` does not hold it yet.
+      fire(null, next);
     },
-    [draft],
+    [draft, fire],
   );
 
   /* Rewrites the dates only. Fires nothing — see the platform feed's note. */
@@ -197,8 +220,9 @@ export function OrganizationAudit({
 
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-4xl">
-      <a
-        href={buildHash(organizationDetailPath(organizationId))}
+      <Link
+        to="/organizations/$organizationId"
+        params={{ organizationId }}
         className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
       >
         {/*
@@ -224,7 +248,7 @@ export function OrganizationAudit({
           <path d="M10 3L5 8l5 5" />
         </svg>
         Back to this Organization
-      </a>
+      </Link>
 
       <h1 id="section-heading" className="mt-3 text-xl font-bold text-ink sm:text-2xl">
         Audit trail
@@ -450,7 +474,7 @@ export function OrganizationAudit({
                     onClick={() => {
                       setCursor(null);
                       setDepth(1);
-                      setNonce((value) => value + 1);
+                      fire(null, applied);
                     }}
                   >
                     Newest
@@ -464,7 +488,10 @@ export function OrganizationAudit({
                     if (load.page.next_cursor === null) return;
                     setCursor(load.page.next_cursor);
                     setDepth((value) => value + 1);
-                    setNonce((value) => value + 1);
+                    // The new cursor is passed straight through — `setCursor`
+                    // has not landed, and sending the old one would re-read the
+                    // page already on screen at the customer's expense.
+                    fire(load.page.next_cursor, applied);
                   }}
                 >
                   {load.page.next_cursor === null ? 'No more pages' : 'Older'}

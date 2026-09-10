@@ -151,7 +151,27 @@ export function createSessionRouteHandlers(dependencies: {
   readonly sessions: SessionResolver;
 }): SessionRouteHandlers {
   return Object.freeze({
-    'identity.session.organizations.list': listOrganizations(dependencies.sessions),
-    'identity.session.organization.select': selectOrganization(dependencies.sessions),
+    // `.session` IS ABSENT FROM BOTH IDS BY DECISION, NOT BY SLIP — `0039`, and the normative
+    // statement lives on `SessionRouteId` in `session-routes.ts`: `.session` names the session
+    // RESOURCE and never the request class.
+    //
+    // *** AND THE TYPE SYSTEM DOES NOT CATCH A WRONG KEY HERE. MEASURED, NOT ASSUMED. ***
+    // `SessionRouteHandlers` is `Partial<Record<SessionRouteId, …>>`, so a MISSING key is legal by
+    // construction — and `Object.freeze()` strips object-literal freshness, so the excess-property
+    // check does not fire on an ADDED one either. Both halves were confirmed against `tsc --strict`
+    // rather than reasoned about; the first draft of this comment claimed the opposite and was
+    // wrong, which is `architecture.md` §3c with the citation pointing at the compiler.
+    //
+    // WHAT A WRONG KEY WOULD DO: `dispatchSessionRoute` fails closed, so the route answers
+    // `unauthenticated` to everyone. **A silently unreachable route, not an open one** — the exact
+    // shape `workflow.md` §11a records, where every property you thought to check is green and
+    // "can anybody actually call this" was not among them.
+    //
+    // WHAT ACTUALLY COVERS IT IS BEHAVIOURAL, NOT STRUCTURAL: `packages/testing/suites/az2-login/
+    // session-routes.ts` composes these real handlers and drives both routes end to end, so a
+    // mismatched key surfaces as a 401 on a request that should have succeeded. That is coverage
+    // by a suite someone must keep running, not by a mechanism that cannot be omitted.
+    'identity.organizations.list': listOrganizations(dependencies.sessions),
+    'identity.organization.select': selectOrganization(dependencies.sessions),
   });
 }

@@ -125,7 +125,9 @@ import type { ConfirmationService } from '../../../platform/core/confirmation/co
 import { createInProcessRequestCoordinator } from '../../../platform/core/protection/in-process-coordinator.ts';
 import { createMemberResolutionService } from '../../../platform/core/directory/member-resolution.ts';
 import { createCredentialResetService } from '../../../platform/core/credential/reset-service.ts';
-import { deriveLoginCredential as adminDerive } from '../../../platform/admin/src/api/kdf.ts';
+// `@dudo/client-kdf` (0040). Both hosts now consume this one module; the alias is kept because
+// every call site below describes which CONSOLE it is standing in for, and that is still true.
+import { deriveLoginCredential as adminDerive } from '@dudo/client-kdf';
 import { normalizeTemplateName } from '../../../platform/core/platform/templates.ts';
 
 /**
@@ -350,8 +352,12 @@ export async function successfulCallFor(
     // be a legitimate answer for this route — `0028` collapses all five refusal causes to one 404
     // — but a case asserting SUCCESS needs the hit, and the hit is what proves the identifier
     // hashing agrees with the credential path's.
+    // MOVED TO `target_identifier` 2026-09-09, WITH `0034` PHASE 3. The deprecated `identifier`
+    // here was named in the phase-3 tripwire as a thing that had to move in the same change, and
+    // it is why two assertions in OTHER suites went red on a route they were not testing — a
+    // shared fixture carries a field name into every case that borrows it.
     return {
-      bodyText: JSON.stringify({ identifier: TENANT_OWNER_IDENTIFIER }),
+      bodyText: JSON.stringify({ target_identifier: TENANT_OWNER_IDENTIFIER }),
       pathParams: { organization_id: ORG_ALPHA },
     };
   }
@@ -1418,9 +1424,17 @@ export async function createPlatformWorld(
  * first derivation disagreed with the console by one byte, the account would be created and
  * unreachable — and a fixture with a typed-out constant could not tell.
  *
- * So this calls `platform/admin/src/api/kdf.ts::deriveLoginCredential`, which is the same function
- * the console calls. The same argument `confirmation-fixture.ts` makes for deriving through
- * `platform/web`.
+ * So this calls `@dudo/client-kdf`'s `deriveLoginCredential`, which is the same function the
+ * console calls. The same argument `confirmation-fixture.ts` makes for deriving through the
+ * shared module rather than typing a constant.
+ *
+ * *** THIS SENTENCE NAMED `platform/admin/src/api/kdf.ts` UNTIL 2026-09-09, AND THAT FILE HAD BEEN
+ * DELETED BY `0040`. *** It was found by sweeping for the removed path after the Team Lead caught
+ * the same residue in `enrolment-round-trip.ts` — **a second instance in a second file, from one
+ * `grep` for what the move deleted.** `workflow.md` §2b: a file's header is a consumer of the file
+ * layout, and neither the import sweep nor the call-site reading looks at a comment. **The imports
+ * here were repointed correctly; the sentence explaining WHY was not, and nothing could go red on
+ * it.**
  *
  * WHAT IS NOT THE CONSOLE'S, both stated at `syntheticAdminPassword` above: the Web Worker
  * plumbing in `kdf-client.ts`, and the password GENERATOR, which Node cannot import. The

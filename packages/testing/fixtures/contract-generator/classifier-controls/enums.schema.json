@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:classifiercontrols:1",
+  "title": "THE KNOWN-FAILING INPUT for the corpus-enum classifier in suites/contracts/generator-gate.ts.",
+  "$comment": "NOT A CONTRACT AND NOT WALKED BY THE GENERATOR. It exists so the classifier is exercised on all three of its outcomes, because THE REAL CORPUS ONLY EVER PRODUCES TWO: every shape enum there declares a policy, so `shape + UNDECLARED` — the outcome that must make phase 2 not-due — has no instance on disk and the assertion asserting it is empty would be green whether the classifier works or never ran. `workflow.md` §11a: a check that is sound by accident is indistinguishable from one that is sound by design.",
+  "$defs": {
+    "declaredShape": {
+      "$comment": "SHAPE + DECLARED. The ordinary case, and the mirror: if this is ever reported as undeclared the classifier is reading the wrong key.",
+      "type": "string",
+      "enum": ["alpha", "beta"],
+      "enumPolicy": "closed"
+    },
+    "undeclaredShape": {
+      "$comment": "SHAPE + UNDECLARED. *** THE ONE THE REAL CORPUS CANNOT PRODUCE. *** This is what a forgotten `enumPolicy` looks like, and it is the input the 0041 case must go red on.",
+      "type": "string",
+      "enum": ["gamma", "delta"]
+    },
+    "gated": {
+      "$comment": "CONSTRAINT + UNDECLARED. Its enum is reached through `allOf/0/if/properties/kind/not` — a NEGATED CONDITIONAL, not a type. Nothing renders it, so `renderType` never counts it, so it can never carry a policy in the sense 0041 means. The real corpus has exactly one of these and it is why a pin on the RAW enum count could never reach zero.",
+      "type": "object",
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "not": { "enum": ["forbidden"] } } } },
+          "then": { "required": ["detail"] }
+        }
+      ]
+    }
+  }
+}

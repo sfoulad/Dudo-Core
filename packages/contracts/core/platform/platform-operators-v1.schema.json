@@ -14,6 +14,8 @@
     "platformRole": {
       "type": "string",
       "enum": ["platform-admin", "marketplace-moderator"],
+      "enumPolicy": "extensible",
+      "$comment": "DUPLICATED THREE WAYS — this file, `platform-operator-v1` and `platform-audit-read-v1` each define `platformRole` with the same two values, and ALL THREE MUST CARRY THE SAME POLICY. Nothing wires them together, so nothing catches a divergence today; a cross-contract check that identical value sets carry identical policies is owed (docs/decisions/0041). `extensible` because permission-catalog.yaml already anticipates a third role — a break-glass responder holding REVOKE without GRANT — and a client that broke when it appeared would make adding it a client release.",
       "description": "The closed union stored in platform_operator.platform_role. An unrecognised stored value denies everything and is never rendered — it collapses to null on read, the device authorization/roles.ts and credential-verifier.ts both use so that a row written by a future migration this build does not understand fails onto the safe path."
     },
 

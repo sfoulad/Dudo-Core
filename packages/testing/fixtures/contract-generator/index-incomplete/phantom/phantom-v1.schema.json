@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:phantom:1",
+  "title": "A schema whose input names a URN NO FILE DECLARES, in any state of this corpus.",
+  "$comment": "THIS IS THE COST CASE, and the generator writes the cost down itself: while any file is unparseable, this genuinely-unresolvable URN is reported as `derived` rather than as the contract defect it is. That is the safe direction — it defers a contract finding until the corpus is readable rather than asserting one on an index that could not see half the answer. `nowheredeclared` appears in no `$id` anywhere; grep it if you doubt that, which is cheaper than trusting this sentence.",
+  "$defs": {
+    "phantomInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["y"],
+      "properties": {
+        "y": { "$ref": "urn:dudo:schema:nowheredeclared:1#/$defs/thing" }
+      }
+    },
+    "phantomOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

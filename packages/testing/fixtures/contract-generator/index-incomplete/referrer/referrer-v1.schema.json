@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:referrer:1",
+  "title": "A schema whose input resolves a URN INTO THE FILE THAT WILL NOT PARSE.",
+  "$comment": "The URN below IS declared — by `carrier.schema.json`, textually, on its third line. The generator cannot know that, because it never read the file. This is the whole distinction `GEN_REF_UNRESOLVABLE_INDEX_INCOMPLETE` exists to draw: a derived effect, not a contract defect.",
+  "$defs": {
+    "referrerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x"],
+      "properties": {
+        "x": { "$ref": "urn:dudo:schema:zephyr:1#/$defs/thing" }
+      }
+    },
+    "referrerOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

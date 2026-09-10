@@ -79,12 +79,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@dudo/ui';
 import { LoadingBlock } from '@/components/StateBlock';
 import { ConfirmationGate } from '@/components/ConfirmationGate';
 import { buildConfirmedRequest } from '@/api/confirmation';
 import { createOnboardingCredential } from '@/api/onboarding-credential';
-import type { DerivationProgress } from '@/api/kdf-client';
+import type { DerivationProgress } from '@dudo/client-kdf/client';
 import {
   CREDENTIAL_RESET_ACTION_ID,
   CREDENTIAL_RESET_PATH,

@@ -1,0 +1,12 @@
+---
+# CONTROL 3 of 3. DECLARES NO CLASS ANYWHERE, at either level.
+# The sweep must return EXACTLY this file and no other.
+#
+# The word `requestClass` appears nowhere below on purpose — not in a comment, not in prose. A
+# textual sweep cannot tell a mention from a declaration, and a control that contained the word
+# would be testing the regex against a string the regex was never meant to see.
+
+contractVersion: 1
+
+operations:
+  - id: fixture.ClassifierControlsNoClass

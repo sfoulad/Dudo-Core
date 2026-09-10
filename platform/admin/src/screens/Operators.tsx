@@ -35,66 +35,102 @@
  * makes none.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { useMemo, useState } from 'react';
+import { Button } from '@dudo/ui';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
 import { ConfirmationGate } from '@/components/ConfirmationGate';
 import { buildConfirmedRequest } from '@/api/confirmation';
-import { cn } from '@/lib/cn';
+import { useWhoami } from '@/lib/operator-context';
+import { useOperatorList, useRevokeOperator } from '@/lib/queries';
+import { platformClient } from '@/lib/clients';
+import { cn } from '@dudo/ui';
 import {
-  PLATFORM_DEFAULT_PAGE_SIZE,
   REVOKE_OPERATOR_ACTION_ID,
   REVOKE_OPERATOR_PATH_TEMPLATE,
   isKnownPlatformRole,
   type ListOperatorsOutput,
-  type PlatformClient,
   type RevokeOperatorOutput,
-  type WhoamiOutput,
 } from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'loading' }
   | { readonly kind: 'loaded'; readonly page: ListOperatorsOutput }
   | { readonly kind: 'failed'; readonly error: ApiError };
 
-export function Operators({
-  platform,
-  whoami,
-}: {
-  platform: PlatformClient;
-  /** The signed-in operator, so this screen can mark which row is you. */
-  whoami: WhoamiOutput;
-}) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+/** What the gate is handed. The return type is not restated — it is read off the hook. */
+type RevokeMutation = ReturnType<typeof useRevokeOperator>;
+
+export function Operators() {
+  /*
+   * The signed-in operator, so this screen can mark which row is you.
+   *
+   * IT WAS A PROP AND IS NOW READ FROM CONTEXT (ADR 0040's router migration):
+   * routed sections have no parent that can pass anything. It is NOT re-fetched
+   * here and must never be — the probe that produces it is `whoami`, which
+   * writes a platform-operator audit record on every call.
+   */
+  const whoami = useWhoami();
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
-  const [nonce, setNonce] = useState(0);
   /** The principal whose revoke gate is open, or null. At most one at a time. */
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revoked, setRevoked] = useState<RevokeOperatorOutput | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform.listOperators({ pageSize: PLATFORM_DEFAULT_PAGE_SIZE, cursor }).then(
-      (page) => {
-        if (!cancelled) setLoad({ kind: 'loaded', page });
-      },
-      (thrown: unknown) => {
-        if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-    // One audited call per page. No interval, no focus refetch.
-  }, [platform, cursor, nonce]);
+  /*
+   * THE READ IS A QUERY, AND THE `nonce` IS GONE.
+   *
+   * It was `useEffect` + `let cancelled` + a nonce bumped to force a re-read
+   * after a revoke. The cancellation flag guarded against a response landing
+   * after the operator had paged away and overwriting fresher state; the cache
+   * owns that. The nonce is now an invalidation performed by the revoke
+   * mutation itself, so this screen no longer has to remember to ask.
+   *
+   * `Load` is DERIVED, never stored — the three states rendered below are the
+   * three the query already distinguishes, and a parallel copy in `useState` is
+   * how the two drift apart.
+   *
+   * `isFetching` rather than `isPending` is what reproduces the previous
+   * screen: the effect set `{ kind: 'loading' }` at the top of every run,
+   * including a retry and a post-revoke re-read. `lib/queries.ts` records why
+   * that equivalence is safe here — this client issues no fetch an operator did
+   * not cause. **It is also what stops the success banner and the revoked row
+   * being on screen together**, which is a contradiction the old code never
+   * had a chance to show.
+   */
+  const list = useOperatorList(cursor);
+  const load: Load =
+    list.isPending || list.isFetching
+      ? { kind: 'loading' }
+      : list.error !== null
+        ? { kind: 'failed', error: list.error }
+        : { kind: 'loaded', page: list.data };
 
-  const retry = useCallback(() => {
-    setNonce((value) => value + 1);
-  }, []);
+  /*
+   * RETRY IS `refetch`, AND IT IS STILL EXACTLY ONE AUDITED CALL — the same
+   * cost as the nonce bump it replaces. `retry: false` in `lib/query-client.ts`
+   * is what keeps it one; the library default would answer an operator's single
+   * click with four requests and, on a refusal, four audit rows.
+   */
+  const retry = () => void list.refetch();
+
+  /*
+   * THE REVOKE MUTATION IS HELD HERE, NOT IN THE GATE, AND THE REASON IS
+   * LIFETIME RATHER THAN TIDINESS.
+   *
+   * `useMutation`'s `onSuccess` — which is what re-reads the roster — runs
+   * through the observer the calling component owns. Hold the hook inside
+   * `RevokeOperator` and the invalidation is lost if that component unmounts
+   * while the request is in flight: **the operator would be revoked and still
+   * listed.**
+   *
+   * It cannot happen today, because the gate disables Cancel while submitting.
+   * **That is a guarantee living in another component, one prop away from being
+   * changed by someone with no reason to look here.** This screen outlives every
+   * gate it opens, so holding it here makes the property structural instead.
+   */
+  const revoke = useRevokeOperator();
 
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-3xl">
@@ -213,16 +249,20 @@ export function Operators({
 
                   {revoking === operator.principal_id ? (
                     <RevokeOperator
-                      platform={platform}
+                      revoke={revoke}
                       principalId={operator.principal_id}
                       isSelf={isYou}
                       remainingCount={load.page.data.length}
                       onDone={(result) => {
                         setRevoking(null);
                         setRevoked(result);
-                        // The roster changed, so re-read it. One audited call,
-                        // triggered by a completed action rather than a timer.
-                        setNonce((value) => value + 1);
+                        /*
+                         * THE RE-READ IS NOT HERE ANY MORE. `useRevokeOperator`
+                         * invalidates the roster on success, so it happens
+                         * because the write succeeded rather than because this
+                         * callback remembered — still one audited call,
+                         * triggered by a completed action and never by a timer.
+                         */
                       }}
                       onCancel={() => {
                         setRevoking(null);
@@ -310,14 +350,21 @@ export function Operators({
  * together. There is no second place the target could differ.
  */
 function RevokeOperator({
-  platform,
+  revoke,
   principalId,
   isSelf,
   remainingCount,
   onDone,
   onCancel,
 }: {
-  platform: PlatformClient;
+  /*
+   * PASSED IN, AND ONLY `mutateAsync` IS USED. The gate is already a state
+   * machine over this request and holds the phase the password derivation runs
+   * inside, so `revoke.isPending` and `revoke.error` are deliberately not read —
+   * two renderings of one request would drift. `lib/queries.ts` says the same
+   * at the hook; the parent says why the hook is not held here.
+   */
+  revoke: RevokeMutation;
   principalId: string;
   isSelf: boolean;
   remainingCount: number;
@@ -353,14 +400,22 @@ function RevokeOperator({
       <ConfirmationGate
         title={isSelf ? 'Remove your own platform authority' : 'Remove platform authority'}
         boundParameters={request.parameters}
+        /*
+         * THE CHALLENGE IS NOT A MUTATION HOOK, AND THE REASON IS THE GATE'S
+         * OWN `[]` EFFECT. It is requested exactly once, from the press that
+         * opened this panel, because a second one mints a second challenge and
+         * spends another audited write. Routing it through TanStack Query would
+         * buy nothing — it invalidates no cache — and would mean restructuring
+         * a component two screens share. Left as a direct call, deliberately.
+         */
         requestChallenge={() =>
-          platform.requestConfirmation({
+          platformClient.requestConfirmation({
             actionId: REVOKE_OPERATOR_ACTION_ID,
             parameters: request.parameters,
           })
         }
         submit={async (confirmation) => {
-          const result = await platform.revokeOperator({
+          const result = await revoke.mutateAsync({
             path: request.path,
             bodyWithoutConfirmation: request.bodyWithoutConfirmation,
             ...confirmation,

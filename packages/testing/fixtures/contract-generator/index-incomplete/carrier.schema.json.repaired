@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:zephyr:1",
+  "title": "THE REPAIRED FORM of `carrier.schema.json` — identical but for the missing comma.",
+  "$comment": "NOT NAMED `*.schema.json`, so neither `buildSchemaIndex` nor `discoverContracts` sees it: both filter on that exact suffix. The suite copies this over `carrier.schema.json` inside a TEMPORARY COPY of this directory to produce the clean run, and never writes into the repository. It carries the same `$id` and the same `$defs.thing` as the broken form, and that coupling is SELF-CHECKING rather than trusted — if it drifted, `referrer-v1` would stop being delivered on the clean run and the case goes red.",
+  "$defs": {
+    "thing": { "type": "string" }
+  }
+}

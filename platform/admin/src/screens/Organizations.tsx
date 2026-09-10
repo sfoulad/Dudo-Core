@@ -77,54 +77,48 @@
  * scroll firing requests on scroll position.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
+import { useCallback, useState, type ReactNode } from 'react';
+import { Button } from '@dudo/ui';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { OnboardOrganization } from '@/screens/OnboardOrganization';
-import { cn } from '@/lib/cn';
-import { buildHash, organizationDetailPath } from '@/lib/router';
-import {
-  PLATFORM_DEFAULT_PAGE_SIZE,
-  isKnownStatus,
-  type ListOrganizationsOutput,
-  type PlatformClient,
-} from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { cn } from '@dudo/ui';
+import { Link } from '@tanstack/react-router';
+import { useOrganizationList } from '@/lib/queries';
+import { isKnownStatus, type ListOrganizationsOutput } from '@/api/platform';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'loading' }
   | { readonly kind: 'loaded'; readonly page: ListOrganizationsOutput }
   | { readonly kind: 'failed'; readonly error: ApiError };
 
-export function Organizations({ platform }: { platform: PlatformClient }) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+export function Organizations() {
   /** The cursor for the page currently being shown. `null` is the first page. */
   const [cursor, setCursor] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
   /** How many pages deep, for a position line. Not a page number from Core. */
   const [depth, setDepth] = useState(1);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform
-      .listOrganizations({ pageSize: PLATFORM_DEFAULT_PAGE_SIZE, cursor })
-      .then(
-        (page) => {
-          if (!cancelled) setLoad({ kind: 'loaded', page });
-        },
-        (thrown: unknown) => {
-          if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-        },
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, [platform, cursor, nonce]);
+  /*
+   * THE READ IS A QUERY, AND THE `nonce` IS GONE.
+   *
+   * `Load` is derived rather than stored — a parallel copy in `useState` is how
+   * the two drift. `isFetching` rather than `isPending` is what reproduces the
+   * previous screen: the effect set `{ kind: 'loading' }` at the top of every
+   * run. `lib/queries.ts` records why that equivalence holds on this console —
+   * no fetch happens here that an operator did not cause.
+   */
+  const list = useOrganizationList(cursor);
+  const load: Load =
+    list.isPending || list.isFetching
+      ? { kind: 'loading' }
+      : list.error !== null
+        ? { kind: 'failed', error: list.error }
+        : { kind: 'loaded', page: list.data };
 
+  /* One audited call, the same cost as the nonce bump it replaces. */
   const retry = useCallback(() => {
-    setNonce((value) => value + 1);
-  }, []);
+    void list.refetch();
+  }, [list]);
 
   const restart = useCallback(() => {
     setCursor(null);
@@ -132,19 +126,24 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
   }, []);
 
   /*
-   * After onboarding, return to the first page and re-fetch.
+   * After onboarding, return to the first page.
    *
    * BACK TO THE FIRST PAGE RATHER THAN RE-FETCHING THE CURRENT ONE: the cursor
    * is bound to the query and a new row changes what the enumeration contains,
    * so resuming mid-list after an insert shows a page whose meaning has quietly
-   * changed. `nonce` is bumped as well because `restart` alone is a no-op when
-   * the operator is already on the first page — and that is exactly the common
-   * case here.
+   * changed.
+   *
+   * THE `nonce` BUMP THAT USED TO SIT HERE IS GONE, AND THE CASE IT EXISTED FOR
+   * IS STILL COVERED. It was here because resetting the cursor is a no-op when
+   * the operator is already on the first page — "exactly the common case here" —
+   * so nothing would have re-read. `useOnboardOrganization` invalidates the
+   * list instead, which does not care whether the cursor changed. **The
+   * refresh is now a consequence of the write succeeding rather than something
+   * this callback has to remember.**
    */
   const refreshAfterOnboarding = useCallback(() => {
     setCursor(null);
     setDepth(1);
-    setNonce((value) => value + 1);
   }, []);
 
   return (
@@ -170,7 +169,7 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
         much trouble that navigation has already caused.
       */}
       <div className="mb-8">
-        <OnboardOrganization platform={platform} onOnboarded={refreshAfterOnboarding} />
+        <OnboardOrganization onOnboarded={refreshAfterOnboarding} />
       </div>
 
       {load.kind === 'loading' ? <LoadingBlock label="Asking Core for the Organizations…" /> : null}
@@ -283,8 +282,9 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                   `<tr onClick>` gives none of that and is invisible to a screen
                   reader.
                 */}
-                <a
-                  href={buildHash(organizationDetailPath(organization.organization_id))}
+                <Link
+                  to="/organizations/$organizationId"
+                  params={{ organizationId: organization.organization_id }}
                   className={cn(
                     'text-[0.8125rem] font-semibold text-navy-600 no-underline hover:underline',
                     organization.display_name === null
@@ -293,7 +293,7 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                   )}
                 >
                   {organization.display_name ?? organization.organization_id}
-                </a>
+                </Link>
                 {organization.display_name !== null ? (
                   <span className="mt-0.5 block font-mono text-xs break-all text-ink-muted">
                     {organization.organization_id}

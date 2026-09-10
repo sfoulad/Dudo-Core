@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:classambiguity:1",
+  "title": "A minimal admissible body. The variable under test is the requestClass line the case appends.",
+  "$defs": {
+    "probeInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": { "value": { "type": "string" } }
+    },
+    "probeOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

@@ -66,26 +66,25 @@
  * pointer whose failure surfaces in the tenant's UI as a missing label.
  */
 
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
+import { useTemplateList, useCreateTemplate } from '@/lib/queries';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
-import { cn } from '@/lib/cn';
+import { cn } from '@dudo/ui';
 import {
   MAX_TEMPLATE_LABEL_LENGTH,
   MAX_TEMPLATE_NAME_LENGTH,
-  PLATFORM_DEFAULT_PAGE_SIZE,
   TEMPLATE_LEVELS,
   TEMPLATE_LEVEL_DEFAULTS,
   isKnownTemplateStatus,
   templateLabelRefusal,
   templateNameRefusal,
   type ListTemplatesOutput,
-  type PlatformClient,
   type Template,
   type TemplateLevel,
 } from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'loading' }
@@ -105,30 +104,39 @@ const LEVEL_HINTS: Readonly<Record<TemplateLevel, string>> = {
   branch: 'The level below a Workspace.',
 };
 
-export function Templates({ platform }: { platform: PlatformClient }) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+export function Templates() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
-  const [nonce, setNonce] = useState(0);
   const [creating, setCreating] = useState(false);
   /** The Template created by the last successful submit, for confirmation. */
   const [justCreated, setJustCreated] = useState<Template | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform.listTemplates({ pageSize: PLATFORM_DEFAULT_PAGE_SIZE, cursor }).then(
-      (page) => {
-        if (!cancelled) setLoad({ kind: 'loaded', page });
-      },
-      (thrown: unknown) => {
-        if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [platform, cursor, nonce]);
+  /*
+   * THE READ IS A QUERY NOW, AND THE `nonce` IS GONE.
+   *
+   * It was `useEffect` + `let cancelled` + a nonce bumped to force a re-read.
+   * The cancellation flag existed because a response arriving after the operator
+   * had moved on would overwrite fresher state; the query cache owns that.
+   *
+   * `Load` is derived rather than stored — the three states this screen renders
+   * are the three the query already distinguishes, and keeping a parallel copy
+   * in `useState` is how the two drift.
+   *
+   * `isFetching`, NOT `isPending`, AND THE FIRST VERSION OF THIS CONVERSION HAD
+   * IT WRONG. `isPending` is only the state with no data and no error, so a
+   * retry after a failure left the error block frozen with no sign that the
+   * button had done anything — the effect this replaced set
+   * `{ kind: 'loading' }` at the top of EVERY run. `lib/queries.ts` records why
+   * `isFetching` is a safe stand-in on this console: no fetch happens here that
+   * an operator did not cause.
+   */
+  const list = useTemplateList(cursor);
+  const load: Load =
+    list.isPending || list.isFetching
+      ? { kind: 'loading' }
+      : list.error !== null
+        ? { kind: 'failed', error: list.error }
+        : { kind: 'loaded', page: list.data };
 
   /*
    * A create refreshes the list, and it does so by RETURNING TO THE FIRST PAGE
@@ -136,11 +144,14 @@ export function Templates({ platform }: { platform: PlatformClient }) {
    * and a new row changes what the enumeration contains; resuming mid-list after
    * an insert shows a page whose meaning has quietly changed. It is also one
    * audited call either way.
+   *
+   * THE INVALIDATION LIVES IN `useCreateTemplate`, so this is now only the
+   * cursor reset. The audited-call count is unchanged and is asserted in that
+   * hook's comment rather than left to be inferred here.
    */
   const refreshFromStart = useCallback(() => {
     setCursor(null);
     setDepth(1);
-    setNonce((value) => value + 1);
   }, []);
 
   return (
@@ -158,7 +169,6 @@ export function Templates({ platform }: { platform: PlatformClient }) {
       <InertNotice />
 
       <CreateTemplateForm
-        platform={platform}
         busy={creating}
         setBusy={setCreating}
         onCreated={(template) => {
@@ -173,7 +183,14 @@ export function Templates({ platform }: { platform: PlatformClient }) {
       {load.kind === 'loading' ? <LoadingBlock label="Asking Core for the Templates…" /> : null}
 
       {load.kind === 'failed' ? (
-        <ErrorBlock error={load.error} onRetry={() => setNonce((value) => value + 1)}>
+        /*
+         * RETRY IS `refetch`, AND IT IS STILL EXACTLY ONE AUDITED CALL. It was a
+         * nonce bump that re-ran the effect; the query does the same thing at the
+         * same cost. `retry: false` in `lib/query-client.ts` is what keeps it one
+         * — the library default would have turned an operator's single click into
+         * four requests and four audit rows.
+         */
+        <ErrorBlock error={load.error} onRetry={() => void list.refetch()}>
           {cursor !== null ? (
             <Button variant="secondary" size="sm" className="mt-4 me-2" onClick={refreshFromStart}>
               Start again from the first page
@@ -268,13 +285,11 @@ function InertNotice() {
 }
 
 function CreateTemplateForm({
-  platform,
   busy,
   setBusy,
   onCreated,
   justCreated,
 }: {
-  platform: PlatformClient;
   busy: boolean;
   setBusy: (value: boolean) => void;
   onCreated: (template: Template) => void;
@@ -288,6 +303,7 @@ function CreateTemplateForm({
   });
   const [localErrors, setLocalErrors] = useState<Record<string, string | null>>({});
   const [failure, setFailure] = useState<ApiError | null>(null);
+  const createTemplate = useCreateTemplate();
 
   const submit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -305,21 +321,31 @@ function CreateTemplateForm({
 
       setFailure(null);
       setBusy(true);
-      void platform.createTemplate({ name, level_labels: labels }).then(
-        (template) => {
-          setBusy(false);
-          setName('');
-          setLabels({ organization: '', workspace: '', branch: '' });
-          setLocalErrors({});
-          onCreated(template);
-        },
-        (thrown: unknown) => {
-          setBusy(false);
-          setFailure(toApiError(thrown));
+      /*
+       * THE MUTATION INVALIDATES THE LIST; THIS CALLBACK STILL OWNS THE FORM.
+       * Clearing the fields, clearing the local errors and handing the created
+       * Template to the confirmation panel are this screen's, and none of them
+       * belongs in a cache. `setBusy` stays too — the parent renders the busy
+       * state for the whole section, not just this form.
+       */
+      createTemplate.mutate(
+        { name, level_labels: labels },
+        {
+          onSuccess: (template) => {
+            setBusy(false);
+            setName('');
+            setLabels({ organization: '', workspace: '', branch: '' });
+            setLocalErrors({});
+            onCreated(template);
+          },
+          onError: (thrown) => {
+            setBusy(false);
+            setFailure(thrown);
+          },
         },
       );
     },
-    [busy, labels, name, onCreated, platform, setBusy],
+    [busy, createTemplate, labels, name, onCreated, setBusy],
   );
 
   return (

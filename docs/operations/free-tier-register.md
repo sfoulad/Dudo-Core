@@ -31,7 +31,18 @@ Current usage is **0** for every row: no Cloudflare resource has been created, a
 workflow exists. `Last verified` is the date the *allowance* was checked against the
 official source, not the date usage was measured.
 
-| Service | Source | Free allowance | Expected MVP usage | Current | Warn (70%) | Hard stop | Owner | Last verified |
+> **The fourth column read "Expected MVP usage" until 2026-09-08.** The MVP framing was
+> withdrawn by `0030` on 2026-09-06 and the scope is now the full system, built admin-first
+> (`0035`). **This is not only a wording fix: the figures under that heading were budgeted
+> against a smaller system than the one being built**, and each is owed a re-check against
+> Milestones 1–6 rather than inherited. `0008` and its zero-cost ceiling are unchanged.
+>
+> **The `D1 — databases` row allocates slot 3 to "combined staging". There is no staging
+> environment** —
+> the user ruled on 2026-09-08 that `dudo.work` **is** the test environment (`0035`), so
+> that allocation describes a database nothing uses.
+
+| Service | Source | Free allowance | Expected usage (full system) | Current | Warn (70%) | Hard stop | Owner | Last verified |
 |---|---|---|---|---|---|---|---|---|
 | **D1 — databases** | `developers.cloudflare.com/d1/platform/limits/` | **10 per account** | **4 allocated of 10** — 1 control-plane/tenant directory (**now schema-defined by `0014` §C: principal, organization, organization_membership, session, tenant_directory — slot 1 was already reserved for it, so this is not a fifth database**), 2 production shared tenant data, 3 combined staging, 4 reserved migration/recovery; 5–10 unallocated reserve (`0006` §0.3). Local dev and CI consume **no** remote slots | 0 | 7 | Refuse to create an 11th; degrade rather than upgrade | core-agent | 2026-09-02 |
 | **D1 — size per database** | same | **500 MB** | **Production shared tenant-data database: 500 MB ceiling.** One shared database holds every Organization's business data (`0006` §0.1). Files and large exports go to R2, never here | 0 | 350 MB (70%) | 425 MB (85%) stop onboarding new Organizations; 450 MB (90%) emergency gate — essential existing-customer operations only. **Never delete financial, audit, or customer data to stay free** | core-agent | 2026-09-01 |

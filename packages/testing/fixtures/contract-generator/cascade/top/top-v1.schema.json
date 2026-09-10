@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:cascadetop:1",
+  "title": "DEPTH TWO. Imports dep, which imports bad. It never mentions bad itself.",
+  "$comment": "If the fixed point only closes ONE edge, this module is delivered importing a module that was never written — the same dangling import as depth 1, one level deeper and correspondingly harder to spot by reading.",
+  "$defs": {
+    "topInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inner"],
+      "properties": {
+        "inner": { "$ref": "urn:dudo:schema:cascadedep:1#/$defs/depOutput" }
+      }
+    },
+    "topOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

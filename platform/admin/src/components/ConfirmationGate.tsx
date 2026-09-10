@@ -76,12 +76,12 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
-import { identifierRefusal, CredentialDerivationError } from '@/api/kdf';
-import { deriveLogin, type DerivationProgress } from '@/api/kdf-client';
+import { identifierRefusal, CredentialDerivationError } from '@dudo/client-kdf';
+import { deriveLogin, type DerivationProgress } from '@dudo/client-kdf/client';
 import {
   EXPECTED_STATEMENT_LOCALE,
   isPresentableStatement,
@@ -157,6 +157,30 @@ export function ConfirmationGate({
    * `[]` is deliberate and the lint-suppressing dependency array is not an
    * oversight, because re-running this would mint a second challenge and spend
    * another audited write.
+   *
+   * ===========================================================================
+   * THIS EFFECT SURVIVED THE TANSTACK QUERY CONVERSION ON PURPOSE
+   * ===========================================================================
+   *
+   * Every read in this console moved to `lib/queries.ts` and every screen lost
+   * its `useEffect`. **This one stays, and it is the decision rather than the
+   * file nobody reached.**
+   *
+   * **It cannot be a query.** A challenge is a WRITE — it costs control-plane
+   * row-writes and runs the full authorization of the operation it names — and
+   * a cache would hand a second press a challenge minted for the first, which
+   * is the opposite of what a single-use confirmation is for.
+   *
+   * **And a mutation would not remove this effect, only relocate the call
+   * inside it.** The trigger genuinely is the mount: this component is rendered
+   * because a person pressed the action, so "on mount" and "on the press" are
+   * the same moment. **The conversion would keep the effect, keep the `[]`, and
+   * add a hook whose `isPending` duplicates `phase.kind === 'requesting'` —
+   * paying the drift risk for nothing.**
+   *
+   * The `cancelled` flag stays for the same reason it was written: this panel
+   * can be unmounted by its parent while the challenge is in flight, and a
+   * `setPhase` after that is a state update to a component that is gone.
    */
   useEffect(() => {
     let cancelled = false;

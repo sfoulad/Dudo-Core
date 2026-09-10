@@ -58,7 +58,7 @@
  * those terms rather than leaving an operator to work it out.
  */
 
-import { deriveLogin, type DerivationProgress } from './kdf-client';
+import { deriveLogin, type DerivationProgress } from '@dudo/client-kdf/client';
 import { generateAdminPassword } from './generate-password';
 
 export { generateAdminPassword, GENERATED_PASSWORD_LENGTH } from './generate-password';
@@ -92,8 +92,34 @@ export interface OnboardingCredential {
  * appears when a real customer first tries to log in — so the derivation is not
  * reimplemented here, it is CALLED. The schema states the obligation directly:
  * "The console's KDF must be byte-identical to the web and Apple clients'."
- * `scripts/verify-kdf.mjs` already proves that byte-identity against
- * `platform/web`.
+ *
+ * ---------------------------------------------------------------------------
+ * HOW THAT BYTE-IDENTITY IS GUARANTEED — RE-DERIVED 2026-09-09, BECAUSE THE
+ * MECHANISM CHANGED AND THE OLD SENTENCE WOULD HAVE STOPPED ANYONE CHECKING
+ * ---------------------------------------------------------------------------
+ *
+ * This paragraph used to end: *"`scripts/verify-kdf.mjs` already proves that
+ * byte-identity against `platform/web`."* **Both halves are now false.** That
+ * script is deleted from this tree, and there is no `platform/web` copy to
+ * compare against — both moved into `@dudo/client-kdf` (ADR 0040).
+ *
+ * **The conclusion still holds; the reason is different and stronger.** The
+ * byte-identity is no longer PROVED BY A COMPARISON — **it is unexpressible.**
+ * There is one module, `@dudo/client-kdf/client`, and enrolment and login both
+ * call it. Two things that are one thing cannot disagree (`architecture.md`
+ * §3a: a mechanism, not a discipline).
+ *
+ * **What keeps that true is a reservation, not a comparison:**
+ * `packages/testing/suites/az2-login/enrolment-round-trip.ts` asserts
+ * *"AND NO HOST HAS RE-FORKED THE KDF"* — it walks both console trees and goes
+ * red the day a host-local `kdf` module reappears, **which is the only way the
+ * drift can return.**
+ *
+ * **THE OLD SENTENCE WAS THE DANGEROUS KIND AND IT IS WORTH SAYING WHY.** Its
+ * whole function was to tell the next reader that something already proved
+ * this, so they need not look — and on this path that reader is someone
+ * auditing why a real customer cannot sign in. A citation naming a deleted file
+ * is `architecture.md` §3c's defect on the worst possible line.
  *
  * THE SALT IS AVAILABLE BECAUSE THE OPERATOR TYPED THE IDENTIFIER IN THIS SAME
  * REQUEST. `credential-reset-v1` has no such luck and needed a different request

@@ -12,6 +12,8 @@
     "platformRole": {
       "type": "string",
       "enum": ["platform-admin", "marketplace-moderator"],
+      "enumPolicy": "extensible",
+      "$comment": "THE THIRD COPY of `platformRole` — see `platform-operator-v1` and `platform-operators-v1`. Same values, same policy, and the agreement is maintained by hand until a check asserts it (docs/decisions/0041).",
       "description": "The actor's platform role AT THE TIME OF THE ACTION, recorded on the row rather than resolved at read time — a role that changed later must not rewrite history."
     },
 
@@ -25,6 +27,8 @@
     "outcome": {
       "type": "string",
       "enum": ["succeeded", "failed"],
+      "enumPolicy": "closed",
+      "$comment": "`closed`. An operation outcome is binary by construction, like `audit-read-v1`'s `decision` — there is no third result to add, so an unknown arm would be an arm for a case that cannot exist. Note this is NOT the same judgement as the warning taxonomies, which are extensible: a warning describes a bounded incompleteness WITHIN an outcome and the set of those grows; the outcome itself does not.",
       "description": "TWO VALUES, NOT A CODE. A reason string would drift toward describing WHAT went wrong, and 0025 Decision 5 forbids the contents of what was touched. Note that 'failed' here means the operation failed AFTER the authority check — a caller who is not an established operator writes no record at all (platform-operator-v1 whichSIDEOFTHEAUTHORITYCHECKTHEWRITESITSON), so this log contains no evidence of probing by non-operators. That blind spot is recorded there, not solved here."
     },
 

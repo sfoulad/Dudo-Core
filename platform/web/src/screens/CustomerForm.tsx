@@ -10,8 +10,8 @@
  *     its own audit record, so on the edit screen the Business is a read-only
  *     fact with a sentence saying why.
  *   - Update is PARTIAL, and the three-way distinction is normative: absent
- *     means unchanged, a value means set, null means cleared. The form submits
- *     a DIFF against the record it loaded, never the whole form. Sending
+ *     means unchanged, a value means set, null means cleared. The form submits a
+ *     DIFF against the record it loaded, never the whole form. Sending
  *     everything would look identical on a happy path and silently overwrite a
  *     colleague's concurrent edit on any other.
  *   - Only an ACTIVE customer can be edited. The server refuses otherwise; this
@@ -20,16 +20,60 @@
  * Validation here is a courtesy, not a gate. Every rule is a transcription of
  * the schema, the server validates again, and the server's answer is what the
  * person is shown when the two disagree.
+ *
+ * ===========================================================================
+ * REACT HOOK FORM HOLDS THE STATE. IT DOES NOT HOLD THE RULES.
+ * ===========================================================================
+ *
+ * What RHF replaced is four `useState` maps — values, errors, touched,
+ * submitting — and the blur/change plumbing between them. What it did NOT
+ * replace, and must not:
+ *
+ *   · `validateField` and `issueText` from `contracts/field-rules.ts` remain the
+ *     only source of what is valid. Each field's `validate` calls them.
+ *   · `buildDiff` is unchanged in logic. "Absent means unchanged" is a wire
+ *     property, and a form library that helpfully submitted every field would
+ *     break it silently on the only path where it matters.
+ *   · The server's answer still wins. Field-level detail is attached with
+ *     `setError`; anything the form does not render is stated in the summary
+ *     rather than swallowed.
+ *
+ * ===========================================================================
+ * NO ZOD RESOLVER, AND THAT IS A DEPENDENCY FACT RATHER THAN A PREFERENCE
+ * ===========================================================================
+ *
+ * The usual RHF + Zod pairing goes through `@hookform/resolvers`. **That package
+ * is not in the set the user approved on 2026-09-08** (ADR 0036 names six:
+ * shadcn/ui, TanStack Router, TanStack Query, TanStack Table, React Hook Form,
+ * Zod), and `security.md` §7 is explicit that approval is specific and does not
+ * carry forward — "it is already a peer dependency of one of these" is not
+ * approval.
+ *
+ * It would also be the wrong tool here even if it were approved: a Zod schema
+ * restating `customer-directory-v1`'s field rules is exactly what ADR 0037
+ * forbids — a hand-written type wearing a validator's clothes. The rules belong
+ * to the contract, and `field-rules.ts` is the transcription `0037`'s generator
+ * is meant to replace. Per-field `validate` reaches them with no adapter at all.
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Button, ButtonLink } from '@/components/ui/button';
-import { Field, Input, ReadOnlyValue, Select, Textarea } from '@/components/ui/field';
-import { ErrorBlock, Panel, Skeleton, StateBlock } from '@/components/StateBlock';
-import { toast } from '@/components/Toaster';
-import { navigate } from '@/lib/router';
-import { getLastListHash } from '@/lib/last-list';
-import { toApiError, type ApiError } from '@/api/errors';
+import { useForm, type FieldErrors, type SubmitHandler } from 'react-hook-form';
+import { Link, useNavigate } from '@tanstack/react-router';
+import {
+  Button,
+  buttonVariants,
+  Field,
+  Input,
+  Panel,
+  ReadOnlyValue,
+  Select,
+  Skeleton,
+  StateBlock,
+  Textarea,
+  toast,
+} from '@dudo/ui';
+import { ErrorBlock } from '@/components/ErrorBlock';
+import { type ApiError } from '@/api/errors';
 import { LIMITS, issueText, validateField } from '@/contracts/field-rules';
 import {
   EDITABLE_FIELDS,
@@ -38,9 +82,10 @@ import {
   type EditableField,
   type UpdateCustomerChanges,
 } from '@/contracts/customer-directory';
-import type { CustomerDirectoryClient } from '@/api/client';
-import { makeBusinessLabeller, useAuthorizedBusinesses } from '@/lib/use-businesses';
+import { useAuthorizedBusinesses, useCreateCustomer, useCustomer, useUpdateCustomer } from '@/lib/queries';
+import { makeBusinessLabeller } from '@/lib/business-label';
 import { businessLabel } from '@/contracts/business-read';
+import { getLastListSearch } from '@/lib/last-list';
 
 const LABELS: Record<string, string> = {
   business_id: 'Business',
@@ -79,45 +124,21 @@ function valuesFrom(customer: Customer): FormValues {
   };
 }
 
-export function CustomerForm({
-  client,
-  customerId,
-}: {
-  client: CustomerDirectoryClient;
-  customerId?: string;
-}) {
+function isRequired(field: string): boolean {
+  return field === 'display_name' || field === 'customer_type' || field === 'business_id';
+}
+
+export function CustomerForm({ customerId }: { customerId?: string }) {
   const mode = customerId ? 'edit' : 'create';
-  const [record, setRecord] = useState<Customer | null>(null);
-  const [loading, setLoading] = useState(mode === 'edit');
-  const [loadError, setLoadError] = useState<ApiError | null>(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
+  const recordQuery = useCustomer(customerId);
+  const loading = mode === 'edit' && recordQuery.isPending;
+  const loadError = mode === 'edit' ? (recordQuery.error ?? null) : null;
+  const record = mode === 'edit' ? (recordQuery.data ?? null) : null;
+  const backSearch = getLastListSearch();
 
   useEffect(() => {
     document.title = mode === 'edit' ? 'Edit customer · Dudo' : 'New customer · Dudo';
   }, [mode]);
-
-  useEffect(() => {
-    if (mode !== 'edit' || !customerId) return;
-    let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
-
-    client
-      .getCustomer(customerId)
-      .then((loaded) => {
-        if (!cancelled) setRecord(loaded);
-      })
-      .catch((thrown) => {
-        if (!cancelled) setLoadError(toApiError(thrown));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [client, customerId, mode, reloadNonce]);
 
   if (loading) {
     return <Skeleton className="h-6 w-56" />;
@@ -128,20 +149,27 @@ export function CustomerForm({
       <Panel>
         <ErrorBlock
           error={loadError}
-          onRetry={() => setReloadNonce((n) => n + 1)}
-          extraActions={<ButtonLink href={getLastListHash()}>Back to customers</ButtonLink>}
+          onRetry={() => void recordQuery.refetch()}
+          extraActions={
+            <Link to="/customers" search={backSearch} className={buttonVariants()}>
+              Back to customers
+            </Link>
+          }
         />
       </Panel>
     );
   }
 
   if (mode === 'edit' && record && record.status !== 'active') {
-    const backHref = `#/customers/${encodeURIComponent(record.customer_id)}`;
     return (
       <div>
-        <a href={backHref} className="mb-4 inline-block text-[0.8125rem] font-semibold text-ink-muted no-underline">
+        <Link
+          to="/customers/$customerId"
+          params={{ customerId: record.customer_id }}
+          className="mb-4 inline-block text-[0.8125rem] font-semibold text-ink-muted no-underline"
+        >
           ← {record.display_name}
-        </a>
+        </Link>
         <Panel>
           <StateBlock
             title={
@@ -155,9 +183,13 @@ export function CustomerForm({
                 : 'Its current state does not allow changes.'
             }
             actions={
-              <ButtonLink variant="primary" href={backHref}>
+              <Link
+                to="/customers/$customerId"
+                params={{ customerId: record.customer_id }}
+                className={buttonVariants({ variant: 'primary' })}
+              >
                 Open the record
-              </ButtonLink>
+              </Link>
             }
           />
         </Panel>
@@ -165,52 +197,62 @@ export function CustomerForm({
     );
   }
 
-  return <Form client={client} record={record} mode={mode} />;
+  /*
+   * `key` REMOUNTS THE FORM WHEN THE RECORD CHANGES.
+   *
+   * RHF takes its defaults once, at first render. Without this, navigating from
+   * editing one customer to editing another would keep the first one's values in
+   * the fields while the header showed the second one's name — and the diff
+   * would then be computed against the wrong record, which is the one place this
+   * screen can silently send a wrong write.
+   */
+  return <Form key={record?.customer_id ?? 'new'} record={record} mode={mode} />;
 }
 
-function Form({
-  client,
-  record,
-  mode,
-}: {
-  client: CustomerDirectoryClient;
-  record: Customer | null;
-  mode: 'create' | 'edit';
-}) {
+function Form({ record, mode }: { record: Customer | null; mode: 'create' | 'edit' }) {
+  const navigate = useNavigate();
   const { businesses, loading: businessesLoading, isEmpty: noBusinesses } =
-    useAuthorizedBusinesses(client);
-  const [values, setValues] = useState<FormValues>(record ? valuesFrom(record) : EMPTY);
-  const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
-  const [touched, setTouched] = useState<Partial<Record<string, boolean>>>({});
-  const [submitting, setSubmitting] = useState(false);
+    useAuthorizedBusinesses();
+  const createCustomer = useCreateCustomer();
+  const updateCustomer = useUpdateCustomer();
+  const submitting = createCustomer.isPending || updateCustomer.isPending;
+
   const [summary, setSummary] = useState<ErrorSummary | null>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
-  const nameRef = useRef<HTMLInputElement>(null);
+  const backSearch = getLastListSearch();
+
+  const {
+    register,
+    handleSubmit,
+    setError,
+    setFocus,
+    setValue,
+    watch,
+    formState: { errors, touchedFields, isSubmitted },
+  } = useForm<FormValues>({
+    defaultValues: record ? valuesFrom(record) : EMPTY,
+    // Validate when a field is left, then keep it current as it is corrected —
+    // the same two-stage behaviour the hand-rolled version had.
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
+  });
+
+  const values = watch();
 
   useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
+    setFocus('display_name');
+  }, [setFocus]);
 
   useEffect(() => {
     if (summary) summaryRef.current?.focus();
   }, [summary]);
 
-  function isRequired(field: string): boolean {
-    return field === 'display_name' || field === 'customer_type' || field === 'business_id';
-  }
-
-  function set(field: keyof FormValues, value: string) {
-    setValues((previous) => ({ ...previous, [field]: value }));
-    if (errors[field]) {
+  /** One field's rule, read from the contract transcription rather than restated. */
+  function rule(field: keyof FormValues) {
+    return (value: string) => {
       const issue = validateField(field, value.trim() || null, { required: isRequired(field) });
-      setErrors((previous) => ({ ...previous, [field]: issue ? issueText(issue.issue, field) : undefined }));
-    }
-  }
-
-  function blur(field: keyof FormValues) {
-    setTouched((previous) => ({ ...previous, [field]: true }));
-    const issue = validateField(field, values[field].trim() || null, { required: isRequired(field) });
-    setErrors((previous) => ({ ...previous, [field]: issue ? issueText(issue.issue, field) : undefined }));
+      return issue ? issueText(issue.issue, field) : true;
+    };
   }
 
   /**
@@ -233,63 +275,6 @@ function Form({
   const diff = mode === 'edit' ? buildDiff() : {};
   const changedCount = Object.keys(diff).length;
 
-  async function onSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setSummary(null);
-
-    const found: Partial<Record<string, string>> = {};
-    const fields: (keyof FormValues)[] =
-      mode === 'create' ? ['business_id', ...EDITABLE_FIELDS] : [...EDITABLE_FIELDS];
-
-    for (const field of fields) {
-      const issue = validateField(field, values[field].trim() || null, {
-        required: isRequired(field),
-      });
-      if (issue) found[field] = issueText(issue.issue, field);
-    }
-
-    setErrors(found);
-    setTouched(Object.fromEntries(fields.map((f) => [f, true])));
-
-    const problems = Object.entries(found).filter(([, message]) => Boolean(message));
-    if (problems.length > 0) {
-      setSummary({
-        title: `Check ${problems.length === 1 ? 'this field' : `these ${problems.length} fields`} before saving.`,
-        items: problems.map(([field, message]) => ({ field, text: message! })),
-      });
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      if (mode === 'create') {
-        const created = await client.createCustomer({
-          business_id: values.business_id,
-          display_name: values.display_name.trim().replace(/\s+/g, ' '),
-          customer_type: values.customer_type as CustomerType,
-          email: values.email.trim() || null,
-          phone: values.phone.trim() || null,
-          country: values.country.trim().toUpperCase() || null,
-          address: values.address.trim() || null,
-          notes: values.notes.trim() || null,
-        });
-        toast(`${created.display_name} has been added.`);
-        navigate(`/customers/${created.customer_id}`);
-        return;
-      }
-
-      if (!record || changedCount === 0) return;
-      const updated = await client.updateCustomer(record.customer_id, diff);
-      toast(`${updated.display_name} has been updated.`);
-      navigate(`/customers/${updated.customer_id}`);
-      return;
-    } catch (thrown) {
-      applyServerError(toApiError(thrown));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   /**
    * The server's answer wins. Field-level detail is attached to the field it
    * names; anything without a field, or with a field this form does not render,
@@ -297,12 +282,11 @@ function Form({
    */
   function applyServerError(failure: ApiError) {
     const items: SummaryItem[] = [];
-    const nextErrors: Partial<Record<string, string>> = {};
 
     for (const detail of failure.details) {
       const text = issueText(detail.issue, detail.field);
       if (detail.field in LABELS) {
-        nextErrors[detail.field] = text;
+        setError(detail.field as keyof FormValues, { type: 'server', message: text });
         items.push({ field: detail.field, text });
       } else {
         items.push({ text: `${detail.field}: ${text}` });
@@ -311,7 +295,6 @@ function Form({
 
     if (items.length === 0) items.push({ text: failure.message || 'The request was refused.' });
 
-    setErrors((previous) => ({ ...previous, ...nextErrors }));
     setSummary({
       title:
         failure.code === 'invalid_argument'
@@ -326,10 +309,96 @@ function Form({
     });
   }
 
-  const backHref = record ? `#/customers/${encodeURIComponent(record.customer_id)}` : getLastListHash();
+  const onValid: SubmitHandler<FormValues> = (submitted) => {
+    setSummary(null);
+
+    if (mode === 'create') {
+      createCustomer.mutate(
+        {
+          business_id: submitted.business_id,
+          display_name: submitted.display_name.trim().replace(/\s+/g, ' '),
+          customer_type: submitted.customer_type as CustomerType,
+          email: submitted.email.trim() || null,
+          phone: submitted.phone.trim() || null,
+          country: submitted.country.trim().toUpperCase() || null,
+          address: submitted.address.trim() || null,
+          notes: submitted.notes.trim() || null,
+        },
+        {
+          onSuccess: (created) => {
+            toast(`${created.display_name} has been added.`);
+            void navigate({
+              to: '/customers/$customerId',
+              params: { customerId: created.customer_id },
+            });
+          },
+          onError: applyServerError,
+        },
+      );
+      return;
+    }
+
+    if (!record || changedCount === 0) return;
+    updateCustomer.mutate(
+      { customerId: record.customer_id, changes: diff },
+      {
+        onSuccess: (updated) => {
+          toast(`${updated.display_name} has been updated.`);
+          void navigate({
+            to: '/customers/$customerId',
+            params: { customerId: updated.customer_id },
+          });
+        },
+        onError: applyServerError,
+      },
+    );
+  };
+
+  /**
+   * A failed client-side check produces the same summary a failed server check
+   * does, so the person meets one pattern rather than two.
+   *
+   * ⚠ IT READS THE ERRORS RHF HANDS IT, NOT `formState.errors`.
+   *
+   * The first version of this closed over `errors` from `formState` and found it
+   * EMPTY every time — that map is updated as part of the same submit, so the
+   * closure captured at render time still held the pre-submit state. The
+   * function returned early and pressing "Create customer" on an empty form did
+   * nothing at all, silently.
+   *
+   * It typechecked, it built, and it was caught only by clicking the button in a
+   * browser. Recorded here because the correct-looking version is the one that
+   * reaches for the value already in scope.
+   */
+  function onInvalid(fieldErrors: FieldErrors<FormValues>) {
+    const problems = Object.entries(fieldErrors)
+      .filter(([, entry]) => Boolean(entry?.message))
+      .map(([field, entry]) => ({ field, text: String(entry?.message) }));
+
+    if (problems.length === 0) return;
+    setSummary({
+      title: `Check ${problems.length === 1 ? 'this field' : `these ${problems.length} fields`} before saving.`,
+      items: problems,
+    });
+  }
 
   function errorFor(field: keyof FormValues): string | null {
-    return touched[field] && errors[field] ? errors[field]! : null;
+    const entry = errors[field];
+    if (!entry?.message) return null;
+    // A server error is shown whatever the field's history — the server has
+    // spoken about it, and the person has not necessarily visited it.
+    if (entry.type === 'server') return String(entry.message);
+    /*
+     * A CLIENT-SIDE ERROR IS QUIET UNTIL THE FIELD IS VISITED **OR THE FORM IS
+     * SUBMITTED**, and the second half is not optional.
+     *
+     * `touchedFields` alone was the first version, and it meant that submitting
+     * an untouched form marked the fields invalid in RHF's state and showed the
+     * person nothing next to any of them. The hand-rolled version this replaced
+     * had the same requirement and met it by marking every field touched on
+     * submit; `isSubmitted` is the same idea without mutating anything.
+     */
+    return isSubmitted || touchedFields[field] ? String(entry.message) : null;
   }
 
   /**
@@ -347,12 +416,13 @@ function Form({
   if (mode === 'create' && noBusinesses) {
     return (
       <div>
-        <a
-          href={getLastListHash()}
+        <Link
+          to="/customers"
+          search={backSearch}
           className="mb-4 inline-block text-[0.8125rem] font-semibold text-ink-muted no-underline"
         >
           ← Customers
-        </a>
+        </Link>
         <Panel>
           <StateBlock
             title="You are not authorized over any Business"
@@ -368,7 +438,11 @@ function Form({
                 </p>
               </>
             }
-            actions={<ButtonLink href={getLastListHash()}>Back to customers</ButtonLink>}
+            actions={
+              <Link to="/customers" search={backSearch} className={buttonVariants()}>
+                Back to customers
+              </Link>
+            }
           />
         </Panel>
       </div>
@@ -377,15 +451,29 @@ function Form({
 
   return (
     <div>
-      <a
-        href={backHref}
-        className="mb-4 inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-ink-muted no-underline hover:text-navy-700"
-      >
-        <span aria-hidden="true" className="rtl:rotate-180">
-          ←
-        </span>
-        {record ? record.display_name : 'Customers'}
-      </a>
+      {record ? (
+        <Link
+          to="/customers/$customerId"
+          params={{ customerId: record.customer_id }}
+          className="mb-4 inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-ink-muted no-underline hover:text-navy-700"
+        >
+          <span aria-hidden="true" className="rtl:rotate-180">
+            ←
+          </span>
+          {record.display_name}
+        </Link>
+      ) : (
+        <Link
+          to="/customers"
+          search={backSearch}
+          className="mb-4 inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-ink-muted no-underline hover:text-navy-700"
+        >
+          <span aria-hidden="true" className="rtl:rotate-180">
+            ←
+          </span>
+          Customers
+        </Link>
+      )}
 
       <div className="mb-6">
         <h1 className="font-serif text-3xl leading-tight tracking-[-0.01em] text-navy-800">
@@ -398,7 +486,7 @@ function Form({
         </p>
       </div>
 
-      <form onSubmit={onSubmit} noValidate className="grid max-w-3xl gap-5">
+      <form onSubmit={handleSubmit(onValid, onInvalid)} noValidate className="grid max-w-3xl gap-5">
         {summary ? (
           <div
             ref={summaryRef}
@@ -442,10 +530,8 @@ function Form({
               {(aria) => (
                 <Select
                   {...aria}
-                  value={values.business_id}
                   disabled={businessesLoading}
-                  onChange={(event) => set('business_id', event.target.value)}
-                  onBlur={() => blur('business_id')}
+                  {...register('business_id', { validate: rule('business_id') })}
                 >
                   <option value="">
                     {businessesLoading ? 'Loading your Businesses…' : 'Choose a Business'}
@@ -483,13 +569,10 @@ function Form({
             {(aria) => (
               <Input
                 {...aria}
-                ref={nameRef}
                 type="text"
-                value={values.display_name}
-                onChange={(event) => set('display_name', event.target.value)}
-                onBlur={() => blur('display_name')}
                 autoComplete="off"
                 maxLength={LIMITS.display_name.max}
+                {...register('display_name', { validate: rule('display_name') })}
               />
             )}
           </Field>
@@ -502,12 +585,7 @@ function Form({
             error={errorFor('customer_type')}
           >
             {(aria) => (
-              <Select
-                {...aria}
-                value={values.customer_type}
-                onChange={(event) => set('customer_type', event.target.value)}
-                onBlur={() => blur('customer_type')}
-              >
+              <Select {...aria} {...register('customer_type', { validate: rule('customer_type') })}>
                 <option value="person">Person</option>
                 <option value="company">Company</option>
               </Select>
@@ -527,11 +605,9 @@ function Form({
                 {...aria}
                 type="email"
                 inputMode="email"
-                value={values.email}
-                onChange={(event) => set('email', event.target.value)}
-                onBlur={() => blur('email')}
                 autoComplete="off"
                 maxLength={LIMITS.email.max}
+                {...register('email', { validate: rule('email') })}
               />
             )}
           </Field>
@@ -547,11 +623,9 @@ function Form({
                 {...aria}
                 type="tel"
                 inputMode="tel"
-                value={values.phone}
-                onChange={(event) => set('phone', event.target.value)}
-                onBlur={() => blur('phone')}
                 autoComplete="off"
                 maxLength={LIMITS.phone.max}
+                {...register('phone', { validate: rule('phone') })}
               />
             )}
           </Field>
@@ -566,12 +640,17 @@ function Form({
               <Input
                 {...aria}
                 type="text"
-                value={values.country}
-                onChange={(event) => set('country', event.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                onBlur={() => blur('country')}
                 autoComplete="off"
                 maxLength={2}
                 className="max-w-32 uppercase"
+                {...register('country', {
+                  validate: rule('country'),
+                  // The contract wants two upper-case letters; typing "bh" should
+                  // become "BH" rather than being reported as wrong afterwards.
+                  onChange: (event: { target: { value: string } }) => {
+                    setValue('country', event.target.value.toUpperCase().replace(/[^A-Z]/g, ''));
+                  },
+                })}
               />
             )}
           </Field>
@@ -590,10 +669,8 @@ function Form({
               <Textarea
                 {...aria}
                 rows={3}
-                value={values.address}
-                onChange={(event) => set('address', event.target.value)}
-                onBlur={() => blur('address')}
                 maxLength={LIMITS.address.max}
+                {...register('address', { validate: rule('address') })}
               />
             )}
           </Field>
@@ -612,10 +689,8 @@ function Form({
               <Textarea
                 {...aria}
                 rows={5}
-                value={values.notes}
-                onChange={(event) => set('notes', event.target.value)}
-                onBlur={() => blur('notes')}
                 maxLength={LIMITS.notes.max}
+                {...register('notes', { validate: rule('notes') })}
               />
             )}
           </Field>
@@ -636,7 +711,19 @@ function Form({
                 ? 'Create customer'
                 : 'Save changes'}
           </Button>
-          <ButtonLink href={backHref}>Cancel</ButtonLink>
+          {record ? (
+            <Link
+              to="/customers/$customerId"
+              params={{ customerId: record.customer_id }}
+              className={buttonVariants()}
+            >
+              Cancel
+            </Link>
+          ) : (
+            <Link to="/customers" search={backSearch} className={buttonVariants()}>
+              Cancel
+            </Link>
+          )}
           {mode === 'edit' ? (
             <p className="grow basis-48 text-[0.8125rem] text-ink-muted">
               {changedCount === 0

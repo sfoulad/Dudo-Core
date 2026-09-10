@@ -18,8 +18,8 @@
 
 import type { ReactNode } from 'react';
 import { Login } from '@/screens/Login';
-import { Panel, StateBlock, ErrorBlock } from '@/components/StateBlock';
-import { Button } from '@/components/ui/button';
+import { Button, Panel, StateBlock } from '@dudo/ui';
+import { ErrorBlock } from '@/components/ErrorBlock';
 import type { AuthClient } from '@/api/auth';
 import type { Session } from '@/lib/use-session';
 

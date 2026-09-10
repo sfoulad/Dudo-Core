@@ -61,22 +61,21 @@
  * way into a real customer.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { useCallback, useState, type FormEvent } from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { LoadingBlock } from '@/components/StateBlock';
-import { cn } from '@/lib/cn';
-import { buildHash, organizationDetailPath } from '@/lib/router';
-import { identifierRefusal } from '@/api/kdf';
-import type { DerivationProgress } from '@/api/kdf-client';
+import { cn } from '@dudo/ui';
+import { Link } from '@tanstack/react-router';
+import { identifierRefusal } from '@dudo/client-kdf';
+import type { DerivationProgress } from '@dudo/client-kdf/client';
 import { createOnboardingCredential } from '@/api/onboarding-credential';
+import { useOnboardOrganization, useTemplatePicker } from '@/lib/queries';
 import {
   MAX_DISPLAY_NAME_LENGTH,
-  PLATFORM_MAX_PAGE_SIZE,
   displayNameRefusal,
   isKnownOnboardingWarning,
   type OnboardOrganizationOutput,
-  type PlatformClient,
   type Template,
 } from '@/api/platform';
 import { toApiError, type ApiError } from '@/api/errors';
@@ -125,15 +124,23 @@ type Phase =
   | { readonly kind: 'deriving'; readonly progress: DerivationProgress }
   | { readonly kind: 'sending' };
 
-export function OnboardOrganization({
-  platform,
-  onOnboarded,
-}: {
-  platform: PlatformClient;
-  onOnboarded: () => void;
-}) {
-  const [templates, setTemplates] = useState<readonly Template[] | null>(null);
-  const [templatesError, setTemplatesError] = useState<ApiError | null>(null);
+export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }) {
+  /*
+   * THE PICKER IS A QUERY, AND ITS TWO STATES ARE DERIVED RATHER THAN STORED.
+   *
+   * `templates` was `readonly Template[] | null` where null meant "still
+   * loading", and `templatesError` sat beside it — two pieces of state for one
+   * request, which is how a screen ends up showing a spinner next to an error.
+   * Both now come off the query.
+   *
+   * ONE CALL, ON MOUNT, unchanged: it is an audited platform call like every
+   * other, so there is no polling and no refetch on focus. `lib/queries.ts`
+   * carries the page-size reasoning and the note that creating a Template
+   * invalidates this picker.
+   */
+  const picker = useTemplatePicker();
+  const templates: readonly Template[] | null = picker.data?.data ?? null;
+  const templatesError: ApiError | null = picker.error;
   const [identifier, setIdentifier] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
@@ -146,29 +153,16 @@ export function OnboardOrganization({
   const busy = phase.kind !== 'idle';
 
   /*
-   * The Template list, so an operator picks rather than types an opaque
-   * identifier. ONE CALL, ON MOUNT — it is an audited platform call like every
-   * other, so there is no polling and no refetch on focus.
+   * THE WRITE, HELD FOR ITS INVALIDATION RATHER THAN ITS STATE. `phase` is
+   * already a state machine over the derivation and the send, and the
+   * derivation happens INSIDE it — so `onboard.isPending` would be a second,
+   * narrower rendering of the same act. It is not read.
    *
-   * `PLATFORM_MAX_PAGE_SIZE` rather than the default: this is a picker, and a
-   * second page of it would be a paginated dropdown nobody wants. If a platform
-   * ever has more than 100 business types, this becomes a search field and that
-   * is a real change rather than a bigger number.
+   * What the hook buys is that a successful onboarding re-reads the
+   * Organization list because it succeeded, not because this component
+   * remembered to call back (`architecture.md` §3a).
    */
-  useEffect(() => {
-    let cancelled = false;
-    void platform.listTemplates({ pageSize: PLATFORM_MAX_PAGE_SIZE }).then(
-      (page) => {
-        if (!cancelled) setTemplates(page.data);
-      },
-      (thrown: unknown) => {
-        if (!cancelled) setTemplatesError(toApiError(thrown));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [platform]);
+  const onboard = useOnboardOrganization();
 
   const submit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -216,7 +210,7 @@ export function OnboardOrganization({
         if (!derivationDone) setPhase({ kind: 'deriving', progress });
       })
         .then(async (credential) => {
-          const result = await platform.onboardOrganization({
+          const result = await onboard.mutateAsync({
             admin_identifier: credential.identifier,
             template_id: templateId,
             derived_value: credential.derivedValue,
@@ -252,7 +246,7 @@ export function OnboardOrganization({
           setFailure(toApiError(thrown));
         });
     },
-    [busy, displayName, identifier, onOnboarded, platform, templateId, templates],
+    [busy, displayName, identifier, onboard, onOnboarded, templateId, templates],
   );
 
   if (outcome !== null) {
@@ -589,12 +583,13 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
         <span className="font-semibold">Record the password before you follow this.</span> The
         business has no name, no CR and no VAT registration recorded yet — nobody has asked, which
         is a different fact from having none.{' '}
-        <a
-          href={buildHash(organizationDetailPath(outcome.result.organization_id))}
+        <Link
+          to="/organizations/$organizationId"
+          params={{ organizationId: outcome.result.organization_id }}
           className="font-semibold text-navy-600 no-underline hover:underline"
         >
           Open this business to record them
-        </a>
+        </Link>
         . Leaving this screen loses the password.
       </p>
 

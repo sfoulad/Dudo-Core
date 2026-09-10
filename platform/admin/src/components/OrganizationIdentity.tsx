@@ -69,9 +69,9 @@
  */
 
 import { useCallback, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
-import { cn } from '@/lib/cn';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
+import { cn } from '@dudo/ui';
 import {
   MAX_DISPLAY_NAME_LENGTH,
   MAX_REGISTRATION_NUMBER_LENGTH,

@@ -636,7 +636,21 @@ export async function createHmacIdentifierBucketer(
   return {
     async bucket(entryPointId: PreAuthEntryPointId, identifier: string): Promise<number> {
       const normalized = identifier.normalize('NFKC').trim().toLowerCase();
-      const message = new TextEncoder().encode(`${entryPointId} ${normalized}`);
+      // THE SEPARATOR BELOW IS A NUL, AND IT IS SPELLED RATHER THAN TYPED. It was a raw 0x00
+      // byte until 2026-09-08. A raw one makes plain `grep` return NOTHING over this entire
+      // file, silently — measured here as 0 matches for `const` before the fix and 66 after —
+      // so every search of the login path examined nothing and looked clean.
+      //
+      // `git diff` was NOT affected in this file, and the repository's general claim that a NUL
+      // makes a diff binary with no hunks was checked here rather than repeated: git samples
+      // only the first ~8 KB for its binary test, and this NUL sat at byte 34,135, so the diff
+      // stayed textual throughout. That is a property of WHERE the byte fell, not a reprieve —
+      // the same byte near the top of a file does disable the diff entirely.
+      //
+      // THE VALUE MUST NOT MOVE, only the spelling: a
+      // NUL cannot occur in an entry-point id or in an NFKC-normalised identifier, so the two
+      // components cannot run together. Changing this byte silently re-buckets every account.
+      const message = new TextEncoder().encode(`${entryPointId}${String.fromCharCode(0)}${normalized}`);
       const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, message));
       // Four bytes is far more entropy than 4,096 buckets needs, and taking a prefix of an HMAC
       // is a standard truncation rather than an invention.

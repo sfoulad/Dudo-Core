@@ -82,6 +82,31 @@ proves the mapping is a mapping.
 Neither grants `DeleteCustomer` or `RestoreDeletedCustomer` — they are outside MVP scope, and the
 web client already makes calling them a compile error.
 
+> **AMENDED 2026-09-08. "OUTSIDE MVP SCOPE" NO LONGER DEFINES ANYTHING**, because `0030`
+> withdrew the MVP framing on 2026-09-06 and `0035` made the target the full system, built
+> admin-first. **The two sentences above are left unedited** — they were true on their own
+> terms and this record is not quietly rewritten — but the phrase they turn on now names a
+> boundary that does not exist.
+>
+> **Read it as: NOT YET GRANTED, AND STILL NOT GRANTED TODAY.** The exclusion of
+> `DeleteCustomer` and `RestoreDeletedCustomer` from both roles **still holds**, and it now
+> holds for a better-stated reason than scope: `DeleteCustomer` is gated on
+> `customers.customer.delete`, which is one of the **twelve tenant-scope `critical`
+> permissions that cannot presently be exercised at all** — the confirmation lock is fitted
+> and the Action-class challenge route the accepted `confirmation-v1` requires has not been
+> built (`0038` F-1). **Granting it today would produce a role that holds a permission
+> nothing can use.**
+>
+> **Found by `qa-agent`, and the way it was found is the point.** Three assertions in
+> `packages/testing/suites/az2-login/role-grants.ts` say *"outside MVP scope"* — **a
+> faithful quotation of this file.** `qa-agent` declined to modernise the test's vocabulary,
+> on the grounds that **a test rewritten out of step with the decision it cites is exactly
+> the drift `architecture.md` §3c is about**, and reported that the MVP-wording retirement in
+> `packages/testing/**` was blocked on the decision records instead. **That was correct, and
+> it is the reverse of the usual failure**: normally the artifact drifts from the record; here
+> the record was the stale half and the test was faithful to it. **Amending this file is what
+> unblocks that one.**
+
 ## Consequences
 
 - One migration, `0007_membership_role.sql`, adding the column with **no default that grants

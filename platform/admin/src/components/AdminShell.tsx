@@ -58,9 +58,11 @@
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/cn';
-import { ROUTES, buildHash, type RoutePath } from '@/lib/router';
+import { Button, cn } from '@dudo/ui';
+import { Link } from '@tanstack/react-router';
+// From the leaf module, NOT from the route tree — importing it from there put
+// this file in a cycle and blanked the console. See `lib/routes.ts`.
+import { ROUTES, type RoutePath } from '@/lib/routes';
 import type { WhoamiOutput } from '@/api/platform';
 import { CONFIG } from '@/api/config';
 
@@ -289,11 +291,18 @@ export function AdminShell({
               const active = currentPath === item.path;
               return (
                 <li key={item.path}>
-                  <a
-                    href={buildHash(item.path)}
+                  <Link
+                    to={item.path}
                     // `aria-current="page"` is what tells a screen reader which
                     // section is open. The background colour tells everyone
                     // else; neither substitutes for the other.
+                    //
+                    // SET EXPLICITLY RATHER THAN LEFT TO THE ROUTER. TanStack's
+                    // `Link` can manage `aria-current` itself via `activeProps`,
+                    // and its default notion of "active" is prefix-based — which
+                    // would mark Organizations current on `/organizations/x/audit`
+                    // as well. `currentPath === item.path` is the exact-match
+                    // behaviour this shell had, preserved.
                     aria-current={active ? 'page' : undefined}
                     onClick={() => {
                       setDrawerOpen(false);
@@ -306,7 +315,7 @@ export function AdminShell({
                     )}
                   >
                     {item.label}
-                  </a>
+                  </Link>
                 </li>
               );
             })}
