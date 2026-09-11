@@ -64,10 +64,39 @@ export class ApiError extends Error {
   readonly request_id: string | null;
   readonly details: ErrorDetail[];
   readonly retry_after_seconds: number | null;
+  /**
+   * ===========================================================================
+   * SET ONLY WHEN THIS CLIENT CONSTRUCTED THE ERROR ITSELF
+   * ===========================================================================
+   *
+   * `errorBodyKey` deliberately returns `null` for `invalid_argument` and
+   * `conflict`, so the screen shows Core's own `message` — **because Core knows
+   * which field and this console does not.**
+   *
+   * **THAT REASONING IS FALSE FOR AN ERROR THIS CLIENT BUILT**, and there is
+   * one: the identity save refuses an empty change set locally rather than
+   * spending five of a customer's daily writes on a request Core would refuse.
+   * Its message never came from Core, so falling through to it fell through to
+   * **an English sentence written here** — on the one code whose whole deferral
+   * rule assumes the opposite.
+   *
+   * Found by asking which of the remaining `.ts` strings can actually reach a
+   * screen, rather than assuming the deferral rule covered them.
+   *
+   * ⚠ **IT IS NEVER READ FROM THE WIRE — AND THE FIRST VERSION OF THIS SENTENCE
+   * WAS FALSE.** It said `fromEnvelope` "passes `envelope.error` straight
+   * through, so a server cannot select this console's copy… by construction".
+   * **Passing it straight through is exactly how a server COULD**, because the
+   * type does not police a value that arrived at runtime. See `fromEnvelope`,
+   * which now names its fields one at a time, and the assertion that holds it
+   * there.
+   */
+  readonly messageKey: ErrorMessageKey | null;
 
   constructor(init: {
     code?: ErrorCode;
     message?: string;
+    messageKey?: ErrorMessageKey;
     request_id?: string | null;
     details?: ErrorDetail[];
     retry_after_seconds?: number | null;
@@ -78,10 +107,41 @@ export class ApiError extends Error {
     this.request_id = init.request_id ?? null;
     this.details = init.details ?? [];
     this.retry_after_seconds = init.retry_after_seconds ?? null;
+    this.messageKey = init.messageKey ?? null;
   }
 
+  /**
+   * ===========================================================================
+   * ⚠ THIS SPREAD THE WHOLE WIRE OBJECT, AND `messageKey` WAS REACHABLE THROUGH
+   * IT FOR ABOUT A MINUTE
+   * ===========================================================================
+   *
+   * It read `new ApiError(envelope.error)`. **`ErrorEnvelope` declares no
+   * `messageKey`, and the type is not the wire** — a real response is parsed
+   * JSON, and TypeScript polices excess properties on object LITERALS, never on
+   * a value that arrived at runtime. So a server sending `messageKey` would have
+   * had it read straight into the field that decides which sentence this console
+   * shows.
+   *
+   * **I wrote a comment on `messageKey` saying it was `undefined` here "by
+   * construction, not by a check somebody has to remember". That sentence was
+   * FALSE WHEN I TYPED IT** — `architecture.md` §3b's dismissal that stops the
+   * next reader looking, in my own file, and it survived exactly as long as it
+   * took to run the check I wrote to confirm it.
+   *
+   * **The fields are now named one at a time.** A property added to the envelope
+   * later does not arrive here by default; somebody has to add it, which is the
+   * review surface the spread removed. Same shape as `platformRequest` refusing
+   * to forward an undeclared field.
+   */
   static fromEnvelope(envelope: ErrorEnvelope): ApiError {
-    return new ApiError(envelope.error);
+    return new ApiError({
+      code: envelope.error.code,
+      message: envelope.error.message,
+      request_id: envelope.error.request_id,
+      details: envelope.error.details,
+      retry_after_seconds: envelope.error.retry_after_seconds,
+    });
   }
 }
 
@@ -89,7 +149,18 @@ export function isApiError(value: unknown): value is ApiError {
   return value instanceof ApiError;
 }
 
-/** Normalise anything thrown into an ApiError, so no view sees a raw throw. */
+/**
+ * Normalise anything thrown into an ApiError, so no view sees a raw throw.
+ *
+ * **THE MESSAGE HERE IS NOT TRANSLATED, AND THAT IS NOT AN OMISSION.** The code
+ * is `internal`, `BODY_KEYS` has an entry for `internal`, and `errorBodyKey`
+ * therefore never falls through to `message` for this error — so this string
+ * **cannot reach a screen.** It exists for `Error.message`, which is what a
+ * stack trace and a console log show, and those are read by whoever is
+ * debugging rather than by an operator.
+ *
+ * Stated because the next reader translating this file will find it and wonder.
+ */
 export function toApiError(thrown: unknown): ApiError {
   if (isApiError(thrown)) return thrown;
   return new ApiError({ code: 'internal', message: 'The request could not be completed.' });
@@ -167,52 +238,127 @@ export function writeIsCertainlyAbsent(error: Pick<ApiError, 'code'>): boolean {
   }
 }
 
-const TITLES: Record<ErrorCode, string> = {
-  invalid_argument: 'Check what was sent',
-  unauthenticated: 'You need to sign in',
-  forbidden: 'This console will not perform that',
-  not_found: 'That is not here',
-  conflict: 'That conflicts with something that already exists',
-  failed_precondition: 'That is not possible in this state',
-  quota_exceeded: 'A platform limit has been reached',
-  rate_limited: 'Too many requests just now',
-  internal: 'Something went wrong at our end',
-  unavailable: 'Dudo is temporarily unreachable',
-  timeout: 'That took too long',
+/**
+ * ===========================================================================
+ * ⚠ THESE RETURNED ENGLISH PROSE UNTIL 2026-09-11, AND THIS IS THE COPY EVERY
+ * FAILED REQUEST ON EVERY SCREEN RENDERS
+ * ===========================================================================
+ *
+ * Sixteen operator-facing sentences lived here. **The console's copy-coverage
+ * pin scans `.tsx` files**, so none of them was ever in the population it
+ * reports — the same blindness that hid eleven more in `api/audit-window.ts`.
+ * A console can be reported as 80% translated while **every error state in it
+ * is still English**, which is the state that matters most to an operator who
+ * has just been refused.
+ *
+ * **The functions now return KEYS.** They are called from components, so taking
+ * a `t` would have been possible — but `api/**` must not import `lib/i18n`, and
+ * the token shape is what `audit-window.ts` already uses, so the two shared
+ * modules behave the same way rather than each having its own convention.
+ *
+ * `ErrorMessageKey` is declared here as a narrow union for the reason given in
+ * `audit-window.ts`, and `lib/i18n.tsx` asserts it is a subset of `MessageKey`
+ * **at compile time** — a key invented here does not build.
+ */
+export type ErrorMessageKey =
+  | 'error.title.fallback'
+  | 'error.title.invalidArgument'
+  | 'error.title.unauthenticated'
+  | 'error.title.forbidden'
+  | 'error.title.notFound'
+  | 'error.title.conflict'
+  | 'error.title.failedPrecondition'
+  | 'error.title.quotaExceeded'
+  | 'error.title.rateLimited'
+  | 'error.title.internal'
+  | 'error.title.unavailable'
+  | 'error.title.timeout'
+  | 'error.body.unauthenticated'
+  | 'error.body.forbidden'
+  | 'error.body.notFound'
+  | 'error.body.failedPrecondition'
+  | 'error.body.rateLimited'
+  | 'error.body.rateLimitedFor'
+  | 'error.body.unavailable'
+  | 'error.body.timeout'
+  | 'error.body.internal'
+  /* Client-constructed. See `ApiError.messageKey`. */
+  | 'error.body.nothingChanged';
+
+/**
+ * TOTAL OVER `ErrorCode`, not partial — so **adding a code to `ERROR_CODES`
+ * fails the build here** rather than falling through to a generic title. That
+ * is the same mechanism `writeIsCertainlyAbsent` relies on one function up, and
+ * for the same reason: a new error code arriving unnoticed is a new error code
+ * rendered as "Something went wrong".
+ */
+const TITLE_KEYS: Record<ErrorCode, ErrorMessageKey> = {
+  invalid_argument: 'error.title.invalidArgument',
+  unauthenticated: 'error.title.unauthenticated',
+  forbidden: 'error.title.forbidden',
+  not_found: 'error.title.notFound',
+  conflict: 'error.title.conflict',
+  failed_precondition: 'error.title.failedPrecondition',
+  quota_exceeded: 'error.title.quotaExceeded',
+  rate_limited: 'error.title.rateLimited',
+  internal: 'error.title.internal',
+  unavailable: 'error.title.unavailable',
+  timeout: 'error.title.timeout',
 };
 
-export function errorTitle(error: Pick<ApiError, 'code'> | null | undefined): string {
-  if (!error) return 'Something went wrong';
-  return TITLES[error.code] ?? 'Something went wrong';
+export function errorTitleKey(
+  error: Pick<ApiError, 'code'> | null | undefined,
+): ErrorMessageKey {
+  if (!error) return 'error.title.fallback';
+  return TITLE_KEYS[error.code];
 }
 
-const BODIES: Partial<Record<ErrorCode, string>> = {
-  unauthenticated: 'Your operator session is not active. Sign in and try again.',
+/**
+ * PARTIAL ON PURPOSE, unlike the titles. A code with no entry falls back to the
+ * SERVER's `message`, which is written for a developer and is better than a
+ * generic sentence when this console has nothing specific to add —
+ * `invalid_argument` and `conflict` are exactly that case, where Core knows
+ * which field and this console does not.
+ */
+const BODY_KEYS: Partial<Record<ErrorCode, ErrorMessageKey>> = {
+  unauthenticated: 'error.body.unauthenticated',
   /*
    * WRITTEN TO BE TRUE OF ALL FOUR COLLAPSED CONDITIONS. See the header. It does
    * not say the caller lacks a platform_operator row, because Core deliberately
    * does not say so and one of the four conditions would make that claim false.
    */
-  forbidden:
-    'Core refused this call for this principal. The refusal is deliberately unspecific and this ' +
-    'console cannot tell you which condition produced it. Raise it with the Team Lead rather ' +
-    'than retrying.',
-  not_found: 'The identifier may be wrong, or the object may have been removed.',
-  failed_precondition: 'Something this depends on is not in the required state.',
-  rate_limited: 'Wait a moment and try again.',
-  unavailable: 'This is usually brief. Try again in a moment.',
-  timeout: 'The request did not finish. Try again.',
-  internal: 'The problem has been recorded. Try again in a moment.',
+  forbidden: 'error.body.forbidden',
+  not_found: 'error.body.notFound',
+  failed_precondition: 'error.body.failedPrecondition',
+  rate_limited: 'error.body.rateLimited',
+  unavailable: 'error.body.unavailable',
+  timeout: 'error.body.timeout',
+  internal: 'error.body.internal',
 };
 
 /**
- * Wording of last resort. The server's own `message` is written for a developer,
- * so it is shown as supporting detail rather than as the headline.
+ * Wording of last resort, as a key.
+ *
+ * **`null` MEANS "SHOW THE SERVER'S OWN `message`"** and is a real answer rather
+ * than a missing one — see `BODY_KEYS`. The caller renders `error.message` in
+ * that case, untranslated, because it came from Core in whatever language Core
+ * speaks and inventing a translation for it would be inventing content.
+ *
+ * **`error.body.rateLimitedFor` carries `{seconds}`**, which the caller fills
+ * with `formatSeconds` — so *"about 25 seconds"* gets Arabic's singular, dual
+ * and two plural forms from `Intl` rather than from a ternary.
  */
-export function errorBody(error: ApiError | null | undefined): string {
-  if (!error) return '';
+export function errorBodyKey(error: ApiError | null | undefined): ErrorMessageKey | null {
+  if (!error) return null;
+  /*
+   * THE CLIENT'S OWN KEY WINS, and it is checked FIRST rather than last. An
+   * error this console built knows its own wording; the code-keyed table is the
+   * fallback for errors that arrived from Core. Checking it last would let
+   * `BODY_KEYS` shadow it on any code that happens to have an entry.
+   */
+  if (error.messageKey !== null) return error.messageKey;
   if (error.code === 'rate_limited' && error.retry_after_seconds !== null) {
-    return `Wait about ${String(error.retry_after_seconds)} seconds and try again.`;
+    return 'error.body.rateLimitedFor';
   }
-  return BODIES[error.code] ?? error.message ?? '';
+  return BODY_KEYS[error.code] ?? null;
 }

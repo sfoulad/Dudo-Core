@@ -91,11 +91,39 @@ export const PLATFORM_MAX_PAGE_SIZE = 100;
    The wire shapes — `platform-operator-v1.schema.json`
    ------------------------------------------------------------------------- */
 
-/** `organizationStatus`. A closed set in the schema. See `isKnownStatus`. */
-export type OrganizationStatus = 'active' | 'suspended';
+/*
+ * ===========================================================================
+ * FOUR `Known…` UNIONS, AND THE PREFIX IS LOAD-BEARING RATHER THAN TIDY
+ * ===========================================================================
+ *
+ * These were `OrganizationStatus`, `PlatformRole`, `TemplateStatus` and
+ * `MembershipRole` — **the exact names the contract now exports for the same
+ * fields, meaning something different.** Renamed 2026-09-09.
+ *
+ * `0041` splits every `extensible` enum in two: the WIRE type, which carries
+ * `(string & {})` because a value this build never learned may arrive, and the
+ * KNOWN SUBSET, which is what this build understands and what a guard narrows
+ * to. **Both are correct and they are not the same type.**
+ *
+ * **Sharing one name across that boundary is `architecture.md` §1a's defect** —
+ * one name, two meanings, each locally coherent — and it was becoming live
+ * rather than theoretical: this file already imports generated types, so
+ * `TemplateStatus` here and `TemplateStatus` in `@dudo/contracts` were one
+ * import away from being read as the same thing.
+ *
+ * **The failure it prevents is silent.** A guard declared `x is PlatformRole`
+ * against the EXTENSIBLE union proves nothing — the arm absorbs every string —
+ * so the branch after it would be believed rather than checked, and nothing
+ * would go red. **`§1a`'s remedy applies: rename BOTH sides so neither meaning
+ * holds the bare word**, and the prefixed name is greppable where the bare one
+ * is not.
+ */
 
-/** `platformRole`. Mirrors the two platform-scope seed roles. */
-export type PlatformRole = 'platform-admin' | 'marketplace-moderator';
+/** `organizationStatus`, as far as this build understands it. See `isKnownStatus`. */
+export type KnownOrganizationStatus = 'active' | 'suspended';
+
+/** `platformRole`. The two platform-scope seed roles this build renders by name. */
+export type KnownPlatformRole = 'platform-admin' | 'marketplace-moderator';
 
 export interface OrganizationSummary {
   readonly organization_id: string;
@@ -181,7 +209,7 @@ export interface WhoamiOutput {
   readonly permissions: readonly string[];
 }
 
-export function isKnownStatus(status: string): status is OrganizationStatus {
+export function isKnownStatus(status: string): status is KnownOrganizationStatus {
   return status === 'active' || status === 'suspended';
 }
 
@@ -233,41 +261,95 @@ export const TEMPLATE_LEVEL_DEFAULTS: Readonly<Record<TemplateLevel, string>> = 
 export const MAX_TEMPLATE_NAME_LENGTH = 80;
 export const MAX_TEMPLATE_LABEL_LENGTH = 40;
 
-export type TemplateStatus = 'active' | 'retired';
+/** `templateStatus`, as far as this build understands it. See `isKnownTemplateStatus`. */
+export type KnownTemplateStatus = 'active' | 'retired';
 
-export interface Template {
-  readonly template_id: string;
-  readonly name: string;
-  /** Always all three, filled by Core. Never defaulted on this side. */
-  readonly level_labels: Readonly<Record<TemplateLevel, string>>;
-  /**
-   * Always `active` today. `templateStatus` declares both values and NO ROUTE
-   * SETS IT in version 1 — the field exists now because adding one to an
-   * already-published response later is worse. Kept as a plain string for the
-   * same reason as `OrganizationSummary.status`: narrowing by cast would be this
-   * client asserting Core's guarantee on Core's behalf.
-   */
-  readonly status: string;
-  readonly created_at: string;
-}
+/**
+ * ===========================================================================
+ * TEMPLATES, CONSUMED FROM THE CONTRACT (0037, 0041)
+ * ===========================================================================
+ *
+ * `Template` is the contract's `TemplateOutput`, renamed at the boundary
+ * because this console has always called it a Template and the screens read
+ * better for it. **The shape is not restated** — only the name is local.
+ *
+ * `status` was `string` here, with a comment that has now been ANSWERED rather
+ * than deleted: *"narrowing by cast would be this client asserting Core's
+ * guarantee on Core's behalf."* **That was correct while the generated type was
+ * a bare `'active' | 'retired'`.** `templateStatus` is declared `extensible`,
+ * so the emitted type carries `(string & {})` — an explicit arm for a value
+ * this client was never taught — and adopting it asserts nothing on Core's
+ * behalf. `isKnownTemplateStatus` still narrows, and the neutral branch in
+ * `StatusBadge` is still reachable.
+ *
+ * ⚠ **THIS SAID "the field is still set by no route in version 1, so every
+ * Template is `active`."** `template-lifecycle-v1` publishes
+ * `platform.templates.retire` and `platform.templates.restore`, **both of which
+ * set it.** The sentence was true when written and expired when the routes
+ * landed, with nothing to make it go red.
+ *
+ * **What the `extensible` arm is for does not change**, and that is the part
+ * worth keeping: the tolerant branch exists because a THIRD status may arrive
+ * without a version bump — not because the field was inert.
+ *
+ * `level_labels` is required and complete on the way OUT and a partial subset
+ * on the way IN — the contract distinguishes them and so do the two generated
+ * types. **The reason the request omits blanks rather than sending `''` is not
+ * in the generated type and stays here:** Core refuses a zero-length label with
+ * `out_of_range`, so sending `''` for "leave it default" turns a blank field
+ * into a validation error.
+ *
+ * **`parseTemplate` and `parseListTemplates` are untouched.**
+ */
+export type {
+  TemplateOutput as Template,
+  ListTemplatesOutput,
+  CreateTemplateInput,
+} from '@dudo/contracts/core/platform/template-v1';
 
-export interface ListTemplatesOutput {
-  readonly data: readonly Template[];
-  readonly next_cursor: string | null;
-}
+/**
+ * ===========================================================================
+ * THE LIFECYCLE SHAPES — `template-lifecycle-v1`, consumed not re-declared
+ * ===========================================================================
+ *
+ * **THE TRANSITION IS THE ROUTE, AND THERE IS NO `status` FIELD IN ANY REQUEST
+ * SHAPE HERE.** `UpdateTemplateInput` carries a name and labels; retire and
+ * restore carry NOTHING and are distinguished by their paths. The contract
+ * gives three reasons and the third is the one that decides it:
+ *
+ *   1. a `status` in a PATCH body would let `core.template.update` perform
+ *      `core.template.retire`'s act — **the permission split undone by a field**;
+ *   2. the route names the intent, so an audit trail shows ACTS rather than
+ *      field writes;
+ *   3. **it transmits no lifecycle vocabulary at all.** A status a client SENDS
+ *      is a request enum and must be `closed` (`0041` amendment 1), while the
+ *      same words read on the way back are `extensible` — one value set, two
+ *      policies. **A transition named by a route needs no vocabulary.**
+ *
+ * So this client must never grow a `setTemplateStatus(id, status)`. It would be
+ * correct-looking, would type-check, and would be the exact collapse the
+ * contract spent thirty lines refusing.
+ */
+export type {
+  UpdateTemplateInput,
+  TemplateUsageOutput,
+  SetOrganizationTemplateInput,
+  OrganizationTemplateOutput,
+} from '@dudo/contracts/core/platform/template-lifecycle-v1';
+import type {
+  UpdateTemplateInput,
+  TemplateUsageOutput,
+  SetOrganizationTemplateInput,
+  OrganizationTemplateOutput,
+} from '@dudo/contracts/core/platform/template-lifecycle-v1';
+import type {
+  TemplateOutput as Template,
+  ListTemplatesOutput,
+  CreateTemplateInput,
+  TemplateCountOutput,
+} from '@dudo/contracts/core/platform/template-v1';
 
-export interface CreateTemplateInput {
-  readonly name: string;
-  /**
-   * Any subset of the three levels. OMITTED KEYS ARE OMITTED FROM THE REQUEST,
-   * never sent as an empty string — Core refuses a zero-length label with
-   * `out_of_range`, so sending `''` for "leave it default" would turn a blank
-   * field into a validation error.
-   */
-  readonly level_labels?: Partial<Record<TemplateLevel, string>>;
-}
-
-export function isKnownTemplateStatus(status: string): status is TemplateStatus {
+export function isKnownTemplateStatus(status: string): status is KnownTemplateStatus {
   return status === 'active' || status === 'retired';
 }
 
@@ -287,25 +369,70 @@ export function isKnownTemplateStatus(status: string): status is TemplateStatus 
  * another only by a trailing space is also two Templates an operator cannot tell
  * apart in a list.
  */
-export function templateNameRefusal(value: string): string | null {
-  if (value.length === 0) return 'Give the business type a name.';
+/**
+ * ===========================================================================
+ * ⚠ THE FOUR REFUSALS RETURNED ENGLISH PROSE UNTIL 2026-09-11
+ * ===========================================================================
+ *
+ * These are **field errors** — the sentence an operator reads the moment they
+ * mistype a name — and this is a `.ts` module, so the copy-coverage pin has
+ * never counted one of them. Same blindness that hid sixteen in `api/errors.ts`
+ * and eleven in `api/audit-window.ts`.
+ *
+ * They now return a **key plus the numbers the sentence names**, for the reason
+ * those two modules do: `api/**` must not import `lib/i18n`, and a form's
+ * submit handler has no component to borrow a locale from.
+ *
+ * **THE NUMBERS RIDE ALONG RATHER THAN BEING SPELLED.** `MAX_TEMPLATE_NAME_LENGTH`
+ * and the typed length are code; a numeral typed into two dictionaries is a
+ * second copy of a constant in the files least likely to be re-derived when it
+ * moves (`§12`). The caller fills `{max}` and `{length}` with `fill`.
+ */
+export interface Refusal {
+  readonly key: PlatformMessageKey;
+  /** Numbers the sentence names. Filled by the caller, through `Intl`. */
+  readonly values?: Readonly<Record<string, number>>;
+}
+
+/**
+ * The message keys this module names.
+ *
+ * Declared here as a narrow union rather than imported, and asserted a subset of
+ * `MessageKey` at compile time in `lib/i18n.tsx` — see `audit-window.ts`'s
+ * `WindowMessageKey` for the full reasoning. A key invented here does not build.
+ */
+export type PlatformMessageKey =
+  | 'refusal.templateName.empty'
+  | 'refusal.templateName.padded'
+  | 'refusal.templateName.tooLong'
+  | 'refusal.templateLabel.padded'
+  | 'refusal.templateLabel.tooLong'
+  | 'refusal.displayName.empty'
+  | 'refusal.displayName.padded'
+  | 'refusal.displayName.tooLong'
+  | 'refusal.registration.empty'
+  | 'refusal.registration.tooLong'
+  | 'refusal.registration.pattern';
+
+export function templateNameRefusal(value: string): Refusal | null {
+  if (value.length === 0) return { key: 'refusal.templateName.empty' };
   if (value.trim() !== value) {
-    return 'Remove the spaces from the start or end of the name — Dudo refuses them rather than trimming them.';
+    return { key: 'refusal.templateName.padded' };
   }
   if (value.length > MAX_TEMPLATE_NAME_LENGTH) {
-    return `A name cannot be longer than ${String(MAX_TEMPLATE_NAME_LENGTH)} characters.`;
+    return { key: 'refusal.templateName.tooLong', values: { max: MAX_TEMPLATE_NAME_LENGTH } };
   }
   return null;
 }
 
 /** An empty label is valid input here: it means "leave the default". */
-export function templateLabelRefusal(value: string): string | null {
+export function templateLabelRefusal(value: string): Refusal | null {
   if (value.length === 0) return null;
   if (value.trim() !== value) {
-    return 'Remove the spaces from the start or end of the label.';
+    return { key: 'refusal.templateLabel.padded' };
   }
   if (value.length > MAX_TEMPLATE_LABEL_LENGTH) {
-    return `A label cannot be longer than ${String(MAX_TEMPLATE_LABEL_LENGTH)} characters.`;
+    return { key: 'refusal.templateLabel.tooLong', values: { max: MAX_TEMPLATE_LABEL_LENGTH } };
   }
   return null;
 }
@@ -377,6 +504,37 @@ export function parseWhoami(payload: unknown): WhoamiOutput {
   };
 }
 
+/**
+ * A scalar total, checked rather than cast.
+ *
+ * ===========================================================================
+ * ONE PARSER FOR BOTH COUNTS, AND THE SHARED SHAPE IS THE SECURITY PROPERTY
+ * ===========================================================================
+ *
+ * `organizationCountOutput` and `templateCountOutput` are the same object —
+ * `{ total: number }` — and that sameness is deliberate: `security.md` §2a
+ * constrains an aggregate to **a scalar and nothing else.** No per-status
+ * breakdown, no grouping, no map, **because any of those transposes into the
+ * mapping `0028` Decision 1 refuses.**
+ *
+ * **So a parser that accepted an extra key would be the first step in undoing
+ * that**, and this one reads exactly one field. A future response growing a
+ * `by_status` is a contract change that must be argued for, not a shape this
+ * client silently starts carrying.
+ *
+ * **NEGATIVE AND FRACTIONAL ARE REFUSED.** A count is a cardinality; `-1` as a
+ * sentinel for *unknown* is the shape that makes *"at least N"* come back as a
+ * number an operator reads as a total.
+ */
+export function parseCount(payload: unknown, what: string): { readonly total: number } {
+  const body = requireObject(payload, what);
+  const total = body.total;
+  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) {
+    throw new ShapeError(`${what} field "total" was not a non-negative integer.`);
+  }
+  return { total };
+}
+
 export function parseListOrganizations(payload: unknown): ListOrganizationsOutput {
   const body = requireObject(payload, 'The Organization list response');
   const rows = body.data;
@@ -429,7 +587,20 @@ export function parseListOrganizations(payload: unknown): ListOrganizationsOutpu
 
 export const AUDIT_PATH = `${PLATFORM_BASE_PATH}/audit`;
 
-export type PlatformRoleName = 'platform-admin' | 'marketplace-moderator';
+/*
+ * `PlatformRoleName` WAS DECLARED HERE AND WAS A DUPLICATE OF THE UNION ABOVE.
+ *
+ * Two names for one literal set, in one file, both `'platform-admin' |
+ * 'marketplace-moderator'` — invisible while the other was called `PlatformRole`
+ * and eight hundred lines away, and surfaced by renaming it to
+ * `KnownPlatformRole`. **A duplicated constraint has no citations, so no sweep
+ * finds it** (`workflow.md` §12); it turned up only because the rename forced
+ * the compiler to name every use.
+ *
+ * `isKnownPlatformRole` now narrows to `KnownPlatformRole`, so there is one
+ * definition and the audit feed and the operator roster cannot drift apart on
+ * what a platform role is.
+ */
 export type AuditOutcome = 'succeeded' | 'failed';
 
 /** The seven fields both feeds share. Neither target field is in here. */
@@ -509,7 +680,7 @@ export function isKnownAuditOutcome(value: string): value is AuditOutcome {
   return value === 'succeeded' || value === 'failed';
 }
 
-export function isKnownPlatformRole(value: string): value is PlatformRoleName {
+export function isKnownPlatformRole(value: string): value is KnownPlatformRole {
   return value === 'platform-admin' || value === 'marketplace-moderator';
 }
 
@@ -601,17 +772,44 @@ export const REVOKE_OPERATOR_ACTION_ID = 'platform.operators.revoke';
 export const CREDENTIAL_RESET_PATH = `${PLATFORM_BASE_PATH}/credentials/reset`;
 export const CREDENTIAL_RESET_ACTION_ID = 'platform.credentials.reset';
 
-export interface OperatorSummary {
-  readonly principal_id: string;
-  readonly platform_role: string;
-  /** When platform authority was GRANTED — not when the principal was created. */
-  readonly created_at: string;
-}
-
-export interface ListOperatorsOutput {
-  readonly data: readonly OperatorSummary[];
-  readonly next_cursor: string | null;
-}
+/**
+ * ===========================================================================
+ * THE OPERATOR ROSTER, CONSUMED FROM THE CONTRACT (0037, 0041)
+ * ===========================================================================
+ *
+ * `platform_role` was `string` here, with the same reasoning `status` carried:
+ * narrowing it by cast would be this client asserting Core's guarantee on
+ * Core's behalf, and `RoleBadge` deliberately renders an unrecognised role
+ * neutrally with a screen-reader note.
+ *
+ * **`0041` RESOLVED THAT, AND `isKnownPlatformRole` IS NOT DEAD CODE.**
+ * `platformRole` is declared `extensible`, so the generated type is
+ * `'platform-admin' | 'marketplace-moderator' | (string & {})` — a union with
+ * **an explicit arm for the value this client was never taught.** The tolerant
+ * branch is now the arm the type provides for rather than a branch the type
+ * says is unreachable. **Before the arm existed, adopting the bare union would
+ * have raised the compile-time claim without raising the runtime check.**
+ *
+ * `created_at` is when platform authority was GRANTED, not when the principal
+ * was created — a fact about the field that the generated type cannot carry,
+ * so it stays here.
+ *
+ * **`parseListOperators` is untouched.** It still validates what arrived.
+ */
+export type {
+  OperatorSummary,
+  ListOperatorsOutput,
+} from '@dudo/contracts/core/platform/platform-operators-v1';
+/* Only `ListOperatorsOutput` is named locally — by `parseListOperators` below. */
+import type { ListOperatorsOutput } from '@dudo/contracts/core/platform/platform-operators-v1';
+/*
+ * `0037` requirement 2 — consume the generated type rather than re-declaring
+ * it. `OrganizationSummary` and `ListOrganizationsOutput` above are still local
+ * for their own recorded reasons; this one is new, has no local twin, and there
+ * is no reason to create one.
+ */
+import type { OrganizationCountOutput } from '@dudo/contracts/core/platform/platform-operator-v1';
+export type { OrganizationCountOutput, TemplateCountOutput };
 
 /**
  * NOTE WHAT IS ABSENT AND MUST STAY ABSENT: no identifier, no email, no display
@@ -651,8 +849,31 @@ export function parseListOperators(payload: unknown): ListOperatorsOutput {
    Organization detail — `organization-detail-v1`, accepted
    ------------------------------------------------------------------------- */
 
-/** `membershipRole`. A closed union; Core never emits an unrecognised value. */
-export type MembershipRole = 'owner' | 'member';
+/**
+ * ===========================================================================
+ * THE WIRE TYPE AND THE KNOWN SUBSET ARE DIFFERENT TYPES. THIS IS THE SECOND.
+ * ===========================================================================
+ *
+ * **`0041` splits every `extensible` enum in two, and the split needs two
+ * names.** The contract's `MembershipRole` is the WIRE type — what may ARRIVE,
+ * including a value this build was never taught, which is why the generated
+ * union carries `(string & {})`. **`KnownMembershipRole` is what this build
+ * UNDERSTANDS**, and it is what a type guard must narrow to.
+ *
+ * **NARROWING TO THE WIRE TYPE WOULD BE NARROWING TO NOTHING.** A guard
+ * declared `role is MembershipRole` against an extensible union proves nothing
+ * the caller did not already have — the arm absorbs every string — so the
+ * branch that follows would be believed rather than checked.
+ *
+ * **This union is NOT a restatement of the generated type (`0037` req 2).** It
+ * is the proper subset the generated type deliberately does not express, and it
+ * exists because the contract says a third value is expected: `membershipRole`'s
+ * own `$comment` records that `authorization/roles.ts` is a closed union of two
+ * while `0007` D10 says roles are data, and that `0023`'s reconciliation trigger
+ * has already fired. **A third role is the expected outcome, not a hypothetical**
+ * — so this list must be widened by hand, deliberately, when one lands.
+ */
+export type KnownMembershipRole = 'owner' | 'member';
 
 export interface EmbeddedTemplate {
   readonly template_id: string;
@@ -698,78 +919,100 @@ export interface EmbeddedTemplate {
  * no input shape for this type anywhere in this file, and there must not be: a
  * caller-supplied provenance value is not provenance.
  */
-export interface RegistrationVerification {
-  readonly verified_by_principal_id: string;
-  /** RFC 3339 UTC, exactly three fractional digits. */
-  readonly verified_at: string;
-}
-
-/** One government-issued registration, as returned. */
-export type RegistrationRecord =
-  | { readonly state: 'not_recorded' }
-  | { readonly state: 'not_registered'; readonly declared_at: string }
-  | {
-      readonly state: 'registered';
-      readonly number: string;
-      readonly recorded_at: string;
-      /**
-       * NULL MEANS RECORDED BUT UNVERIFIED, and it is a state this console
-       * renders DISTINCTLY. "A number an operator typed" and "a number an
-       * operator checked against the registry" are the two things the whole
-       * design exists to keep apart.
-       */
-      readonly verification: RegistrationVerification | null;
-    }
-  /**
-   * A STATE THIS BUILD DOES NOT KNOW. Kept rather than refused, so that a
-   * fourth state added to the contract renders as an honest "this console does
-   * not understand this" instead of failing the whole detail page — and so it
-   * can never be mistaken for one of the three above.
-   */
-  | { readonly state: 'unrecognised'; readonly raw: string };
-
-/** One registration, as submitted. NONE of the server-stamped fields. */
-export type RegistrationInput =
-  | { readonly state: 'not_recorded' }
-  | { readonly state: 'not_registered' }
-  | {
-      readonly state: 'registered';
-      readonly number: string;
-      /**
-       * TRUE MEANS: *I have just checked this number against the issuing
-       * registry.* Core stamps the acting operator and the current instant.
-       *
-       * IT IS REQUIRED RATHER THAN DEFAULTING TO FALSE, so the operator makes
-       * the claim or declines it explicitly and no code path here produces a
-       * verification by omission.
-       */
-      readonly verified: boolean;
-    };
-
-/** The three fields, as returned. The whole block, after any change. */
-export interface OrganizationIdentity {
-  /** NULL means no name has ever been recorded. Render the identifier verbatim. */
-  readonly display_name: string | null;
-  readonly commercial_registration: RegistrationRecord;
-  readonly vat_registration: RegistrationRecord;
-}
-
 /**
- * PARTIAL. An omitted field is UNCHANGED; a present field is REPLACED WHOLE.
+ * ===========================================================================
+ * THE IDENTITY SHAPES, CONSUMED FROM THE CONTRACT — THE LAST SWAP (0037, 0041)
+ * ===========================================================================
  *
- * THERE IS NO MERGE INSIDE A REGISTRATION. Sending
- * `{ state: 'registered', number, verified }` replaces the entire record, which
- * is what keeps a verification from surviving a number it does not attest to.
+ * **This one waited longest and for the best reason.** `RegistrationRecord` is
+ * a `oneOf` variant union, not an enum, so `0041` did not reach it: the
+ * generated type had **three** arms while this client deliberately had four.
+ * Adopting it then would have deleted `raw` from the type, turned the panel
+ * that renders it into a compile error, and left deleting a reachable UI state
+ * as the only way to make the build pass — **`0037`'s trap arriving as a
+ * tidy-up, in a diff that only deletes.**
  *
- * `display_name` CANNOT BE SET TO NULL — renaming is permitted, un-naming is
- * not, because null is a legacy state rather than a choice. There is no
- * `| null` on this property and that is the enforcement.
+ * `0041` amendment 2 extended `enumPolicy` to variant sets, and the emitted
+ * type now carries the fourth arm:
+ *
+ *     | { readonly state: 'unrecognised'; readonly raw: string }
+ *
+ * **THE ARM IS THIS FILE'S SHAPE, ADOPTED RATHER THAN INVENTED**, and the
+ * contract's `$comment` says so on its face. The detail that decided it:
+ * `raw` carries the raw **DISCRIMINANT**, never the body — *a client meeting an
+ * unknown variant cannot read that variant's sibling fields*, so a `raw`
+ * holding the whole payload would be an object nothing can narrow, handed to a
+ * screen that is forbidden to act on it.
+ *
+ * **WHAT THE ARM DOES NOT LICENSE, because its new legitimacy invites exactly
+ * this:** `0028` still governs — *a value you do not understand is not a value
+ * you may branch on.* The arm exists so `OrganizationIdentity.tsx` can SAY it
+ * cannot read the state. **It is not a fourth state with behaviour**, and
+ * nothing downstream may treat it as one.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO FACTS THE GENERATED TYPES CANNOT CARRY
+ * ---------------------------------------------------------------------------
+ *
+ * `verification: null` MEANS RECORDED BUT UNVERIFIED, and it is a state this
+ * console renders DISTINCTLY. *"A number an operator typed"* and *"a number an
+ * operator checked against the registry"* are the two things the whole design
+ * exists to keep apart.
+ *
+ * `RegistrationInput.verified` IS REQUIRED RATHER THAN DEFAULTING TO FALSE, so
+ * the operator makes the claim or declines it explicitly and **no code path
+ * here produces a verification by omission.** `true` means *I have just checked
+ * this number against the issuing registry*; Core stamps the acting operator
+ * and the instant.
+ *
+ * ---------------------------------------------------------------------------
+ * AND `registrationInput` IS `closed` WHILE `registrationRecord` IS EXTENSIBLE
+ * ---------------------------------------------------------------------------
+ *
+ * **Same three states, opposite policy, and it is not drift** — `0041`
+ * amendment 1's first live instance. The contract's reason: *"there is no
+ * direction in which a client may send Core a state neither of them has agreed
+ * on; the tolerant reading would have Core accepting an unknown state from an
+ * untrusted caller, which is not tolerance but a validation hole."*
+ *
+ * So the INPUT union is exact and narrowing on it may legitimately use the
+ * generated type. The RESPONSE union is not.
  */
-export interface UpdateOrganizationIdentityInput {
-  readonly display_name?: string;
-  readonly commercial_registration?: RegistrationInput;
-  readonly vat_registration?: RegistrationInput;
-}
+export type {
+  RegistrationVerification,
+  RegistrationRecord,
+  RegistrationInput,
+  OrganizationIdentity,
+  UpdateOrganizationIdentityInput,
+} from '@dudo/contracts/core/platform/organization-identity-v1';
+/* The names this file itself uses — the parsers and the client interface. */
+import type {
+  RegistrationRecord,
+  RegistrationVerification,
+  OrganizationIdentity,
+  UpdateOrganizationIdentityInput,
+} from '@dudo/contracts/core/platform/organization-identity-v1';
+
+/*
+ * `RegistrationInput`, `OrganizationIdentity` and `UpdateOrganizationIdentityInput`
+ * WERE DECLARED HERE. They are consumed from the contract above.
+ *
+ * Two properties of the update route that the generated types state
+ * structurally rather than in prose, kept because the reason is not obvious
+ * from the shape:
+ *
+ * **PARTIAL. An omitted field is UNCHANGED; a present field is REPLACED WHOLE,
+ * and THERE IS NO MERGE INSIDE A REGISTRATION.** Sending
+ * `{ state: 'registered', number, verified }` replaces the entire record —
+ * which is what keeps a verification from surviving a number it does not
+ * attest to.
+ *
+ * **`display_name` CANNOT BE SET TO NULL.** Renaming is permitted, un-naming is
+ * not, because null is a legacy state rather than a choice. **There is no
+ * `| null` on that property in the generated type either, and that absence is
+ * the enforcement** — the contract and this client agree, and now they agree by
+ * construction rather than by two people writing the same thing.
+ */
 
 /**
  * The two bounds, transcribed from `organization-identity-v1.schema.json`.
@@ -814,25 +1057,36 @@ const DISPLAY_NAME_PATTERN = /^[^\s].*[^\s]$|^[^\s]$/s;
  * about data, so refusing locally discloses nothing — the same line the window
  * pre-check and the member-lookup identifier check sit on.
  */
-export function displayNameRefusal(value: string): string | null {
-  if (value === '') return 'A name cannot be empty.';
+export function displayNameRefusal(value: string): Refusal | null {
+  if (value === '') return { key: 'refusal.displayName.empty' };
   if (!DISPLAY_NAME_PATTERN.test(value)) {
-    return 'A name cannot start or end with a space. Type it without the padding rather than relying on Dudo to trim it.';
+    return { key: 'refusal.displayName.padded' };
   }
   if (value.length > MAX_DISPLAY_NAME_LENGTH) {
-    return `A name can be at most ${String(MAX_DISPLAY_NAME_LENGTH)} characters. This one is ${String(value.length)}.`;
+    /*
+     * BOTH NUMBERS TRAVEL. The sentence says what the limit is AND what the
+     * operator typed — *"at most 120 characters. This one is 138."* — because
+     * "too long" without the excess leaves them counting by hand.
+     */
+    return {
+      key: 'refusal.displayName.tooLong',
+      values: { max: MAX_DISPLAY_NAME_LENGTH, length: value.length },
+    };
   }
   return null;
 }
 
-/** Local shape refusal for a registration number. Returns a sentence, or `null`. */
-export function registrationNumberRefusal(value: string): string | null {
-  if (value === '') return 'Type the number, or choose one of the other two states.';
+/** Local shape refusal for a registration number. Returns a key, or `null`. */
+export function registrationNumberRefusal(value: string): Refusal | null {
+  if (value === '') return { key: 'refusal.registration.empty' };
   if (value.length > MAX_REGISTRATION_NUMBER_LENGTH) {
-    return `A registration number can be at most ${String(MAX_REGISTRATION_NUMBER_LENGTH)} characters. This one is ${String(value.length)}.`;
+    return {
+      key: 'refusal.registration.tooLong',
+      values: { max: MAX_REGISTRATION_NUMBER_LENGTH, length: value.length },
+    };
   }
   if (!REGISTRATION_NUMBER_PATTERN.test(value)) {
-    return 'Use letters, digits, spaces and hyphens only, and do not start or end with a space or a hyphen. Dudo records the number as the registry issues it and checks nothing else about its shape.';
+    return { key: 'refusal.registration.pattern' };
   }
   return null;
 }
@@ -915,43 +1169,101 @@ export function parseOrganizationIdentity(payload: unknown, what: string): Organ
   };
 }
 
+/**
+ * ===========================================================================
+ * ORGANIZATION DETAIL, CONSUMED FROM THE CONTRACT (0037, 0041)
+ * ===========================================================================
+ *
+ * `status` is `extensible` and the emitted type carries `(string & {})`, so
+ * `isKnownStatus` still narrows and `StatusBadge`'s neutral branch is the arm
+ * the type provides for rather than one the type calls unreachable.
+ *
+ * THREE FACTS THE GENERATED TYPE CANNOT CARRY, KEPT HERE BECAUSE THEY ARE WHY
+ * THE SCREEN IS SHAPED AS IT IS:
+ *
+ * `display_name` NULL MEANS NO NAME HAS EVER BEEN RECORDED — reachable only for
+ * Organizations created before the field existed. Render `organization_id`
+ * verbatim: *"not a blank, not a dash, not 'Unnamed Organization'."*
+ *
+ * `template` is null when no Template was recorded, which today is every
+ * Organization.
+ *
+ * `member_count` IS A COUNT, NEVER A LIST, AND THE DISTINCTION IS THE RULING.
+ * *"A count does not invert, so it reconstructs nothing about any principal,
+ * while a list over every Organization reconstructs every principal's
+ * Organization list."* An operator can enumerate every Organization, so member
+ * lists over all of them invert to exactly that — which
+ * `core-object-registry.yaml` CO1 forbids by name. **THERE IS NO ROUTE ANYWHERE
+ * THAT RETURNS MEMBER IDENTITIES.** Not one this console has not called — one
+ * that does not exist. A roster is not unbuilt here; it is refused.
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠ `ResolveMemberOutput` IS DELIBERATELY NOT SWAPPED, AND STAYS BELOW
+ * ---------------------------------------------------------------------------
+ *
+ * It comes from this same contract and would have been the obvious thing to
+ * take in the same change. **`membershipRole` carries NO `enumPolicy`** — this
+ * schema declares exactly one, on `status` — so the generator emits a **bare
+ * closed union `'owner' | 'member'`**, while `parseResolveMember` reads the
+ * field with `requireString` and the screen renders an unrecognised role
+ * neutrally.
+ *
+ * **Adopting it would make that tolerant branch dead code by the type system's
+ * reckoning while the runtime can still produce the case** — `0041`'s exact
+ * collision, on a field the sweep has not reached. Reported, not worked around.
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠ AND THE SWAP WAS ATTEMPTED AND REVERTED. THE BLOCKER IS NOT `status`.
+ * ---------------------------------------------------------------------------
+ *
+ * `status` is fine — `extensible`, with the arm. **`RegistrationRecord` is
+ * not.** This client's version has a FOURTH ARM the contract's has not:
+ *
+ *     | { readonly state: 'unrecognised'; readonly raw: string }
+ *
+ * It is not decoration. `parseRegistrationRecord` RETURNS it for any state this
+ * build has never heard of, `OrganizationIdentity.tsx` narrows on it, and it
+ * renders as a visible panel quoting `record.raw` — *"Core reported the state X,
+ * which is newer than this build."*
+ *
+ * **Adopting the generated type deletes `raw` from the type, which turns that
+ * renderer into a compile error, whose only "fix" is deleting a UI state the
+ * runtime still reaches.** `0037`'s trap exactly, one construct along.
+ *
+ * **AND `0041` DOES NOT COVER IT.** That decision governs `enum` — a set of
+ * scalar values. This is a `oneOf` DISCRIMINATED UNION OF OBJECT SHAPES, which
+ * asks the identical open-or-closed question and has no way to answer it. The
+ * client is tolerant; the contract is silent; nothing declares which is right.
+ * **Raised rather than resolved here.**
+ */
 export interface OrganizationDetail {
   readonly organization_id: string;
   readonly status: string;
   readonly created_at: string;
-  /**
-   * NULL MEANS NO NAME HAS EVER BEEN RECORDED — reachable only for
-   * Organizations created before this field existed. Render `organization_id`
-   * verbatim: "not a blank, not a dash, not 'Unnamed Organization'."
-   */
   readonly display_name: string | null;
   readonly commercial_registration: RegistrationRecord;
   readonly vat_registration: RegistrationRecord;
-  /** Null when no Template was recorded, which today is every Organization. */
   readonly template: EmbeddedTemplate | null;
-  /**
-   * A COUNT, NEVER A LIST, AND THE DISTINCTION IS THE RULING.
-   *
-   * "a count does not invert, so it reconstructs nothing about any principal,
-   * while a list over every Organization reconstructs every principal's
-   * Organization list." An operator can enumerate every Organization, so member
-   * lists over all of them invert to exactly that — which
-   * `core-object-registry.yaml` CO1 forbids by name.
-   *
-   * THERE IS NO ROUTE ANYWHERE THAT RETURNS MEMBER IDENTITIES. Not one this
-   * console has not called — one that does not exist. A roster is not unbuilt
-   * here; it is refused.
-   */
   readonly member_count: number;
 }
 
-export interface ResolveMemberOutput {
-  readonly principal_id: string;
-  /** `owner` or `member` — a fact about the relationship, not about the person. */
-  readonly role: string;
-}
+/**
+ * Consumed from the contract (`0037`, `0041`). `membershipRole` is declared
+ * `extensible`, so `role` is `'owner' | 'member' | (string & {})` and the
+ * neutral rendering in `LookupResult` is the arm the type provides for.
+ *
+ * **The role is a fact about the RELATIONSHIP, not about the person** — it is
+ * returned because an operator about to reset a credential should know whether
+ * they are taking over an `owner` or a `member`.
+ *
+ * **`parseResolveMember` is untouched**, and its `requireString` is now
+ * CORRECT rather than merely tolerant: `0041` forbids an `extensible` enum's
+ * parser from rejecting an unlisted value.
+ */
+export type { ResolveMemberOutput } from '@dudo/contracts/core/platform/organization-detail-v1';
+import type { ResolveMemberOutput } from '@dudo/contracts/core/platform/organization-detail-v1';
 
-export function isKnownMembershipRole(role: string): role is MembershipRole {
+export function isKnownMembershipRole(role: string): role is KnownMembershipRole {
   return role === 'owner' || role === 'member';
 }
 
@@ -1144,7 +1456,32 @@ export function isKnownOnboardingWarning(value: string): value is OnboardingWarn
  * chose. That is the failure mode worth designing for: the field starting to
  * matter without anyone revisiting this line.
  */
-export const DISCARDED_WORKSPACE_NAME_PLACEHOLDER = 'Unnamed (naming arrives with organization structure)';
+/*
+ * ⚠ THIS SAID "Unnamed (naming arrives with organization structure)" AND THE
+ * SCHEDULE PROMISE WAS THE PROBLEM.
+ *
+ * **The value is not operator copy** — Core validates and discards it, and no
+ * screen ever renders it — which is why it was left alone through the whole
+ * translation pass. **What changed the answer is this constant's OWN comment**,
+ * a few lines up: it exists in this self-describing form precisely because
+ * somebody contemplated it **reaching storage** if the organization-structure
+ * slice adds the column while this line is still here.
+ *
+ * **`§12` is explicit that a conditional expires the day its condition turns
+ * true — and this one expires into a CUSTOMER'S RECORD**, where nothing sweeps
+ * and nobody is assigned to look. *"Naming arrives with organization
+ * structure"* sitting in a tenant's data is a promise about our roadmap
+ * rendered on their screen.
+ *
+ * **The replacement says what the value IS and where it came from**, and stays
+ * true whether workspace naming ships next month or never. It still reads as
+ * an obvious placeholder rather than a name someone chose, which was the whole
+ * point of the original.
+ *
+ * Still satisfies `workspaceName`: 1–120 characters, no leading or trailing
+ * whitespace.
+ */
+export const DISCARDED_WORKSPACE_NAME_PLACEHOLDER = 'Unnamed (placeholder sent by the platform console)';
 
 export function parseOnboardOrganization(payload: unknown): OnboardOrganizationOutput {
   const what = 'The onboarding response';
@@ -1202,6 +1539,129 @@ export function parseListTemplates(payload: unknown): ListTemplatesOutput {
   return {
     data: Object.freeze(rows.map((row, index) => parseTemplate(row, `Template row ${String(index)}`))),
     next_cursor: requireNullableString(body, 'next_cursor', 'The Template list response'),
+  };
+}
+
+/**
+ * The Template plus how many Organizations currently adopt it.
+ *
+ * **`organizations_using` IS THE READ THAT MAKES A RETIRE DECISION SAFE**, so
+ * the count is validated as a non-negative integer rather than carried through
+ * as whatever arrived. A `"3"` rendered into *"3 Organizations adopt this"*
+ * would look right; a `null` rendered the same way would not, and both are
+ * refused here rather than reaching the sentence an operator acts on.
+ *
+ * The same shape comes back from `retire` and `restore`, which is why this
+ * parser is shared: the transition returns the state it produced.
+ */
+export function parseTemplateUsage(
+  payload: unknown,
+  what = 'The Template usage response',
+): TemplateUsageOutput {
+  const body = requireObject(payload, what);
+  const count = body.organizations_using;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+    throw new ShapeError(`${what} field "organizations_using" was not a non-negative integer.`);
+  }
+  return {
+    template: parseTemplate(body.template, `${what} field "template"`),
+    organizations_using: count,
+  };
+}
+
+/**
+ * ===========================================================================
+ * THE RETIRE / RESTORE RESPONSE, ACROSS A CONTRACT CHANGE THAT IS IN FLIGHT
+ * ===========================================================================
+ *
+ * **SR-14: `organizations_using` is coming OUT of the `update`, `retire` and
+ * `restore` responses**, because it was a census reachable through
+ * `core.template.update` and `core.template.retire` — neither of which is the
+ * permission created to gate one. The contract is amended; **Core has not
+ * implemented it yet and is held until this lands.**
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠ IT IS NOT A FIELD REMOVAL. THE RESPONSE UNWRAPS, AND THAT IS THE WHOLE
+ * DIFFICULTY.
+ * ---------------------------------------------------------------------------
+ *
+ * ```
+ * today   { template: { template_id, name, … }, organizations_using: 3 }
+ * after   { template_id, name, … }
+ * ```
+ *
+ * **A parser that merely made the count OPTIONAL would still fail**, because it
+ * would go on looking for `body.template` — which does not exist in the new
+ * shape. The brief was *"stop requiring the field"*; the measurement says the
+ * nesting changes, and only reading the amended contract showed that.
+ *
+ * So this accepts BOTH, deliberately and temporarily:
+ *
+ *   - a `template` key holding an object  ->  the wrapper, parse what is inside
+ *   - anything else                       ->  the bare Template
+ *
+ * **THE COUNT IS NEVER READ, IN EITHER FORM.** Core still sends it today, and
+ * this client still must not surface a census obtained through a write
+ * permission — **tolerating a field is not the same as consuming it**, and the
+ * security property holds throughout the window rather than only at the end of
+ * it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHEN THIS SHIM COMES OUT — an owner and an event, not a date
+ * ---------------------------------------------------------------------------
+ *
+ * **`web-agent` deletes the wrapper branch once `core-agent` confirms both
+ * routes return the bare Template**, at which point `parseTemplate` is called
+ * directly and this function disappears. The Team Lead holds that sequence.
+ *
+ * **It must not be left in place as harmless.** A parser that accepts two
+ * shapes forever is a parser that cannot tell a correct response from a stale
+ * deployment — `workflow.md` §12's *conditional nobody is assigned to collect*,
+ * which is why the owner and the trigger are named here rather than implied.
+ *
+ * ---------------------------------------------------------------------------
+ * ✅ THE TRIGGER FIRED AND THE SHIM IS GONE — 2026-09-11
+ * ---------------------------------------------------------------------------
+ *
+ * `core-agent` confirmed the new shape **by reading response keys off real
+ * URLs** rather than by reading its own diff:
+ *
+ *     update · retire · restore   [template_id, name, level_labels, status, created_at]
+ *     usage                       [template, organizations_using]   <- unchanged
+ *
+ * **So `retire` and `restore` call `parseTemplate` directly** and the
+ * two-shape function is deleted rather than left standing. It existed for about
+ * an hour, which is what a transition shim should look like.
+ *
+ * **Core went further than the contract required, and it matters here:** the
+ * handlers no longer hold the port whose only use was computing the census —
+ * *"a handler that CAN compute the census and merely does not is one edit from
+ * disclosing it again."* **So the count is now unreachable from these routes
+ * by construction, and re-disclosing it is a deliberate change to the
+ * composition where a reviewer sees it.**
+ *
+ * The paragraphs above are kept unedited because the sequence is the record:
+ * a brief that said *"stop requiring the field"*, an amendment that actually
+ * **unwrapped the response**, and a client that only found the difference by
+ * opening the contract.
+ */
+
+/**
+ * One Organization's adopted Template, after setting or clearing it.
+ *
+ * **`template` IS NULLABLE AND NULL IS A REAL ANSWER** — clearing is an
+ * operation rather than an omission, so a null here means *this Organization
+ * now adopts none*, not *the server did not say*. `requireObject` on a null
+ * would refuse the successful outcome of a legitimate act.
+ */
+export function parseOrganizationTemplate(payload: unknown): OrganizationTemplateOutput {
+  const what = 'The Organization template response';
+  const body = requireObject(payload, what);
+  return {
+    organization_id: requireString(body, 'organization_id', what),
+    template:
+      body.template === null ? null : parseTemplate(body.template, `${what} field "template"`),
+    updated_at: requireString(body, 'updated_at', what),
   };
 }
 
@@ -1560,8 +2020,97 @@ export interface PlatformClient {
     pageSize?: number;
     cursor?: string | null;
   }): Promise<ListTemplatesOutput>;
+
+  /**
+   * ===========================================================================
+   * THE TOTALS THE LIST ROUTES CANNOT STATE
+   * ===========================================================================
+   *
+   * **A paginated list can only say *"at least 25"* until its last page**, so
+   * an operational summary opened cold has no honest total. `0042` exists for
+   * exactly that sentence, and until now these two routes were **built,
+   * registered, verified from real URLs, emitted into `@dudo/contracts` — and
+   * consumed by nothing.**
+   *
+   * **NEITHER TAKES A FILTER, AND THAT IS THE SECURITY SHAPE RATHER THAN AN
+   * ECONOMY.** `security.md` §2a constrains an aggregate to a scalar total —
+   * no grouping, no `by_status` map — because any breakdown transposes into a
+   * mapping, and the mapping is the object `0028` refuses.
+   *
+   * **NEITHER NEEDS A NEW PERMISSION**, and the test is the one that decides
+   * the whole class: *a count is safe exactly when its consumer already holds
+   * enumeration over the counted population.* `core.organization.list` holders
+   * enumerate Organizations deliberately; walking the pages yields the same
+   * number. **Contrast `templateUsage` directly above, which DOES carry its own
+   * permission** — its consumer is a Template reader, who holds no such right.
+   *
+   * **Each is an audited call costing control-plane row-writes**, so they are
+   * read once when a summary opens and never polled.
+   */
+  countOrganizations(): Promise<OrganizationCountOutput>;
+  countTemplates(): Promise<TemplateCountOutput>;
+
   readTemplate(templateId: string): Promise<Template>;
   createTemplate(input: CreateTemplateInput): Promise<Template>;
+
+  /* ---- template-lifecycle-v1 ----------------------------------------- */
+
+  /**
+   * How many Organizations adopt this Template. **The read performed BEFORE
+   * retiring, so the decision is not made blind.**
+   *
+   * ITS OWN PERMISSION, `core.template-adoption.read`, and that is a decision
+   * rather than an oversight — the contract's first draft reused
+   * `core.template.read` and **security review overturned it.** The count
+   * crosses into the Organization population, which a Template reader has no
+   * right to enumerate (`security.md` §2a: *a count is safe exactly when its
+   * consumer already holds enumeration over the counted population*).
+   *
+   * **So an operator may hold Template read and be refused this**, and the
+   * screen must render that as a missing section with a reason rather than as
+   * a zero. A zero is a fact about the platform; a refusal is a fact about the
+   * caller, and showing the second as the first would tell an operator no
+   * Organization adopts a Template that half the platform is using.
+   */
+  templateUsage(templateId: string): Promise<TemplateUsageOutput>;
+  /** Name and labels. **Never status** — see `UpdateTemplateInput`. */
+  updateTemplate(templateId: string, input: UpdateTemplateInput): Promise<Template>;
+  /**
+   * Withdraw a Template from NEW adoption. **Existing adopters keep it and keep
+   * rendering its labels** — this is not a delete and does not orphan anything.
+   *
+   * NO BODY. The transition is the route.
+   *
+   * **RETURNS THE TEMPLATE, NOT A USAGE COUNT — SR-14.** It used to return the
+   * census so the outcome could state what it affected, and that made an
+   * adoption count reachable through `core.template.retire`, which is not the
+   * permission that gates one. **The figure the operator needs is read BEFORE
+   * the act, from `platform.templates.usage`, which is where the decision is
+   * made anyway.**
+   */
+  retireTemplate(templateId: string): Promise<Template>;
+  /**
+   * The inverse, and **a SEPARATE ROUTE rather than the other half of a toggle**
+   * — *"a toggle's audit record cannot say which direction it went without
+   * reading the previous state."*
+   *
+   * It shares `core.template.retire`'s permission BY DECISION
+   * (`theRetirementRuling`), not by copy-paste: restore exists because without
+   * it *"a mistaken retirement spends the Template's unique name permanently."*
+   * Whoever may retire must be able to undo it.
+   *
+   * **Returns the Template, for the same reason retire does — SR-14.**
+   */
+  restoreTemplate(templateId: string): Promise<Template>;
+  /**
+   * Set or CLEAR an Organization's Template. **Clearing is a real operation,
+   * not an empty update** — `{ template_id: null }` is sent deliberately.
+   */
+  setOrganizationTemplate(
+    organizationId: string,
+    input: SetOrganizationTemplateInput,
+  ): Promise<OrganizationTemplateOutput>;
+
   onboardOrganization(input: OnboardOrganizationInput): Promise<OnboardOrganizationOutput>;
   readOrganization(organizationId: string): Promise<OrganizationDetail>;
   /**
@@ -1624,11 +2173,65 @@ export interface ConfirmedSubmission {
   readonly reauthDerivedValue: string;
 }
 
-export interface RevokeOperatorOutput {
-  readonly principal_id: string;
-  readonly was_self: boolean;
-  readonly remaining_operator_count: number;
-}
+/**
+ * ===========================================================================
+ * THE FIRST GENERATED TYPE THIS CONSOLE CONSUMES (ADR 0037, ADR 0040)
+ * ===========================================================================
+ *
+ * It was declared here by hand until 2026-09-09, restating a shape the
+ * contract already publishes. **`0037` requirement 2: generated types are
+ * consumed, never re-declared** — a hand-written type restating a generated one
+ * is the defect that ADR exists to remove, arriving one layer up.
+ *
+ * **The import path mirrors the contract path**, so a reader holding this line
+ * knows which file to open without resolving anything:
+ *
+ *     packages/contracts/core/platform/platform-operators-v1.contract.yaml
+ *     @dudo/contracts/core/platform/platform-operators-v1
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS SHAPE WENT FIRST — AND THE REST HAVE SINCE FOLLOWED
+ * ---------------------------------------------------------------------------
+ *
+ * **It was the only shape on this surface with no enum in it.** `0041` requires
+ * every enum to declare whether it is `closed` or `extensible`, and an
+ * `extensible` one must emit an explicit unknown arm. **Before that sweep, the
+ * generated `status` and `platform_role` types were bare closed unions**, and
+ * adopting one would have made this console's tolerant branches dead code by
+ * the type system's reckoning **while the runtime could still produce the
+ * case** — raising the compile-time claim without raising the check.
+ *
+ * ⚠ **THIS PARAGRAPH LISTED FIVE SHAPES AS "STILL HAND-WRITTEN, ON PURPOSE AND
+ * TEMPORARILY". ALL FIVE ARE NOW SWAPPED, AND SO IS `RegistrationRecord`.**
+ * Corrected 2026-09-09. A comment describing a temporary state is one nothing
+ * goes red about when the state ends — `workflow.md` §12, written by the author
+ * of the temporary state, one swap later. **The word "temporarily" is what made
+ * it an obligation nobody was assigned to collect.**
+ *
+ * The order it actually went in, and the reason is the same each time — the arm
+ * had to exist before the type could be adopted: this shape (no enum), then
+ * `Template` and the operator roster (scalar enums declared `extensible`), then
+ * `ResolveMemberOutput` (`membershipRole`), then **`RegistrationRecord` last**,
+ * because it is a `oneOf` variant union and needed `0041` amendment 2 before it
+ * had an unknown arm at all.
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠ AND `parseRevokeOperator` BELOW IS UNTOUCHED. IT IS NOT DUPLICATION.
+ * ---------------------------------------------------------------------------
+ *
+ * **The generated type says what the contract PROMISES. The parser checks what
+ * ARRIVED.** Deleting the second because the first exists keeps the
+ * compile-time claim and drops the runtime check — the wrong half to keep, in a
+ * diff that only deletes (`0037`).
+ *
+ * **Generation makes the parser MORE necessary, not less.** Before, this
+ * client's shape and the server's response were two independent statements and
+ * a mismatch had two chances to look odd. Now the type is derived from the same
+ * contract the server was built against, so **a wrong contract produces a
+ * client and a server that agree with each other and with nothing real.**
+ */
+export type { RevokeOperatorOutput } from '@dudo/contracts/core/platform/platform-operators-v1';
+import type { RevokeOperatorOutput } from '@dudo/contracts/core/platform/platform-operators-v1';
 
 export interface ResetCredentialOutput {
   readonly principal_id: string;
@@ -1734,8 +2337,13 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
        *
        * The route declares `fields: ['name']` and `objectFields: ['level_labels']`
        * and Core refuses any undeclared field, so there is no `template_id` and
-       * no `status` here — the operator chooses neither, and no route sets
-       * `status` in version 1.
+       * no `status` here — the operator chooses neither ON CREATE.
+       *
+       * ⚠ This used to add "and no route sets `status` in version 1", which is
+       * now false: `retire` and `restore` both set it. **The reason this
+       * request omits it is unchanged and is the narrower one** — the route
+       * declares two fields and Core refuses a third. Status is changed by its
+       * own routes, not by widening this one.
        *
        * A LABEL THE OPERATOR LEFT BLANK IS OMITTED, NOT SENT AS `''`. Core
        * refuses a zero-length label with `out_of_range`, so sending an empty
@@ -1753,6 +2361,115 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
         return parseTemplate(
           await platformRequest(TEMPLATES_PATH, { method: 'POST', body }, options.fetchImpl),
           'The created Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async templateUsage(templateId) {
+      try {
+        return parseTemplateUsage(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}/usage`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async updateTemplate(templateId, input) {
+      /*
+       * A PARTIAL PATCH, AND AN OMITTED FIELD MEANS "LEAVE IT". Sending
+       * `name: undefined` would serialise to nothing, but sending `name: ''`
+       * would be a request to set an empty name, which Core refuses — so a
+       * field the operator did not edit is not in the body at all.
+       *
+       * `level_labels` is a WHOLE-BLOCK replacement when present, matching the
+       * generated `LevelLabels` shape. A blank label inside it is omitted for
+       * the same reason it is on create: omission selects the default, `''`
+       * is `out_of_range`.
+       */
+      const body: Record<string, unknown> = {};
+      if (input.name !== undefined) body.name = input.name;
+      if (input.level_labels !== undefined) {
+        const labels: Record<string, string> = {};
+        for (const [level, value] of Object.entries(input.level_labels)) {
+          if (typeof value === 'string' && value !== '') labels[level] = value;
+        }
+        if (Object.keys(labels).length > 0) body.level_labels = labels;
+      }
+      try {
+        return parseTemplate(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}`,
+            { method: 'PATCH', body },
+            options.fetchImpl,
+          ),
+          'The updated Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    /*
+     * RETIRE AND RESTORE SEND NO BODY, AND THAT IS THE CONTRACT RATHER THAN AN
+     * ECONOMY. "There is no `status` field in any request shape in this
+     * contract" — the path names the transition, so the audit record says
+     * "retired" instead of "updated status to retired", and no lifecycle
+     * vocabulary crosses the wire in the request direction at all.
+     *
+     * They are DELIBERATELY two methods for two routes. One `setStatus` taking
+     * a direction would type-check, read as tidier, and re-merge the two audit
+     * entries the split exists to keep apart.
+     */
+    async retireTemplate(templateId) {
+      try {
+        return parseTemplate(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}/retire`,
+            { method: 'POST' },
+            options.fetchImpl,
+          ),
+          'The retired Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async restoreTemplate(templateId) {
+      try {
+        return parseTemplate(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}/restore`,
+            { method: 'POST' },
+            options.fetchImpl,
+          ),
+          'The restored Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async setOrganizationTemplate(organizationId, input) {
+      /*
+       * `template_id` IS ALWAYS SENT, INCLUDING WHEN IT IS NULL. Clearing is an
+       * operation; omitting the field would be a request that changes nothing
+       * and would read to Core as an empty patch rather than as "adopt none".
+       */
+      try {
+        return parseOrganizationTemplate(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}/template`,
+            { method: 'PATCH', body: { template_id: input.template_id } },
+            options.fetchImpl,
+          ),
         );
       } catch (thrown) {
         throw asApiError(thrown);
@@ -1947,8 +2664,22 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
       if (input.vat_registration !== undefined) body.vat_registration = input.vat_registration;
 
       if (Object.keys(body).length === 0) {
+        /*
+         * ⚠ THE ONLY `invalid_argument` THIS CLIENT BUILDS, AND IT CARRIES ITS
+         * OWN MESSAGE KEY.
+         *
+         * `errorBodyKey` returns `null` for `invalid_argument` on the grounds
+         * that **Core knows which field and this console does not** — true of
+         * every other instance and false of this one, which never reached Core.
+         * Without the key, the screen would fall through to `message` and
+         * render an English sentence written here.
+         *
+         * `message` is kept for `Error.message`, which is what a stack trace
+         * shows.
+         */
         throw new ApiError({
           code: 'invalid_argument',
+          messageKey: 'error.body.nothingChanged',
           message:
             'Nothing was changed, so nothing was sent. Editing a field and saving it unchanged ' +
             'would still spend five of this business’s daily writes.',
@@ -2121,6 +2852,39 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
             { method: 'GET' },
             options.fetchImpl,
           ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    /*
+     * THE TWO COUNTS. **No query string of any kind** — not even an empty
+     * `pageQuery` — because these routes declare *"no body, no query
+     * parameters, no path parameters"*, and the platform class refuses an
+     * undeclared field BEFORE AUTHENTICATION. Sending `?` would fail every
+     * call on a route whose whole purpose is a summary opening cleanly.
+     */
+    async countOrganizations() {
+      try {
+        return parseCount(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/count`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+          'The Organization count response',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async countTemplates() {
+      try {
+        return parseCount(
+          await platformRequest(`${TEMPLATES_PATH}/count`, { method: 'GET' }, options.fetchImpl),
+          'The business type count response',
         );
       } catch (thrown) {
         throw asApiError(thrown);

@@ -63,9 +63,18 @@ import {
   ORGANIZATION_UPDATE_ROW_WRITES,
   PLATFORM_OPERATOR_ROW_WRITES,
   TEMPLATE_ROW_WRITES,
+  TEMPLATE_STATUS_ROW_WRITES,
+  TEMPLATE_UPDATE_ROW_WRITES,
 } from '../identity/control-plane-admission.ts';
 import type { TemplateStore } from './template-store.ts';
-import { normalizeTemplateName, parseTemplateCreate, toTemplateOutput } from './templates.ts';
+import type { TemplateRecord, TemplateStatus } from './templates.ts';
+import {
+  TEMPLATE_STATUSES,
+  normalizeTemplateName,
+  parseTemplateCreate,
+  parseTemplateUpdate,
+  toTemplateOutput,
+} from './templates.ts';
 import {
   applyIdentityUpdate,
   changedIdentityFieldNames,
@@ -624,23 +633,36 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
       return err(internal());
     }
     // =========================================================================================
-    // *** EXACTLY ONE OF `target_identifier` AND `identifier`. PHASE 1 OF A TWO-PHASE RENAME. ***
+    // *** PHASE 3 HAS LANDED. `identifier` IS NO LONGER DECLARED ON THE ROUTE, SO IT CANNOT
+    // *** REACH THIS FUNCTION — AND THE REFUSAL BELOW IS KEPT ANYWAY, DELIBERATELY.
+    // `docs/decisions/0034`, discharging `OD-5`. Corrected 2026-09-09; the paragraph this replaces
+    // said *"both are declared on the route"*, which stopped being true in the same change.
     // =========================================================================================
     //
-    // `target_identifier` is the destination; `identifier` is deprecated and its removal is `OD-5`.
-    // Both are declared on the route because the class refuses an undeclared field before
-    // authentication, so publishing only the new name would refuse the field the deployed console
-    // sends.
+    // WHAT IS TRUE NOW: `platform-routes.ts` declares `fields: ['target_identifier']` and the
+    // platform class refuses an undeclared field BEFORE authentication. So `body.identifier` is
+    // `undefined` on every request that reaches here, `legacy` is always `undefined`, and the
+    // both-present branch cannot fire. **A straggler sending the old name is refused by the class
+    // with `invalid_argument` — loud, recoverable and immediately diagnosable**, which is the
+    // residual risk `0034` priced rather than assumed away.
+    //
+    // *** SO WHY IS THE DEAD BRANCH STILL HERE. IT IS NOT AN OVERSIGHT AND IT IS NOT TIDINESS
+    // *** DEFERRED. *** Deleting it and reading `body.target_identifier` directly would be fewer
+    // lines and would change what happens if `identifier` ever returned to the route table: the
+    // field would be **silently ignored** instead of refused. On the route that leads to a
+    // credential reset, *"if the two values differ, choosing silently is choosing which principal
+    // to resolve"* — and ignoring is choosing. **This branch costs one comparison and converts a
+    // future silent-wrong into a loud refusal, so it is a second layer rather than dead weight.**
     //
     // **BOTH PRESENT IS REFUSED. NEITHER PRESENT IS REFUSED. NEITHER IS SILENTLY PREFERRED.**
-    // A route that quietly prefers one lets a client send the wrong name forever and never learn —
-    // and **if the two values differ, choosing silently is choosing which principal to resolve**,
-    // on the route that leads to a credential reset. Refusing has a known-failing input; preferring
-    // is a behaviour nobody would ever write a case for.
+    // The first of those three is now unreachable; the second and third are live and are what the
+    // shape check below enforces.
     //
-    // THE CONTRACT'S `oneOf` EXPRESSES THIS AND DOES NOT ENFORCE IT — nothing here executes JSON
-    // Schema (`packages/contracts/README.md`). It is mechanical and diffable where prose is
-    // neither, **and it is still a rule this function has to be.**
+    // WHAT THE CONTRACT SAYS AFTER PHASE 3: `resolveMemberInput` publishes one property and
+    // `required: ["target_identifier"]`. The `oneOf` that expressed exactly-one over two names came
+    // out in the same change, per `OD-5`. It never executed here in any case — nothing in this
+    // repository runs JSON Schema (`packages/contracts/README.md`) — so the refusal was always a
+    // rule this function had to write, and still is.
     const target = body.target_identifier;
     const legacy = body.identifier;
     if (target !== undefined && legacy !== undefined) {
@@ -664,7 +686,19 @@ function resolveMember(dependencies: { readonly members: MemberResolutionService
       // IT ALSO MEANS A MALFORMED IDENTIFIER COSTS NO TENANT WRITE, which is the difference
       // between a validation floor and a rate limit and is worth being clear about — it bounds
       // garbage, not probing.
-      return err(invalidArgument([detail('identifier', 'must_be_a_submittable_identifier')]));
+      //
+      // *** THE FIELD NAME IS `target_identifier`, AND IT SAID `identifier` UNTIL 2026-09-09. ***
+      // That was a live client-facing defect rather than documentation rot: after phase 3 the only
+      // field this route accepts is `target_identifier`, so a caller sending a malformed one — or
+      // an empty body — was told that a field it cannot send and has never heard of was bad. An
+      // error naming a field outside the request shape is unactionable, and it is exactly the kind
+      // of residue `workflow.md` §12 is about: nothing turned red, because the assertion covering
+      // it was green ON THE OLD NAME.
+      //
+      // IT COVERS BOTH REMAINING FAILURE MODES AND THE NAME IS RIGHT FOR EACH: a present-but-
+      // malformed `target_identifier`, and NEITHER FIELD PRESENT — where `target_identifier` is
+      // the only field there is to name.
+      return err(invalidArgument([detail('target_identifier', 'must_be_a_submittable_identifier')]));
     }
 
     const resolved = await dependencies.members.resolve({
@@ -1684,6 +1718,46 @@ function resetCredential(dependencies: { readonly reset: CredentialResetService 
   };
 }
 
+/**
+ * ===========================================================================================
+ * READ THE OPTIONAL `status` FILTER. `template-v1`'s `listFilterAmendment`, `templateStatusFilter`.
+ * ===========================================================================================
+ *
+ * *** `closed`, NOT `extensible`, AND THAT IS THE WHOLE RULE RATHER THAN A PREFERENCE. ***
+ * `0041` amendment 1: **`extensible` is a claim about what the SERVER sends, so a REQUEST enum is
+ * always `closed`.** A client reading a status must survive one it was never taught; a client
+ * FILTERING on one may not invent it, because the tolerant reading would have Core accepting an
+ * unrecognised value from a caller and deciding what to do with it.
+ *
+ * SO AN UNRECOGNISED VALUE IS `invalid_argument` AND IS NEVER IGNORED. An ignored filter returns
+ * the UNFILTERED list — every retired Template included — to a caller that believes it asked for
+ * active ones. **That is the picker ambiguity this parameter exists to close, delivered by the
+ * parameter meant to close it.**
+ *
+ * `templateStatusFilter` AND `templateStatus` CARRY THE IDENTICAL VALUE SET AND OPPOSITE POLICIES,
+ * declared as a mutual `enumPolicyDivergence` in the schema. That is not drift; it is the one case
+ * `0041` amendment 1 identifies where a duplicate-policy check is wrong to complain.
+ *
+ * ABSENT MEANS UNFILTERED — today's behaviour exactly, so a caller that ignores this sees nothing
+ * different. **The default that matters is the CLIENT's**, and both clients send `status=active`.
+ */
+function readTemplateStatusFilter(
+  query: ReadonlyMap<string, string>,
+): Result<TemplateStatus | null> {
+  const raw = query.get('status');
+  if (raw === undefined) {
+    return ok(null);
+  }
+  const matched = TEMPLATE_STATUSES.find((candidate) => candidate === raw);
+  if (matched === undefined) {
+    // THE PARAMETER NAME AND A STABLE TOKEN, NEVER THE VALUE — the same discipline every refusal
+    // in this class keeps, and it matters more here since SR-8: a rejected value could carry a
+    // bidi override into a log line.
+    return err(invalidArgument([detail('status', 'unknown_status')]));
+  }
+  return ok(matched);
+}
+
 /** List Templates. Keyset paging, identical in shape to the Organization list. */
 function listTemplates(dependencies: {
   readonly templates: TemplateStore;
@@ -1699,11 +1773,29 @@ function listTemplates(dependencies: {
     if (!offered.ok) {
       return err(offered.error);
     }
+    const status = readTemplateStatusFilter(context.query);
+    if (!status.ok) {
+      return err(status.error);
+    }
     const nowMs = dependencies.clock.nowMs();
+    // ===========================================================================================
+    // *** THE FILTER JOINS THE CURSOR SCOPE, AND OMITTING IT WOULD BE A SILENT WRONG PAGE. ***
+    // ===========================================================================================
+    //
+    // `PlatformCursorBinding.scope` says so in terms: *"Callers build it from the route id plus
+    // every filter that affects the result set, so a filter added later that is not in the scope is
+    // a defect of the same shape this field exists to close."* **This is that later filter, and
+    // this line is the obligation being collected rather than noticed.**
+    //
+    // WHAT IT PREVENTS: page 1 of `status=active`, then page 2 with the filter dropped. The anchor
+    // is still a valid template id, the signature still verifies, and the caller receives an
+    // unfiltered page resumed from a position in the filtered one — **skipping every retired
+    // Template that sorts before the anchor, with no error anywhere.** A wrong page that looks
+    // exactly like a right one.
     const binding = {
       principalId: context.authority.principalId,
       pageSize: pageSize.value,
-      scope: 'platform.templates.list',
+      scope: ['platform.templates.list', status.value ?? ''].join(' '),
     };
     let anchor: string | null = null;
     if (offered.value !== null) {
@@ -1715,7 +1807,7 @@ function listTemplates(dependencies: {
     }
 
     const limit = Math.min(pageSize.value + 1, PLATFORM_MAX_PAGE_SIZE + 1);
-    const rows = await dependencies.templates.list(limit, anchor);
+    const rows = await dependencies.templates.list(limit, anchor, status.value);
     if (!rows.ok) {
       return err(rows.error);
     }
@@ -1764,6 +1856,601 @@ function readTemplate(dependencies: { readonly templates: TemplateStore }) {
       return err(notFound());
     }
     return ok({ body: toTemplateOutput(found.value), target: NO_TARGET });
+  };
+}
+
+/**
+ * ===========================================================================================
+ * THE TWO COUNTS. `docs/decisions/0042` · `platform-operator-v1` · `template-v1`.
+ * ===========================================================================================
+ *
+ * *** EACH RETURNS A SCALAR `total` AND NOTHING ELSE, AND THAT IS THE SHAPE CONSTRAINT RATHER THAN
+ * A MINIMAL IMPLEMENTATION. *** No breakdown, no grouping, no `by_status` map, no per-population
+ * figure, no filter. **Each of those transposes into a MAPPING, and the mapping is what `0028`
+ * Decision 1 refuses.** A count is one number; the moment it is keyed by anything it has stopped
+ * being a count and become a table.
+ *
+ * *** NEITHER TAKES A NEW PERMISSION, AND THE TEST THAT DECIDES IT IS `security.md` §2a: a count is
+ * safe exactly when its consumer already holds enumeration over the counted population. *** A
+ * `core.organization.list` holder enumerates every Organization at `sensitive`; a
+ * `core.template.list` holder enumerates every Template. **Neither count reaches past its
+ * consumer's existing right** — walking the pages yields the same number, more slowly and at an
+ * audit row per page.
+ *
+ * *** THE AUDIT RECORD IS WHY THESE ROUTES ARE PERMITTED AT ALL, NOT AN OVERHEAD ON THEM. ***
+ * `0042`'s argument inverts the usual instinct: **counting by enumeration is indistinguishable from
+ * ordinary browsing**, so 365 identical count entries in the trail are a clearer signal than 365
+ * bursts of paginated reads. **Refusing the route would keep the capability, remove the audit
+ * clarity, and charge an audit row per page for the privilege.** `dispatchPlatformRoute` writes
+ * that record for every route in the class, which is why `maxRowWrites` is 2 on a read.
+ *
+ * ZERO IS THE ORDINARY ANSWER AND NEVER A `not_found`. An empty platform is not a missing one, and
+ * it is the ordinary first day.
+ *
+ * NO TARGET on either. A total names neither an Organization nor a principal — `createTemplate`'s
+ * reasoning, and `0025` Decision 5 permits only those two kinds in the operator log's target
+ * columns.
+ */
+function countOrganizations(dependencies: { readonly store: PlatformOperatorStore }) {
+  return async (): Promise<Result<PlatformRouteOutcome>> => {
+    const total = await dependencies.store.countOrganizations();
+    if (!total.ok) {
+      return err(total.error);
+    }
+    return ok({ body: { total: total.value }, target: NO_TARGET });
+  };
+}
+
+function countTemplates(dependencies: { readonly templates: TemplateStore }) {
+  return async (): Promise<Result<PlatformRouteOutcome>> => {
+    // NO `status` FILTER IS READ, AND THE ROUTE DECLARES NO QUERY PARAMETER — so the class refuses
+    // `?status=active` with `invalid_argument` before this runs. **A total that accepted a filter
+    // would be a different number under the same name.** A filtered count is a separate operation
+    // with a separate name, not a parameter on this one.
+    const total = await dependencies.templates.count();
+    if (!total.ok) {
+      return err(total.error);
+    }
+    return ok({ body: { total: total.value }, target: NO_TARGET });
+  };
+}
+
+/**
+ * Read a Template and how many Organizations have adopted it.
+ *
+ * *** IT HAS ITS OWN PERMISSION AND MUST NOT BE FOLDED BACK INTO `core.template.read`. ***
+ * Security review overturned exactly that reuse: `core.template.list` is also a read, so a holder
+ * of template read-plus-list would **enumerate every Template and sum the counts** — the exact
+ * number of Organizations holding any Template, and polled over time, a customer growth rate.
+ * *"Reading a Template and counting its adopters are different decisions."*
+ *
+ * A RATE LIMIT IS NOT A SUBSTITUTE AND THE CONTRACT SAYS WHY: *"the census vector is LONGITUDINAL,
+ * NOT BURST. One call a day for a year is rate-limited by nothing and yields a growth curve."*
+ *
+ * `not_found` IS AN HONEST `not_found`, for `readTemplate`'s reason — copy the reasoning, not the
+ * habit.
+ */
+function readTemplateUsage(dependencies: {
+  readonly templates: TemplateStore;
+  readonly store: PlatformOperatorStore;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const templateId = context.pathParams.template_id;
+    if (templateId === undefined) {
+      return err(internal());
+    }
+    const found = await dependencies.templates.findById(templateId);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    if (found.value === null) {
+      return err(notFound());
+    }
+
+    // =========================================================================================
+    // *** THE COUNT IS BUILT HERE AND NOWHERE ELSE. THIS SHAPE IS NOT SHARED, DELIBERATELY. ***
+    // SR-14, 2026-09-11.
+    // =========================================================================================
+    //
+    // It WAS shared. `templateUsageBody` was called by this handler, by `updateTemplate` and by
+    // `setTemplateStatus` — **so the census permission created to gate it was obtainable through
+    // two permissions that are not it**, `core.template.update` and `core.template.retire`, neither
+    // of whose holders enumerates Organizations (`security.md` §2a).
+    //
+    // *** THE DEFECT WAS NEVER THAT THREE HANDLERS WERE WRONG. IT WAS THAT ONE BODY CARRIED A
+    // PERMISSION OBLIGATION NOTHING IN THE CODE EXPRESSED. *** That is why a comment at a call site
+    // was never going to hold it, and why the repair is INLINING rather than renaming: **a shared
+    // helper with one caller is a loaded gun with the safety recorded in a contract**, and the next
+    // handler that needs to return a Template would find it, use it, and disclose the count under
+    // whatever permission that handler carries.
+    //
+    // A NAME THAT CARRIES THE OBLIGATION — `templateAdoptionBody` — WAS THE ALTERNATIVE AND IS
+    // WEAKER: it discourages the next caller where inlining leaves nothing to find.
+    // `architecture.md` §3a prefers making the wrong thing unrepresentable over making it
+    // unattractive, and with one caller the sharing bought nothing to weigh against that.
+    //
+    // *** THE STRONGEST FORM IS UNAVAILABLE AND THE REASON IS SR-19. *** A body requiring a value
+    // only a handler holding `core.template-adoption.read` can mint would make a wrong caller fail
+    // to compile — §3a proper. **`PlatformRouteContext` does not carry the authorized permission**,
+    // so there is nothing to mint from. When SR-19 lands, this is the second thing it buys.
+    const adopters = await dependencies.store.countOrganizationsUsingTemplate(found.value.templateId);
+    if (!adopters.ok) {
+      return err(adopters.error);
+    }
+    // ZERO IS THE ORDINARY ANSWER AND NOT AN EMPTY STATE. It means the Template may be retired with
+    // nothing stranded, which is the most useful thing this number can say.
+    //
+    // A COUNT AND NEVER THE ORGANIZATIONS. `countOrganizationsUsingTemplate` returns a `number`, so
+    // the port's type is what enforces that rather than this function's restraint.
+    //
+    // NO TARGET. A Template names neither an Organization nor a principal, so there is nothing for
+    // the operator log's target columns to hold — `createTemplate`'s reasoning, unchanged.
+    return ok({
+      body: { template: toTemplateOutput(found.value), organizations_using: adopters.value },
+      target: NO_TARGET,
+    });
+  };
+}
+
+/**
+ * ===========================================================================================
+ * EDIT A TEMPLATE. `template-lifecycle-v1` -> `platform.templates.update` · `template-v1` TM-1.
+ * ===========================================================================================
+ *
+ * *** THE BOUNDARY CHECK IS DUE AGAIN HERE RATHER THAN SETTLED. *** `templates.ts`'s rule is that
+ * **no identifier in `platform/core/**` may name a business type**, and the contract names this
+ * route as where it erodes: *"the update path is where a `switch (template.name)` would first look
+ * reasonable."* **Nothing in this function reads what a name says.** It is carried, normalised for
+ * collision, and never inspected.
+ *
+ * *** A RETIRED TEMPLATE IS NOT EDITED, AND THE REFUSAL IS NOT PEDANTRY. *** Existing adopters are
+ * rendering its labels; changing those would alter what a tenant sees on a Template the platform has
+ * already stopped standing behind. *"Restore it first, edit it, retire it again — three deliberate
+ * acts, each audited, rather than one that quietly reaches adopters of a withdrawn configuration."*
+ *
+ * THE ORDER IS READ, PARSE, RESERVE, WRITE — `updateOrganizationIdentity`'s order, for its reason.
+ * The read is not optional: the merge base for `level_labels` is **what the Template currently
+ * says**, not the platform defaults, and that is the case the contract asks QA to prove separately.
+ *
+ * *** THE READ IS STALE BY THE TIME THE WRITE LANDS AND THE STORE RE-ASKS BOTH QUESTIONS. *** The
+ * outcomes below are not defensive duplication; they are the only layer with no window
+ * (`architecture.md` §3a). A retire or a competing rename in that gap is answered correctly.
+ */
+/**
+ * *** NO `PlatformOperatorStore`, AND ITS ABSENCE IS THE ENFORCEMENT RATHER THAN A TIDY-UP. ***
+ * SR-14, 2026-09-11.
+ *
+ * This handler held one until the census came out of its response, and **the only thing it used it
+ * for was `countOrganizationsUsingTemplate`.** Leaving it would mean a handler that CAN compute the
+ * count and merely does not — one edit away from disclosing it again, under a permission whose
+ * holder enumerates no Organizations.
+ *
+ * **Removing it converts *"we stopped calling it"* into *"it cannot be called"***, which is
+ * `architecture.md` §3a's preference for the unrepresentable over the merely absent. The dependency
+ * list is the reach; a route that should not disclose a census should not be handed the port that
+ * computes one.
+ */
+function updateTemplate(dependencies: {
+  readonly templates: TemplateStore;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly clock: Clock;
+}) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const templateId = context.pathParams.template_id;
+    if (templateId === undefined) {
+      return err(internal());
+    }
+
+    // ---- 1. READ. The merge base, and the honest 404.
+    const found = await dependencies.templates.findById(templateId);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    if (found.value === null) {
+      return err(notFound());
+    }
+    const current = found.value;
+    if (current.status === 'retired') {
+      return err(failedPrecondition());
+    }
+
+    // ---- 2. PARSE, against the STORED RECORD. A request that changes nothing is refused here.
+    //
+    // *** THE MERGE MOVED INTO THE PARSER WITH SR-23'S NO-OP CHECK, AND HAD TO. *** This handler
+    // used to resolve the name — `update.value.name ?? current.name` — which meant *did anything
+    // change* could not be asked where the request was validated. **Both halves of one rule now
+    // live in one function**, and `TemplateUpdate` is proof that something changed rather than
+    // proof that something was sent.
+    //
+    // WHAT IS STILL REFUSED HERE AND NOT THERE: a malformed name is a shape fault, answered as one.
+    // `{"name": 42}` is `must_be_a_string`, never `must_change_something`.
+    const update = parseTemplateUpdate(
+      { name: body.name, labels: context.objects.level_labels },
+      current,
+    );
+    if (!update.ok) {
+      return err(update.error);
+    }
+    // ALREADY RESOLVED. The statement still writes all five columns, which is what makes a
+    // case-only rename an ordinary write — and it is why the store excludes the row being updated
+    // from the uniqueness comparison. **`School` -> `SCHOOL` changes what every adopting tenant
+    // reads and produces an identical collision key**, so the raw comparison above admits it and
+    // the self-exclusion below stops it colliding with itself.
+    const name = update.value.name;
+
+    // ---- 3. RESERVE, before the write.
+    const nowMs = dependencies.clock.nowMs();
+    const admitted = await dependencies.admission.reserve({
+      principalId: context.authority.principalId,
+      estimatedRowWrites: TEMPLATE_UPDATE_ROW_WRITES,
+      nowMs,
+    });
+    if (!admitted.ok) {
+      return err(admitted.error);
+    }
+    if (admitted.value.kind === 'deferred') {
+      return err(quotaExceeded());
+    }
+
+    // ---- 4. WRITE, with both preconditions re-asked in the statement.
+    const written = await dependencies.templates.update(
+      templateId,
+      { name, normalizedName: normalizeTemplateName(name), labels: update.value.labels },
+      admitted.value.reservation,
+    );
+    if (!written.ok) {
+      return err(written.error);
+    }
+    switch (written.value) {
+      case 'updated':
+        break;
+      case 'not_found':
+        return err(notFound());
+      case 'retired':
+        return err(failedPrecondition());
+      case 'name_taken':
+        // A CONFLICT IS DISCLOSED HERE AND THAT IS RULED SAFE FOR A REASON THAT DOES NOT
+        // GENERALISE — `createTemplate`'s: the caller may already enumerate every Template through
+        // `platform.templates.list`, so there is no population to protect.
+        return err(conflict());
+      case 'raced':
+        // NOT A COLLISION. The guard refused and a follow-up read found nothing wrong, which only a
+        // concurrent write explains. `conflict` is the honest answer — the request conflicts with a
+        // state that moved — and the operator's remedy is to retry, not to hunt for a duplicate.
+        return err(conflict());
+    }
+
+    // =========================================================================================
+    // *** THE BARE TEMPLATE. NO `organizations_using`, AND THE RESPONSE UNWRAPS RATHER THAN
+    // LOSING A FIELD. *** SR-14, 2026-09-11.
+    // =========================================================================================
+    //
+    //     was   { template: { … }, organizations_using: 3 }
+    //     now   { … }                                          `templateOutput`, bare
+    //
+    // **This route's `response` now declares `urn:dudo:schema:template:1#/$defs/templateOutput`**,
+    // read from the amended contract rather than inferred from "the count was removed" — the
+    // wrapper existed only to carry the count beside the Template, so removing one collapses both.
+    //
+    // *** WHY THE COUNT CAME OUT: it was a census reachable under a permission that is not the
+    // census permission. *** `core.template-adoption.read` exists precisely because a Template
+    // reader holds no enumeration right over Organizations (`security.md` §2a) — and this route
+    // returned the identical number under `core.template.update`.
+    //
+    // **THE COMMENT THAT STOOD HERE IS REMOVED RATHER THAN CORRECTED**, because the disclosure it
+    // accepted no longer exists and a corrected note about a departed field is residue
+    // (`workflow.md` §12). Both of its arguments were withdrawn: *"the reach of a mutation"* is a
+    // claim about a mutation, and a rename to a Template's own current name is not one — which is
+    // now refused outright by `parseTemplateUpdate`'s no-op check (SR-23); and *"gating it would
+    // reopen TL-1"* did not hold, since TL-1 is closed by `platform.templates.usage` existing and
+    // nothing here touches that route.
+    return ok({
+      body: toTemplateOutput({ ...current, name, labels: update.value.labels }),
+      target: NO_TARGET,
+    });
+  };
+}
+
+/**
+ * ===========================================================================================
+ * RETIRE AND RESTORE. ONE IMPLEMENTATION, TWO ROUTES, ONE PERMISSION.
+ * `template-lifecycle-v1` -> `theRetirementRuling`.
+ * ===========================================================================================
+ *
+ * *** RETIREMENT IS REVERSIBLE BECAUSE ONE-WAY RETIREMENT CREATES A DEAD NAME. *** Template names
+ * are unique, so an operator who retires "School" by mistake **cannot create "School" again — the
+ * retired row still holds the name — and could not un-retire it.** The name would be spent,
+ * permanently, by one click. *"Retirement was designed as the SAFE alternative to deletion and
+ * one-way retirement would make it a quieter deletion with the same permanence."*
+ *
+ * *** TWO ROUTES RATHER THAN A TOGGLE, AND THE REASON IS THE TRAIL. *** *"A toggle's audit record
+ * cannot say which direction it went without reading the previous state."* The direction is in the
+ * route id, so `platform.templates.retire` and `platform.templates.restore` are distinguishable in
+ * an operator's trail without a second lookup. **That is why this shared function is parameterised
+ * by the transition and is NOT registered as one handler under one id.**
+ *
+ * ONE PERMISSION GATES BOTH, and the cost of that merge is recorded in the contract rather than
+ * implied: **anyone who may restore may also retire.** A low-privilege recovery role cannot exist
+ * while that holds. It stands for version 1 and reopens on either of two named triggers.
+ *
+ * *** ALREADY-IN-STATE IS REFUSED, NOT TREATED AS IDEMPOTENT. *** *"A silent success writes an
+ * audit record saying an operator retired something that was already retired, and a trail whose
+ * entries do not correspond to changes is a trail that has to be read twice. THE OPERATOR LEARNS
+ * THE STATE, which is what they were checking."*
+ *
+ * RETIREMENT DOES NOT CASCADE. Organizations already on this Template keep it and keep rendering
+ * its labels; retirement blocks NEW adoption only. Moving them is `platform.organizations.set-template`,
+ * performed deliberately, one Organization at a time. **Nothing in this function touches an
+ * Organization**, which is that ruling held in code rather than documented.
+ */
+/**
+ * *** NO `PlatformOperatorStore` HERE EITHER — see `updateTemplate` for the argument. *** SR-14.
+ *
+ * It matters marginally more on this pair of routes: they returned the identical census under
+ * `core.template.retire` **with nothing recorded about the disclosure at all**, so there was no
+ * comment for a reviewer to disagree with. **Now there is no port to disclose it with.**
+ */
+function setTemplateStatus(dependencies: {
+  readonly templates: TemplateStore;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly clock: Clock;
+  readonly from: TemplateStatus;
+  readonly to: TemplateStatus;
+}) {
+  return async (context: PlatformRouteContext): Promise<Result<PlatformRouteOutcome>> => {
+    const templateId = context.pathParams.template_id;
+    if (templateId === undefined) {
+      return err(internal());
+    }
+
+    // ---- 1. READ. The response embeds the Template, and an already-retired one is refused before
+    // any budget is spent — a refusal that cost a reservation would let a loop of doomed retires
+    // drain an operator's daily allocation.
+    const found = await dependencies.templates.findById(templateId);
+    if (!found.ok) {
+      return err(found.error);
+    }
+    if (found.value === null) {
+      return err(notFound());
+    }
+    if (found.value.status !== dependencies.from) {
+      return err(failedPrecondition());
+    }
+
+    // ---- 2. RESERVE.
+    const nowMs = dependencies.clock.nowMs();
+    const admitted = await dependencies.admission.reserve({
+      principalId: context.authority.principalId,
+      estimatedRowWrites: TEMPLATE_STATUS_ROW_WRITES,
+      nowMs,
+    });
+    if (!admitted.ok) {
+      return err(admitted.error);
+    }
+    if (admitted.value.kind === 'deferred') {
+      return err(quotaExceeded());
+    }
+
+    // ---- 3. WRITE. `from` is the guard and it is inside the statement, so two concurrent retires
+    // cannot both succeed and write two records for one transition.
+    const written = await dependencies.templates.setStatus(
+      templateId,
+      { from: dependencies.from, to: dependencies.to },
+      admitted.value.reservation,
+    );
+    if (!written.ok) {
+      return err(written.error);
+    }
+    switch (written.value) {
+      case 'updated':
+        break;
+      case 'not_found':
+        return err(notFound());
+      case 'already_in_state':
+        return err(failedPrecondition());
+    }
+
+    // THE NEW STATUS IS ASSERTED RATHER THAN RE-READ, and the guard is what licenses that: the
+    // statement matched a row in state `from` and set it to `to`, so a second read could only
+    // report a state some LATER write produced — which would describe someone else's act as this
+    // route's result.
+    //
+    // =========================================================================================
+    // *** THE BARE TEMPLATE, AND THIS ROUTE IS THE ONE THAT MATTERED MOST. *** SR-14, 2026-09-11.
+    // =========================================================================================
+    //
+    // Both `retire` and `restore` declare `urn:dudo:schema:template:1#/$defs/templateOutput`, so
+    // the wrapper collapses here exactly as it does on `update`.
+    //
+    // **`updateTemplate` at least carried an argument someone could disagree with. THIS ROUTE
+    // RETURNED THE IDENTICAL CENSUS UNDER `core.template.retire` WITH NOTHING RECORDED AT ALL** —
+    // and an unexamined consequence is indistinguishable from a considered one to the next reader,
+    // which is the shape SR-4 was. **One argument, two disclosures, one record, and the unrecorded
+    // one was the more consequential route.**
+    //
+    // The count is `platform.templates.usage`'s, under `core.template-adoption.read`, and an
+    // operator wanting the reach before retiring calls it — which is what `theReachRuling` decided
+    // it for: *"the reversibility makes the mistake recoverable; it does not make the decision
+    // informed."* **That read still exists and still answers before the act.**
+    return ok({
+      body: toTemplateOutput({ ...found.value, status: dependencies.to }),
+      target: NO_TARGET,
+    });
+  };
+}
+
+/**
+ * ===========================================================================================
+ * SET OR CLEAR ONE ORGANIZATION'S TEMPLATE. `template-lifecycle-v1` -> PA-17.
+ * ===========================================================================================
+ *
+ * *** THIS IS THE ONE OPERATION IN THE CONTRACT THAT WRITES INTO A CUSTOMER'S OWN DATABASE, AND THE
+ * BUDGET FOR THAT WRITE IS A MECHANISM RATHER THAN A CONVENTION. *** It goes through
+ * `recordOrganizationAccess`, which requires an `OperatorWriteCharged` — *"PROOF THE OPERATOR'S
+ * WRITE BUDGET WAS CHARGED FIRST. REQUIRED."* **Omitting it does not compile.**
+ *
+ * A HAND-ROLLED TENANT WRITE WOULD NOT FAIL — IT WOULD BE CHARGED AS THOUGH THE CUSTOMER HAD DONE
+ * IT. `RequestCoordination.reserveWrites` takes the origin as a required parameter with no default
+ * *"so the cheap side cannot be inherited by omission"*, and a fourth route that forgot the argument
+ * would silently escape `PLATFORM_ORIGINATED_DAILY_ROW_WRITES` — the sub-ceiling that **bounds the
+ * victim rather than the attacker.** Routing through the port inherits it by construction.
+ *
+ * *** `0024`'S MUTUAL EXCLUSION IS NOT WEAKENED BY THIS ROUTE, AND "a platform operator writes into
+ * a tenant database" IS EXACTLY THE SENTENCE THAT SOUNDS LIKE IT IS. *** A `platform_operator` holds
+ * zero `organization_membership` rows, so no store handle is resolved for them and no tenant-scoped
+ * read is reachable. The audit write is performed by Core on the platform's behalf through the audit
+ * path, not by the operator holding a tenant handle. **This function names no resolver, no store
+ * handle and no binding.** If an implementation ever resolves a tenant store for a platform
+ * principal to perform this write, that is a critical defect and not an implementation detail.
+ *
+ * *** IT READS NOTHING OF THE CUSTOMER'S. *** No customer, no invoice, no business record, nothing
+ * behind `whereWithTenant`. The Template is a control-plane column; the tenant write is an audit
+ * record the platform authors for the customer's benefit.
+ *
+ * THE CUSTOMER CANNOT READ THAT RECORD TODAY AND THE TENSE MATTERS. `core.audit.read` is at
+ * organization scope and has no route (`PA-3`), so the record **is written so the customer can see
+ * it when a route exists.** Writing it late would mean the trail begins after the acts it covers.
+ * No document may claim the customer CAN see what the platform did until `PA-3` lands.
+ */
+function setOrganizationTemplate(dependencies: {
+  readonly store: PlatformOperatorStore;
+  readonly templates: TemplateStore;
+  readonly members: MemberResolutionService;
+  readonly admission: ControlPlaneWriteAdmission;
+  readonly clock: Clock;
+}) {
+  return async (
+    context: PlatformRouteContext,
+    body: PreAuthBody,
+  ): Promise<Result<PlatformRouteOutcome>> => {
+    const organizationId = context.pathParams.organization_id;
+    if (organizationId === undefined) {
+      return err(internal());
+    }
+
+    // ---- 1. PARSE. ABSENT AND NULL ARE DIFFERENT REQUESTS and the contract makes that a test
+    // case: `{}` is `invalid_argument`; `{"template_id": null}` is a 200 that clears the Template.
+    // `setOrganizationTemplateInput` lists `template_id` as REQUIRED, so absence is not a clear.
+    const submitted = body.template_id;
+    if (submitted === undefined) {
+      return err(invalidArgument([detail('template_id', 'required')]));
+    }
+    let templateId: string | null = null;
+    if (submitted !== null) {
+      if (typeof submitted !== 'string' || !IDENTIFIER_PATTERN.test(submitted)) {
+        // NOT COERCED, and the value is never echoed — `detail()` has no parameter for one.
+        return err(invalidArgument([detail('template_id', 'must_be_an_identifier')]));
+      }
+      templateId = submitted;
+    }
+
+    // ---- 2. RESOLVE THE TEMPLATE. The response embeds it, and this read is what distinguishes
+    // "no such Template" from "that Template is retired" — which the contract requires, because
+    // telling them apart tells the operator which of the two identifiers they got wrong.
+    let template: TemplateRecord | null = null;
+    if (templateId !== null) {
+      const found = await dependencies.templates.findById(templateId);
+      if (!found.ok) {
+        return err(found.error);
+      }
+      if (found.value === null) {
+        return err(notFound());
+      }
+      if (found.value.status === 'retired') {
+        // THE MOST LIKELY REFUSAL ON THIS ROUTE, BY CONSTRUCTION: the workflow that brings an
+        // operator here is *"I retired the old Template, now let me move everyone"* — and the old
+        // one is the retired one.
+        return err(failedPrecondition());
+      }
+      template = found.value;
+    }
+
+    // ---- 3. RESERVE, before either write.
+    const nowMs = dependencies.clock.nowMs();
+    const admitted = await dependencies.admission.reserve({
+      principalId: context.authority.principalId,
+      estimatedRowWrites: ORGANIZATION_UPDATE_ROW_WRITES,
+      nowMs,
+    });
+    if (!admitted.ok) {
+      return err(admitted.error);
+    }
+    if (admitted.value.kind === 'deferred') {
+      return err(quotaExceeded());
+    }
+
+    // ---- 4. WRITE THE CONTROL-PLANE COLUMN. The retired-Template guard is re-asked inside the
+    // statement, so a retire landing between step 2 and here is answered rather than raced past.
+    const written = await dependencies.store.setOrganizationTemplate(
+      organizationId,
+      templateId,
+      admitted.value.reservation,
+    );
+    if (!written.ok) {
+      return err(written.error);
+    }
+    switch (written.value) {
+      case 'updated':
+        break;
+      case 'organization_not_found':
+        // THE ARGUMENT-FREE 404, AND IT IS SCOPED TO THIS CLASS: every caller who can reach this
+        // route may already enumerate every Organization, so distinguishing discloses nothing they
+        // could not get from `platform.organizations.list`. **Do not copy this to a route a tenant
+        // principal can reach.**
+        return err(notFound());
+      case 'template_unusable':
+        // Step 2 read the Template and found it usable; the guard disagrees, so it was retired in
+        // the window. The operator learns the state, which is what step 2 would have told them.
+        return err(failedPrecondition());
+    }
+
+    // ---- 5. APPEND THE TENANT RECORD. Last, for `updateOrganizationIdentity`'s reason: a record
+    // written before the write would claim a change that might not land.
+    //
+    // THE COST IF THIS FAILS, STATED RATHER THAN HIDDEN: the column is already changed and the
+    // caller is told the operation failed, so the customer's trail lacks a record of a change that
+    // happened. Closing it needs one transaction across two databases, which D1 does not offer.
+    const recorded = await dependencies.members.recordOrganizationAccess({
+      organizationId,
+      actionId: 'platform.organizations.set-template',
+      actorPrincipalId: context.authority.principalId,
+      // *** NOT `core.platform-organization.update`. *** That permission's own catalogue entry
+      // rules itself out — it covers display name, CR and VAT, and *"IT DOES NOT COVER STATUS"* —
+      // and a Template is not identity. The tenant is the one party who cannot check this value
+      // against the route table, so a wrong-but-well-formed permission here is undetectable to them.
+      permissionId: 'core.platform-organization.set-template',
+      // THE FIELD, NEVER THE VALUE. The record says `template_id` changed and never says to what.
+      // `audit.ts` has nowhere to put a value and must not acquire one.
+      changedFieldNames: Object.freeze(['template_id']),
+      // REQUIRED, AND UNFORGEABLE. `dispatchPlatformRoute` is the only producer and
+      // `consumeOperatorCharge` compares it against the actor being recorded.
+      charge: context.charge,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+    });
+    if (!recorded.ok) {
+      return err(recorded.error);
+    }
+
+    return ok({
+      body: {
+        organization_id: organizationId,
+        // PRESENT AND NULL, NEVER ABSENT — the schema's words. Embedded rather than referenced for
+        // `organization-detail-v1`'s reason: a Template is tenant-independent platform
+        // configuration, identical for every caller, so it copies nothing sensitive.
+        template: template === null ? null : toTemplateOutput(template),
+        // *** SERVER-STAMPED, AND THERE IS NO `organization.updated_at` COLUMN — DO NOT ADD ONE. ***
+        // The schema is explicit that this *"dates THIS assignment, not the Organization"*, so it is
+        // the moment of the change rather than a stored value. A column would be a new fact about
+        // the Organization that nothing asked for, and `0030`'s rule is that the schema is the
+        // expensive thing to spend.
+        updated_at: toRfc3339Utc(nowMs),
+      },
+      target: { kind: 'organization', organizationId },
+    });
   };
 }
 
@@ -1865,6 +2552,59 @@ export function createPlatformRouteHandlers(dependencies: {
       clock: dependencies.clock,
     }),
     'platform.templates.read': readTemplate({ templates: dependencies.templates }),
+    // THE TWO COUNTS. `0042`. Each borrows the permission of the list it counts; neither takes a
+    // parameter, which is why both handlers ignore the context entirely.
+    'platform.organizations.count': countOrganizations({ store: dependencies.store }),
+    'platform.templates.count': countTemplates({ templates: dependencies.templates }),
+    // =========================================================================================
+    // THE FIVE `template-lifecycle-v1` OPERATIONS, REGISTERED 2026-09-11.
+    // =========================================================================================
+    //
+    // THE HANDLERS, THE ROUTE TABLE ENTRIES, THE ENVELOPE AND THE ROLE GRANTS LANDED TOGETHER —
+    // `assertEveryRoutePermissionIsReachable` runs at module load and checks route to envelope to
+    // some role, so **any half arriving alone is a build failure rather than a route that quietly
+    // serves nobody.** That guard exists because this platform shipped exactly that defect twice in
+    // one day, from opposite causes.
+    'platform.templates.usage': readTemplateUsage({
+      templates: dependencies.templates,
+      store: dependencies.store,
+    }),
+    // *** NO `store` ON THESE THREE — SR-14, AND THE COMPILER NAMED ALL THREE CALL SITES WHEN IT
+    // CAME OFF THE PARAMETER. *** That is the point of removing it rather than merely stopping the
+    // call: the port that computes the adoption census is now unreachable from the write handlers,
+    // so re-disclosing it is a change somebody has to make deliberately and here.
+    'platform.templates.update': updateTemplate({
+      templates: dependencies.templates,
+      admission: dependencies.admission,
+      clock: dependencies.clock,
+    }),
+    // TWO REGISTRATIONS OF ONE FUNCTION, DIFFERING ONLY IN THE TRANSITION. The two ids are what
+    // make the direction readable in an operator's trail without a second lookup, which is the
+    // contract's reason for two routes rather than a toggle.
+    'platform.templates.retire': setTemplateStatus({
+      templates: dependencies.templates,
+      admission: dependencies.admission,
+      clock: dependencies.clock,
+      from: 'active',
+      to: 'retired',
+    }),
+    'platform.templates.restore': setTemplateStatus({
+      templates: dependencies.templates,
+      admission: dependencies.admission,
+      clock: dependencies.clock,
+      from: 'retired',
+      to: 'active',
+    }),
+    'platform.organizations.set-template': setOrganizationTemplate({
+      store: dependencies.store,
+      templates: dependencies.templates,
+      // REQUIRED HERE, UNLIKE ON THE SCOPED AUDIT FEED WHERE IT IS OPTIONAL. This route's tenant
+      // write is the operation rather than a by-product: an Organization whose Template changed
+      // with no record in its own trail is the `0028` gap, not a degraded mode.
+      members: dependencies.members,
+      admission: dependencies.admission,
+      clock: dependencies.clock,
+    }),
   };
   if (dependencies.confirmations !== undefined) {
     handlers['platform.confirmations.request'] = requestConfirmation({

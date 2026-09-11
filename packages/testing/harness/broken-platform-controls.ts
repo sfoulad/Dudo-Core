@@ -66,6 +66,16 @@ export function withMutualExclusionProbeRemoved(store: PlatformOperatorStore): P
     findOrganizationIdentity: (organizationId) => store.findOrganizationIdentity(organizationId),
     updateOrganizationIdentity: (organizationId, identity, reservation) =>
       store.updateOrganizationIdentity(organizationId, identity, reservation),
+    // ADDED 2026-09-11 with the Template lifecycle port. DELEGATED, and here that matters more
+    // than usual: `setOrganizationTemplate` is a WRITE, and this control exists to prove the
+    // mutual-exclusion probe is load-bearing. A stub would break a second thing in the one
+    // control whose whole value is that exactly one thing is broken.
+    countOrganizationsUsingTemplate: (templateId) => store.countOrganizationsUsingTemplate(templateId),
+    setOrganizationTemplate: (organizationId, templateId, reservation) =>
+      store.setOrganizationTemplate(organizationId, templateId, reservation),
+    // ADDED 2026-09-11 with `0042`'s count routes. Delegated, same rule as every other method this
+    // control does not break.
+    countOrganizations: () => store.countOrganizations(),
   };
 }
 
@@ -205,5 +215,14 @@ export function withFailingActionLog(store: PlatformOperatorStore): PlatformOper
     findOrganizationIdentity: (organizationId) => store.findOrganizationIdentity(organizationId),
     updateOrganizationIdentity: (organizationId, identity, reservation) =>
       store.updateOrganizationIdentity(organizationId, identity, reservation),
+    // ADDED 2026-09-11 with the Template lifecycle port, delegated on this control's own terms:
+    // it breaks the action-log WRITE and nothing else. `setOrganizationTemplate` is a different
+    // write and must keep working, or a case asserting "the action-log failure is what failed the
+    // operation" could no longer show that it was.
+    countOrganizationsUsingTemplate: (templateId) => store.countOrganizationsUsingTemplate(templateId),
+    setOrganizationTemplate: (organizationId, templateId, reservation) =>
+      store.setOrganizationTemplate(organizationId, templateId, reservation),
+    // ADDED 2026-09-11 with `0042`. A READ, and this control breaks the action-log WRITE only.
+    countOrganizations: () => store.countOrganizations(),
   };
 }

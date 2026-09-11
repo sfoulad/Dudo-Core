@@ -108,7 +108,24 @@ export type TenantRecordedPlatformPermission =
   // ADDED 2026-09-07 for `platform.organizations.identity.update`, and adding it was the stop this
   // union was built to be: the identity route did not inherit a value, it required a decision in
   // this file. **It is also the first MUTATION to record here** — the two above are reads.
-  | 'core.platform-organization.update';
+  | 'core.platform-organization.update'
+  // ===========================================================================================
+  // ADDED 2026-09-11 for `platform.organizations.set-template`. `template-lifecycle-v1` PA-17.
+  // ===========================================================================================
+  //
+  // *** THE STOP WORKED AGAIN, AND THE VALUE IT REFUSED TO SUPPLY IS THE POINT. ***
+  // `core.platform-organization.update` was sitting right here, one line up, and set-template's
+  // whole permission argument is that it must NOT be that permission. The contract's reason is that
+  // the identity entry rules itself out in terms — it covers *"an Organization's display name, its
+  // commercial registration and its VAT registration"* and states *"IT DOES NOT COVER STATUS"* —
+  // and **a Template is not identity**: it decides what every user in that Organization reads as the
+  // name of their own structure.
+  //
+  // **The customer's own trail is where that distinction matters most.** A record saying the
+  // platform exercised `core.platform-organization.update` on an Organization whose Template was
+  // changed would be a true-looking sentence about the wrong authority — and the tenant is the one
+  // party who cannot check it against the route table.
+  | 'core.platform-organization.set-template';
 
 export type MemberResolutionService = {
   /**

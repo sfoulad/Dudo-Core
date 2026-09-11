@@ -9,7 +9,7 @@
  * four seconds on a laptop, longer on a phone — before a single byte is sent.
  * With no indication, that reads as a dead button, and a person's response to a
  * dead button is to press it again. So the progress bar is driven by a real
- * timed calibration on this device (`api/kdf-worker.ts`), it is LABELLED an
+ * timed calibration on this device (`@dudo/client-kdf/worker`), it is LABELLED an
  * estimate because that is what it is, and it never claims completion before the
  * derivation returns.
  *
@@ -41,12 +41,14 @@
  */
 
 import { useCallback, useRef, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
-import { errorBody, errorTitle, toApiError, type ApiError } from '@/api/errors';
-import { identifierRefusal, CredentialDerivationError } from '@/api/kdf';
-import type { DerivationProgress } from '@/api/kdf-client';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
+import { errorTitleKey, toApiError, type ApiError } from '@/api/errors';
+import { errorSentence } from '@/components/StateBlock';
+import { identifierRefusal, CredentialDerivationError } from '@dudo/client-kdf';
+import type { DerivationProgress } from '@dudo/client-kdf/client';
 import type { AuthClient } from '@/api/auth';
+import { formatSeconds, useLocale } from '@/lib/i18n';
 
 export interface SignInProps {
   readonly auth: AuthClient;
@@ -64,6 +66,7 @@ type Phase =
   | { readonly kind: 'sending' };
 
 export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
+  const { locale, t } = useLocale();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
@@ -113,7 +116,7 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
              * THE PASSWORD IS DROPPED THE MOMENT IT IS NO LONGER NEEDED. It was
              * held in component state for the lifetime of the submit and nowhere
              * else: not in a ref that outlives the screen, not in storage, and
-             * not in the result. `api/kdf-client.ts` terminates the worker on
+             * not in the result. `@dudo/client-kdf/client` terminates the worker on
              * every path, which drops the worker's copy with the thread.
              */
             setPassword('');
@@ -141,13 +144,10 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
       <div className="mx-auto w-full max-w-[26rem]">
         <header className="mb-7 text-center">
           <p className="text-[0.6875rem] font-bold uppercase tracking-[0.16em] text-gold-500">
-            Dudo
+            {t('signIn.brand')}
           </p>
-          <h1 className="mt-1 text-2xl font-bold text-white">Platform administration</h1>
-          <p className="mt-2 text-[0.875rem] leading-relaxed text-navy-100">
-            Operator access. This is a separate sign-in from the Dudo application — being signed
-            in there does not sign you in here.
-          </p>
+          <h1 className="mt-1 text-2xl font-bold text-white">{t('signIn.title')}</h1>
+          <p className="mt-2 text-[0.875rem] leading-relaxed text-navy-100">{t('signIn.intro')}</p>
         </header>
 
         {signOutUncleared ? (
@@ -155,12 +155,8 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
             role="alert"
             className="mb-5 rounded-[7px] border border-gold-500 bg-gold-50 p-4 text-[0.875rem] text-ink"
           >
-            <p className="font-bold">Your last sign-out did not reach Dudo.</p>
-            <p className="mt-1 leading-relaxed">
-              Nothing was revoked and the session credential was not cleared, so that session is
-              still live. If you are on a shared machine, sign in and sign out again on a working
-              connection.
-            </p>
+            <p className="font-bold">{t('signIn.uncleared.title')}</p>
+            <p className="mt-1 leading-relaxed">{t('signIn.uncleared.body')}</p>
           </div>
         ) : null}
 
@@ -176,23 +172,31 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
             >
               <p className="font-bold text-scarlet-700">
                 {failure.code === 'unauthenticated'
-                  ? 'Those credentials were not accepted'
-                  : errorTitle(failure)}
+                  ? t('signIn.rejected.title')
+                  : t(errorTitleKey(failure))}
               </p>
               <p className="mt-1 leading-relaxed text-ink-soft">
                 {/*
                   Core's 401 body is a constant and says nothing about which part
                   was wrong. This screen must not invent the distinction, so it
                   states only what is true of every 401.
+
+                  **THE SIGN-IN OVERRIDE STAYS, and it is not duplication.**
+                  `error.body.unauthenticated` says *your operator session is not
+                  active — sign in* , which is right everywhere EXCEPT on the
+                  sign-in screen, where the operator is already doing that. Here
+                  a 401 means the credentials were rejected, and telling someone
+                  to sign in while they are signing in is the shape of message
+                  that makes a console feel broken.
                 */}
                 {failure.code === 'unauthenticated'
-                  ? 'Check the address and the password and try again. Dudo does not say which of ' +
-                    'the two was wrong, deliberately.'
-                  : errorBody(failure)}
+                  ? t('signIn.rejected.body')
+                  : errorSentence(failure, locale, t)}
               </p>
               {failure.request_id ? (
-                <p className="mt-2 font-mono text-xs text-ink-muted">
-                  Reference {failure.request_id}
+                <p className="mt-2 text-xs text-ink-muted">
+                  {t('denied.reference')}{' '}
+                  <bdi className="font-mono break-all">{failure.request_id}</bdi>
                 </p>
               ) : null}
             </div>
@@ -200,9 +204,9 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
 
           <Field
             id="operator-email"
-            label="Email address"
+            label={t('signIn.email')}
             error={localError}
-            hint="Plain ASCII only. Spaces are refused rather than trimmed."
+            hint={t('signIn.emailHint')}
           >
             {(aria) => (
               <Input
@@ -226,7 +230,7 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
             )}
           </Field>
 
-          <Field id="operator-password" label="Password">
+          <Field id="operator-password" label={t('signIn.password')}>
             {(aria) => (
               <Input
                 {...aria}
@@ -245,17 +249,16 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
 
           <Button type="submit" variant="primary" disabled={busy} busy={busy} className="w-full">
             {phase.kind === 'deriving'
-              ? 'Preparing your credential…'
+              ? t('signIn.deriving')
               : phase.kind === 'sending'
-                ? 'Signing in…'
-                : 'Sign in'}
+                ? t('signIn.sending')
+                : t('signIn.submit')}
           </Button>
 
           {phase.kind === 'deriving' ? <DerivationProgressBar progress={phase.progress} /> : null}
 
           <p className="text-[0.8125rem] leading-relaxed text-ink-muted">
-            Your password is turned into a key in this browser and the password itself is never
-            sent to Dudo. That takes a second or two and is the pause you will see.
+            {t('signIn.kdfExplainer')}
           </p>
         </form>
       </div>
@@ -271,6 +274,7 @@ export function SignIn({ auth, onSignedIn, signOutUncleared }: SignInProps) {
  * in the text a screen reader reaches.
  */
 function DerivationProgressBar({ progress }: { progress: DerivationProgress }) {
+  const { t, locale } = useLocale();
   const percent = Math.round(progress.fraction * 100);
   const remainingMs =
     progress.estimatedMs === null ? null : Math.max(0, progress.estimatedMs - progress.elapsedMs);
@@ -282,7 +286,7 @@ function DerivationProgressBar({ progress }: { progress: DerivationProgress }) {
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label="Preparing your credential"
+        aria-label={t('signIn.progressLabel')}
         className="h-1.5 w-full overflow-hidden rounded-full bg-sunk"
       >
         {/*
@@ -296,8 +300,14 @@ function DerivationProgressBar({ progress }: { progress: DerivationProgress }) {
       </div>
       <p aria-live="polite" className="text-[0.8125rem] text-ink-muted">
         {remainingMs === null
-          ? 'Measuring how long this will take on this device…'
-          : `About ${String(Math.ceil(remainingMs / 1000))} seconds left — an estimate measured on this device.`}
+          ? t('derivation.measuring')
+          : /*
+              THREE PIECES RATHER THAN ONE TEMPLATE STRING, and the middle one
+              is `Intl`'s. `${n} seconds` is wrong in Arabic for almost every
+              `n` — singular, dual and two plural forms — and `formatSeconds`
+              defers that to the engine rather than to a rule written here.
+            */
+            `${t('derivation.remainingPrefix')} ${formatSeconds(locale, Math.ceil(remainingMs / 1000))} — ${t('derivation.estimateNote')}`}
         {!progress.usedWorker ? (
           <>
             {' '}

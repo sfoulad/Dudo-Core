@@ -1,0 +1,39 @@
+---
+# THE CASCADE NEGATIVE CONTROL, DEPTH 1. Built by qa-agent, deliberately NOT by the generator's
+# author — `architecture-agent` asked for it by name, because the axis it cannot see from inside
+# its own code is the SET BEING EXAMINED rather than the logic examining it.
+#
+# This contract is ADMISSIBLE on its own terms: it declares all five things `admitContract`
+# requires. Its SCHEMA `$ref`s `urn:dudo:schema:cascadebad:1#/$defs/badThing`, which refuses.
+#
+# PASS  = refused with GEN_UNEMITTABLE_DEPENDENCY, and dep-v1.ts is NOT written.
+# FAIL  = dep-v1.ts appears on disk importing a module that was never emitted, which is a dangling
+#         import — the one outcome that looks like success until somebody compiles it.
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: cascade
+status: proposed
+updated: "2026-09-09"
+documentsExistingImplementation: none
+
+tenancy:
+  scope: >-
+    NONE. A generator test input. It binds to no route and reaches no store.
+
+operations:
+
+  - id: fixture.CascadeDep
+    title: "An operation whose request type cannot be generated"
+    description: >-
+      Its request schema depends on a refused node, so this module must never be delivered.
+    request: { schemaRef: "urn:dudo:schema:cascadedep:1#/$defs/depInput" }
+    response: { schemaRef: "urn:dudo:schema:cascadedep:1#/$defs/depOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.cascade.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

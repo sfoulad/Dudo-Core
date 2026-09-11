@@ -37,7 +37,8 @@
  * allocation" on the platform feed would name a party that is not involved.
  */
 
-import { Button } from '@/components/ui/button';
+import { Button } from '@dudo/ui';
+import { fill, formatSeconds, useLocale } from '@/lib/i18n';
 import type { ApiError, ErrorCode } from '@/api/errors';
 
 /** The two codes this component exists for. Anything else is an ordinary error. */
@@ -53,6 +54,7 @@ export interface CeilingNoticeProps {
 }
 
 export function CeilingNotice({ error, scope, onRetry }: CeilingNoticeProps) {
+  const { locale, t } = useLocale();
   const isRateLimit = error.code === 'rate_limited';
 
   return (
@@ -67,54 +69,67 @@ export function CeilingNotice({ error, scope, onRetry }: CeilingNoticeProps) {
       <h2 className={isRateLimit ? 'text-base font-bold text-gold-700' : 'text-base font-bold text-azure-700'}>
         {isRateLimit
           ? scope === 'organization'
-            ? 'Operators have read this business enough for today'
-            : 'This log has been read enough for today'
+            ? t('ceiling.rate.org.title')
+            : t('ceiling.rate.platform.title')
           : scope === 'organization'
-            ? 'This business has reached its own daily limit'
-            : 'The platform has reached its own daily limit'}
+            ? t('ceiling.quota.org.title')
+            : t('ceiling.quota.platform.title')}
       </h2>
 
+      {/*
+        ⚠ WHOSE ALLOWANCE IT IS, IS THE WHOLE POINT OF THESE FOUR SENTENCES, and
+        it is the half a translation would flatten first.
+
+        `rate_limited` is about OPERATOR activity against a customer.
+        `quota_exceeded` at organization scope is about the CUSTOMER'S OWN
+        allocation, which no operator action can clear and which retrying
+        actively spends. **Merging them produces a retry** — the behaviour the
+        ceilings exist to stop — and telling an operator a limit is theirs when
+        it is the customer's invites exactly that.
+      */}
       <p className="mt-2 leading-relaxed text-ink-soft">
         {isRateLimit ? (
           scope === 'organization' ? (
             <>
-              Reading this trail writes to it, and the platform&rsquo;s share of this
-              business&rsquo;s day is spent.{' '}
-              <span className="font-semibold">This is about operator activity, not about the
-              customer</span> — someone, possibly you, has read enough for one day. Another
-              operator may be part-way through an investigation.
+              {t('ceiling.rate.org.before')}{' '}
+              <span className="font-semibold">{t('ceiling.rate.org.whose')}</span>{' '}
+              {t('ceiling.rate.org.after')}
             </>
           ) : (
             <>
-              Reading the log writes to the log, and the allowance for that is spent for now.{' '}
-              <span className="font-semibold">This is about operator activity</span>, not about any
-              customer.
+              {t('ceiling.rate.platform.before')}{' '}
+              <span className="font-semibold">{t('ceiling.rate.platform.whose')}</span>{' '}
+              {t('ceiling.rate.platform.after')}
             </>
           )
         ) : scope === 'organization' ? (
           <>
-            <span className="font-semibold">This is about the customer, not about you.</span> The
-            business has reached its own daily write allocation, and reading this trail needs a
-            write into it. Nothing an operator does will clear it — it resets at 00:00 UTC, and
-            retrying now spends what little the customer has left on a refusal.
+            <span className="font-semibold">{t('ceiling.quota.org.whose')}</span>{' '}
+            {t('ceiling.quota.org.after')}
           </>
         ) : (
           <>
-            <span className="font-semibold">This is the platform&rsquo;s own allocation</span>, not
-            a customer&rsquo;s. It resets at 00:00 UTC. Retrying now will not help.
+            <span className="font-semibold">{t('ceiling.quota.platform.whose')}</span>{' '}
+            {t('ceiling.quota.platform.after')}
           </>
         )}
       </p>
 
       {error.retry_after_seconds !== null ? (
         <p className="mt-2 text-[0.875rem] text-ink-muted">
-          Core suggests waiting about {error.retry_after_seconds} seconds.
+          {/*
+            `formatSeconds` RATHER THAN A NUMERAL — Arabic has singular, dual and
+            two plural forms for "seconds" and `Intl` has them all.
+          */}
+          {fill(t('ceiling.waitAbout'), locale, {
+            seconds: formatSeconds(locale, error.retry_after_seconds),
+          })}
         </p>
       ) : null}
 
       {error.request_id ? (
-        <p className="mt-3 font-mono text-xs break-all text-ink-muted">
-          Reference {error.request_id}
+        <p className="mt-3 text-xs text-ink-muted">
+          {t('denied.reference')} <bdi className="font-mono break-all">{error.request_id}</bdi>
         </p>
       ) : null}
 
@@ -126,7 +141,7 @@ export function CeilingNotice({ error, scope, onRetry }: CeilingNoticeProps) {
       */}
       {onRetry && isRateLimit ? (
         <Button variant="secondary" size="sm" className="mt-4" onClick={onRetry}>
-          Try again
+          {t('state.retry')}
         </Button>
       ) : null}
     </div>

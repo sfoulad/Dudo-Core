@@ -19,15 +19,17 @@
     },
 
     "organizationStatus": {
-      "description": "As stored in the control plane's organization table. A closed set; an unrecognised stored value is never rendered to a client, because Core validates on read and treats an unknown value as unavailable rather than passing it through.",
+      "description": "As stored in the control plane's organization table. An unrecognised STORED value is never rendered to a client, because Core validates on read and treats an unknown value as unavailable rather than passing it through.\n\n*** THIS DESCRIPTION SAID 'A CLOSED SET' AND THAT SENTENCE ANSWERS A DIFFERENT QUESTION FROM THE ONE `enumPolicy` ASKS. *** Corrected 2026-09-09. Core refusing to render a CORRUPT stored value is protection against schema drift; it says nothing about whether a NEW value may be added legitimately. Those are two questions and the word 'closed' answers only the first. When a third state ships — suspension already has a named future route, and `core.platform-organization.update` explicitly 'DOES NOT COVER STATUS' — Core's union widens and it emits the new value correctly, at which point a client holding a closed union has a wrong type. See `enumPolicy`.\n\nDUPLICATED: `organization-detail-v1`'s `organizationSummary.status` carries the same two values for the same wire field. Both are declared `extensible` and MUST stay agreed; see that file.",
       "type": "string",
-      "enum": ["active", "suspended"]
+      "enum": ["active", "suspended"],
+      "enumPolicy": "extensible"
     },
 
     "platformRole": {
-      "description": "The closed union stored in platform_operator.platform_role, mirroring permission-catalog.yaml's two platform-scope seed roles. An unrecognised stored value denies everything and never reaches a response.",
+      "description": "The union stored in platform_operator.platform_role, mirroring permission-catalog.yaml's platform-scope seed roles. An unrecognised stored value denies everything and never reaches a response.\n\n`extensible`, AND THE CATALOGUE ITSELF IS THE ARGUMENT: it already anticipates a third role — 'a break-glass responder role can hold REVOKE without GRANT, so the person reachable at 3am can cut off a compromised operator without themselves being able to create one' — and records that the permission making that a catalogue edit rather than a redesign already exists. A client that breaks when that role appears would make adding it a client release.\n\nDUPLICATED THREE WAYS, and this is the one to watch: `platform-operators-v1` and `platform-audit-read-v1` each define `platformRole` with the same two values. All three must carry the same policy, and nothing checks that they do.",
       "type": "string",
-      "enum": ["platform-admin", "marketplace-moderator"]
+      "enum": ["platform-admin", "marketplace-moderator"],
+      "enumPolicy": "extensible"
     },
 
     "permissionId": {
@@ -75,6 +77,21 @@
         },
         "next_cursor": { "$ref": "#/$defs/cursor" }
       }
+    },
+
+    "organizationCountOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total"],
+      "description": "How many Organizations exist on the platform. The number `platform.organizations.list` cannot state, because a paginated list can only say 'at least 25' until its last page.",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The number of rows in the control-plane `organization` table. ZERO IS A VALID, REACHABLE ANSWER and is not an error or an empty state — a platform with no Organizations yet is the ordinary first day. IT MUST BE A COUNT AND NEVER A FETCH-AND-LENGTH: reading every row to measure the length is the same number on the wire and a different number against d1-rows-read."
+        }
+      },
+      "$comment": "*** A SCALAR AND NOTHING ELSE. `additionalProperties: false` IS THE ENFORCEMENT OF THAT RULE AND NOT TIDINESS. *** docs/decisions/0042.\n\nNO BREAKDOWN, NO GROUPING, NO `by_status` MAP, NO PER-ORGANIZATION FIGURE. Every one of those transposes into a MAPPING, and the mapping is the object docs/decisions/0028 Decision 1 refuses. A count is one number; the moment it is keyed by anything it stops being a count and becomes a table.\n\n*** THIS DOES NOT CONTRADICT platform.organizations.list's 'IT RETURNS NO COUNTS' — READ THEM TOGETHER. *** That sentence refuses a COUNT COLUMN ON A ROW: 'how many customers does this Organization have', which is a per-Organization figure over TENANT data behind whereWithTenant, and it is the transpose above. THIS is a single control-plane total over the Organization table itself, reads nothing behind whereWithTenant, and names no Organization. Different object, different population, and the sentence that refuses the first is the reason this one must stay scalar.\n\nWHY IT NEEDS NO NEW PERMISSION, and the test is security.md §2a: a count is safe exactly when its consumer already holds enumeration over the counted population. `core.organization.list` holders enumerate Organizations deliberately, at `sensitive`, so this discloses nothing they cannot obtain by walking pages — more slowly, and at an audit row per page.\n\nSHAPED THE SAME AS `urn:dudo:schema:template:1#/$defs/templateCountOutput` AND DELIBERATELY NOT SHARED WITH IT. They are the same shape by coincidence rather than by rule: different populations, different permissions, different sensitivity rungs. A shared def would couple two responses so that a legitimate addition to one — an `as_of` on this one, say — silently appeared on the other, which is the harmonising-two-rules-that-look-alike mistake. The duplication is two independent enforcement points of one rule, and the rule lives in 0042 rather than in either copy."
     },
 
     "whoamiOutput": {

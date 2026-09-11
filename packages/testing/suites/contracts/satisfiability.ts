@@ -1,6 +1,25 @@
 /**
  * ===========================================================================================
- * EVERY CLOSED REQUEST OBJECT IN THE CONTRACT SET MUST BE SATISFIABLE.
+ * EVERY CLOSED OBJECT IN THE CONTRACT SET MUST BE SATISFIABLE — REQUEST, RESPONSE, OR NEITHER.
+ *
+ * *** IT SAID "REQUEST" UNTIL 2026-09-11, AND THE WALK NEVER DID. *** The walk has always covered
+ * every closed object in every `*.schema.json` — `$defs`, nested `properties`, `items`, `allOf`
+ * branches — for the reason stated further down and it is the right one: *restricting the walk to
+ * the shapes somebody expected is how a sweep reports a smaller number than the truth.*
+ *
+ * **The narrower title nearly cost a duplicate check.** `architecture-agent` produced two
+ * unsatisfiable RESPONSE defs in the `0042` count amendments — `required: ["total"]` with
+ * `additionalProperties: false` and no `properties` block — caught them by re-reading, and then
+ * asked whether a satisfiability check existed **because it had read this title and concluded
+ * responses were uncovered.** They were never uncovered; both sat inside the examined population
+ * and would have been named by `$defs` path.
+ *
+ * *** AND THE DANGEROUS DIRECTION IS THE TIDY ONE, WHICH IS WHY THE TITLE IS THE FIX. *** A reader
+ * who sees "REQUEST" in the title and a walk covering responses can reasonably NARROW THE WALK TO
+ * MATCH — deleting live coverage in a change that looks like making the code agree with its own
+ * documentation. **Nothing would go red**, because the response objects are satisfiable today.
+ * `workflow.md` §12: a sentence resting on a premise that has moved becomes an argument for
+ * removing what it describes.
  * ===========================================================================================
  *
  * An object with `additionalProperties: false` and a `required` list naming a field its

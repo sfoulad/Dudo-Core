@@ -97,7 +97,7 @@
 
 import { ApiError, toApiError } from './errors';
 import { CONFIG } from './config';
-import { deriveLogin, type DerivationProgress } from './kdf-client';
+import { deriveLogin, type DerivationProgress } from '@dudo/client-kdf/client';
 import { setFixtureOrganizationSelected } from './fixture-session-state';
 import type { Transport } from './fixture-transport';
 

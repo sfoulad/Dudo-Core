@@ -1,0 +1,43 @@
+---
+# THE COST, MADE INTO A FIXTURE. This contract is WRONG and stays wrong in every run.
+#
+# Its URN names nothing, in any state of this corpus. The finding it deserves is
+# `GEN_UNRESOLVABLE_REF`, authored `contract`. What it GETS depends on whether some unrelated file
+# was readable:
+#
+#   with `hollow.schema.json` unparseable  ->  GEN_REF_UNRESOLVABLE_INDEX_INCOMPLETE  (derived)
+#   with the corpus clean                  ->  GEN_UNRESOLVABLE_REF                   (contract)
+#
+# THE SECOND ROW IS WHY THIS FIXTURE EXISTS AT ALL. The first row on its own reads like a defect —
+# a real contract fault suppressed by an unrelated parse error. It is deliberate, and the sentence
+# that makes it deliberate rather than lost is "the finding RETURNS on the next clean run".
+# Nothing had ever observed it returning. This does.
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: indexincomplete
+status: proposed
+updated: "2026-09-10"
+documentsExistingImplementation: none
+requestClass: platform
+
+tenancy:
+  scope: >-
+    NONE. A generator test input. It binds to no route and reaches no store.
+
+operations:
+
+  - id: fixture.IndexIncompletePhantom
+    title: "An operation whose request type names a URN nothing declares"
+    description: >-
+      A genuine contract defect, permanently. Only its ATTRIBUTION changes between runs.
+    request: { schemaRef: "urn:dudo:schema:phantom:1#/$defs/phantomInput" }
+    response: { schemaRef: "urn:dudo:schema:phantom:1#/$defs/phantomOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.indexincomplete.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

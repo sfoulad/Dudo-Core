@@ -3,10 +3,17 @@
  * THE CROSS-CLIENT KDF VECTOR TABLE. `docs/decisions/0015` §D and its NFC amendment.
  * ===========================================================================================
  *
- * ONE CONTRACT SET, THREE IMPLEMENTATIONS: the web client (`platform/web/src/api/kdf.ts`), the
- * Apple client (Swift, not yet written), and the enrolment tool
- * (`platform/core/identity/tools/seed-principal.ts`), which derives the client value on the
- * operator's behalf and is therefore a client of this rule whatever directory it lives in.
+ * ONE CONTRACT SET, THREE IMPLEMENTATIONS: the browser clients (`@dudo/client-kdf`, shared by
+ * `platform/web` and `platform/admin` since `0040`), the Apple client (Swift, not yet written),
+ * and the enrolment tool (`platform/core/identity/tools/seed-principal.ts`), which derives the
+ * client value on the operator's behalf and is therefore a client of this rule whatever directory
+ * it lives in.
+ *
+ * **IT WAS FOUR UNTIL `0040`, AND THE FOURTH WAS A COPY RATHER THAN AN IMPLEMENTATION.** The two
+ * consoles held separate `kdf.ts` files that had already drifted in both directions — 17 gaps by
+ * `check:suite-parity`'s count, with neither copy the fuller one. **Merging them removed a
+ * divergence this table could only ever have DETECTED, by making it impossible to express.** The
+ * table's job is unchanged and is now aimed at the three that remain.
  *
  * All three must produce BYTE-IDENTICAL output. `0015` states the consequence of divergence in
  * the plainest available terms: *"The user enrols on one platform and cannot log in on the
@@ -62,7 +69,7 @@ import {
   normalizePassword,
   isSubmittableIdentifier as webIsSubmittableIdentifier,
   normalizeIdentifier as webNormalizeIdentifier,
-} from '../../../../platform/web/src/api/kdf.ts';
+} from '@dudo/client-kdf';
 import { deriveClientValue } from '../../../../platform/core/identity/tools/seed-principal.ts';
 
 const ITERATIONS = 600_000;

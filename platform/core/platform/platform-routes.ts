@@ -187,7 +187,32 @@ export type PlatformRouteId =
   | 'platform.templates.create'
   | 'platform.templates.list'
   | 'platform.templates.read'
-  | 'platform.organizations.identity.update';
+  | 'platform.organizations.identity.update'
+  // ===========================================================================================
+  // `template-lifecycle-v1`, REGISTERED 2026-09-11. Five routes, four permissions.
+  // ===========================================================================================
+  //
+  // THE IDS, THE HANDLERS, THE ENVELOPE ENTRIES, THE ROLE GRANTS AND THE TABLE ROWS ALL LANDED IN
+  // ONE CHANGE, AND THAT ORDER IS FORCED RATHER THAN CHOSEN.
+  // `assertEveryRoutePermissionIsReachable` runs at MODULE LOAD and checks the whole chain — route
+  // to envelope to some role — so **any of the five halves arriving alone fails the build of
+  // everything that imports this file**, not a test.
+  //
+  // THE PERMISSIONS WERE GRANTED BY THE USER on 2026-09-11 and relayed by the Team Lead, who does
+  // not approve (`security.md` §8). Core's envelope and role list are a TRANSCRIPTION of
+  // `permission-catalog.yaml`, which is the register (`0007` rule 4).
+  //
+  // FIVE ROUTES, FOUR PERMISSIONS: `core.template.retire` gates retire AND restore.
+  // `docs/decisions/0042`, 2026-09-11. Two counts, each borrowing the permission of the list it
+  // counts — `core.organization.list` and `core.template.list`. **No new permission**, so neither
+  // needed an envelope or role change: `security.md` §2a's enumeration test is what licenses that.
+  | 'platform.organizations.count'
+  | 'platform.templates.count'
+  | 'platform.templates.usage'
+  | 'platform.templates.update'
+  | 'platform.templates.retire'
+  | 'platform.templates.restore'
+  | 'platform.organizations.set-template';
 
 /**
  * *** `PATCH` ARRIVED 2026-09-07 WITH `platform.organizations.identity.update`, AND IT NEEDED NO
@@ -339,6 +364,35 @@ export type PlatformRoute = {
  * holding.
  */
 const ROUTES: readonly PlatformRoute[] = Object.freeze([
+  // ===========================================================================================
+  // *** DECLARED BEFORE `/organizations/{organization_id}`. *** Same reason as
+  // `platform.templates.count` further down: `matchPlatformRoute` is first-match-wins, so
+  // declaration order — not the identifier grammar's minimum length — is what keeps the literal
+  // segment reachable. `assertNoLiteralShadowedByParameter` turns that into a build failure.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.organizations.count' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/organizations/count`,
+    // *** `core.organization.list`, AND A NEW PERMISSION HERE WOULD BE A SPLIT WITH NO DECISION IN
+    // IT. *** `security.md` §2a. A holder already enumerates every Organization, deliberately, at
+    // `sensitive` — this count reaches nothing past that right.
+    //
+    // CONTRAST `core.template-adoption.read`, which IS a new permission for an aggregate over this
+    // SAME Organization population, because ITS consumer — a Template reader — holds no enumeration
+    // right over Organizations. **Same test, opposite answers, and the difference is the RIGHT
+    // rather than the object.**
+    permission: fixedPermission(PLATFORM_ORGANIZATION_LIST_PERMISSION),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    // NONE. No filter, no `status`, no `q`. A scalar total keyed by nothing — the moment it is
+    // keyed by anything it has stopped being a count and become a table, which is the mapping
+    // `0028` Decision 1 refuses.
+    queryParameters: Object.freeze([]),
+    // 200. `platform-operator-v1`'s `platform.organizations.count` -> `successStatus`, opened and
+    // read rather than inferred from the method.
+    successStatus: 200 as const,
+  }),
   Object.freeze({
     id: 'platform.organizations.list' as const,
     method: 'GET' as const,
@@ -528,34 +582,35 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // It is the same device the confirmation challenge uses: a caller cannot obtain a step toward
     // something it may not do.
     permission: fixedPermission('core.credential.reset'),
-    // THE IDENTIFIER THE OPERATOR WAS GIVEN, UNDER EITHER OF TWO NAMES. THERE IS NO
-    // `principal_id` — that is what this route produces, not what it takes — and no `role`, no
-    // `status`, no `q`.
+    // THE IDENTIFIER THE OPERATOR WAS GIVEN, UNDER ITS ONE NAME. THERE IS NO `principal_id` —
+    // that is what this route produces, not what it takes — and no `role`, no `status`, no `q`.
     //
     // ===========================================================================================
-    // *** PHASE 1 OF A TWO-PHASE RENAME. EXACTLY ONE OF THE TWO, ENFORCED IN THE HANDLER. ***
+    // *** PHASE 3 OF THE RENAME, LANDED. `identifier` IS GONE AND MAY NOT COME BACK. ***
+    // `docs/decisions/0034`, discharging `OD-5` in `organization-detail-v1`.
     // ===========================================================================================
     //
-    // `target_identifier` IS THE DESTINATION; `identifier` is deprecated and its removal is owed as
-    // `OD-5`. Both are declared here because **the class refuses an undeclared field before
-    // authentication**, so declaring only the new name would refuse the field the deployed console
-    // sends — the outage direction, hit twice already today.
+    // THE SEQUENCE WAS: Core accepts both -> the console switches -> Core drops `identifier`.
+    // Phases 1 and 2 are what made this phase safe; this is the breaking one, and `0034` prices
+    // the residual risk rather than assuming it away — **a straggler now receives
+    // `invalid_argument` from the class, before authentication, which is a loud, recoverable and
+    // immediately diagnosable failure rather than a silent one.**
     //
-    // THE SEQUENCE IS: Core accepts both -> the console switches -> Core drops `identifier`.
+    // *** DO NOT RE-ADD `identifier` HERE, AND NOT ONLY BECAUSE IT IS RETIRED. ***
+    // `architecture.md` §1a reserves the bare word platform-wide: a name that does not say WHOSE
+    // is a name two contracts can both use correctly while meaning different things by it, which
+    // is the defect that would have made `credential-reset-v1` return `forbidden` on every
+    // well-formed request. `target_identifier` means THE TARGET'S — the principal being resolved.
+    // The deprecation alias was an old name being retired, which is a different act from
+    // introducing a new one, and the reservation was never lifted.
     //
-    // *** DECLARING A FIELD HERE IS NOT ACCEPTING BOTH AT ONCE. *** This list is the class's
-    // pre-auth allow-list and nothing more. **Exactly-one is `resolveMember`'s job**, and both-
-    // present is refused there rather than silently preferred — if the two values differ, choosing
-    // silently is choosing which principal to resolve.
+    // THIS LIST IS THE CLASS'S PRE-AUTH ALLOW-LIST AND NOTHING MORE. It decides which names reach
+    // a handler at all; it decides nothing about what the handler then requires.
     //
-    // THE `oneOf` IN THE CONTRACT EXPRESSES THAT RULE AND DOES NOT ENFORCE IT: nothing in this
-    // repository executes JSON Schema. It is mechanical and diffable where prose is neither, and it
-    // is still a rule Core has to write.
-    //
-    // **WHEN `OD-5` IS DISCHARGED, THE CONTRACT PROPERTY AND THIS ENTRY COME OUT IN ONE CHANGE.**
-    // `scripts/check-route-fields.mjs` compares them and goes red if they are split — which is the
-    // check working rather than an obstacle to route around.
-    fields: Object.freeze(['identifier', 'target_identifier']),
+    // **THE CONTRACT PROPERTY AND THIS ENTRY COME OUT IN ONE CHANGE**, per `OD-5` and `0034`.
+    // `scripts/check-route-fields.mjs` compares them in both directions and goes red while only
+    // one half has landed — which is the check working rather than an obstacle to route around.
+    fields: Object.freeze(['target_identifier']),
     objectFields: Object.freeze([]),
     queryParameters: Object.freeze([]),
     successStatus: 200 as const,
@@ -741,6 +796,39 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     // client side, which is where a status mismatch surfaces.
     successStatus: 201 as const,
   }),
+  // ===========================================================================================
+  // *** THE LITERAL `count` ROUTE IS DECLARED BEFORE `/templates/{template_id}`, DELIBERATELY. ***
+  // `docs/decisions/0042`.
+  //
+  // `matchPlatformRoute` is FIRST-MATCH-WINS over this frozen array, so declaration order decides
+  // a literal-versus-parameter collision. **Today the grammar would decide it anyway** — a path
+  // parameter must satisfy `^[A-Za-z0-9_-]{8,64}$` and `count` is five characters, so it cannot be
+  // read as a `template_id`. **That is a property of the constant, not of this route**, and a
+  // future relaxation of the minimum length would silently turn `GET /templates/count` into a read
+  // of a Template with the id `count`, answering `not_found` forever.
+  //
+  // ORDERING MAKES IT INDEPENDENT OF THAT CONSTANT, and `assertNoLiteralShadowedByParameter` below
+  // makes it a build failure rather than a discipline.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.templates.count' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/templates/count`,
+    // THE LIST'S OWN PERMISSION, AND NO NEW ONE. `security.md` §2a: a count is safe exactly when
+    // its consumer already holds enumeration over the counted population, and a
+    // `core.template.list` holder enumerates Templates. Walking the pages yields the same number.
+    permission: fixedPermission('core.template.list'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    // *** NONE, AND `status` IS ABSENT ON PURPOSE. *** The list route takes `templateStatusFilter`
+    // because a picker must not offer a retired Template beside an active one. **A TOTAL IS A
+    // DIFFERENT QUESTION**: a number that changed with a filter would be a different number under
+    // the same name. The class refuses an undeclared query parameter before authentication, so
+    // this empty list is what makes `?status=active` an `invalid_argument` rather than a filter.
+    queryParameters: Object.freeze([]),
+    // 200. `template-v1`'s `platform.templates.count` -> `successStatus`, opened and read.
+    successStatus: 200 as const,
+  }),
   Object.freeze({
     id: 'platform.templates.list' as const,
     method: 'GET' as const,
@@ -748,7 +836,23 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     permission: fixedPermission('core.template.list'),
     fields: Object.freeze([]),
     objectFields: Object.freeze([]),
-    queryParameters: Object.freeze(['page_size', 'cursor']),
+    // `status` ADDED 2026-09-11, `template-v1`'s `listFilterAmendment`, WITH THE RETIRE ROUTE AND
+    // NOT AFTER IT. **The moment `retired` is reachable, a list that mixes the two recreates the
+    // defect name-uniqueness exists to prevent** — an active and a retired "School" side by side in
+    // the picker an operator chooses from. Retire without this filter is a half-built feature.
+    //
+    // ADDITIVE AND NOT BREAKING: **the server default does not change.** Absent still means
+    // unfiltered, which is exactly what every caller has shipped against. Changing the default to
+    // `active` was considered and rejected — unobservable today, observable the first time retire is
+    // used, and *"a change that is invisible until the feature that makes it visible ships is not a
+    // safe change, it is a delayed one."* **The default that matters is the client's**, stated
+    // normatively in the schema: an operator-facing list SENDS `status=active`.
+    //
+    // THE CLASS REFUSES AN UNDECLARED QUERY PARAMETER BEFORE AUTHENTICATION, so this entry is what
+    // makes the parameter reachable at all; the closed-enum check on its VALUE is
+    // `readTemplateStatusFilter`'s, and an unrecognised value is `invalid_argument` rather than
+    // silently ignored.
+    queryParameters: Object.freeze(['page_size', 'cursor', 'status']),
     successStatus: 200 as const,
   }),
   Object.freeze({
@@ -762,6 +866,101 @@ const ROUTES: readonly PlatformRoute[] = Object.freeze([
     objectFields: Object.freeze([]),
     // NONE, so any query string at all is refused. The identifier is in the path.
     queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  // ===========================================================================================
+  // TEMPLATE LIFECYCLE. `template-lifecycle-v1`, accepted 2026-09-10. FIVE ROUTES, FOUR
+  // PERMISSIONS, GRANTED BY THE USER 2026-09-11.
+  //
+  // *** THE COUNT IS 5-TO-4 AND NOT 5-TO-5. *** `core.template.retire` gates BOTH retire and
+  // restore, deliberately: the field is a reversible, non-destructive toggle on platform
+  // configuration, and *"nobody sensible holds the power to withdraw a Template and not the power to
+  // undo their own mistake."* **The cost of that merge is that anyone who may restore may also
+  // retire**, which forecloses a low-privilege recovery role — recorded in the contract as a
+  // capability given up rather than a consequence nobody noticed.
+  // ===========================================================================================
+  Object.freeze({
+    id: 'platform.templates.usage' as const,
+    method: 'GET' as const,
+    path: `${PLATFORM_BASE_PATH}/templates/{template_id}/usage`,
+    // *** ITS OWN PERMISSION, NOT `core.template.read`, AND SECURITY REVIEW OVERTURNED THE FIRST
+    // ANSWER TO GET HERE. *** `core.template.list` is also a read, so a holder of read-plus-list
+    // would enumerate every Template and sum the counts — the exact number of Organizations holding
+    // any Template, and polled over time a customer growth rate. `security.md` §2a states the
+    // general rule: a count is safe exactly when its consumer already holds enumeration over the
+    // counted population, and a Template reader holds none over Organizations.
+    permission: fixedPermission('core.template-adoption.read'),
+    // NO BODY, NO QUERY. The identifier is in the path, and a filter here would be the census
+    // vector with a knob on it.
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze([]),
+    // 200. `template-lifecycle-v1`'s `platform.templates.usage` -> `successStatus`, opened and read
+    // rather than inferred from the prose — which is how two of these were wrong on 2026-09-05.
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.templates.update' as const,
+    method: 'PATCH' as const,
+    path: `${PLATFORM_BASE_PATH}/templates/{template_id}`,
+    permission: fixedPermission('core.template.update'),
+    // `name` IS FLAT; `level_labels` IS THE DECLARED OBJECT FIELD — the same split as create.
+    //
+    // *** AND THERE IS NO `status`. *** `updateTemplateInput` carries exactly these two under
+    // `additionalProperties: false`, and the reason is a permission boundary rather than a shape
+    // preference: *"a `status` in a PATCH body would make `core.template.update` able to perform
+    // `core.template.retire`'s act, which is the permission split undone by a field."* The
+    // transition is the route. **Do not add one here.**
+    fields: Object.freeze(['name']),
+    objectFields: Object.freeze(['level_labels']),
+    queryParameters: Object.freeze([]),
+    // 200. `template-lifecycle-v1`'s `platform.templates.update` -> `successStatus`.
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.templates.retire' as const,
+    method: 'POST' as const,
+    path: `${PLATFORM_BASE_PATH}/templates/{template_id}/retire`,
+    permission: fixedPermission('core.template.retire'),
+    // NO BODY AT ALL. An empty declared set rejects every field with `invalid_argument` — *"this
+    // route accepts no body fields" has to be an explicit statement rather than an omission.*
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.templates.restore' as const,
+    method: 'POST' as const,
+    path: `${PLATFORM_BASE_PATH}/templates/{template_id}/restore`,
+    // *** THE SAME PERMISSION AS RETIRE AND A SEPARATE ROUTE. *** Sharing the permission is
+    // `theRetirementRuling`'s decision; sharing a ROUTE would have meant a toggle, and **a toggle's
+    // audit record cannot say which direction it went without reading the previous state.** The
+    // direction is in the route id, so an operator's trail distinguishes them at a glance.
+    permission: fixedPermission('core.template.retire'),
+    fields: Object.freeze([]),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze([]),
+    successStatus: 200 as const,
+  }),
+  Object.freeze({
+    id: 'platform.organizations.set-template' as const,
+    method: 'PATCH' as const,
+    path: `${PLATFORM_BASE_PATH}/organizations/{organization_id}/template`,
+    // *** NOT `core.platform-organization.update`. *** That permission's catalogue entry rules
+    // itself out in terms — display name, commercial registration, VAT registration, and *"IT DOES
+    // NOT COVER STATUS"*. A Template is not identity: it decides what every user in that
+    // Organization reads as the name of their own structure. Reusing the identity permission would
+    // widen it by adoption rather than by decision.
+    permission: fixedPermission('core.platform-organization.set-template'),
+    // ONE FIELD, REQUIRED, AND NULLABLE. `null` clears the Template back to the platform defaults
+    // and is a real operation rather than a hole. **ABSENT AND NULL ARE DIFFERENT REQUESTS** — the
+    // class permits a null primitive through, and `setOrganizationTemplateInput` lists this field as
+    // required, so an absent one is `invalid_argument` rather than a clear.
+    fields: Object.freeze(['template_id']),
+    objectFields: Object.freeze([]),
+    queryParameters: Object.freeze([]),
+    // 200. `template-lifecycle-v1`'s `platform.organizations.set-template` -> `successStatus`.
     successStatus: 200 as const,
   }),
   // ===========================================================================================
@@ -1190,8 +1389,177 @@ export function assertEveryRoutePermissionIsReachable(
   }
 }
 
+export class PlatformMemberEnumerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlatformMemberEnumerationError';
+  }
+}
+
+/**
+ * ===========================================================================================
+ * *** NO PLATFORM ROUTE RETURNS A SET OF PRINCIPALS FOR AN ORGANIZATION. ***
+ * `docs/decisions/0028` Decision 1 · `organization-detail-v1` · `template-lifecycle-v1` SR-11.
+ * ===========================================================================================
+ *
+ * *** THE PROHIBITION EXISTED ONLY IN CONTRACT PROSE UNTIL 2026-09-11, AND PROSE DESCRIBES WHILE
+ * ASSERTIONS INSTRUCT. *** `workflow.md` §12. The route table above already says *"THE ABSENCE IS
+ * THE CONTROL, so it is asserted by enumerating this table rather than by trying a URL — a route
+ * added later would pass a URL test that never ran."* **That sentence described a check nobody had
+ * written.** This is it.
+ *
+ * WHAT THE RULE ACTUALLY PROTECTS, because it is not obvious from the shape: an operator can
+ * enumerate every Organization one screen away, so **per-Organization member lists invert into
+ * every principal's Organization list**, which `CO1` forbids by name. *"Neither permission
+ * discloses it alone; the pair does, held by one principal, with no rule broken at either step."*
+ *
+ * *** IT IS AN ALLOW-LIST OF EXACTLY ONE, NOT A PATTERN THAT BANS THE OBVIOUS SPELLING. *** A check
+ * refusing `GET /organizations/{id}/members` is defeated by `/members/list`, `/people`, or a query
+ * parameter. Requiring every route under a `members` segment to be the ONE known-good shape means
+ * **a new route there fails the build and its author has to come here and read this argument** —
+ * which is the point, since the addition that matters will look reasonable to whoever makes it.
+ *
+ * WHAT IT CANNOT SEE, STATED SO NOBODY READS IT AS MORE THAN IT IS: **a route table declares no
+ * response shape**, so this cannot prove a route does not RETURN a set of principals. It proves
+ * that the only route under `members` is the single-subject resolve. A route named something else
+ * entirely that returned a member list would pass this and is caught by
+ * `qa-agent`'s response-shape cases and by review — **two layers, and this is the cheap one.**
+ * Do not describe it as the enforcement (`architecture.md` §3a's closing warning).
+ */
+export function assertNoMemberEnumerationRoute(routes: readonly PlatformRoute[] = ROUTES): void {
+  let examined = 0;
+  for (const route of routes) {
+    const segments = route.path.split('/').filter((segment) => segment.length > 0);
+    const index = segments.indexOf('members');
+    if (index === -1) {
+      continue;
+    }
+    examined += 1;
+    // THE ONE PERMITTED SHAPE: `POST .../organizations/{organization_id}/members/resolve`.
+    // At most one principal, named by an identifier the caller was already given — *"an operator
+    // resolving an identifier they were given is support; an operator receiving a list they did
+    // not ask for by name is surveillance."*
+    const isTheResolve =
+      route.method === 'POST' &&
+      index === segments.length - 2 &&
+      segments[segments.length - 1] === 'resolve' &&
+      segments[index - 1] === '{organization_id}';
+    if (!isTheResolve) {
+      throw new PlatformMemberEnumerationError(
+        `'${route.id}' registers '${route.method} ${route.path}', which sits under a 'members' ` +
+          'segment and is not the single-subject resolve. `0028` Decision 1 forbids a platform ' +
+          'route that returns a SET of principals for an Organization: an operator can already ' +
+          'enumerate every Organization, so per-Organization member lists invert into every ' +
+          "principal's Organization list, which CO1 forbids. Neither permission discloses that " +
+          'alone; the pair does, held by one principal, with no rule broken at either step. ' +
+          'If this route is genuinely not an enumeration, widen this assertion DELIBERATELY and ' +
+          'record why — do not rename the path around it.',
+      );
+    }
+  }
+  // ---- THE FLOOR. `workflow.md` §11a: a check handed nothing reports success, and this one is a
+  // loop over a filtered set — the failure mode that renders as a pass is the filter stopping
+  // matching. If the resolve is ever renamed, this goes red HERE rather than going quiet.
+  if (examined !== 1) {
+    throw new PlatformMemberEnumerationError(
+      `This check examined ${String(examined)} route(s) under a 'members' segment and expected ` +
+        "exactly 1 — `platform.organizations.members.resolve`. Zero means the filter stopped " +
+        'matching and this assertion has been silently asserting nothing; more than one means a ' +
+        'route was added and the count above was not revisited. Neither is a reason to relax it.',
+    );
+  }
+}
+
+export class PlatformRouteShadowedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlatformRouteShadowedError';
+  }
+}
+
+/**
+ * ===========================================================================================
+ * *** A LITERAL SEGMENT MUST NOT SIT BEHIND A PATH PARAMETER THAT COULD SWALLOW IT. ***
+ * Added 2026-09-11 with `docs/decisions/0042`'s two `count` routes.
+ * ===========================================================================================
+ *
+ * `matchPlatformRoute` is FIRST-MATCH-WINS over `ROUTES`, so for two routes of the same method and
+ * the same segment count, **declaration order decides which one a URL reaches.**
+ * `GET /templates/count` and `GET /templates/{template_id}` are exactly that pair.
+ *
+ * *** TODAY THE COLLISION CANNOT HAPPEN, AND THE REASON IS A CONSTANT IN ANOTHER PART OF THIS FILE
+ * RATHER THAN ANYTHING ABOUT THE ROUTES. *** `IDENTIFIER_PATTERN` is `^[A-Za-z0-9_-]{8,64}$`, and
+ * `count` is five characters, so it can never be read as a `template_id`. **Relax that minimum —
+ * for a shorter identifier scheme, for a legacy id, for any reason that has nothing to do with
+ * routing — and `GET /templates/count` silently becomes a read of a Template called `count`,
+ * answering `not_found` forever.** No test would go red: the route still exists, still authorizes,
+ * still audits, and returns a plausible answer to the wrong question.
+ *
+ * **SO THE ORDERING IS THE FIX AND THIS IS THE ENFORCEMENT.** `architecture.md` §3a: a guard that
+ * must be remembered is a discipline; one that fails the build is a mechanism. Declaration order is
+ * exactly the kind of thing a later edit reshuffles for tidiness.
+ *
+ * *** IT CHECKS ORDER, NOT THE GRAMMAR, AND THAT IS DELIBERATE. *** Asserting that no literal
+ * matches `IDENTIFIER_PATTERN` would couple this check to the constant whose future change is the
+ * hazard — it would go green on the day the relaxation landed and red on nothing. **Order is the
+ * property that holds whatever the grammar becomes.**
+ *
+ * WHAT IT DOES NOT COVER, stated so it is not read as more than it is: two routes whose patterns
+ * differ in segment COUNT cannot collide, and neither can two of different methods, so both are
+ * skipped. A parameter shadowing another parameter is not a shadowing at all — the first is simply
+ * the route. **This finds one thing: a reachable-only-by-luck literal.**
+ */
+export function assertNoLiteralShadowedByParameter(
+  routes: readonly PlatformRoute[] = ROUTES,
+): void {
+  let compared = 0;
+  for (let later = 0; later < routes.length; later += 1) {
+    const candidate = routes[later].path.split('/').filter((s) => s.length > 0);
+    for (let earlier = 0; earlier < later; earlier += 1) {
+      if (routes[earlier].method !== routes[later].method) {
+        continue;
+      }
+      const pattern = routes[earlier].path.split('/').filter((s) => s.length > 0);
+      if (pattern.length !== candidate.length) {
+        continue;
+      }
+      compared += 1;
+      // Does the EARLIER route's pattern cover the LATER route's path, treating `{name}` as a
+      // wildcard? If so the later route is unreachable whenever the grammar admits the literal.
+      const shadowed = pattern.every((expected, index) =>
+        expected.startsWith('{') && expected.endsWith('}')
+          ? !candidate[index].startsWith('{')
+          : expected === candidate[index],
+      );
+      if (shadowed) {
+        throw new PlatformRouteShadowedError(
+          `'${routes[later].id}' declares '${routes[later].method} ${routes[later].path}', which ` +
+            `is DECLARED AFTER '${routes[earlier].id}' ('${routes[earlier].path}') and is covered ` +
+            'by its path parameter. `matchPlatformRoute` is first-match-wins, so the literal route ' +
+            'is reachable only while IDENTIFIER_PATTERN happens to refuse the literal segment — a ' +
+            'property of that constant, not of these routes. Declare the LITERAL route FIRST. Do ' +
+            'not "fix" this by tightening the grammar; the grammar is not what should decide it.',
+        );
+      }
+    }
+  }
+  // ---- THE FLOOR. `workflow.md` §11a: this loop is over a FILTERED set, and the failure mode that
+  // renders as a pass is the filter matching nothing. Two routes of one method sharing a segment
+  // count is the whole precondition, and there are several such pairs today; zero would mean the
+  // comparison stopped finding candidates rather than that nothing was wrong.
+  if (compared === 0) {
+    throw new PlatformRouteShadowedError(
+      'This check compared 0 route pairs. It examines pairs sharing a METHOD and a SEGMENT COUNT, ' +
+        'and the shipped table has several — so zero means the pairing stopped matching and this ' +
+        'assertion has been asserting nothing.',
+    );
+  }
+}
+
 assertConfirmationCoverageIsCoherent();
 assertEveryRoutePermissionIsReachable();
+assertNoMemberEnumerationRoute();
+assertNoLiteralShadowedByParameter();
 
 /**
  * Matches an ABSOLUTE path and method. Exact match only, no path parameters and no patterns.

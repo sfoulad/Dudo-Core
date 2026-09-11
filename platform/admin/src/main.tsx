@@ -1,7 +1,18 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from '@/App';
+import { RouterProvider } from '@tanstack/react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { router } from '@/routes/route-tree';
+import { createQueryClient } from '@/lib/query-client';
+import { LocaleProvider } from '@/lib/i18n';
 import '@/styles/index.css';
+
+/*
+ * ONE QUERY CLIENT, CREATED ONCE, OUTSIDE RENDER. A second one silently halves
+ * the cache and re-issues every read — and on this console a re-issued read is
+ * an audit row describing nothing an operator did.
+ */
+const queryClient = createQueryClient();
 
 /**
  * Entry point.
@@ -32,10 +43,37 @@ if (container === null) {
 try {
   createRoot(container).render(
     <StrictMode>
-      <App />
+      {/*
+        LOCALE OUTSIDE THE ROUTER, NOT INSIDE IT.
+
+        `dir` is written to `<html>` and is inherited by everything — including
+        anything the router renders before a route resolves, and including the
+        configuration-error path below. A provider mounted inside the router
+        would leave those in the document's default direction, which is the
+        subset of the console a person is most likely to be looking at when
+        something has gone wrong.
+      */}
+      <LocaleProvider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </LocaleProvider>
     </StrictMode>,
   );
 } catch (thrown) {
+  /*
+   * ⚠ THIS ONE STAYS ENGLISH, AND IT IS THE ONLY OPERATOR-FACING STRING ON THE
+   * CONSOLE THAT DOES.
+   *
+   * **The catch fires when `LocaleProvider` failed to mount**, so there is no
+   * locale, no dictionary and no `t` — reaching for one here would throw inside
+   * the handler for a throw. This is the message shown when the React tree did
+   * not start at all, written into a bare DOM node.
+   *
+   * Named here so the next reader does not translate a string that cannot reach
+   * a translator, and so the copy pin's exemption for `main.tsx` has a reason
+   * attached rather than being a filename on a list.
+   */
   const message =
     thrown instanceof Error ? thrown.message : 'The console could not start on this build.';
   const paragraph = document.createElement('p');

@@ -77,7 +77,9 @@ import {
   normalizeIdentifier,
 } from '../../../platform/core/identity/credential-store.ts';
 import { buildSeedRows } from '../../../platform/core/identity/tools/seed-principal.ts';
-import { deriveLoginCredential as webDerive } from '../../../platform/web/src/api/kdf.ts';
+// `@dudo/client-kdf` (0040), not a relative path into `packages/client-kdf/src/`: a relative path
+// across a package boundary asserts about the tree layout rather than about the dependency.
+import { deriveLoginCredential as webDerive } from '@dudo/client-kdf';
 import { createInProcessControlPlaneWriteAdmission } from '../../../platform/core/identity/control-plane-admission.ts';
 import { createInProcessDayWriteBudget } from '../../../platform/core/protection/in-process-coordinator.ts';
 import { DAILY_ALLOCATION } from '../../../platform/core/protection/write-admission.ts';

@@ -1,13 +1,13 @@
 /**
  * One customer's full record — all fifteen fields.
  *
- * WHAT IS NOT ON THIS SCREEN, AND WHY. There is no Delete control and no
- * "cancel deletion" control. DeleteCustomer and RestoreDeletedCustomer are
- * contracted and deliberately out of scope for this slice (contract §11.1), so
- * the platform would refuse them. An interface that offers an action the
- * platform refuses is worse than one that omits it, and their absence here is
- * the decision rather than an oversight. The client has no method for either,
- * so adding one would not compile.
+ * WHAT IS NOT ON THIS SCREEN, AND WHY. There is no Delete control and no "cancel
+ * deletion" control. DeleteCustomer and RestoreDeletedCustomer are contracted
+ * and deliberately out of scope for this slice (contract §11.1), so the platform
+ * would refuse them. An interface that offers an action the platform refuses is
+ * worse than one that omits it, and their absence here is the decision rather
+ * than an oversight. The client has no method for either, so adding one would
+ * not compile.
  *
  * The archive and restore controls follow the state machine exactly: archive
  * only from `active`, restore only from `archived`, and `pending_deletion` — a
@@ -18,170 +18,120 @@
  * call. Hiding a button is presentation, never security.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, ButtonLink } from '@/components/ui/button';
-import { StatusBadge, TypeTag } from '@/components/ui/badge';
-import { ErrorBlock, Panel, Skeleton, StateBlock } from '@/components/StateBlock';
-import { toast } from '@/components/Toaster';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link } from '@tanstack/react-router';
+import { Button, buttonVariants, Panel, Skeleton, toast } from '@dudo/ui';
+import { StatusBadge, TypeTag } from '@/components/CustomerBadges';
+import { ErrorBlock } from '@/components/ErrorBlock';
 import { countryLabel, formatDate, formatTimestamp, statusLabel } from '@/contracts/format';
-import { toApiError, type ApiError } from '@/api/errors';
-import type { Customer } from '@/contracts/customer-directory';
-import { businessLabel, type BusinessReference } from '@/contracts/business-read';
-import type { CustomerDirectoryClient } from '@/api/client';
-import { getLastListHash } from '@/lib/last-list';
-import { navigate } from '@/lib/router';
+import { toApiError } from '@/api/errors';
+import { businessLabel } from '@/contracts/business-read';
+import { getLastListSearch } from '@/lib/last-list';
+import type { CustomerListSearch } from '@/routes/customer-list-search';
+import { useBusinessReference, useCustomer, useCustomerTransition } from '@/lib/queries';
 
-export function CustomerDetail({
-  client,
-  customerId,
-}: {
-  client: CustomerDirectoryClient;
-  customerId: string;
-}) {
-  const [customer, setCustomer] = useState<Customer | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [pendingAction, setPendingAction] = useState<'archive' | 'restore' | null>(null);
+export function CustomerDetail({ customerId }: { customerId: string }) {
   const [confirmingArchive, setConfirmingArchive] = useState(false);
-  const [businessRef, setBusinessRef] = useState<BusinessReference | null>(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
-  const reload = useCallback(() => setReloadNonce((n) => n + 1), []);
+  const customerQuery = useCustomer(customerId);
+  const customer = customerQuery.data ?? null;
+  const archive = useCustomerTransition('archive');
+  const restore = useCustomerTransition('restore');
+  const pendingAction = archive.isPending ? 'archive' : restore.isPending ? 'restore' : null;
+
+  /*
+   * One record needs one Business name, so this screen uses
+   * ResolveBusinessReferences rather than fetching the caller's whole authorized
+   * set — which is the case that Action exists for. A failure resolves to `null`
+   * inside the query and the identifier is shown instead: a name that will not
+   * load must not take down a record the person can otherwise read in full.
+   */
+  const businessRef = useBusinessReference(customer?.business_id).data ?? null;
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
+    document.title = customer
+      ? `${customer.display_name} · Dudo`
+      : customerQuery.error
+        ? 'Customer not available · Dudo'
+        : 'Customer · Dudo';
+  }, [customer, customerQuery.error]);
+
+  // A record that reloaded is a record whose state may have moved; an
+  // in-progress confirmation for the state it used to be in is withdrawn.
+  useEffect(() => {
     setConfirmingArchive(false);
-
-    client
-      .getCustomer(customerId)
-      .then((record) => {
-        if (cancelled) return;
-        setCustomer(record);
-        document.title = `${record.display_name} · Dudo`;
-      })
-      .catch((thrown) => {
-        if (cancelled) return;
-        setCustomer(null);
-        setError(toApiError(thrown));
-        document.title = 'Customer not available · Dudo';
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [client, customerId, reloadNonce]);
+  }, [customerId]);
 
   useEffect(() => {
     if (confirmingArchive) confirmRef.current?.focus();
   }, [confirmingArchive]);
 
-  /**
-   * Resolve this record's Business name.
-   *
-   * The response carries exactly one entry per requested identifier at the same
-   * index, with the identifier echoed. This reads `data[0]` and then checks the
-   * echoed identifier rather than trusting position alone — the contract echoes
-   * it precisely so a client need not depend on alignment.
-   *
-   * A failure here is deliberately swallowed: a name that will not load must
-   * not take down a record the person can otherwise read in full. The fallback
-   * is the identifier, which is what the contract says to render anyway.
-   */
-  useEffect(() => {
+  function runTransition(kind: 'archive' | 'restore') {
     if (!customer) return;
-    let cancelled = false;
-
-    client
-      .resolveBusinessReferences([customer.business_id])
-      .then((response) => {
-        if (cancelled) return;
-        const entry = response.data[0];
-        if (entry && entry.business_id === customer.business_id) setBusinessRef(entry);
-      })
-      .catch(() => {
-        /* Falls back to the identifier. */
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [client, customer]);
-
-  async function runTransition(kind: 'archive' | 'restore') {
-    if (!customer) return;
-    setPendingAction(kind);
-    try {
-      const updated =
-        kind === 'archive'
-          ? await client.archiveCustomer(customer.customer_id)
-          : await client.restoreCustomer(customer.customer_id);
-      setCustomer(updated);
-      setConfirmingArchive(false);
-      toast(
-        kind === 'archive'
-          ? `${updated.display_name} is archived.`
-          : `${updated.display_name} is active again.`,
-      );
-    } catch (thrown) {
-      const failure = toApiError(thrown);
-      if (failure.code === 'failed_precondition') {
-        // The record moved on since the page was loaded. Reload rather than
-        // argue with the server about what state it is in.
-        toast(failure.message || 'That is no longer possible for this customer.', 'error');
-        reload();
-        return;
-      }
-      toast(failure.message || 'That could not be completed.', 'error');
-      setConfirmingArchive(false);
-    } finally {
-      setPendingAction(null);
-    }
+    const mutation = kind === 'archive' ? archive : restore;
+    mutation.mutate(customer.customer_id, {
+      onSuccess: (updated) => {
+        setConfirmingArchive(false);
+        toast(
+          kind === 'archive'
+            ? `${updated.display_name} is archived.`
+            : `${updated.display_name} is active again.`,
+        );
+      },
+      onError: (failure) => {
+        if (failure.code === 'failed_precondition') {
+          // The record moved on since the page was loaded. Re-read rather than
+          // argue with the server about what state it is in.
+          toast(failure.message || 'That is no longer possible for this customer.', 'error');
+          void customerQuery.refetch();
+          return;
+        }
+        toast(failure.message || 'That could not be completed.', 'error');
+        setConfirmingArchive(false);
+      },
+    });
   }
 
-  const backHref = getLastListHash();
+  const backSearch = getLastListSearch();
 
-  if (loading) {
+  if (customerQuery.isPending) {
     return (
       <div>
-        <BackLink href={backHref} />
+        <BackLink search={backSearch} />
         <Skeleton className="h-6 w-56" />
       </div>
     );
   }
 
-  if (error || !customer) {
+  if (customerQuery.error || !customer) {
     return (
       <div>
-        <BackLink href={backHref} />
+        <BackLink search={backSearch} />
         <Panel>
           <ErrorBlock
-            error={error ?? toApiError(null)}
-            onRetry={reload}
-            extraActions={<ButtonLink href={backHref}>Back to customers</ButtonLink>}
+            error={customerQuery.error ?? toApiError(null)}
+            onRetry={() => void customerQuery.refetch()}
+            extraActions={
+              <Link to="/customers" search={backSearch} className={buttonVariants()}>
+                Back to customers
+              </Link>
+            }
           />
         </Panel>
       </div>
     );
   }
 
-  // One record needs one Business name, so this screen uses
-  // ResolveBusinessReferences rather than fetching the caller's whole
-  // authorized set — which is the case that Action exists for.
   const businessName = businessRef
     ? businessLabel(businessRef)
-    : // Not yet resolved, or unresolved. Either way the identifier is the
-      // honest rendering; a client must never infer existence from a name.
+    : // Not yet resolved, or unresolved. Either way the identifier is the honest
+      // rendering; a client must never infer existence from a name.
       customer.business_id;
 
   return (
     <div>
-      <BackLink href={backHref} />
+      <BackLink search={backSearch} />
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
@@ -198,18 +148,22 @@ export function CustomerDetail({
         <div className="flex flex-wrap gap-2">
           {customer.status === 'active' && !confirmingArchive ? (
             <>
-              <ButtonLink href={`#/customers/${encodeURIComponent(customer.customer_id)}/edit`}>
+              <Link
+                to="/customers/$customerId/edit"
+                params={{ customerId: customer.customer_id }}
+                className={buttonVariants()}
+              >
                 Edit
-              </ButtonLink>
+              </Link>
               <Button onClick={() => setConfirmingArchive(true)}>Archive</Button>
             </>
           ) : null}
 
           {customer.status === 'active' && confirmingArchive ? (
-            // The confirmation happens in place rather than in a dialog:
-            // nothing is trapped, Escape and Cancel both back out, and focus
-            // moves to the confirming control so a keyboard user is not left
-            // pressing a button that has moved.
+            // The confirmation happens in place rather than in a dialog: nothing
+            // is trapped, Escape and Cancel both back out, and focus moves to
+            // the confirming control so a keyboard user is not left pressing a
+            // button that has moved.
             <div
               role="group"
               aria-label="Confirm archiving this customer"
@@ -227,7 +181,7 @@ export function CustomerDetail({
                 variant="primary"
                 busy={pendingAction === 'archive'}
                 disabled={pendingAction !== null}
-                onClick={() => void runTransition('archive')}
+                onClick={() => runTransition('archive')}
               >
                 {pendingAction === 'archive' ? 'Archiving…' : 'Yes, archive'}
               </Button>
@@ -242,15 +196,15 @@ export function CustomerDetail({
               variant="primary"
               busy={pendingAction === 'restore'}
               disabled={pendingAction !== null}
-              onClick={() => void runTransition('restore')}
+              onClick={() => runTransition('restore')}
             >
               {pendingAction === 'restore' ? 'Restoring…' : 'Restore'}
             </Button>
           ) : null}
 
-          {/* pending_deletion, or any status this client has not been taught:
-              no action is offered, because none this slice implements is legal
-              from here. */}
+          {/* pending_deletion, or any status this client has not been taught: no
+              action is offered, because none this slice implements is legal from
+              here. */}
         </div>
       </div>
 
@@ -275,8 +229,8 @@ export function CustomerDetail({
         <Section title="Contact">
           {/* `dir="ltr"` on the contact values is required, not decorative: a
               phone number begins with a neutral "+", so in an RTL document the
-              bidi algorithm reorders the groups and "+973 3901 2244" displays
-              as "2244 3901 973+". Verified by rendering with dir="rtl". */}
+              bidi algorithm reorders the groups and "+973 3901 2244" displays as
+              "2244 3901 973+". Verified by rendering with dir="rtl". */}
           <FieldRow label="Email address">
             {customer.email ? (
               <a dir="ltr" href={`mailto:${customer.email}`}>
@@ -342,17 +296,18 @@ function Meta({ when, who }: { when: string | null; who: string }) {
   );
 }
 
-function BackLink({ href }: { href: string }) {
+function BackLink({ search }: { search: CustomerListSearch }) {
   return (
-    <a
-      href={href}
+    <Link
+      to="/customers"
+      search={search}
       className="mb-4 inline-flex items-center gap-2 rounded-sm text-[0.8125rem] font-semibold text-ink-muted no-underline hover:text-navy-700"
     >
       <span aria-hidden="true" className="text-base leading-none rtl:rotate-180">
         ←
       </span>
       Customers
-    </a>
+    </Link>
   );
 }
 
@@ -425,35 +380,6 @@ function FieldRow({
       >
         {empty ? 'Not recorded' : children}
       </p>
-    </div>
-  );
-}
-
-/** Reached when the address does not match any screen. */
-export function NotFound() {
-  return (
-    <div>
-      <a
-        href={getLastListHash()}
-        className="mb-4 inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-ink-muted no-underline hover:text-navy-700"
-      >
-        <span aria-hidden="true" className="rtl:rotate-180">
-          ←
-        </span>
-        Customers
-      </a>
-      <Panel>
-        <StateBlock
-          glyph="?"
-          title="This page does not exist"
-          body="The address does not match anything in Dudo."
-          actions={
-            <Button variant="primary" onClick={() => navigate('/customers')}>
-              Go to customers
-            </Button>
-          }
-        />
-      </Panel>
     </div>
   );
 }

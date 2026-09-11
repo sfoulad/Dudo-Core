@@ -1,6 +1,12 @@
 # Dudo — Dudo-Core
 
-**Status: pre-alpha MVP. Not ready for use.**
+**Status: pre-alpha. Not ready for use.**
+
+*(This line read "pre-alpha MVP" until 2026-09-08. The MVP framing was withdrawn on
+2026-09-06 by [`docs/decisions/0030`](docs/decisions/0030-full-system-zero-cost-and-expandability.md);
+the target is the full system, built **admin-first** per
+[`0035`](docs/decisions/0035-admin-first-and-the-milestone-program.md). "Not ready for use"
+is unchanged and is not softened by either.)*
 
 Dudo is a business-management platform for startups and SMEs. This repository,
 **Dudo-Core**, holds the server side of the product, the responsive web application, and
@@ -22,29 +28,49 @@ contracts from this repository.
 
 ## Current state
 
-**No application code exists yet.** The stack is now decided: **TypeScript on
-Cloudflare** — Workers for the API and web backend, D1 for relational tenant data, R2 for
-files, Queues for asynchronous work, Workflows for long-running processes, and Durable
-Objects only where real coordination is needed. See
+> **Corrected 2026-09-08.** This section said **"No application code exists yet"** and
+> **"the directories are placeholders"** long after neither was true — in the public README
+> of a public repository, which is the worst place in the tree for that sentence to rot.
+> Nothing goes red when a status paragraph goes stale, which is the whole of
+> `.claude/rules/workflow.md` §12.
+
+**Application code exists and is deployed.** Core domain logic, authorization, tenancy,
+auditing and the platform routes are in `platform/core/`; the responsive web application
+and the platform admin console are in `platform/web/`; the published contracts are in
+`packages/contracts/`; the suites are in `packages/testing/`; the first business App is
+`apps/customers/`.
+
+**Not started, and still README-only:** the capability registry and App runtime
+(`platform/capabilities/`), the plugin SDK (`packages/sdk/`), and Connectors
+(`connectors/`).
+
+**Stack.** **TypeScript on Cloudflare** — Workers for the API and web backend, D1 for
+relational tenant data, R2 for files, Queues for asynchronous work, Workflows for
+long-running processes, and Durable Objects only where real coordination is needed. See
 [`docs/decisions/0003-technology-stack-typescript-on-cloudflare.md`](docs/decisions/0003-technology-stack-typescript-on-cloudflare.md).
+The web application stack is [`0016`](docs/decisions/0016-web-application-stack.md) and the
+admin interface stack is [`0010`](docs/decisions/0010-admin-interface-frontend-stack.md).
+**No Cloudflare service beyond the six above is approved**, and each further one needs its
+own record.
 
-No web framework, testing framework, or third-party dependency has been selected — those
-are separate decisions, and no Cloudflare service beyond the six above is approved.
-
-What exists today is the structure the code will be built into: module boundaries,
-binding development rules, agent definitions, product documentation, and decision
-records. The directories are placeholders.
-
-**Executable setup, build, and run instructions will be added only after the technology
-stack is approved and recorded** as a decision. Publishing setup steps before then would
-mean inventing them.
+**Setup, build and run instructions are still not published here.** That is now a
+deliberate gap rather than an unmet precondition, and it is owed.
 
 ## How Dudo is built
 
-One small, complete vertical feature at a time. A feature is not finished when it
-compiles — it is finished when it has shipped to a web test environment and an internal
-Apple test build, been verified, and been accepted by the project owner. The full policy
-is in [`docs/product/mvp-delivery-policy.md`](docs/product/mvp-delivery-policy.md).
+**Admin-first, full-system scope, in named milestones.** The target is the whole product —
+Core, both clients, the capability registry and SDK, Connectors, and the business Apps —
+with the **administration product built complete first**, through Milestones 0–6. Work runs
+continuously and stops at named milestones for the project owner to test and accept. See
+[`docs/decisions/0035`](docs/decisions/0035-admin-first-and-the-milestone-program.md) and
+[`0030`](docs/decisions/0030-full-system-zero-cost-and-expandability.md).
+
+*(This section described "one small, complete vertical feature at a time" — the pre-`0030`
+policy, superseded on 2026-09-06.)* **What did not change:** a feature is not finished when
+it compiles, production actions require the owner's explicit approval every time, and
+**acceptance belongs to the project owner alone.** The delivery requirements are in
+[`docs/product/mvp-delivery-policy.md`](docs/product/mvp-delivery-policy.md), whose pacing
+sections are superseded and whose Apple, web and public-repository requirements still hold.
 
 ## Documentation
 
@@ -62,16 +88,20 @@ is in [`docs/product/mvp-delivery-policy.md`](docs/product/mvp-delivery-policy.m
 
 ```
 platform/core/          domain logic, APIs, authorization, tenancy
-platform/web/           responsive web application
-platform/capabilities/  capability registry and App runtime
-apps/                   installable business Apps (reserved — none yet)
-connectors/             adapters to external platforms (reserved — none yet)
+platform/web/           responsive web application + platform admin console
+platform/capabilities/  capability registry and App runtime      (README only)
+apps/                   installable business Apps — customers/
+connectors/             adapters to external platforms           (README only)
 packages/contracts/     shared cross-module contracts
-packages/sdk/           the SDK App developers build against
+packages/sdk/           the SDK App developers build against     (README only)
 packages/testing/       test suites and shared harness
 agents/                 agent rules, prompts, task specifications
-docs/                   product, architecture, decisions, operations
+scripts/ tools/         repository checkers and the suite runner
+docs/                   product, architecture, decisions, operations, releases
 ```
+
+*(`apps/` read "reserved — none yet" until 2026-09-08; the Customer Directory App has been
+there since the first slice. The three marked **README only** genuinely are.)*
 
 ## Licence
 

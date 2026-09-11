@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:cascadeneighbour:1",
+  "title": "THE OVER-REFUSAL CONTROL. Imports a GOOD shared schema, never the bad one.",
+  "$defs": {
+    "neighbourInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v"],
+      "properties": {
+        "v": { "$ref": "urn:dudo:schema:cascadefine:1#/$defs/fineThing" }
+      }
+    },
+    "neighbourOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

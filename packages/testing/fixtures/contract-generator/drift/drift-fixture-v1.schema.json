@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:drift-fixture:1",
+  "title": "Drift fixture — NOT A REAL CONTRACT",
+  "description": "The negative control for generate-types.mjs. See drift-fixture-v1.contract.yaml. The committed TypeScript beside this file in generated/ is DELIBERATELY STALE and must stay that way: it is the known-failing input that proves the drift check can go red. Do not 'fix' it.\n\nIt exercises one of each node kind the renderer supports, so that a change to renderType which breaks a kind shows up here rather than in a real contract: a plain string, a bounded integer, an enum, a nullable via oneOf, an array with items, an object with required and optional properties, and a local $ref.",
+  "$defs": {
+    "echoToken": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "description": "An opaque token. Exercises the plain-string branch."
+    },
+    "echoCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Exercises the integer branch, which must render as `number` and not as a bounded type."
+    },
+    "echoMode": {
+      "type": "string",
+      "enum": ["plain", "reversed"],
+      "description": "Exercises the enum branch, which must render as a union of string literals."
+    },
+    "echoLabelOrNull": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Exercises the oneOf branch and the null type."
+    },
+    "echoInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "description": "Exercises required-versus-optional. `token` is required; `mode` and `count` are not.",
+      "properties": {
+        "token": { "$ref": "#/$defs/echoToken" },
+        "mode": { "$ref": "#/$defs/echoMode" },
+        "count": { "$ref": "#/$defs/echoCount" }
+      }
+    },
+    "echoOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens", "label"],
+      "description": "Exercises the array branch and a nullable field.",
+      "properties": {
+        "tokens": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/echoToken" }
+        },
+        "label": { "$ref": "#/$defs/echoLabelOrNull" }
+      }
+    }
+  }
+}

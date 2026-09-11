@@ -1,0 +1,43 @@
+{
+  "name": "@dudo/client-kdf",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Client-side credential derivation — ADR 0015 §D. One implementation, both browser consoles, and the shared test vectors Dudo-Apple must reproduce.",
+  "//": [
+    "WHY THIS IS A SEPARATE PACKAGE FROM @dudo/ui, AND IT IS THE LOAD-BEARING HALF",
+    "OF ADR 0040.",
+    "",
+    "One shared package would have been simpler and would have quietly destroyed",
+    "0036's no-authority rule. Put `kdf.ts` beside `button.tsx` and 'the shared",
+    "package' becomes a place where presentation and CREDENTIAL DERIVATION both",
+    "live — at which point the next author importing something that decides from it",
+    "has broken no visible rule. The split is what keeps that sentence enforceable,",
+    "and it is what gives `check:ui-purity` a subject it can actually cover.",
+    "",
+    "THIS PACKAGE IS THE OPPOSITE KIND OF THING AND IS TREATED ACCORDINGLY: it is",
+    "security-relevant, it carries no components and no styling, and its output is a",
+    "43-character credential that Core will accept or refuse.",
+    "",
+    "IT HAS NO DEPENDENCIES AT ALL. The derivation runs on the platform's own",
+    "WebCrypto — `crypto.subtle.deriveBits` with PBKDF2-HMAC-SHA256 — and normalises",
+    "with `String.prototype.normalize`. Nothing is installed, and nothing should be:",
+    "a supply-chain surface on the login path is the one place it costs most.",
+    "",
+    "THE SUITE SHIPS WITH THE CODE. `scripts/verify-kdf.mjs` imports the REAL module",
+    "rather than a copy, so it checks what the browsers ship. It is the UNION of the",
+    "two suites the consoles used to carry separately — 17 assertions were present in",
+    "one and absent from the other, including the printable-ASCII boundary on the",
+    "login path — and `check:suite-parity` reached 0 before this package existed,",
+    "which is what proved the union complete rather than convenient."
+  ],
+  "exports": {
+    ".": "./src/kdf.ts",
+    "./client": "./src/kdf-client.ts",
+    "./worker": "./src/kdf-worker.ts"
+  },
+  "scripts": {
+    "verify:kdf": "node --experimental-strip-types scripts/verify-kdf.mjs",
+    "verify": "npm run verify:kdf"
+  }
+}

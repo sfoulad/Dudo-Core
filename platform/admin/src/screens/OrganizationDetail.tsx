@@ -91,20 +91,29 @@
  * every edit for information already in hand.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
-import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
+import { ErrorBlock, LoadingBlock, PermissionDeniedBlock } from '@/components/StateBlock';
 import { OrganizationIdentityPanel } from '@/components/OrganizationIdentity';
 import { ResetCredential } from '@/screens/ResetCredential';
-import { cn } from '@/lib/cn';
-import { buildHash, organizationAuditPath, ROUTES } from '@/lib/router';
-import { identifierRefusal } from '@/api/kdf';
+import { cn } from '@dudo/ui';
+import { Link } from '@tanstack/react-router';
+import { identifierRefusal } from '@dudo/client-kdf';
+import {
+  useOrganizationDetail,
+  useMergeOrganizationIdentity,
+  useTemplatePicker,
+  useSetOrganizationTemplate,
+} from '@/lib/queries';
+import { useLocale, useT } from '@/lib/i18n';
+import { platformClient } from '@/lib/clients';
 import {
   TEMPLATE_LEVELS,
   isKnownMembershipRole,
   isKnownStatus,
   type OrganizationDetail as Detail,
+  type Template,
   type PlatformClient,
   type ResolveMemberOutput,
 } from '@/api/platform';
@@ -132,8 +141,9 @@ const REFUSAL =
  * FROM THE SERVER REFUSAL ON PURPOSE.
  * ===========================================================================
  *
- * `identifierRefusal` lives in `api/kdf.ts`, is shared with the sign-in and
- * onboarding screens, and is BYTE-COMPARED against `platform/web` — so it is not
+ * `identifierRefusal` lives in `@dudo/client-kdf`, is shared with the sign-in and
+ * onboarding screens, and is now THE SAME FUNCTION `platform/web` calls rather
+ * than a byte-compared copy of it (ADR 0040) — so it is not
  * editable here even if it were the right place. Its non-ASCII sentence is
  * phrased in terms of signing the reader in, which is correct where somebody is
  * signing in and WRONG HERE: nobody is being signed in, and an operator reading
@@ -253,43 +263,39 @@ type Lookup =
   | { readonly kind: 'forbidden'; readonly error: ApiError }
   | { readonly kind: 'failed'; readonly error: ApiError };
 
-export function OrganizationDetail({
-  platform,
-  organizationId,
-}: {
-  platform: PlatformClient;
-  organizationId: string;
-}) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
-  const [nonce, setNonce] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform.readOrganization(organizationId).then(
-      (detail) => {
-        if (!cancelled) setLoad({ kind: 'loaded', detail });
-      },
-      (thrown: unknown) => {
-        if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-    // `nonce` only ever changes when a person presses Try again. There is no
-    // interval and no focus listener here, and adding one would be a budget
-    // defect rather than a refresh.
-  }, [platform, organizationId, nonce]);
+export function OrganizationDetail({ organizationId }: { organizationId: string }) {
+  /*
+   * THE DETAIL READ IS A QUERY, AND THE `nonce` IS GONE.
+   *
+   * It was `useEffect` + `let cancelled` + a nonce bumped only by Try again.
+   * `Load` is derived, never stored, so the screen cannot hold a state the
+   * query disagrees with.
+   *
+   * `isFetching` reproduces the previous behaviour exactly — the effect set
+   * `{ kind: 'loading' }` at the top of every run, which is what made Try again
+   * visibly do something. `lib/queries.ts` records why that is safe on this
+   * console: nothing here fetches unless an operator caused it. **There is still
+   * no interval and no focus listener, and adding one would be a budget defect
+   * rather than a refresh.**
+   */
+  const t = useT();
+  const detailQuery = useOrganizationDetail(organizationId);
+  const mergeIdentity = useMergeOrganizationIdentity();
+  const load: Load =
+    detailQuery.isPending || detailQuery.isFetching
+      ? { kind: 'loading' }
+      : detailQuery.error !== null
+        ? { kind: 'failed', error: detailQuery.error }
+        : { kind: 'loaded', detail: detailQuery.data };
 
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-3xl">
-      <a
-        href={buildHash(ROUTES.organizations)}
+      <Link
+        to="/organizations"
         className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
       >
         &larr; All Organizations
-      </a>
+      </Link>
 
       {/*
         THE NAME IS THE HEADING WHEN THERE IS ONE, AND THE IDENTIFIER IS
@@ -326,32 +332,131 @@ export function OrganizationDetail({
 
       {load.kind === 'loading' ? (
         <div className="mt-5">
-          <LoadingBlock label="Asking Core about this Organization…" />
+          <LoadingBlock label={t('detail.loading')} />
         </div>
       ) : null}
 
       {load.kind === 'failed' ? (
         <div className="mt-5">
-          <ErrorBlock
-            error={load.error}
-            onRetry={() => {
-              setNonce((value) => value + 1);
-            }}
-          >
-            {load.error.code === 'not_found' ? (
-              <p className="mt-2 leading-relaxed text-ink-soft">
-                No Organization has this identifier. It may have been mistyped, or the address may
-                be stale.
+          {/*
+            ===================================================================
+            THREE OUTCOMES, RENDERED AS THREE THINGS. `not_found` IS A STATE,
+            NOT AN ERROR.
+            ===================================================================
+
+            `platform.organizations.read` declares `forbidden` AND `not_found`
+            as separate errors, and its own `notFound` block settles what this
+            console may say:
+
+              "An unknown organization_id returns the argument-free 404. THERE
+               IS NO ORACLE CONCERN HERE... every caller who can reach this
+               route can already enumerate every Organization from
+               platform.organizations.list, so a distinction discloses nothing
+               to a population that could not obtain it one screen away."
+
+            *** THAT REASONING IS SPECIFIC TO THIS ROUTE CLASS AND THE CONTRACT
+            SAYS SO IN THE SAME BREATH: "must not be copied to a route reachable
+            by a tenant principal." ***
+
+            So this pattern is PLATFORM-CONSOLE-ONLY. A tenant-facing screen on
+            `app.dudo.work` distinguishing "absent" from "not yours" IS an
+            oracle — the exemption here rests entirely on the enumeration being
+            one screen away FOR THE SAME CALLER. **Nothing below may become a
+            shared not-found component across the two administrations**; that
+            is `CLAUDE.md`'s structural split arriving as a component boundary.
+
+            AND NOTE WHAT SITS SIXTEEN LINES BELOW IT IN THE SAME CONTRACT: the
+            member resolve's `notFoundCOLLAPSE` — "five cases, one answer, no
+            distinguishing field" — which is the OPPOSITE ruling for the
+            OPPOSITE reason. One file, two routes, two answers. Anchor to the
+            operation id, never to a line number (`architecture.md` §3c).
+          */}
+          {load.error.code === 'not_found' ? (
+            <div
+              role="status"
+              className="rounded-[12px] border border-line-strong bg-sunk p-5 text-[0.9375rem] leading-relaxed text-ink sm:p-6"
+            >
+              <h2 className="text-base font-bold text-ink">{t('detail.notFound.title')}</h2>
+              <p className="mt-2 text-ink-soft">
+                {t('detail.notFound.before')}{' '}
+                <bdi className="font-mono break-all text-ink">{organizationId}</bdi>{' '}
+                {t('detail.notFound.after')}
               </p>
-            ) : null}
-          </ErrorBlock>
+              {/*
+                A WAY BACK, NOT A RETRY. Asking again spends another audited read
+                — 2 row-writes — to receive the same answer, so no retry control
+                is offered and `isRetryable` would refuse one anyway. The
+                directory is where the operator can see what does exist.
+              */}
+              <Link
+                to="/organizations"
+                className="mt-4 inline-block text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
+              >
+                &larr; Back to all Organizations
+              </Link>
+            </div>
+          ) : load.error.code === 'forbidden' ? (
+            /*
+              A DIFFERENT FACT, AND MERGING IT WITH THE ABOVE WOULD MISLEAD.
+              `forbidden` means this operator may not read Organizations at all;
+              `not_found` means this one is not there. An operator who was shown
+              "does not exist" for a permission failure would go and tell a
+              colleague their business had been deleted.
+            */
+            <div
+              role="alert"
+              className="rounded-[12px] border border-scarlet-600 bg-scarlet-50 p-5 sm:p-6"
+            >
+              <h2 className="text-base font-bold text-scarlet-700">
+                {t('detail.forbidden.title')}
+              </h2>
+              {/*
+                SAYS THE REFUSAL IS NOT AN ABSENCE, and that distinction is the
+                whole reason this branch exists. **A translation that collapsed
+                it into "not found" would tell an operator a customer does not
+                exist when the truth is that they may not look** — a false
+                statement about a business, produced by a shorter sentence.
+              */}
+              <p className="mt-2 leading-relaxed text-ink-soft">
+                {t('detail.forbidden.body')}
+              </p>
+              {load.error.request_id ? (
+                <p className="mt-3 text-xs text-ink-muted">
+                  {t('denied.reference')}{' '}
+                  <bdi className="font-mono break-all">{load.error.request_id}</bdi>
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            /*
+              TRY AGAIN IS `refetch` — one call, the same cost as the nonce bump
+              it replaces. `retry: false` in `lib/query-client.ts` is what keeps
+              it one; the library default would spend four reads, at 2 row-writes
+              each, on a single press. `ErrorBlock` offers the control only for
+              codes `isRetryable` allows, so a settled answer never gets one.
+            */
+            <ErrorBlock
+              error={load.error}
+              onRetry={() => {
+                void detailQuery.refetch();
+              }}
+            />
+          )}
         </div>
       ) : null}
 
       {load.kind === 'loaded' ? (
         <>
+          {/*
+            `platformClient` IS PASSED DOWN BECAUSE THESE TWO ARE NOT CONVERTED
+            YET. `OrganizationIdentityPanel` and `ResetCredential` still hold
+            their own request state; they are outside this group's scope. It is
+            the module singleton from `lib/clients.ts` either way, so there is
+            still exactly one client — the prop is transitional, not a second
+            route to it.
+          */}
           <OrganizationIdentityPanel
-            platform={platform}
+            platform={platformClient}
             organizationId={load.detail.organization_id}
             identity={{
               display_name: load.detail.display_name,
@@ -364,13 +469,19 @@ export function OrganizationDetail({
              * nothing to ask for again. `member_count`, `status`, `template`
              * and `created_at` are untouched by this route and keep their
              * loaded values.
+             *
+             * IT NOW MERGES INTO THE CACHE RATHER THAN INTO LOCAL STATE, which
+             * is the same operation against the one copy that exists — and
+             * `useMergeOrganizationIdentity` is `setQueryData`, deliberately NOT
+             * `invalidateQueries`. An invalidation here would re-read the
+             * Organization and double the cost of every edit.
              */
             onSaved={(identity) => {
-              setLoad({ kind: 'loaded', detail: { ...load.detail, ...identity } });
+              mergeIdentity(load.detail.organization_id, identity);
             }}
           />
           <DetailCard detail={load.detail} />
-          <MemberLookup platform={platform} organizationId={load.detail.organization_id} />
+          <MemberLookup platform={platformClient} organizationId={load.detail.organization_id} />
         </>
       ) : null}
     </section>
@@ -378,21 +489,22 @@ export function OrganizationDetail({
 }
 
 function DetailCard({ detail }: { detail: Detail }) {
+  const t = useT();
   return (
     <div className="mt-5 rounded-[12px] border border-line bg-surface p-5 sm:p-6">
       <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
         <div className="min-w-0">
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Identifier
+            {t('column.identifier')}
           </dt>
-          <dd className="mt-1 font-mono text-[0.875rem] break-all text-ink">
-            {detail.organization_id}
+          <dd className="mt-1 text-[0.875rem] text-ink">
+            <bdi className="font-mono break-all">{detail.organization_id}</bdi>
           </dd>
         </div>
 
         <div className="min-w-0">
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Status
+            {t('column.status')}
           </dt>
           <dd className="mt-1">
             <StatusBadge status={detail.status} />
@@ -401,7 +513,7 @@ function DetailCard({ detail }: { detail: Detail }) {
 
         <div className="min-w-0">
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Created
+            {t('column.created')}
           </dt>
           <dd className="mt-1 text-[0.875rem] text-ink">
             <CreatedAt value={detail.created_at} />
@@ -410,7 +522,7 @@ function DetailCard({ detail }: { detail: Detail }) {
 
         <div className="min-w-0">
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Members
+            {t('column.members')}
           </dt>
           {/*
             A COUNT, RENDERED AS A COUNT. There is no link, no expander and no
@@ -426,14 +538,28 @@ function DetailCard({ detail }: { detail: Detail }) {
       </dl>
 
       <p className="mt-5 border-t border-line pt-4 text-[0.8125rem] leading-relaxed text-ink-muted">
-        <span className="font-semibold text-ink-soft">There is no member list, by design.</span>{' '}
-        The platform can count an Organization&rsquo;s members but cannot name them. A count says
-        whether onboarding worked and whether a business is in use; a list, across every
-        Organization an operator can already enumerate, would reconstruct every person&rsquo;s
-        Organization membership. Use the lookup below when a customer gives you an identifier.
+        {/*
+          THE ABSENCE IS A SECURITY DECISION AND THE SENTENCE SAYS SO. A count
+          says whether onboarding worked; a LIST, across every Organization an
+          operator can already enumerate, reconstructs every person's membership.
+          **Written as "by design" precisely so nobody reads it as a gap and
+          requests the feature** — which is what a shorter version would invite.
+        */}
+        <span className="font-semibold text-ink-soft">{t('detail.noMemberList.lead')}</span>{' '}
+        {t('detail.noMemberList.why')}
       </p>
 
       <TemplateBlock template={detail.template} />
+      {/*
+        SR-20: THE ORGANIZATION'S STATUS TRAVELS WITH THE RE-TEMPLATE CONTROL.
+        It is the Organization's own `status`, not the Template's — the embedded
+        Template carries none, which is why nothing here defaults it.
+      */}
+      <OrganizationTemplatePanel
+        organizationId={detail.organization_id}
+        organizationStatus={detail.status}
+        current={detail.template}
+      />
 
       {/*
         A LINK, NOT AN EMBEDDED FEED. Reading that trail costs the customer five
@@ -442,12 +568,13 @@ function DetailCard({ detail }: { detail: Detail }) {
         The cost is named here so the operator knows before they click.
       */}
       <div className="mt-5 border-t border-line pt-4">
-        <a
-          href={buildHash(organizationAuditPath(detail.organization_id))}
+        <Link
+          to="/organizations/$organizationId/audit"
+          params={{ organizationId: detail.organization_id }}
           className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
         >
           What has the platform done to this business? &rarr;
-        </a>
+        </Link>
         <p className="mt-1 text-[0.8125rem] leading-relaxed text-ink-muted">
           Their own audit trail, including which person each action named. Reading it writes to it,
           against this business&rsquo;s daily allowance — so it opens without loading anything.
@@ -458,15 +585,15 @@ function DetailCard({ detail }: { detail: Detail }) {
 }
 
 function TemplateBlock({ template }: { template: Detail['template'] }) {
+  const t = useT();
   if (template === null) {
     return (
       <div className="mt-5 border-t border-line pt-4">
         <p className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-          Business type
+          {t('onboard.businessType')}
         </p>
         <p className="mt-1 text-[0.875rem] leading-relaxed text-ink-muted">
-          None recorded. This Organization was created before it could adopt one, so it uses
-          Dudo&rsquo;s default words for every level.
+          {t('detail.template.none')}
         </p>
       </div>
     );
@@ -475,10 +602,15 @@ function TemplateBlock({ template }: { template: Detail['template'] }) {
   return (
     <div className="mt-5 border-t border-line pt-4">
       <p className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-        Business type
+        {t('onboard.businessType')}
       </p>
-      <p className="mt-1 font-semibold break-words text-ink">{template.name}</p>
-      <p className="font-mono text-xs break-all text-ink-muted">{template.template_id}</p>
+      {/* Operator-typed name and a wire id — isolated, not translated. */}
+      <p className="mt-1 font-semibold break-words text-ink">
+        <bdi>{template.name}</bdi>
+      </p>
+      <p className="text-xs text-ink-muted">
+        <bdi className="font-mono break-all">{template.template_id}</bdi>
+      </p>
 
       <dl className="mt-3 grid gap-x-6 gap-y-2 text-[0.875rem] sm:grid-cols-3">
         {TEMPLATE_LEVELS.map((level) => (
@@ -498,6 +630,340 @@ function TemplateBlock({ template }: { template: Detail['template'] }) {
 }
 
 /**
+ * Re-assign or CLEAR this Organization's Template.
+ *
+ * ===========================================================================
+ * CLEARING IS AN OPERATION, NOT AN EMPTY UPDATE
+ * ===========================================================================
+ *
+ * `{ template_id: null }` is SENT. Omitting the field would be an empty patch
+ * — a request that changes nothing — where the operator meant *adopt none and
+ * go back to Dudo's default words.* The two are different acts and only one of
+ * them is what the "Use none" control promises.
+ *
+ * ===========================================================================
+ * THE PICKER IS THE ONE THE ONBOARDING FORM ALREADY USES
+ * ===========================================================================
+ *
+ * `useTemplatePicker` shares its cache key with onboarding, so opening this
+ * costs nothing if that list was read in the last thirty seconds. **A second
+ * query for the same question would be a second audited call to render the
+ * same dropdown.**
+ *
+ * ===========================================================================
+ * ⚠ RETIRED TEMPLATES ARE LISTED, AND THE DECIDING REASON IS A DEFECT RATHER
+ * THAN A PRINCIPLE — Team Lead ruling, 2026-09-11
+ * ===========================================================================
+ *
+ * My argument for showing them was that hiding entries restates an
+ * authorization-shaped rule as a dropdown filter (`security.md` §2: a hidden
+ * control is presentation, never security). **True, and it loses to "the
+ * operator gets refused, which is bad UX" — so it is not what settles it.**
+ *
+ * **THE SETTLING REASON IS DERIVABLE FROM THE CONTRACT: retire is not delete.**
+ * An Organization already assigned to a Template KEEPS it when that Template is
+ * retired — which is exactly why `usage` counts adopters and why retirement
+ * does not free the unique name.
+ *
+ * > **So an Organization can be ON a retired Template, and a picker that
+ * > filtered retired entries could not display that Organization's current
+ * > value.** It would not merely hide an option — it would break the screen for
+ * > the case the feature exists to handle, on exactly the Organization most
+ * > likely to need re-assignment.
+ *
+ * **AND NOT DISABLED-WITH-A-TOOLTIP EITHER.** `Operators.tsx`: a greyed-out
+ * control is a promise, and here it would be a promise about an authorization
+ * outcome this client does not get to make. The status is shown beside each
+ * name; Core refuses what it refuses.
+ *
+ * ---------------------------------------------------------------------------
+ * THE SAME REASONING FORCED `currentOption` BELOW
+ * ---------------------------------------------------------------------------
+ *
+ * The picker asks for `PLATFORM_MAX_PAGE_SIZE` and takes the first page. **If
+ * this Organization's Template is not on that page, the `<select>` has no
+ * option matching `chosen` — and a browser renders the FIRST option instead.**
+ * The operator would see "None recorded" against an Organization that has one,
+ * and pressing Save would send `null`.
+ *
+ * **That is the silent reset the ruling was about, arriving through pagination
+ * instead of through a filter.** So the current Template is appended as an
+ * explicit option whenever the page does not already contain it: **the current
+ * value is always representable, whatever the list happens to hold.**
+ */
+/**
+ * The options, with the current Template guaranteed present.
+ *
+ * **A `<select>` whose `value` matches no `<option>` does not render empty — it
+ * renders the FIRST option**, so an out-of-page current Template would display
+ * as "None recorded" and Save would send `null`. The list is not re-sorted and
+ * nothing is removed; one entry is appended when it is missing.
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠ `status` IS OPTIONAL HERE BECAUSE THE DETAIL RESPONSE DOES NOT CARRY ONE
+ * ---------------------------------------------------------------------------
+ *
+ * `organization-detail-v1`'s embedded template is **`template_id`, `name` and
+ * `level_labels` — no `status` and no `created_at`.** The compiler refused the
+ * first version of this function and it was right to: an appended entry is a
+ * NARROWER shape than a list row.
+ *
+ * **So the appended entry carries no status, and none is invented for it.**
+ * Defaulting it to `'active'` would be this screen asserting a lifecycle state
+ * the response never sent — and on the one Organization most likely to be on a
+ * RETIRED Template, the guess would be wrong in the direction that hides the
+ * thing the operator needs to see. **An absent status renders as absent.**
+ */
+interface TemplateOption {
+  readonly template_id: string;
+  readonly name: string;
+  readonly status?: string;
+}
+
+function templateOptions(
+  page: readonly Template[],
+  current: Detail['template'],
+): readonly TemplateOption[] {
+  if (current === null) return page;
+  return page.some((template) => template.template_id === current.template_id)
+    ? page
+    : [...page, { template_id: current.template_id, name: current.name }];
+}
+
+/**
+ * ===========================================================================
+ * SR-20 — A SUSPENDED ORGANIZATION MAY BE RE-TEMPLATED, AND THE SCREEN SAYS SO
+ * ===========================================================================
+ *
+ * **The act is permitted.** `architecture-agent` ruled it, and the reasoning is
+ * what produces the obligation here:
+ *
+ * > **Refusing the small act forces the big one.** To correct a Template on a
+ * > suspended Organization, a refusal would make the operator **reactivate
+ * > first** — a larger act performed for a smaller reason, because reactivation
+ * > restores a customer's access to their own product. **Correcting
+ * > configuration before restoring access is the safer order.**
+ *
+ * **SO THE OBLIGATION IS TO SHOW, NOT TO GATE.** An operator re-templating a
+ * suspended Organization without knowing it is suspended **is deciding on a
+ * fact they were not shown.** The control stays enabled: *a greyed-out control
+ * is a promise*, and this is not a promise the client gets to make about an act
+ * Core permits.
+ *
+ * **THE STATUS IS THE ORGANIZATION'S, NOT THE TEMPLATE'S.** The embedded
+ * Template on the detail read carries no status — which is why nothing here
+ * defaults one — and this is a different field on a different object, present
+ * on `organizationDetailOutput` already.
+ *
+ * ⚠ **THE RULING RESTS ON THE STATE BEING ONE A CUSTOMER RETURNS FROM.** Both
+ * current values are ordinary operator acts in both directions, so configuration
+ * is being staged for a return. **If a terminal state ever ships —
+ * pending-deletion, closed — this ruling does not extend to it**, because a
+ * terminal state is one that does not come back. Hence `isKnownStatus` below
+ * rather than a comparison against `'suspended'`: **a screen built against a
+ * two-value status is a screen that silently accepts a third.**
+ */
+function OrganizationTemplatePanel({
+  organizationId,
+  organizationStatus,
+  current,
+}: {
+  organizationId: string;
+  organizationStatus: string;
+  current: Detail['template'];
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const picker = useTemplatePicker();
+  const setTemplate = useSetOrganizationTemplate();
+  const [chosen, setChosen] = useState<string>(current?.template_id ?? '');
+
+  /*
+   * FOCUS IN ON OPEN, BACK TO THE OPENER ON CLOSE — the same rule the Template
+   * panels use, and the return half is the one that gets dropped because
+   * nothing looks wrong without it. A keyboard user closing this panel would
+   * otherwise be dropped at the top of a long detail page, above the
+   * registrations, the member lookup and the audit link.
+   */
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const headingId = useId();
+
+  useEffect(() => {
+    if (open) panelRef.current?.focus();
+  }, [open]);
+
+  /*
+   * ⚠ THE SAME LATENT DEFECT AS `Templates.tsx`: the opener is unmounted while
+   * the panel is open — `if (!open) return <Button ref={openerRef} …>` — so
+   * `openerRef.current?.focus()` inside the close handler ran against `null`
+   * and did nothing. **The call was present, which is all a reader or an audit
+   * checks for.** The restore is an effect keyed on the panel closing, so it
+   * runs after the render that remounts the button.
+   */
+  const dismissedRef = useRef(false);
+  useEffect(() => {
+    if (!open && dismissedRef.current) {
+      dismissedRef.current = false;
+      openerRef.current?.focus();
+    }
+  }, [open]);
+
+  const close = useCallback(() => {
+    dismissedRef.current = true;
+    setOpen(false);
+  }, []);
+
+  /* Escape closes it, like the drawer, the gate and the Template panels. */
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [close, open]);
+
+  const apply = (templateId: string | null) => {
+    setTemplate.mutate(
+      { organizationId, input: { template_id: templateId } },
+      { onSuccess: close },
+    );
+  };
+
+  if (!open) {
+    return (
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button ref={openerRef} variant="secondary" size="sm" onClick={() => { setOpen(true); }}>
+          {t('orgTemplate.change')}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      role="group"
+      aria-labelledby={headingId}
+      className="mt-3 rounded-[7px] border border-line bg-sunk p-4"
+    >
+      {/*
+        THE PANEL HAS AN ACCESSIBLE NAME. Without one it is announced as an
+        unlabelled group — focus lands somewhere that says nothing about what
+        it is, which is the same failure as moving focus nowhere at all.
+      */}
+      <h4 id={headingId} className="text-[0.9375rem] font-bold text-ink">
+        {t('orgTemplate.heading')}
+      </h4>
+      <p className="text-[0.875rem] leading-relaxed text-ink-soft">{t('orgTemplate.explain')}</p>
+
+      {/*
+        ===================================================================
+        SR-20 — THE ORGANIZATION'S STATUS, SHOWN AND NOT GATED
+        ===================================================================
+
+        **`role="status"` rather than `alert`.** This is a fact the operator
+        needs before deciding, not a warning that something is wrong — nothing
+        here is wrong, and an assertive interruption would read as a refusal for
+        an act that is permitted.
+
+        **RENDERED FOR EVERY NON-ACTIVE STATUS, NOT JUST `suspended`.** The
+        condition is `status !== 'active'`, so **a third state this build has
+        never heard of still produces the line** rather than silently rendering
+        nothing — which is precisely what a terminal state arriving later would
+        do to a screen that compared against `'suspended'`.
+
+        **AND THE UNRECOGNISED CASE GETS ITS OWN SENTENCE.** Telling an operator
+        an Organization is *suspended* when the console cannot read the status is
+        a false statement about a customer; telling them the console does not
+        recognise it is the honest one, and it is the case where re-templating
+        deserves more hesitation rather than less.
+      */}
+      {organizationStatus !== 'active' ? (
+        <p
+          role="status"
+          className="mt-3 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink"
+        >
+          <span className="font-semibold">
+            {isKnownStatus(organizationStatus)
+              ? t('orgTemplate.statusNotice')
+              : t('orgTemplate.statusUnknown')}
+          </span>{' '}
+          <StatusBadge status={organizationStatus} />{' '}
+          {t('orgTemplate.statusWhy')}
+        </p>
+      ) : null}
+
+      {picker.isPending || picker.isFetching ? (
+        <p className="mt-3 text-[0.875rem] text-ink-muted">{t('state.loading')}</p>
+      ) : picker.error !== null ? (
+        <div className="mt-3">
+          {picker.error.code === 'forbidden' ? (
+            <PermissionDeniedBlock error={picker.error} />
+          ) : (
+            <ErrorBlock error={picker.error} onRetry={() => void picker.refetch()} />
+          )}
+        </div>
+      ) : (
+        <Field id="organization-template" label={t('orgTemplate.choose')}>
+          {(aria) => (
+            <select
+              {...aria}
+              value={chosen}
+              onChange={(event) => { setChosen(event.target.value); }}
+              disabled={setTemplate.isPending}
+              className="w-full rounded-[7px] border border-line bg-surface px-3 py-2 text-ink"
+            >
+              <option value="">{t('orgTemplate.none')}</option>
+              {templateOptions(picker.data?.data ?? [], current).map((template) => (
+                <option key={template.template_id} value={template.template_id}>
+                  {template.name}
+                  {template.status === 'retired' ? ` — ${t('template.retired')}` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
+
+      {setTemplate.error !== null ? (
+        <div className="mt-3">
+          {setTemplate.error.code === 'forbidden' ? (
+            <PermissionDeniedBlock error={setTemplate.error} />
+          ) : (
+            <ErrorBlock error={setTemplate.error} />
+          )}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button
+          variant="primary"
+          size="sm"
+          busy={setTemplate.isPending}
+          disabled={setTemplate.isPending}
+          onClick={() => { apply(chosen === '' ? null : chosen); }}
+        >
+          {setTemplate.isPending ? t('orgTemplate.saving') : t('template.save')}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={setTemplate.isPending}
+          onClick={close}
+        >
+          {t('template.cancel')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The single-shot member lookup.
  *
  * IT FIRES ON SUBMIT AND AT NO OTHER TIME. Every call writes a tenant-side audit
@@ -505,6 +971,35 @@ function TemplateBlock({ template }: { template: Detail['template'] }) {
  * lookup-as-you-type, no debounce, no prefetch, no retry-on-blur and no
  * automatic retry. An operator who wants to try again presses the button again,
  * and the customer sees each attempt.
+ *
+ * ===========================================================================
+ * THIS ONE IS NOT A QUERY AND NOT A MUTATION, AND THAT IS THE DECISION RATHER
+ * THAN THE PART NOBODY GOT TO
+ * ===========================================================================
+ *
+ * Every other read on this console moved to TanStack Query. This did not, for
+ * two reasons that are specific to the collapsed refusal.
+ *
+ * **NOT A QUERY, BECAUSE A CACHE HIT IS A LOOKUP THE CUSTOMER NEVER SEES.** The
+ * record written into the tenant's log is not a side effect of this call — for
+ * accountability it IS the call. Serving the second press from cache would show
+ * the operator an answer while the business's audit trail recorded one attempt
+ * where two happened. **A cached answer is also an answer that arrives at a
+ * different speed from an uncached one**, which is a distinguishing signal
+ * between two lookups on a path whose whole design is that five outcomes are
+ * indistinguishable.
+ *
+ * **NOT A MUTATION EITHER, AND THIS IS THE SUBTLER HALF.** `useMutation` would
+ * fire on every press and cache nothing, which is correct — but it RETAINS the
+ * error it caught, in state any code in this component can read. The `Lookup`
+ * union below is built so that `refused` carries NOTHING: *"there is nothing
+ * downstream that could branch on the cause because nothing downstream has
+ * it."* **A hook holding the 404 puts the cause back within reach**, and the
+ * next person to render `error.request_id` "for support" rebuilds the oracle
+ * Core removed. The type is the enforcement, and a mutation would quietly widen
+ * what the type is protecting.
+ *
+ * So the call stays direct and the error stays in a closure that discards it.
  */
 function MemberLookup({
   platform,
@@ -513,6 +1008,7 @@ function MemberLookup({
   platform: PlatformClient;
   organizationId: string;
 }) {
+  const t = useT();
   const [identifier, setIdentifier] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
   const [lookup, setLookup] = useState<Lookup>({ kind: 'idle' });
@@ -580,10 +1076,9 @@ function MemberLookup({
       className="mt-6 grid gap-4 rounded-[12px] border border-line bg-surface p-5 sm:p-6"
     >
       <div>
-        <h2 className="text-lg font-bold text-ink">Look up a member</h2>
+        <h2 className="text-lg font-bold text-ink">{t('detail.lookup.title')}</h2>
         <p className="mt-1 max-w-prose text-[0.875rem] leading-relaxed text-ink-muted">
-          For an identifier a customer has given you. It returns that
-          person&rsquo;s principal id and role, which is what a credential reset needs.{' '}
+          {t('detail.lookup.intro')}{' '}
           {/*
             "RECORDED IN", NOT "VISIBLE TO", AND THE DISTINCTION IS LOAD-BEARING.
             `0028`'s amendment of 2026-09-05 strikes "tenant-visible" from its own
@@ -596,18 +1091,15 @@ function MemberLookup({
             The record IS permanent and becomes readable when the tenant-side
             audit route lands, so this sentence is true now and stays true then.
           */}
-          <span className="font-semibold text-ink-soft">
-            Every lookup is recorded in this business&rsquo;s own audit trail, including ones that
-            find nothing.
-          </span>
+          <span className="font-semibold text-ink-soft">{t('detail.lookup.recorded')}</span>
         </p>
       </div>
 
       <Field
         id="member-identifier"
-        label="Email address"
+        label={t('detail.lookup.emailLabel')}
         error={localError}
-        hint="Plain ASCII only. Spaces are refused rather than trimmed."
+        hint={t('signIn.emailHint')}
       >
         {(aria) => (
           <Input
@@ -639,9 +1131,9 @@ function MemberLookup({
 
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" variant="secondary" disabled={busy} busy={busy}>
-          {busy ? 'Looking up…' : 'Look up'}
+          {busy ? t('detail.lookup.looking') : t('detail.lookup.submit')}
         </Button>
-        <p className="text-[0.8125rem] text-ink-muted">One lookup per press.</p>
+        <p className="text-[0.8125rem] text-ink-muted">{t('detail.lookup.onePerPress')}</p>
       </div>
 
       <LookupResult lookup={lookup} platform={platform} />
@@ -658,6 +1150,7 @@ function MemberLookup({
  * remembering.
  */
 function LookupResult({ lookup, platform }: { lookup: Lookup; platform: PlatformClient }) {
+  const t = useT();
   if (lookup.kind === 'idle' || lookup.kind === 'looking') return null;
 
   if (lookup.kind === 'found') {
@@ -666,19 +1159,19 @@ function LookupResult({ lookup, platform }: { lookup: Lookup; platform: Platform
         role="status"
         className="rounded-[7px] border border-green-500 bg-green-50 p-4 text-[0.875rem]"
       >
-        <p className="font-bold text-green-700">That person is a member of this Organization.</p>
+        <p className="font-bold text-green-700">{t('detail.lookup.found')}</p>
         <dl className="mt-3 grid gap-2">
           <div className="min-w-0">
             <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-              Principal id
+              {t('detail.lookup.principalId')}
             </dt>
-            <dd className="font-mono break-all select-all text-ink">
-              {lookup.member.principal_id}
+            <dd className="text-ink">
+              <bdi className="font-mono break-all select-all">{lookup.member.principal_id}</bdi>
             </dd>
           </div>
           <div className="min-w-0">
             <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-              Role
+              {t('detail.lookup.role')}
             </dt>
             <dd className="text-ink">
               {lookup.member.role}
@@ -730,15 +1223,21 @@ function LookupResult({ lookup, platform }: { lookup: Lookup; platform: Platform
         role="alert"
         className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-4 text-[0.875rem]"
       >
-        <p className="font-bold text-scarlet-700">You may not use this lookup</p>
+        <p className="font-bold text-scarlet-700">{t('detail.lookup.forbidden.title')}</p>
+        {/*
+          "REFUSED" IS NOT "FOUND NOTHING", and on a lookup that distinction is
+          the difference between *this console may not ask* and *this person is
+          not a member*. **The second is a statement about a customer that
+          nobody made.** A translation that shortened this to "not found" would
+          manufacture it.
+        */}
         <p className="mt-1 leading-relaxed text-ink-soft">
-          Core refused the call itself, which is not the same as finding nothing. This lookup
-          requires the credential-reset permission — without it, resolving people is closed to you.
-          Nothing was looked up. Raise it with the Team Lead rather than retrying.
+          {t('detail.lookup.forbidden.body')}
         </p>
         {lookup.error.request_id ? (
-          <p className="mt-2 font-mono text-xs break-all text-ink-muted">
-            Reference {lookup.error.request_id}
+          <p className="mt-2 text-xs text-ink-muted">
+            {t('denied.reference')}{' '}
+            <bdi className="font-mono break-all">{lookup.error.request_id}</bdi>
           </p>
         ) : null}
       </div>
@@ -771,14 +1270,18 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+/* The locale was `undefined` — the browser's. See `Templates.tsx`'s `CreatedAt`. */
 function CreatedAt({ value }: { value: string }) {
+  const { locale } = useLocale();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return <span className="font-mono text-xs">{value}</span>;
+    return <bdi className="font-mono text-xs">{value}</bdi>;
   }
   return (
     <time dateTime={value} title={value}>
-      {parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+      <bdi>
+        {parsed.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })}
+      </bdi>
     </time>
   );
 }

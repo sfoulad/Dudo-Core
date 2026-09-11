@@ -5,8 +5,8 @@
  */
 
 import type { ReactNode } from 'react';
-import { Toaster } from './Toaster';
-import { Button } from './ui/button';
+import { Link } from '@tanstack/react-router';
+import { Button, Toaster } from '@dudo/ui';
 import { transportBadge } from '@/api/config';
 
 export function AppShell({
@@ -43,7 +43,15 @@ export function AppShell({
 
       <header className="on-navy sticky top-0 z-20 bg-navy-800 text-white">
         <div className="mx-auto flex min-h-14 max-w-[1180px] items-center gap-4 px-4 py-2">
-          <a href="#/customers" className="flex items-center gap-3 rounded-[7px] text-inherit no-underline">
+          {/*
+            A ROUTER LINK, NOT AN ANCHOR. It was `href="#/customers"`, which was
+            correct under hash history and became a dead link the moment `0036`'s
+            amendment switched to path routing — it would have appended a
+            fragment to whatever path you were already on. Nothing in the browser
+            smoke check clicked the wordmark, so this was found by grepping for
+            the old shape rather than by testing.
+          */}
+          <Link to="/customers" className="flex items-center gap-3 rounded-[7px] text-inherit no-underline">
             {/* Decorative: the "Dudo" wordmark beside it carries the name, so `alt` is
                 empty. The mark ships with its own navy field, which matches the header
                 — the rounding is what keeps it reading as an icon rather than a patch. */}
@@ -58,7 +66,7 @@ export function AppShell({
             <span className="ms-1 hidden border-s border-white/20 ps-3 text-[0.8125rem] tracking-[0.02em] text-[#b9c0dd] sm:inline">
               Customers
             </span>
-          </a>
+          </Link>
           <div className="grow" />
           <span className="inline-flex items-center gap-2 rounded-full border border-white/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.04em] text-[#b9c0dd]">
             <span

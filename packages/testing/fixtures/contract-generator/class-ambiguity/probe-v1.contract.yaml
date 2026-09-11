@@ -1,0 +1,46 @@
+---
+# THE `0039` KNOWN-FAILING INPUT. `docs/decisions/0039` requires it in those words:
+#
+#   "Ship with a known-failing input: a fixture contract declaring the wrong class for a real
+#    route, which MUST go red."
+#
+# *** IT DELIBERATELY DECLARES NO `requestClass`. *** The declaration is the variable under test,
+# and the case appends it — one body, three declarations, so that any difference in the outcome is
+# attributable to the declaration and to nothing else. A fixture committed with one class baked in
+# could only ever test that class.
+#
+# THE BLOCK KEY IS `operations:` ON PURPOSE. `session` and `platform` BOTH declare that block key
+# (`REQUEST_CLASSES` in the generator), so it is the one key that cannot discriminate between two
+# classes — which is the entire reason `0039` introduced an explicit declaration.
+#
+# NOTHING HERE IS REGISTERED IN ANY ROUTE TABLE, and that is not a shortcoming of the fixture: the
+# property under test is whether the generator CONSULTS a route table at all. A fixture whose
+# operations were real would confound "the check passed" with "the check found a matching route".
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: classambiguity
+status: proposed
+updated: "2026-09-09"
+documentsExistingImplementation: none
+
+tenancy:
+  scope: >-
+    NONE. A generator test input. It binds to no route and reaches no store.
+
+operations:
+
+  - id: fixture.ClassAmbiguity
+    title: "An operation whose request class cannot be inferred from its block key"
+    description: >-
+      The block key is `operations:`, which two of the four classes share.
+    request: { schemaRef: "urn:dudo:schema:classambiguity:1#/$defs/probeInput" }
+    response: { schemaRef: "urn:dudo:schema:classambiguity:1#/$defs/probeOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.classambiguity.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

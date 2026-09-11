@@ -116,8 +116,40 @@ contractVersion: 1
 apiVersion: v1
 namespace: core
 domain: organization
-status: proposed
-updated: "2026-09-04"
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-08. Unblocked by two independent pieces of evidence that this contract
+  is already the source of truth rather than a proposal: `audit-read-v1` cites it as the canonical
+  form — "business-read-v1 defines the shape of a Core tenant Action contract; this one follows
+  it" — and `platform/core/http/core-routes.ts` builds `CORE_APP_PERMISSIONS` against it, declaring
+  `core.business.read` at `business` scope because this contract says so.
+  A CONTRACT ANOTHER CONTRACT COPIES ITS FORM FROM IS NOT A PROPOSAL. That is the specific
+  argument here, and it is not the argument used for any of the other four.
+  *** WHAT ACCEPTANCE COSTS, AND THIS FILE NAMED THE PRICE BEFORE ANYONE CAME TO PAY IT. ***
+  `versioning` says the 2026-09-04 change of the resolve route from GET-with-repeated-query-
+  parameters to POST-with-a-body was "additive today only because nothing has been accepted or
+  shipped", and lists under breakingOnceEitherClientShips: "the change made on 2026-09-04, which
+  was FREE ONLY BECAUSE IT WAS MADE BEFORE ACCEPTANCE."
+  THAT WINDOW CLOSES TODAY. From this acceptance, changing the resolve route's METHOD, its path,
+  or the carrier its identifiers travel in is a BREAKING change under API_STANDARD.md §6 and
+  needs a new version and a decision record. Recorded here rather than left for someone to
+  rediscover in `versioning`, because acceptance is the event that made the sentence operative
+  and nothing else in this file will mark the transition.
+updated: "2026-09-08"
+# ADDED 2026-09-08. Its absence was itself a finding: this and customer-directory-v1 were the two
+# contracts with the most live routes and the two missing the field that distinguishes
+# TRANSCRIBED FROM CODE from SPECIFIED AHEAD OF CODE — which is the first question anyone asks
+# when they find a `proposed` contract serving traffic.
+# `false`, AND I GOT THIS WRONG ON THE FIRST ATTEMPT AND CORRECTED IT BY READING THIS FILE.
+# I first wrote `partial`, on the reasoning that the 2026-09-04 revision came "after the
+# implementation existed". THE PROVENANCE IN THIS FILE SAYS OTHERWISE, twice: the REVISION note
+# above records that the contract "AS FIRST AUTHORED MANDATED A WIRE FORM CORE REFUSES", and
+# versioning records "this is the first version of a contract with NO CONSUMERS".
+# So the two Actions were SPECIFIED AHEAD OF THEIR IMPLEMENTATION. What the revision collided
+# with was a PRE-EXISTING CORE CONSTRAINT — `http/api.ts` refuses a repeated query parameter —
+# not a pre-existing implementation of these Actions. Those are different facts and only the
+# second would make this `partial`.
+documentsExistingImplementation: false
 
 # ---------------------------------------------------------------------------
 # tenancy — applies to both Actions, without exception

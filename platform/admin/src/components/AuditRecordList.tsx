@@ -65,8 +65,9 @@
  */
 
 import type { ReactNode } from 'react';
-import { cn } from '@/lib/cn';
+import { cn } from '@dudo/ui';
 import { isKnownAuditOutcome, isKnownPlatformRole, type AuditRecordCommon } from '@/api/platform';
+import { useLocale, useT } from '@/lib/i18n';
 
 export interface AuditRecordListProps<T extends AuditRecordCommon> {
   readonly records: readonly T[];
@@ -87,6 +88,7 @@ export function AuditRecordList<T extends AuditRecordCommon>({
   renderTarget,
   targetHeading,
 }: AuditRecordListProps<T>) {
+  const t = useT();
   return (
     <ul className="grid gap-3">
       {records.map((record) => (
@@ -115,7 +117,7 @@ export function AuditRecordList<T extends AuditRecordCommon>({
           <dl className="mt-4 grid gap-x-6 gap-y-3 border-t border-line pt-3 text-[0.8125rem] sm:grid-cols-2">
             <div className="min-w-0">
               <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-                Operator
+                {t('audit.filter.operator')}
               </dt>
               {/*
                 VERBATIM AND NOT TRUNCATED. A 22-character opaque identifier is
@@ -129,7 +131,14 @@ export function AuditRecordList<T extends AuditRecordCommon>({
                 {!isKnownPlatformRole(record.actor_platform_role) ? (
                   <span className="sr-only"> (an unrecognised role)</span>
                 ) : null}
-                <span className="ms-1 text-ink-faint">at the time</span>
+                {/*
+                  "AT THE TIME" IS LOAD-BEARING — the role is what the actor
+                  held WHEN THE ACTION HAPPENED, not what they hold now. On an
+                  audit trail those are different facts, and a translation that
+                  dropped the qualifier would assert a current role from a
+                  historical record.
+                */}
+                <span className="ms-1 text-ink-faint">{t('audit.roleAtTheTime')}</span>
               </dd>
             </div>
 
@@ -142,7 +151,7 @@ export function AuditRecordList<T extends AuditRecordCommon>({
 
             <div className="min-w-0 sm:col-span-2">
               <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-                Correlation
+                {t('audit.correlation')}
               </dt>
               {/*
                 The only identifier crossing the two audit homes, and what makes
@@ -216,23 +225,37 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
  * `dateTime` and `title` still carry the exact value Core sent, for anyone
  * correlating against Core's own logs.
  */
+/*
+ * ⚠ THE LOCALE WAS `undefined` — THE BROWSER'S, NOT THE CONSOLE'S. See
+ * `Templates.tsx`'s `CreatedAt`; this was one of six.
+ *
+ * **It matters most here.** These are audit timestamps, and an operator
+ * correlating them against Core's own logs, a support ticket or another
+ * operator's screen needs them formatted the same way every time — not the way
+ * whichever browser happens to be in front of them prefers. `dateTime` and
+ * `title` still carry Core's exact value, which is the anchor that survives any
+ * formatting at all.
+ */
 function OccurredAt({ value }: { value: string }) {
+  const { locale } = useLocale();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return <span className="font-mono">{value}</span>;
+    return <bdi className="font-mono">{value}</bdi>;
   }
   return (
     <time dateTime={value} title={value}>
-      {parsed.toLocaleString(undefined, {
-        timeZone: 'UTC',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })}
-      <span className="ms-1 text-ink-faint">UTC</span>
+      <bdi>
+        {parsed.toLocaleString(locale, {
+          timeZone: 'UTC',
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })}
+        <span className="ms-1 text-ink-faint">UTC</span>
+      </bdi>
     </time>
   );
 }

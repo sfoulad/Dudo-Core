@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:cascadedep:1",
+  "title": "DEPTH ONE. Its input depends on a schema that REFUSES.",
+  "$defs": {
+    "depInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x"],
+      "properties": {
+        "x": { "$ref": "urn:dudo:schema:cascadebad:1#/$defs/badThing" }
+      }
+    },
+    "depOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    }
+  }
+}

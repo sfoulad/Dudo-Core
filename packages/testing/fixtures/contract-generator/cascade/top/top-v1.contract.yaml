@@ -1,0 +1,33 @@
+---
+# DEPTH-TWO TRANSITIVITY. The cascade's description CLAIMS transitivity; this measures it.
+#
+# top -> dep -> bad.  `top-v1.schema.json` never mentions `cascadebad` anywhere, so a fixed point
+# that closes only one edge would deliver this module with a dangling import.
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: cascade
+status: proposed
+updated: "2026-09-09"
+documentsExistingImplementation: none
+
+tenancy:
+  scope: >-
+    NONE. A generator test input. It binds to no route and reaches no store.
+
+operations:
+
+  - id: fixture.CascadeTop
+    title: "An operation two edges away from a refused node"
+    description: >-
+      Imports urn:dudo:schema:cascadedep:1 only. Refusal is the assertion.
+    request: { schemaRef: "urn:dudo:schema:cascadetop:1#/$defs/topInput" }
+    response: { schemaRef: "urn:dudo:schema:cascadetop:1#/$defs/topOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.cascade.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

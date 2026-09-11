@@ -1,0 +1,9 @@
+---
+# CONTROL 1 of 3 for the `requestClass` textual sweep. DECLARES AT THE CONTRACT LEVEL, column 0.
+# Not a contract, not walked by the generator. The sweep must NOT return this file.
+
+contractVersion: 1
+requestClass: platform
+
+operations:
+  - id: fixture.ClassifierControlsContractLevel

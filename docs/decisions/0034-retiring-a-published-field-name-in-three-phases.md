@@ -123,9 +123,54 @@ ones nobody would remember to check — and the console's own history is the arg
 `identifier` for weeks *because it had read the code rather than the contract*, and nobody knew
 until a checker was written.
 
-> **PRECONDITION: Core records which spelling arrived, on the action record. Phase 3 then cuts over
-> on evidence — "no request has carried the deprecated name in N days" — rather than on the
-> assumption that the only client anyone remembered has switched.**
+> **PRECONDITION, AS FIRST WRITTEN: Core records which spelling arrived, on the action record.**
+
+### ⚠ THAT PRECONDITION IS WITHDRAWN. `architecture-agent`, 2026-09-08: DO NOT BUILD IT.
+
+**The reason is not cost, and the Team Lead framed the question wrongly.** I asked for a shape that
+would not spend an extra row-write. **The column costs no extra row-write and is still refused.**
+
+**1. THE SENDER POPULATION IS CLOSED BY AUTHENTICATION, NOT BY POLICY — SO IT IS ENUMERABLE, AND
+MEASUREMENT IS THE WRONG TOOL.** Reaching this route requires a `platform_operator` row, and
+`0024`'s mutual exclusion means a principal holding one has **no `organization_membership` row.**
+So **no tenant client can authenticate to this route at all**, whatever it sends: the Apple client
+and the web client are *structurally outside* the population rather than unlikely to be in it. The
+host binding is a second layer, not the argument.
+
+**That leaves one console, the scripts in two repositories, and one or two named operators.**
+*Measurement is the right tool for an open population. This one you can list.*
+
+**2. IT SPENDS SCHEMA ON A QUESTION THAT EXPIRES.** `0030` binds the inverse — the free tier may
+cost CONFIGURATION, never SCHEMA — and the asymmetry governs here too. **A column is permanent; the
+fact it records stops mattering the day it is read.** Removing it is a second migration on an
+append-only table `0009` says cannot be rolled back once it holds records. **The realistic outcome
+is a dead column outliving everyone who knows what it was for.**
+
+**3. AN AUDIT RECORD IS A PERMANENT EVIDENTIARY ARTIFACT; THIS IS A TRANSIENT FACT ABOUT OUR OWN
+API.** `0009` is normative that the log holds *who acted, what they did, which Organization or
+principal they named, and when.* **Which spelling of a field name arrived is none of those.**
+
+**And the Team Lead's `0025` objection was right in conclusion and aimed at the wrong table**,
+recorded here so nobody re-derives the weaker version and finds it does not hold: the proposed
+column sits on `platform_operator_action` — **the platform's log, read by operators.** The
+customer's log is `audit_event`, a different table in a different database, and nothing proposed
+putting it there. **The customer-facing property is not what refuses this. Permanence is.**
+
+### WHAT DISCHARGES `OD-5` INSTEAD — enumerable conditions, and the third is already paid for
+
+- **Both repositories searched** for the deprecated spelling, with the empty searches reported.
+- **The operator population told**, since it is one or two people by name.
+- **THE EXISTING AUDIT FEED CONSULTED, AT ZERO COST.** `platform.audit.list` filtered by
+  `action_id = platform.organizations.members.resolve` **already answers a weaker question that is
+  sufficient.** Nothing since phase 2 landed means nobody called the route, so nobody can have
+  called it with the deprecated name — **the spelling question is moot.** A few records each carry
+  `actor_principal_id` and a correlation id, so each is attributable to one operator who can simply
+  be asked. **A handful of records is a conversation, not a telemetry problem.** The contract set
+  already paid for this answer.
+
+**The residual risk is priced rather than assumed away:** a straggler after phase 3 receives
+`invalid_argument`, which is a loud, recoverable, immediately-diagnosable failure — not a silent
+one.
 
 **Why this is stated as a precondition rather than a suggestion.** The original phase-3 trigger below
 is *"the change that follows the console's switch"*. **That trigger is now satisfiable while the
@@ -187,3 +232,38 @@ of two is not evidence about a third.
   *shape* rather than a *role*, where the canonical definition is `account-identifier-v1`'s
   `accountIdentifier`. **Recorded as unrelated to this reservation** and left for someone to decide
   on its own terms.
+
+## ⭑ THE GAP PHASE 2 CANNOT CLOSE: NOTHING RECORDS WHICH SPELLING ARRIVED
+
+Added 2026-09-11, from `qa-agent`, and **preserved here because the paragraph that contained it is
+about to be deleted.** It was found inside `member-resolve-rename.ts`'s phase-1 assertions, which are
+entirely retired now that phase 3 has landed — so the observation would have died with the suite that
+carried it.
+
+> **Nothing downstream records WHICH spelling arrived — not the action log, not the response, not a
+> counter. So the question *"is any client still sending the old name?"* HAS NO ANSWER IN THIS
+> SYSTEM.**
+
+**This is not a test and it is not a defect in the rename.** It is a property of the platform, and it
+bears directly on the decision this file records.
+
+**Why it matters to the three-phase shape.** Phase 2 is *"both spellings accepted, the old one
+deprecated"*, and **the entire purpose of that window is to wait until no client sends the old name.**
+This decision has no instrument for the thing it is waiting on. **Phase 3 was therefore taken on a
+judgement about who the clients are — correct here, because we own both of them and could read their
+source — and that argument does not survive a third-party client, an Apple build in the field, or a
+cached bundle.**
+
+**It is moot for `identifier`: the alias is gone and both clients are ours.** It is recorded because
+**the next two-phase rename meets it again**, and will meet it in a world where reading every client's
+source is not available.
+
+**What would close it, stated as the reason rather than as a verdict** (`workflow.md` §12 — a
+conditional that names a remedy becomes a wrong instruction the day its condition turns true): the
+platform would need to record, per request, which of the accepted spellings was used — the action log
+being the natural home, since it already exists and is already written on these routes. **Whether
+that is worth its write cost is a decision nobody has made, and this paragraph does not make it.**
+
+**Do not read this as an argument that phase 3 was premature.** It was not: the alias was verified
+absent from both clients' source, which is a stronger check than a counter would have been. **The gap
+is that the stronger check does not generalise, and the weaker one does not exist.**

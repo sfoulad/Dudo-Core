@@ -441,6 +441,42 @@ export function buildTemplatesSuite(make: MakePlatformWorld = createPlatformWorl
     // its own disclosure. `marketplace-moderator` holds none of them.
     const world = await make();
     try {
+      // ===================================================================================
+      // A DELTA, NOT AN ABSOLUTE — CHANGED 2026-09-11 AND IT IS THE STRONGER FORM.
+      // ===================================================================================
+      //
+      // This read `world.controlRows('template').length === 1`, which pinned the SEEDED POPULATION
+      // in a case whose subject is that a refusal creates nothing. It went red the moment the
+      // fixture seeded three more Templates for the lifecycle routes — **on a change that could
+      // not possibly affect what this case tests.**
+      //
+      // *** THE OBVIOUS REPAIR IS `1` -> `4`, AND IT IS THE WRONG ONE. *** It restores the green
+      // and leaves the case coupled to a number that belongs to `seedWorld`, so the next fixture
+      // change breaks it again and the next author edits the number again. **A count taken before
+      // and compared after says what the case actually means** — no row appeared — and it is
+      // insensitive to every seeding decision anyone makes later.
+      //
+      // This is not a weakened assertion. It is a narrower one: the absolute form also asserted
+      // "the fixture seeds exactly one Template", which is a fact about the harness that this
+      // case was never the right place to state.
+      //
+      // *** THE DECISION, STATED RATHER THAN LEFT FOR THE NEXT READER TO INFER. *** A count like
+      // this is one of two things and they are not the same choice: a DELIBERATE PIN — *a number
+      // that can only be edited deliberately is a number someone has to look at* — or SCENERY
+      // incidental to the property under test. **This one is scenery, so it is derived.** The case
+      // is about three permissions being separate; the seeded population is not its subject, and a
+      // pin here would send every future fixture change through a case that has nothing to say
+      // about it. **The pin that IS load-bearing lives on the permission envelope**, where the
+      // number is the property.
+      //
+      // If you are here because you seeded a Template and something went red, it was not this.
+      const templatesBefore = world.controlRows('template').length;
+      assertTrue(
+        `${ISOLATION} FLOOR: the world holds Templates to begin with (${templatesBefore})`,
+        templatesBefore > 0,
+        'a world with no Templates would satisfy the delta below trivially, and `templates.read` ' +
+          'would be refusing for want of a row rather than for want of a permission',
+      );
       for (const [routeId, options] of [
         ['platform.templates.create', { bodyText: templateCreateRequest() }],
         ['platform.templates.list', {}],
@@ -456,7 +492,7 @@ export function buildTemplatesSuite(make: MakePlatformWorld = createPlatformWorl
       assertEqual(
         `${ISOLATION} and no Template was created by any of it`,
         world.controlRows('template').length,
-        1,
+        templatesBefore,
       );
     } finally {
       world.close();

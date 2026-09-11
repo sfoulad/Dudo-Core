@@ -34,20 +34,34 @@
  * of this string is what is actually protecting the account." The generator IS
  * the control.
  *
- * WHY THE REST OF THE TREE IS NOT CONVERTED TO MATCH, which is the obvious tidy:
- * `kdf-client.ts` and `kdf-worker.ts` import `./kdf` extensionlessly and MUST
- * REMAIN BYTE-IDENTICAL to `platform/web`'s copies — `verify-kdf.mjs` compares
- * them character for character and fails on a one-character difference. Adding
- * an extension there would break the cross-client drift check to fix a test
- * harness, which is the wrong trade by a wide margin. The mixed style is forced,
- * not careless.
+ * ⚠ THE PARAGRAPH THAT WAS HERE DESCRIBED A CONSTRAINT THAT NO LONGER EXISTS,
+ * AND ADR 0040 IS WHAT REMOVED IT.
  *
- * `allowImportingTsExtensions` is enabled in `tsconfig.json` for this one import.
- * It is permitted because `noEmit` is true, it is permissive rather than
- * mandatory — extensionless imports still resolve — and Vite handles both forms.
+ * It explained why the rest of the tree kept extensionless `./kdf` imports: this
+ * console's `kdf-client.ts` and `kdf-worker.ts` "MUST REMAIN BYTE-IDENTICAL to
+ * `platform/web`'s copies — `verify-kdf.mjs` compares them character for
+ * character and fails on a one-character difference", so adding an extension
+ * "would break the cross-client drift check to fix a test harness". The mixed
+ * style was described as forced rather than careless, and it was.
+ *
+ * **THERE ARE NO LONGER TWO COPIES TO KEEP IDENTICAL.** The three modules moved
+ * to `@dudo/client-kdf`, the drift check retired with its subject, and the
+ * import below is now a package specifier rather than a sibling file. The
+ * constraint dissolved with the duplication that created it.
+ *
+ * Recorded rather than deleted because it is `workflow.md` §12's shape exactly:
+ * **a decision being made strands the artifacts that reasoned about the world it
+ * changed**, and nothing goes red when it happens. This paragraph would have
+ * gone on explaining a forced trade-off to the next reader, who would have
+ * believed it.
+ *
+ * `allowImportingTsExtensions` remains enabled in `tsconfig.json`. It is now
+ * unused by this file and is left alone deliberately — removing a compiler
+ * option is a separate change with its own blast radius, and this one is
+ * permissive rather than mandatory.
  */
 
-import { toBase64Url } from './kdf.ts';
+import { toBase64Url } from '@dudo/client-kdf';
 
 /**
  * 24 bytes. 32 base64url characters, about 192 bits.

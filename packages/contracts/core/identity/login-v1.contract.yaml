@@ -80,9 +80,34 @@ contractVersion: 1
 apiVersion: null            # SEE versioning.thereIsNoVersionInTHESEPATHS. This is not an oversight.
 namespace: core
 domain: identity
-status: proposed
-updated: "2026-09-04"
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-08. Unblocked by docs/decisions/0014 §B, which is Accepted and which
+  admits each of these four routes to the `PreAuthEntryPoint` registry "by a decision, never by
+  declaring itself" — so the substance of every route here was decided by an accepted record and
+  this contract describes it. `documentsExistingImplementation: true` is the same statement from
+  the other side.
+  WHY IT WAS STILL `proposed` WHILE SERVING PRODUCTION TRAFFIC, recorded rather than tidied away:
+  nothing executes a `status:` field, so a contract can serve every login on the platform while
+  declaring itself unaccepted, and nothing goes red. That is .claude/rules/workflow.md §12 in the
+  field that INSTRUCTS rather than describes — a reader who checks this field learns that it does
+  not mean anything. Five contracts were in this state on 2026-09-08 and all five were accepted
+  together on their own separate evidence, never as a batch.
+updated: "2026-09-09"
 documentsExistingImplementation: true
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. DECLARED, NEVER INFERRED FROM THE BLOCK KEY.
+# ---------------------------------------------------------------------------
+# `pre-auth`: docs/decisions/0014 §B's PreAuthEntryPoint registry. No principal, no tenant, no
+# permission, no Action. A route enters that registry BY A DECISION and never by declaring itself.
+#
+# WHY THIS FIELD EXISTS RATHER THAN BEING READ OFF `entryPoints:`. Four request classes share three
+# block keys — `operations:` covers BOTH the platform class and the session class — so the class
+# cannot be inferred from the key, and `organization-selection-v1` was the contract that proved it.
+# A structural key carrying a semantic property is the defect; a fourth key name would have encoded
+# the same property the same implicit way.
+requestClass: pre-auth
 
 # ---------------------------------------------------------------------------
 # tenancy — A LOGIN HAS NO TENANT, AND THAT IS THE POINT OF IT
@@ -170,6 +195,14 @@ entryPoints:
     successBody: { schemaRef: "urn:dudo:schema:login:1#/$defs/preAuthAcknowledgement" }
     successStatus: 200
     setsCredential: { schemaRef: "urn:dudo:schema:login:1#/$defs/sessionCredential" }
+    # NO PERMISSION IS EVALUATED, AND THAT IS DECLARED RATHER THAN LEFT ABSENT.
+    # `permission-catalog.yaml` is normative that a route with no declared permission is
+    # UNREACHABLE, NOT OPEN — unless it is registered in one of two closed, Core-owned sets. This
+    # is in the first: docs/decisions/0014 §B's PreAuthEntryPoint registry, five routes, admitted
+    # by decision. AN ABSENT KEY AND A FORGOTTEN ONE ARE THE SAME CHARACTER, which is why the
+    # exemption is written down at every entry point rather than inferred from the class.
+    permission: none
+    permissionExemption: "docs/decisions/0014 §B — PreAuthEntryPoint registry"
     errors: [invalid_argument, unauthenticated, rate_limited, unavailable]
     notes: >-
       THE ERROR LIST IS EXACTLY FOUR AND THE ABSENCES ARE NORMATIVE. There is no not_found, no
@@ -200,6 +233,8 @@ entryPoints:
         forgotten. No handler ever sees a reason to touch it.
     successBody: { schemaRef: "urn:dudo:schema:login:1#/$defs/preAuthAcknowledgement" }
     successStatus: 200
+    permission: none
+    permissionExemption: "docs/decisions/0014 §B — PreAuthEntryPoint registry"
     errors: [invalid_argument, rate_limited]
     theRulingForCLIENTS: >-
       NEITHER CLIENT CALLS THIS ENDPOINT. Not first, not optionally, not "to be safe", and not to
@@ -247,6 +282,22 @@ entryPoints:
       it presents. Under docs/decisions/0015 §B.3's absolute expiry a refresh either does nothing
       or is a second login, so there is nothing for it to do. Rotation is also unaffordable: it
       would be 6 control-plane row-writes per request against a 3,000/day ceiling.
+    permission: none
+    permissionExemption: "docs/decisions/0014 §B — PreAuthEntryPoint registry"
+    # *** DECLARED AS ABSENT RATHER THAN OMITTED, AND THE DISTINCTION IS THE SAME ONE AS
+    # `permission: none` ONE LINE UP. *** This entry point has NO handler: Core looks the handler
+    # up BEFORE parsing a body, so nothing is ever read from the request and nothing but the fixed
+    # 401 is ever returned. There is genuinely no request shape and no success body to publish.
+    # An omission would be indistinguishable from a shape somebody forgot to write.
+    request: none
+    requestAbsentBecause: >-
+      No handler exists, so the body is never parsed. Every call collapses to the fixed 401
+      whatever it presents — a malformed body, an unknown field and an oversized value all reach
+      the same answer.
+    successBody: none
+    successBodyAbsentBecause: >-
+      There is no success path. The only outcome is `unauthenticated`, so no 2xx body exists to
+      describe.
     errors: [unauthenticated, rate_limited]
     whyNotInvalidArgument: >-
       NO 400 IS REACHABLE HERE, AND THE REASON IS THE ORDER OF CORE'S ADMISSION STEPS RATHER THAN
@@ -288,6 +339,21 @@ entryPoints:
       presented, two carriers disagreeing, an invalid MAC, a session not found, a session found and
       deleted, and the store or budget refusing — return the identical `cleared` outcome. An
       attacker holding a stolen or guessed token cannot learn from a logout whether it was live.
+    permission: none
+    permissionExemption: "docs/decisions/0014 §B — PreAuthEntryPoint registry"
+    # DECLARED ABSENT. Logout takes no body and returns no body — the outcome travels entirely in
+    # the status line and the clearing cookie, both of which are constant and argument-free.
+    request: none
+    requestAbsentBecause: >-
+      No body is accepted. The session is identified by the carrier — cookie or Bearer — and
+      docs/decisions/0018 §A widened revocation to accept either, so there is nothing for a body
+      to carry. A caller supplying one gains nothing and is not refused for it.
+    successBody: none
+    successBodyAbsentBecause: >-
+      The response is the constant `cleared` outcome: 200 {"status":"ok"} plus ONE FIXED CLEARING
+      COOKIE. The handler supplies no name, no value and no lifetime, so there is no shape here
+      that varies with anything — and a body that varied would be the disclosure channel the
+      six-path collapse exists to close.
     errors: [rate_limited]
     outcome: >-
       `cleared` — 200 {"status":"ok"} PLUS ONE FIXED CLEARING COOKIE. The cookie is CONSTANT and

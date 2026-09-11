@@ -74,7 +74,15 @@ const MEMBER_EXPECTED = [
 /** `0023`: the first permission that is Core's rather than an App's. */
 const CORE_OWNED = 'core.business.read';
 
-/** `0019`: granted to nobody. Permanent deletion and its cancellation are outside MVP scope. */
+/**
+ * `0019`: granted to nobody. Permanent deletion and its cancellation are **NOT YET GRANTED, AND
+ * STILL NOT GRANTED TODAY** — `0019`'s amendment of 2026-09-08, which replaced *"outside MVP
+ * scope"* after `0030` withdrew that framing. The exclusion holds for a better reason than scope:
+ * `customers.customer.delete` is one of the *"twelve tenant-scope `critical` permissions that
+ * cannot presently be exercised at all"* — the challenge route `confirmation-v1` requires is not
+ * built (`0038` F-1) — so **granting it today would produce a role that holds a permission nothing
+ * can use.**
+ */
 const GRANTED_TO_NOBODY = [
   'customers.customer.delete',
   'customers.customer.restore-deleted',
@@ -102,7 +110,7 @@ export function buildRoleGrantsSuite(): Suite {
     // Sorted on both sides: the mapping is a SET, and pinning declaration order would make this
     // case fail on a reordering that changes nothing.
     assertEqual('two roles, no more', [...MEMBERSHIP_ROLES].sort().join(','), 'member,owner');
-    assertEqual('owner grants the seven MVP Actions', permissionsOf('owner').join(','), OWNER_EXPECTED.join(','));
+    assertEqual('owner grants the seven Actions', permissionsOf('owner').join(','), OWNER_EXPECTED.join(','));
     assertEqual('member grants read and list only', permissionsOf('member').join(','), MEMBER_EXPECTED.join(','));
   });
 
@@ -180,7 +188,9 @@ export function buildRoleGrantsSuite(): Suite {
         assertTrue(
           `${role} does not grant '${forbidden}'`,
           !granted.includes(forbidden),
-          'permanent deletion is outside MVP scope and adding it needs a decision, not an edit',
+          'permanent deletion is NOT YET GRANTED (`0019`, amended 2026-09-08) and adding it ' +
+            'needs a decision, not an edit. It is gated on a `critical` permission nothing can ' +
+            'currently exercise, so a grant would hold a permission with no usable path',
         );
       }
     }

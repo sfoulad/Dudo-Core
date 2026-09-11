@@ -157,6 +157,40 @@ export function buildClassValidationSuite(make: MakePlatformWorld = createPlatfo
       'platform.templates.create': 'template-v1, 0025 decision 2. Its own permission, not shared',
       'platform.templates.list': 'template-v1. Enumeration is its own disclosure, so its own permission',
       'platform.templates.read': 'template-v1. THE ONLY ROUTE IN THE CLASS WITH A PATH PARAMETER',
+      // ---- THE FIVE LIFECYCLE ROUTES, ADDED 2026-09-11 on the user's grant of the four Template
+      // permissions. `template-lifecycle-v1`, accepted 2026-09-10.
+      //
+      // NOTE THE COMMENT ABOVE IS NOW WRONG AND IS LEFT AS EVIDENCE OF THE CLASS OF DEFECT THIS
+      // REGISTRY EXISTS TO CATCH: `templates.read` was "THE ONLY ROUTE IN THE CLASS WITH A PATH
+      // PARAMETER" until today, and four of the five below take one. **A superlative in a comment
+      // is a claim with an expiry nobody sets** — corrected on the entry itself rather than
+      // silently, because the sentence is what a reader would have trusted.
+      'platform.templates.usage':
+        'template-lifecycle-v1. ITS OWN PERMISSION, core.template-adoption.read, and NOT ' +
+        'core.template.read — security.md §2a: a count is safe only when its consumer already ' +
+        'enumerates the counted population, and a Template reader does not enumerate ' +
+        'Organizations. Security review overturned the first answer to get there',
+      'platform.templates.update': 'template-lifecycle-v1. core.template.update. Path parameter plus a body',
+      'platform.templates.retire': 'template-lifecycle-v1. core.template.retire. A state change, not a delete',
+      'platform.templates.restore':
+        'template-lifecycle-v1. It SHARES core.template.retire with retire, deliberately: the ' +
+        'authority to take a Template out of use and to put it back is one authority, and ' +
+        'splitting it would create a role that could retire and not undo',
+      // ---- `0042`'s two counts, ADDED 2026-09-11. Each sits beside the list it counts, in that
+      // list's own contract, under that list's EXISTING permission — no new permission, because
+      // both consumers already enumerate the population (security.md §2a). Two routes rather than
+      // one combined `platform.counts`, and the reason is mechanical: `PlatformRoutePermission`
+      // carries exactly one permission per route, so a combined route would need a single
+      // permission gating a disclosure over two populations.
+      'platform.organizations.count':
+        'platform-operator-v1, 0042. core.organization.list — the SAME permission as the list, ' +
+        'because its holder already enumerates every Organization at sensitive',
+      'platform.templates.count': 'template-v1, 0042. core.template.list, for the same reason. It refuses a status filter: a total that accepts one is a query',
+      'platform.organizations.set-template':
+        'template-lifecycle-v1, PA-17. core.platform-organization.set-template. **THE ONLY ONE OF ' +
+        'THE FIVE THAT WRITES INTO A CUSTOMER\'S OWN DATABASE** — the tenant-side record goes ' +
+        'through recordOrganizationAccess with the charge receipt (SR-4), on a different port, ' +
+        'which is what keeps 0024 true across this feature',
     };
     const actualRoutes = ROUTES.map((route) => route.id).sort();
     assertEqual(

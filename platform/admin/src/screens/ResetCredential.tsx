@@ -78,13 +78,13 @@
  * completed.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { Button } from '@dudo/ui';
 import { LoadingBlock } from '@/components/StateBlock';
 import { ConfirmationGate } from '@/components/ConfirmationGate';
 import { buildConfirmedRequest } from '@/api/confirmation';
 import { createOnboardingCredential } from '@/api/onboarding-credential';
-import type { DerivationProgress } from '@/api/kdf-client';
+import type { DerivationProgress } from '@dudo/client-kdf/client';
 import {
   CREDENTIAL_RESET_ACTION_ID,
   CREDENTIAL_RESET_PATH,
@@ -92,6 +92,13 @@ import {
   type ResetCredentialOutput,
 } from '@/api/platform';
 import { toApiError, writeIsCertainlyAbsent, type ApiError } from '@/api/errors';
+import {
+  formatCount,
+  useLocale,
+  useT,
+  type MessageKey,
+  type PluralCategory,
+} from '@/lib/i18n';
 
 /** The new credential, held only while this screen is mounted. */
 interface NewCredential {
@@ -137,6 +144,14 @@ export function ResetCredential({
   /** What the operator typed into the resolve. The KDF salt for the new value. */
   targetIdentifier: string;
 }) {
+  const t = useT();
+  /*
+   * TYPED AS `HTMLButtonElement` HERE AND RELAYED AS `HTMLElement`. The gate
+   * only ever calls `.focus()`, so it asks for the widest thing that has one;
+   * this screen knows the node is a button and `<Button>`'s own ref type
+   * requires the narrower one. The widening is safe in that direction.
+   */
+  const openerRef = useRef<HTMLButtonElement | null>(null);
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
 
   const begin = useCallback(() => {
@@ -177,12 +192,19 @@ export function ResetCredential({
     return (
       <div className="mt-4 rounded-[7px] border border-line bg-sunk/60 p-4">
         <p className="text-[0.875rem] leading-relaxed text-ink-soft">
-          <span className="font-semibold text-ink">Reset this person&rsquo;s password.</span> Dudo
-          will generate a new one here and show it once. It signs them out everywhere, and it
-          needs your own password to confirm.
+          <span className="font-semibold text-ink">{t('reset.offer.lead')}</span>{' '}
+          {t('reset.offer.body')}
         </p>
-        <Button variant="secondary" size="sm" className="mt-3" onClick={begin}>
-          Reset their credential
+        {/*
+          WHERE FOCUS RETURNS IF THE CONFIRMATION IS DISMISSED. This button is
+          unmounted for as long as the gate is up — the whole `idle` stage is
+          replaced — so the ref is null while the panel is open and holds this
+          node again the moment the stage comes back. See the gate's own note on
+          why the restore happens in its unmount cleanup rather than before
+          `onCancel`.
+        */}
+        <Button ref={openerRef} variant="secondary" size="sm" className="mt-3" onClick={begin}>
+          {t('reset.offer.action')}
         </Button>
       </div>
     );
@@ -191,7 +213,7 @@ export function ResetCredential({
   if (stage.kind === 'preparing') {
     return (
       <div className="mt-4">
-        <LoadingBlock label="Preparing the new credential in this browser…" />
+        <LoadingBlock label={t('reset.preparing')} />
       </div>
     );
   }
@@ -200,9 +222,9 @@ export function ResetCredential({
     return (
       <div className="mt-4">
         <p role="alert" className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.875rem]">
-          <span className="font-bold text-scarlet-700">The reset was not started.</span>{' '}
+          <span className="font-bold text-scarlet-700">{t('reset.notStarted.title')}</span>{' '}
           <span className="text-ink-soft">{stage.error.message}</span>{' '}
-          <span className="font-semibold">Nothing was changed.</span>
+          <span className="font-semibold">{t('reset.notStarted.unchanged')}</span>
         </p>
         <Button
           variant="secondary"
@@ -212,7 +234,7 @@ export function ResetCredential({
             setStage({ kind: 'idle' });
           }}
         >
-          Start again
+          {t('reset.notStarted.retry')}
         </Button>
       </div>
     );
@@ -228,6 +250,7 @@ export function ResetCredential({
 
   return (
     <ResetConfirmation
+      openerRef={openerRef}
       platform={platform}
       principalId={principalId}
       targetIdentifier={targetIdentifier}
@@ -255,6 +278,7 @@ function ResetConfirmation({
   onDone,
   onFailedAfterApproval,
   onCancel,
+  openerRef,
 }: {
   platform: PlatformClient;
   principalId: string;
@@ -263,7 +287,10 @@ function ResetConfirmation({
   onDone: (result: ResetCredentialOutput) => void;
   onFailedAfterApproval: (error: ApiError) => void;
   onCancel: () => void;
+  /** Threaded straight through. The gate requires it; this panel only relays. */
+  openerRef: RefObject<HTMLElement | null>;
 }) {
+  const t = useT();
   /*
    * THE BOUND PARAMETERS, BUILT ONCE. Body-minus-three, no path parameters —
    * so `{principal_id, target_identifier, derived_value}`. The same object is
@@ -291,14 +318,24 @@ function ResetConfirmation({
   return (
     <div className="mt-4">
       <p className="mb-3 text-[0.8125rem] leading-relaxed text-ink-muted">
-        A new password has been generated in this browser. It has not been sent and nothing has
-        changed yet — approving below is what applies it.{' '}
+        {t('reset.confirm.intro')}{' '}
         <span className="font-semibold text-ink-soft">
-          You typed {targetIdentifier} as the account to reset.
+          {t('reset.confirm.typedPrefix')}{' '}
+          {/*
+           * `bdi` ISOLATES THE IDENTIFIER FROM THE SURROUNDING DIRECTION, and it
+           * matters here rather than being a flourish. An email address is
+           * strongly LTR and this sentence is RTL in Arabic; without isolation
+           * the bidirectional algorithm reorders the punctuation AROUND it, so
+           * `a.b@c.com` can render with a trailing dot leading. **An identifier
+           * an operator is being asked to CHECK must render exactly.**
+           */}
+          <bdi className="font-mono">{targetIdentifier}</bdi>{' '}
+          {t('reset.confirm.typedSuffix')}
         </span>
       </p>
       <ConfirmationGate
-        title="Reset this person's password"
+        openerRef={openerRef}
+        title={t('reset.confirm.title')}
         boundParameters={request.parameters}
         requestChallenge={() =>
           platform.requestConfirmation({
@@ -358,6 +395,7 @@ function ResetUncertain({
   credential: NewCredential;
   error: ApiError;
 }) {
+  const t = useT();
   const certainlyNotWritten = writeIsCertainlyAbsent(error);
 
   /*
@@ -380,18 +418,17 @@ function ResetUncertain({
         role="alert"
         className="mt-4 rounded-[12px] border-2 border-scarlet-600 bg-scarlet-50 p-5"
       >
-        <h3 className="text-base font-bold text-scarlet-700">
-          The password was not reset
-        </h3>
+        <h3 className="text-base font-bold text-scarlet-700">{t('reset.refused.title')}</h3>
         <p className="mt-2 leading-relaxed text-ink">
-          Dudo refused the change, so{' '}
-          <span className="font-bold">nothing happened and the old password still works.</span> The
-          password generated here was never written — do not send it to anyone.
+          {t('reset.refused.lead')}{' '}
+          <span className="font-bold">{t('reset.refused.emphasis')}</span>{' '}
+          {t('reset.refused.warning')}
         </p>
         <p className="mt-2 text-[0.875rem] text-ink-soft">{error.message}</p>
         {error.request_id ? (
-          <p className="mt-2 font-mono text-xs break-all text-ink-muted">
-            Reference {error.request_id}
+          <p className="mt-2 text-xs text-ink-muted">
+            {t('denied.reference')}{' '}
+            <bdi className="font-mono break-all">{error.request_id}</bdi>
           </p>
         ) : null}
       </section>
@@ -405,57 +442,69 @@ function ResetUncertain({
       role="alert"
       className="mt-4 rounded-[12px] border-2 border-gold-500 bg-gold-50 p-5"
     >
-      <h3 className="text-base font-bold text-gold-700">
-        It is not known whether the password was reset
-      </h3>
+      <h3 className="text-base font-bold text-gold-700">{t('reset.unknown.title')}</h3>
       <p className="mt-2 leading-relaxed text-ink">
-        The request did not come back. It may have been applied and the answer lost on the way, or
-        it may never have arrived —{' '}
-        <span className="font-bold">this console cannot tell, and is not going to guess.</span>
+        {t('reset.unknown.body')}{' '}
+        <span className="font-bold">{t('reset.unknown.noGuess')}</span>
       </p>
       <p className="mt-2 leading-relaxed text-ink">
-        <span className="font-bold">Record the password below before leaving this screen.</span> If
-        the reset did land, this is the only copy that exists anywhere. If it did not, the string is
-        harmless and the old password still works.
+        <span className="font-bold">{t('reset.unknown.record')}</span>{' '}
+        {t('reset.unknown.recordWhy')}
       </p>
 
       <dl className="mt-4 grid gap-3">
         <div>
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            They would sign in with
+            {t('reset.unknown.identifierLabel')}
           </dt>
-          <dd className="mt-1 font-mono text-[0.9375rem] break-all text-ink">
-            {credential.identifier}
+          <dd className="mt-1 text-[0.9375rem] text-ink">
+            <bdi className="font-mono break-all">{credential.identifier}</bdi>
           </dd>
         </div>
         <div>
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Possibly-live password
+            {t('reset.unknown.passwordLabel')}
           </dt>
-          <dd className="mt-1 rounded-[7px] border border-line-strong bg-surface px-3 py-2 font-mono text-[0.9375rem] break-all select-all text-ink">
-            {credential.password}
+          <dd className="mt-1 rounded-[7px] border border-line-strong bg-surface px-3 py-2 text-[0.9375rem] text-ink">
+            <bdi className="font-mono break-all select-all">{credential.password}</bdi>
           </dd>
         </div>
       </dl>
 
       <p className="mt-4 leading-relaxed text-ink-soft">
-        <span className="font-semibold">To find out which:</span> check this business&rsquo;s audit
-        trail for a credential-reset record, or ask the person to try the new password.{' '}
-        <span className="font-semibold">
-          Do not simply run the reset again before checking
-        </span>{' '}
-        — a second reset would replace a credential that may already be the live one, and you would
-        then be holding two passwords and know less than you do now.
+        <span className="font-semibold">{t('reset.unknown.resolveLead')}</span>{' '}
+        {t('reset.unknown.resolveBody')}{' '}
+        <span className="font-semibold">{t('reset.unknown.doNotRepeat')}</span>{' '}
+        {t('reset.unknown.doNotRepeatWhy')}
       </p>
       <p className="mt-2 text-[0.875rem] text-ink-soft">{error.message}</p>
       {error.request_id ? (
-        <p className="mt-2 font-mono text-xs break-all text-ink-muted">
-          Reference {error.request_id}
+        <p className="mt-2 text-xs text-ink-muted">
+          {t('denied.reference')}{' '}
+          <bdi className="font-mono break-all">{error.request_id}</bdi>
         </p>
       ) : null}
     </section>
   );
 }
+
+/*
+ * EVERY CATEGORY, NAMED — and the type is what makes that true rather than a
+ * habit. `Record<PluralCategory, MessageKey>` is total over what
+ * `Intl.PluralRules` can return, so **omitting `two` does not compile.** A
+ * partial map with a runtime fallback would render English into an Arabic page
+ * for exactly the counts nobody tests with, which is the failure this module's
+ * no-fallback rule exists to refuse (`architecture.md` §3a: the obligation is a
+ * mechanism, not something to remember).
+ */
+const SESSION_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'reset.sessions.zero',
+  one: 'reset.sessions.one',
+  two: 'reset.sessions.two',
+  few: 'reset.sessions.few',
+  many: 'reset.sessions.many',
+  other: 'reset.sessions.other',
+};
 
 /**
  * The new password, shown once.
@@ -472,6 +521,7 @@ function ResetResult({
   credential: NewCredential;
   result: ResetCredentialOutput;
 }) {
+  const { locale, t } = useLocale();
   /*
    * ANNOUNCED AND FOCUSED, because this panel REPLACES the form the operator was
    * using. Without either, a screen-reader user presses Approve and hears
@@ -500,58 +550,61 @@ function ResetResult({
       aria-live="polite"
       className="mt-4 rounded-[12px] border-2 border-green-500 bg-surface p-5"
     >
-      <h3 className="text-base font-bold text-green-700">The password was reset</h3>
+      <h3 className="text-base font-bold text-green-700">{t('reset.done.title')}</h3>
 
       {result.warnings.length > 0 ? (
         <div
           role="status"
           className="mt-3 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.875rem] leading-relaxed text-ink"
         >
-          <p className="font-bold">Part of it did not finish.</p>
+          <p className="font-bold">{t('reset.done.partial')}</p>
+          {/*
+           * THE WARNING CODES ARE NOT TRANSLATED AND MUST NOT BE. They are
+           * Core's identifiers, they are what an operator quotes when reporting
+           * this, and a localised rendering would be a string nobody upstream
+           * can search for.
+           */}
           <ul className="mt-1 grid list-disc gap-1 ps-4">
             {result.warnings.map((warning) => (
               <li key={warning}>
-                <code className="font-mono">{warning}</code>
+                <bdi className="font-mono">{warning}</bdi>
               </li>
             ))}
           </ul>
-          <p className="mt-1">The password below is live regardless. Report this.</p>
+          <p className="mt-1">{t('reset.done.partialStillLive')}</p>
         </div>
       ) : null}
 
       <p className="mt-3 leading-relaxed text-ink">
-        <span className="font-bold">Record this password now.</span> It exists only on this screen —
-        Dudo did not receive it and cannot show it again.
+        <span className="font-bold">{t('reset.done.record')}</span> {t('reset.done.recordWhy')}
       </p>
 
       <dl className="mt-3 grid gap-3">
         <div>
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            They sign in with
+            {t('reset.done.identifierLabel')}
           </dt>
-          <dd className="mt-1 font-mono text-[0.9375rem] break-all text-ink">
-            {credential.identifier}
+          <dd className="mt-1 text-[0.9375rem] text-ink">
+            <bdi className="font-mono break-all">{credential.identifier}</bdi>
           </dd>
         </div>
         <div>
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            New password
+            {t('reset.done.passwordLabel')}
           </dt>
-          <dd className="mt-1 rounded-[7px] border border-line-strong bg-sunk px-3 py-2 font-mono text-[0.9375rem] break-all select-all text-ink">
-            {credential.password}
+          <dd className="mt-1 rounded-[7px] border border-line-strong bg-sunk px-3 py-2 text-[0.9375rem] text-ink">
+            <bdi className="font-mono break-all select-all">{credential.password}</bdi>
           </dd>
         </div>
       </dl>
 
       <p className="mt-3 text-[0.8125rem] text-ink-muted">
-        {result.sessions_revoked}{' '}
-        {result.sessions_revoked === 1 ? 'session was' : 'sessions were'} signed out.
+        {formatCount(locale, result.sessions_revoked, SESSION_FORMS, t)}
       </p>
 
       <p className="mt-3 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-        <span className="font-semibold">You will know this password until it is reset again.</span>{' '}
-        Dudo has no self-service password change, so they cannot replace it themselves. Send it
-        over a channel you would trust with a password.
+        <span className="font-semibold">{t('reset.done.youWillKnow')}</span>{' '}
+        {t('reset.done.noSelfService')}
       </p>
     </section>
   );

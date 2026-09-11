@@ -316,6 +316,18 @@ export type PlatformOperatorActionRecord = {
   readonly correlationId: string;
 };
 
+/**
+ * What `setOrganizationTemplate` did, or why it did not.
+ *
+ * `template_unusable` COVERS "no such Template" AND "retired" TOGETHER, AND THAT IS NOT A COLLAPSE
+ * OF THE KIND THIS PLATFORM USUALLY REFUSES. The caller distinguishes them from its own prior read
+ * of the Template — which it performs anyway, because the response embeds the Template — and this
+ * value is reached only when the in-statement guard disagrees with that read, which means the world
+ * moved. `template-lifecycle-v1` requires the two to be distinguishable to the operator, and they
+ * are: the answer comes from the read, not from this outcome.
+ */
+export type OrganizationTemplateOutcome = 'updated' | 'organization_not_found' | 'template_unusable';
+
 export type PlatformOperatorStore = {
   /**
    * The operator row for this principal, or `null`.
@@ -469,6 +481,103 @@ export type PlatformOperatorStore = {
     identity: OrganizationIdentity,
     reservation: ControlPlaneWriteReservation,
   ): Promise<Result<OrganizationIdentity>>;
+
+  /**
+   * ===========================================================================================
+   * HOW MANY ORGANIZATIONS HAVE ADOPTED ONE TEMPLATE. A NUMBER, NEVER A SET.
+   * `template-lifecycle-v1` -> `platform.templates.usage`.
+   * ===========================================================================================
+   *
+   * *** IT RETURNS A COUNT AND CANNOT BE MADE TO RETURN IDENTIFIERS, WHICH IS THE WHOLE POINT. ***
+   * The route exists so an operator retiring a Template is not deciding blind. A method returning
+   * the Organizations themselves would be the enumeration `0028` `CO1` forbids arriving through a
+   * different door, and **a return type of `number` is a shape that cannot carry one.**
+   *
+   * *** IT IS ON THIS PORT AND NOT ON `TemplateStore`, DELIBERATELY. *** It aggregates over the
+   * control-plane `organization` table, which is this port's table. `template-store.ts` opens by
+   * claiming something stronger than the other platform ports can — *"there is no tenant identifier
+   * anywhere in its inputs or its outputs"* — and it is the one port in the surface where that is
+   * simply true. **Reaching into `organization` from there would spend a property that is currently
+   * exact**, to save one dependency at one call site.
+   *
+   * IT MUST BE A `COUNT` AND NEVER A FETCH-AND-LENGTH. `template-lifecycle-v1`'s
+   * `freeTierImpact.reads`: *"reading every row to count them is the same number on the wire and a
+   * different number against d1-rows-read."*
+   *
+   * ⚠ THERE IS NO INDEX ON `organization.template_id` AND THIS IS THE ROUTE THAT WOULD WANT ONE.
+   * `0013_organization_template.sql` left it out in terms — *"the only query that would want one is
+   * 'list every Organization using Template X', which is a route that does not exist... Add it with
+   * the route that needs it."* **The route now exists and the index is still absent**, so this is a
+   * full scan of `organization`. That is correct and cheap at the current population and it is a
+   * MIGRATION rather than a code change, which is the user's call every time. Reported, not taken.
+   */
+  countOrganizationsUsingTemplate(templateId: string): Promise<Result<number>>;
+
+  /**
+   * ===========================================================================================
+   * HOW MANY ORGANIZATIONS EXIST. THE NUMBER `listOrganizations` CANNOT STATE.
+   * `platform.organizations.count` · `docs/decisions/0042`.
+   * ===========================================================================================
+   *
+   * A paginated list can only say *"at least 25"* until its last page, so an operational summary
+   * opened cold has no honest total. **This is the difference between a bound and a total.**
+   *
+   * *** IT TAKES NO ARGUMENT, AND THAT IS THE SHAPE CONSTRAINT RATHER THAN A SIMPLIFICATION. ***
+   * A single `total` and nothing else — no breakdown, no grouping, no `by_status` map, no
+   * per-Organization figure, no filter. **Each of those transposes into a MAPPING, and the mapping
+   * is what `0028` Decision 1 refuses.** A count is one number; the moment it is keyed by anything
+   * it has stopped being a count and become a table. **A method with no parameters cannot be keyed
+   * by anything**, which is this rule held in a signature rather than in a review.
+   *
+   * *** IT REUSES `core.organization.list` AND NEEDS NO PERMISSION OF ITS OWN. *** `security.md`
+   * §2a: a count is safe exactly when its consumer already holds enumeration over the counted
+   * population. A `core.organization.list` holder enumerates every Organization deliberately, at
+   * `sensitive`. **A new permission here would be a split with no decision in it.**
+   *
+   * AND IT IS THE MERITS ANSWER TO `theLine.out`, NOT A SCOPE DISTINCTION. That block refuses
+   * counts of business records — *"how many customers is how a console acquires cross-tenant reach
+   * one convenient number at a time"* — and **the operative fact is that a platform operator holds
+   * NO enumeration right over customers**, so each such count is genuinely new. **The rule turns on
+   * the RIGHT, not on the object**, which is why it does not transfer here.
+   *
+   * CONTROL-PLANE ONLY. One aggregate over the `organization` table; **no tenant read of any kind
+   * and no store handle resolved.**
+   *
+   * ZERO IS THE ORDINARY ANSWER AND NEVER A `not_found`. An empty platform is not a missing one,
+   * and it is the ordinary first day.
+   */
+  countOrganizations(): Promise<Result<number>>;
+
+  /**
+   * ===========================================================================================
+   * SET OR CLEAR ONE ORGANIZATION'S TEMPLATE. `template-lifecycle-v1` -> PA-17.
+   * ===========================================================================================
+   *
+   * `null` CLEARS IT, AND CLEARING IS A REAL OPERATION RATHER THAN A HOLE — the schema's own words:
+   * *"an Organization onboarded onto the wrong Template must be able to get back to a neutral
+   * state, and today every Organization that predates Templates is already in it."*
+   *
+   * *** THE RETIRED-TEMPLATE PRECONDITION IS ENFORCED IN THIS STATEMENT AND NOT ONLY ABOVE IT. ***
+   * The caller reads the Template first — it has to, because the response embeds it — and that read
+   * is stale by the time the write lands. `architecture.md` §3a: the in-statement guard is the only
+   * layer with no window. **`template-lifecycle-v1` states the rule cannot be expressed in the
+   * schema at all** — *"JSON Schema cannot see the referenced Template's status — it is a value in
+   * another table"* — so the schema is not a second layer here and this guard is load-bearing.
+   *
+   * IT CANNOT SET A TEMPLATE THAT DOES NOT EXIST EITHER. The foreign key would refuse that anyway;
+   * the guard makes it an answer rather than a caught exception, which is the difference between
+   * telling an operator "that Template is retired" and telling them the database was unavailable.
+   *
+   * *** IT DOES NOT WRITE THE TENANT-SIDE AUDIT RECORD AND MUST NOT LEARN HOW. *** That record goes
+   * into the named Organization's OWN database through `MemberResolutionPort.recordOrganizationAccess`,
+   * which requires an `OperatorWriteCharged` receipt. This port holds no resolver and reaches no
+   * tenant store; keeping the two writes in two places is what keeps `0024`'s mutual exclusion true.
+   */
+  setOrganizationTemplate(
+    organizationId: string,
+    templateId: string | null,
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<OrganizationTemplateOutcome>>;
 
   /**
    * ===========================================================================================

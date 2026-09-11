@@ -233,10 +233,34 @@ export const PER_ORGANIZATION_DAILY_ROW_WRITES = 10_000;
  * WHAT IT BOUNDS, AND WHY THE OTHER TWO FIXES DID NOT
  * ===========================================================================================
  *
- * Two platform routes write into a CUSTOMER'S tenant database — the member resolve and the scoped
- * audit feed — at 5 row-writes each. Measured on 2026-09-05: **2,000 calls exhausted one named
- * Organization's entire 10,000/day allocation**, after which **that customer's own mutations
- * started failing**, for a reason they could not see.
+ * Platform routes write into a CUSTOMER'S tenant database at 5 row-writes each. Measured on
+ * 2026-09-05: **2,000 calls exhausted one named Organization's entire 10,000/day allocation**,
+ * after which **that customer's own mutations started failing**, for a reason they could not see.
+ *
+ * ===========================================================================================
+ * *** THIS SENTENCE SAID "TWO PLATFORM ROUTES" AND NAMED THEM. IT WAS THREE, AND IT IS FOUR THE
+ * DAY `platform.organizations.set-template` REGISTERS. CORRECTED 2026-09-11 — SR-12. ***
+ * ===========================================================================================
+ *
+ * **NOTHING DERIVES THE COUNT AND NOTHING GOES RED WHEN IT ROTS.** It was written when two routes
+ * did this; `platform.organizations.identity.update` became the third on 2026-09-07 and did not
+ * reach this paragraph, because the paragraph is in a file the change had no reason to open. That
+ * is `workflow.md` §12's duplicated constraint in its cheapest form — a hand-maintained figure in
+ * prose, in a file that cannot see the thing it counts.
+ *
+ * **AND IT ROTTED IN THE REASSURING DIRECTION**, which §11a records is the direction nobody catches:
+ * a reader learns the exposure is narrower than it is, and every use of that number — scoping a
+ * review, sizing a risk, deciding this ceiling is generous — reads as diligence.
+ *
+ * *** SO THE COUNT IS REMOVED RATHER THAN INCREMENTED. *** A corrected number is a number that will
+ * be wrong again at the next route, by the same mechanism, with nobody assigned to notice. **The
+ * authority is the code, not this comment**: the callers of
+ * `MemberResolutionPort.recordOrganizationAccess` and `.resolve` are the definitive list, and
+ * `RequestCoordination.reserveWrites`'s `'platform'` origin argument is greppable — with `grep -a`,
+ * because `platform/core/**` still carries quarantined NUL bytes.
+ *
+ * The routes doing it as this was written: the member resolve, the scoped audit feed, the identity
+ * update, and set-template once it registers. **Treat that as an example rather than as the set.**
  *
  * TWO FIXES CAME FIRST AND NEITHER CLOSED IT:
  *

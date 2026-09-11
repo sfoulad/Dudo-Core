@@ -376,6 +376,185 @@ for (const file of files) {
 }
 const failures = [...severe, ...cosmetic];
 
+// =============================================================================================
+// THE QUARANTINE. User decision, 2026-09-09 — Milestone 0 item 3 (docs/decisions/0035).
+//
+// WHY A QUARANTINE AND NOT A FIX. Three NULs remain in ONE file and THERE IS NO WORKING TOOL TO
+// REMOVE THEM. Measured from three directions in a single session: `Edit` will not reliably match
+// the byte (about 30 attempts across 10 anchor shapes); `Write` is a read-then-write round trip
+// that destroys NULs it merely reproduces; Bash is barred from authoring by workflow.md §9.
+//
+// *** AND THE INSTRUMENT WRITES THE BYTE YOU ARE TRYING TO REMOVE. *** The six-character escape
+// naming code point zero, typed into an `Edit` replacement, ARRIVES IN THE FILE AS A REAL NUL.
+// That is how two NEW ones appeared during the repair — one of them inside the sentence
+// documenting the hazard. The file went from three to four and was reverted to HEAD.
+// THE AUTHOR OF THIS COMMENT THEN DID IT AGAIN, IN THIS FILE, while writing this paragraph: the
+// scanner acquired a NUL of its own and had to be reverted and rewritten. Hence the circumlocution
+// above — that escape is not spelled anywhere in this repository, and it cannot be.
+//
+// WHAT THIS BUYS, AND IT IS THE WHOLE POINT: before this, the check exited 1 and was therefore
+// held OUT of `npm test` — so a NEW control byte introduced anywhere tomorrow would have failed
+// NOTHING. A permanently-red check gates nothing at all. Pinning the one known file lets the check
+// exit 0, join the gate, and refuse every future regression.
+//
+// PINNED BY BYTE OFFSET, NOT BY LINE. Line numbers move when anything above them is edited; a pin
+// that drifts under unrelated edits is a pin nobody can verify. Offsets are stable under edits
+// below them and change loudly under edits above them, which is the correct sensitivity.
+//
+// *** IT FAILS IN BOTH DIRECTIONS, AND THE `FEWER` CASE IS THE DELIBERATE ONE. ***
+// More bytes, or a new file: a regression. Obvious.
+// FEWER bytes: ALSO A FAILURE, and this is the half that matters. If a fix passed silently, this
+// pin would sit here claiming three NULs long after they were gone — A PESSIMISTIC STALE NUMBER,
+// which workflow.md §11a records is believed indefinitely BECAUSE ACTING ON IT ALWAYS LOOKS LIKE
+// THE SAFE CHOICE. Every stale count in this repository that rotted the reassuring way was caught
+// eventually, by someone relying on it. One that rots the cautious way is caught by nobody. So a
+// fix must come here and lower the pin, deliberately, by hand.
+// =============================================================================================
+
+const QUARANTINE = new Map([
+  [
+    'platform/core/platform/platform-route-handlers.ts',
+    {
+      // MOVED 2026-09-09, from [40922, 46298, 46602]. NOT a fix and NOT a regression: core-agent's
+      // authorised residue repair inserted content ABOVE the first separator, displacing all three
+      // by exactly +2058.
+      //
+      // HOW I KNOW THESE ARE THE SAME THREE BYTES AND NOT A REMOVAL PLUS AN INSERTION — the count
+      // alone does not establish that, and the count is what the pin compares:
+      //   gaps before:  46298-40922 = 5376   46602-46298 = 304
+      //   gaps after:   48356-42980 = 5376   48660-48356 = 304
+      // IDENTICAL SPACING UNDER A UNIFORM SHIFT. A byte removed and another added elsewhere would
+      // not preserve both gaps. The file was also confirmed settled before the pin moved: identical
+      // sha256 across a six-second interval, and nothing written under platform/core for four
+      // minutes (`find -mmin`, never `-newermt`, which returns nothing silently on this BSD find).
+      //
+      // *** THIS IS THE DIRECTION NO MUTANT TESTED. *** The four controls that verified this
+      // quarantine attack the pin as too high, too low, wrong offsets, and file gone. NONE of them
+      // is "the same count somewhere else", and the tree produced exactly that within the day. It
+      // was caught only because the pin compares offsets rather than a count — a decision made for
+      // a different reason, which is luck rather than foresight and is recorded as such.
+      // MOVED AGAIN 2026-09-11, from [42980, 48356, 48660], by exactly +160. Same mechanism as the
+      // 2026-09-09 move and the SECOND time this has happened — `core-agent`'s Template lifecycle
+      // work inserted content above the first separator. **Reported by `web-agent`, which stopped
+      // rather than editing**, because this file's own message names the Team Lead as the pin's
+      // owner. That instruction worked exactly as written.
+      //
+      // VERIFIED BY THE TEAM LEAD BEFORE MOVING IT, and the count is not what establishes it:
+      //   shift:  +160, +160, +160                    uniform
+      //   gaps:   5376, 304  ->  5376, 304            preserved exactly
+      //   bytes at 43140, 48516, 48820  ->  0, 0, 0   all three still NUL
+      //   total NULs in the file: 3                   none gained, none lost
+      //
+      // A byte removed and another added elsewhere would not preserve both gaps AND leave the total
+      // at three. Displacement, not substitution.
+      //
+      // *** THAT THIS HAS NOW HAPPENED TWICE IS THE ARGUMENT FOR OFFSETS OVER A COUNT. *** A pin on
+      // the count alone would have stayed green through both moves and told nobody the file had
+      // changed above the separators — and the second time, the change was a security repair to the
+      // charset rule on a deployed route. The 2026-09-09 note called catching the first one luck
+      // rather than foresight. It is no longer luck: it is the only reason either move was seen.
+      // MOVED A THIRD TIME 2026-09-11, from [43140, 48516, 48820], by exactly +21 — `core-agent`
+      // hoisting `TEMPLATE_STATUSES` to a single home while building the list `status` filter.
+      // **Reported by `core-agent`, which measured it, said plainly that `scripts/` is the Team
+      // Lead's, and did not touch the pin.** Second reporter, second time the instruction held.
+      //
+      // RE-DERIVED BY THE TEAM LEAD RATHER THAN TRANSCRIBED FROM THE REPORT, which matters more
+      // each time this happens — see the note below on where the risk has migrated:
+      //   shift:  +21, +21, +21                       uniform
+      //   gaps:   5376, 304  ->  5376, 304            preserved exactly
+      //   bytes at 43161, 48537, 48841  ->  0, 0, 0   all three still NUL
+      //   total NULs: 3        other control bytes: none      file size 123326
+      //   neighbourhoods: the cursor `.join(NUL)`, the doc COMMENT describing the separator, and
+      //                   encodeAuditAnchor — the same three sites, meaning unchanged
+      //
+      // *** THREE MOVES IN THREE DAYS, AND NOT ONE OF THEM WAS A DEFECT. *** A residue repair, a
+      // charset security fix, and a deduplication — all correct work, all landing above the first
+      // separator, because that is where this file's code lives and the separators are near its end.
+      // **The pin is now moving about once per session, and it will keep moving.**
+      //
+      // SO THE RISK HAS MIGRATED, AND THIS IS THE PART WORTH READING BEFORE THE FOURTH MOVE.
+      // The pin's VALUE is unchanged and proven: an offset pin caught all three displacements and a
+      // count-only pin would have stayed green through every one. **Its COST is that a human
+      // re-derives three numbers by hand each time** — and hand-transcribing a number from another
+      // agent's report is precisely the class this repository has been bitten by (an accurate row
+      // count attributed to a request that does not exist; accurate line numbers attributed to the
+      // wrong route). **The failure mode is no longer "nobody notices the file changed". It is "the
+      // owner pins what the reporter said."**
+      //
+      // The control that has held three times: THE MOVER REPORTS AND DOES NOT EDIT; THE OWNER
+      // MEASURES INDEPENDENTLY AND DOES NOT TRANSCRIBE. Two different reporters so far
+      // (`web-agent`, then `core-agent`), each stopping because this file's own refusal message
+      // names the Team Lead. **Keep that message pointing at a person, not at a procedure.**
+      nulOffsets: [43161, 48537, 48841],
+      why:
+        'Deliberate domain separators typed as raw bytes instead of String.fromCharCode(0). ' +
+        'CORRECT IN MEANING, WRONG IN FORM — the value must not move. One is inside encodeAuditAnchor, ' +
+        'whose repair will turn two audit-anchor cases red on correct code: expected, and not a reason ' +
+        'to unwind it (packages/testing/suites/platform-operator/audit-anchor.ts says so in its own ' +
+        'header). Removing these needs a tool that can match the byte. None exists today.',
+    },
+  ],
+]);
+
+function actualNulOffsets(path) {
+  const buffer = readFileSync(path);
+  const offsets = [];
+  for (let i = 0; i < buffer.length; i += 1) if (buffer[i] === SEVERE) offsets.push(i);
+  return offsets;
+}
+
+const quarantineBreaches = [];
+const quarantinedPaths = new Set();
+
+for (const [path, pin] of QUARANTINE) {
+  if (!existsSync(path)) {
+    quarantineBreaches.push(
+      `${path}\n      QUARANTINED FILE IS GONE — moved, renamed or deleted. Remove its entry here,\n` +
+        `      deliberately, in the same change. A pin pointing at nothing reports nothing.`,
+    );
+    continue;
+  }
+  quarantinedPaths.add(path);
+  const observed = actualNulOffsets(path);
+  const expected = pin.nulOffsets;
+  if (observed.length === expected.length && observed.every((v, i) => v === expected[i])) continue;
+
+  const direction =
+    observed.length > expected.length
+      ? 'MORE NULs than pinned — a REGRESSION.'
+      : observed.length < expected.length
+        ? 'FEWER NULs than pinned — someone FIXED this. Lower the pin, by hand, in that same change.'
+        : 'the same COUNT at DIFFERENT offsets — content moved above a separator, or a byte moved.';
+  quarantineBreaches.push(
+    `${path}\n      ${direction}\n` +
+      `      pinned:   [${expected.join(', ')}]\n` +
+      `      observed: [${observed.join(', ')}]`,
+  );
+}
+
+// Findings in a quarantined file are not failures; a breach of its pin is.
+//
+// *** THE EXEMPTION IS BOUNDARY-AWARE, AND THE FIRST VERSION WAS NOT. ***
+// It read `entry.startsWith(path)`, which has NO PATH BOUNDARY. `qa-agent` found it by replicating
+// the predicate rather than by mutating the tree, and named the reachable case: a finding in
+// `platform-route-handlers.tsx` — and `.tsx` IS a scanned extension — or in
+// `platform-route-handlers.ts.bak.ts` would have been SILENTLY EXEMPTED, and the scanner would
+// still have exited 0. The realistic trigger is a backup made while rewriting the very file that
+// is quarantined, which is the one rewrite anybody is going to attempt.
+//
+// THE FOUR MUTANTS THAT VERIFIED THIS QUARANTINE ALL ATTACKED THE PIN — too high, too low, wrong
+// offsets, file gone. NOT ONE ASKED WHO THE PIN APPLIES TO. That is `§11a`'s point about a check
+// being sound by accident: the controls were real, they were mine, and they were all aimed at one
+// axis because it was the axis I had been thinking about.
+//
+// A finding's rendered form is `<path>\n      line N, column M: ...`, so the only correct match is
+// the whole path followed by the newline that ends it — or the whole path exactly.
+const quarantineMatches = (entry, path) => entry === path || entry.startsWith(`${path}\n`);
+
+const unquarantinedSevere = severe.filter(
+  (entry) => ![...quarantinedPaths].some((path) => quarantineMatches(entry, path)),
+);
+
 // ---- THE POPULATION. Reported BEFORE what was found, and reported PER EXTENSION so that an
 // extension which stopped matching is named rather than absorbed into a smaller total. ----
 
@@ -442,18 +621,65 @@ if (files.length < 50) {
   process.exit(1);
 }
 
-if (severe.length > 0) {
-  console.error(
-    `\nFAIL — SEVERE: ${String(severe.length)} file(s) contain a NUL and are INVISIBLE TO ` +
-      'TOOLING:\n',
+// ---- THE QUARANTINE VERDICT, printed BEFORE the findings so it cannot be read as an excuse
+// for them. A breached pin is a hard failure; an honoured pin is reported, never silent. ----
+
+if (quarantineBreaches.length > 0) {
+  console.error(`\nFAIL — QUARANTINE BREACHED: ${String(quarantineBreaches.length)} entry/entries:\n`);
+  for (const breach of quarantineBreaches) console.error(`  - ${breach}\n`);
+  console.error('  This pin fails in BOTH directions on purpose. MORE bytes is a regression.');
+  console.error('  FEWER means someone fixed it and the pin must come down, or this file would go');
+  console.error('  on claiming a defect that no longer exists — and a pessimistic stale number is');
+  console.error('  the kind nobody ever questions (§11a).');
+  console.error('  SAME COUNT AT DIFFERENT OFFSETS usually means content moved ABOVE a separator.');
+  console.error('  Check the GAPS between offsets before assuming corruption: preserved gaps under');
+  console.error('  a uniform shift mean the same bytes were displaced, not that one was swapped.');
+  console.error('');
+  console.error('  *** WHO EDITS THIS PIN: THE TEAM LEAD, NOT YOU. *** scripts/** is root tooling');
+  console.error('  (CLAUDE.md). The agent that edits a quarantined file is, by ownership, NOT the');
+  console.error('  agent that can lower or move its pin — so REPORT THE NEW OFFSETS AND STOP.');
+  console.error('  This message used to say "must lower the pin in that same change", which told');
+  console.error('  the one person who cannot do it to do it. Corrected 2026-09-09 after qa-agent');
+  console.error('  pointed out the instruction had no valid recipient.\n');
+  process.exit(1);
+}
+
+if (quarantinedPaths.size > 0) {
+  console.log(
+    `quarantined:  ${String(quarantinedPaths.size)} file(s) carrying ` +
+      `${String([...QUARANTINE.values()].reduce((n, p) => n + p.nulOffsets.length, 0))} pinned NUL(s), ` +
+      'at the exact offsets recorded. NOT a pass for them — a refusal to let them get worse:',
   );
-  for (const failure of severe) console.error(`  - ${failure}\n`);
-  console.error('  *** THESE FILES CANNOT BE GREPPED AND CANNOT BE REVIEWED. ***');
-  console.error('  Plain `grep` returns NOTHING over the whole file, silently — no error, no');
-  console.error('  "binary file matches", no zero — so every later search examines nothing and');
-  console.error('  looks clean. `git diff` reports them as binary with NO HUNKS AT ALL, so a change');
-  console.error('  to one lands unreviewable. A search for a security control in such a file has');
-  console.error('  already been mistaken for the control being absent.');
+  for (const [path, pin] of QUARANTINE) {
+    console.log(`  - ${path}  [${pin.nulOffsets.join(', ')}]`);
+    console.log(`      ${pin.why}`);
+  }
+  console.log('');
+}
+
+if (unquarantinedSevere.length > 0) {
+  console.error(
+    `\nFAIL — SEVERE: ${String(unquarantinedSevere.length)} file(s) contain a NUL and are ` +
+      'INVISIBLE TO TOOLING:\n',
+  );
+  for (const failure of unquarantinedSevere) console.error(`  - ${failure}\n`);
+  console.error('  *** THESE FILES CANNOT BE GREPPED BY THIS SHELL\'S `grep`. ***');
+  console.error('  It returns NOTHING over the whole file, silently — no error, no "binary file');
+  console.error('  matches", no zero — so every later search examines nothing and looks clean.');
+  console.error('  A search for a security control in such a file has already been mistaken for');
+  console.error('  the control being absent. `grep -a` works; so does /usr/bin/grep. The silent');
+  console.error('  failure is the ugrep wrapper\'s -I flag, NOT grep the program. CORRECTED');
+  console.error('  2026-09-09: this text said "plain grep", which overstated it.');
+  console.error('');
+  console.error('  REVIEWABILITY: `git diff` renders such a file as binary with no hunks ONLY');
+  console.error('  WHEN THE NUL IS NEAR THE TOP — git samples just the first block for its binary');
+  console.error('  test. Measured twice independently, each with a no-NUL control, agreeing: the');
+  console.error('  boundary is EXACTLY 8000 bytes (7999 binary, 8000 textual). The quarantined');
+  console.error('  file carries its NULs at 40922 / 46298 / 46602, all far past it, and KEPT A');
+  console.error('  NORMAL TEXTUAL DIFF THROUGHOUT. So "everything committed to these files landed');
+  console.error('  unreviewable" WAS NEVER TRUE OF THEM — and it was the argument that made this');
+  console.error('  urgent. The greppability harm is real and unchanged. Do not restate the');
+  console.error('  reviewability claim without measuring the offset.');
   console.error('  FIX: `String.fromCharCode(0)`, never a typed byte. The BYTE is usually correct —');
   console.error('  a NUL separator that cannot occur in either component is the right design — and');
   console.error('  it is the SPELLING that has to change, so the value must not move.');
@@ -474,8 +700,17 @@ if (cosmetic.length > 0) {
   console.error('  not disable anyone else\'s tools. Fix them after the NULs, not before.\n');
 }
 
-if (failures.length > 0) {
+if (unquarantinedSevere.length > 0 || cosmetic.length > 0) {
   process.exit(1);
 }
 
-console.log('source bytes: OK — no control bytes outside tab and newline.');
+// `failures` is deliberately still computed above and deliberately NOT the exit condition: it
+// counts findings, and the exit condition is findings OUTSIDE the quarantine plus pin breaches.
+// Named here because a variable that stops deciding anything is one a later reader will re-wire.
+void failures;
+
+console.log(
+  quarantinedPaths.size > 0
+    ? 'source bytes: OK — no control bytes outside the quarantine, and every pin exactly honoured.'
+    : 'source bytes: OK — no control bytes outside tab and newline.',
+);

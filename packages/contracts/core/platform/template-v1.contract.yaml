@@ -241,7 +241,36 @@ operations:
         TWO TEMPLATES CALLED "School" ARE INDISTINGUISHABLE TO THE OPERATOR CHOOSING ONE, and the
         choice is permanent for every Organization that adopts the wrong one. This is the one
         place a duplicate is worse than a gap.
+      theCHARSETRULING_SR8_20260910: >-
+        *** THE UNIQUENESS GUARANTEE BELOW WAS DEFEATED BY A TWO-CHARACTER INPUT UNTIL 2026-09-10. ***
+        NFKC collapses fullwidth forms and DOES NOT REMOVE `U+202E` RIGHT-TO-LEFT OVERRIDE or
+        `U+200B` ZERO WIDTH SPACE, so "School" and "Scho<U+202E>ol" normalised DIFFERENTLY, were
+        accepted as two distinct Templates, and were VISUALLY IDENTICAL in the picker. THE INDEX WAS
+        DEFEATED BY A CHARACTER IT COULD NOT SEE — the exact ambiguity it exists to prevent.
+        THE RULING, IN TWO HALVES: (1) REJECT AT INPUT, BY UNICODE CATEGORY — `Cc`, `Cf`, `Cn`, `Co`,
+        `Zl`, `Zp` — WITH EXACTLY TWO EXCEPTIONS, `U+200C` ZWNJ and `U+200D` ZWJ, which Persian,
+        Arabic and Indic scripts REQUIRE for correct rendering. (2) STRIP THOSE TWO FROM THE COLLISION
+        KEY, so the permitted exceptions cannot build a confusable pair while the stored name keeps
+        them. BY CATEGORY RATHER THAN BY CODE-POINT LIST, so a format character Unicode has not
+        assigned yet is refused by default.
+        IT IS PRE-EXISTING AND template-lifecycle-v1 WIDENS IT, WHICH IS WHY IT WAS FIXED WITH THAT
+        CONTRACT RATHER THAN SOMEDAY: before the update route a confusable name could only be
+        introduced at CREATION; now it can be introduced into a Template ORGANIZATIONS HAVE ALREADY
+        ADOPTED, and these strings render to every user in every adopting tenant.
+        NOT A BAN ON NON-ASCII, AND THIS CONTRACT ALREADY REFUSED THAT ONE — see
+        aTEMPLATENAMEISNOTANACCOUNTIDENTIFIERANDMUSTNEVERACQUIREITSRULE. Dudo operates in Bahrain and
+        an Arabic Template name is an ordinary requirement.
+        EXPRESSED, NOT ENFORCED, ON BOTH AXES: the schema `pattern` is a BMP approximation that cannot
+        express a category rule, and nothing here executes JSON Schema. CORE ENFORCES IT AT EVERY
+        ENTRY POINT ACCEPTING A NAME OR A LEVEL LABEL — CREATE AND UPDATE. See the `$comment`s on
+        `$defs/templateName` and `$defs/levelLabel` for the full argument and the client obligation.
       theNORMALISATIONISDELIBERATEANDNARROW: >-
+        AMENDED 2026-09-10 — THERE ARE NOW THREE STEPS AND THE FIRST IS NEW. Strip `U+200C` and
+        `U+200D`, then NFKC, then ASCII-only case folding. *** SO `normalizeTemplateName` IS NO LONGER
+        `normalizeIdentifier`; IT IS THAT FUNCTION COMPOSED WITH A STRIP, AND CORE MUST COMPOSE RATHER
+        THAN MODIFY. *** The strip is a no-op on an account identifier, which is printable-ASCII-only
+        — so pushing it into the shared function would be harmless today and would re-create exactly
+        the coupling theTRAPINTHEOBVIOUSFIX below warns about.
         NFKC then ASCII-only case folding — THE SAME DEFINITION credential-store.ts::normalizeIdentifier
         USES, restated in the schema rather than invented, so that "School" and "school" collide and
         "Ｓchool" (full-width) does too. NOT full Unicode lowercasing, for credential-store.ts's own
@@ -291,7 +320,37 @@ operations:
     description: "Enumerate Templates, so an operator can see what exists before creating another and before onboarding an Organization."
     permission: core.template.list
     scope: platform
-    request: "Query parameters `page_size` (1-100, default 25) and `cursor` only."
+    request: >-
+      Query parameters `page_size` (1-100, default 25), `cursor`, and `status` only.
+      `status` REFERENCES urn:dudo:schema:template:1#/$defs/templateStatusFilter AND IS OPTIONAL.
+      ABSENT MEANS UNFILTERED — both statuses — which is exactly the behaviour every caller has
+      shipped against, so this parameter changes nothing for one that ignores it.
+    listFilterAmendment:
+      added: "2026-09-09, by template-lifecycle-v1, which is the contract that makes `retired` reachable."
+      whyItIsNEEDED: >-
+        A LIST THAT MIXES RETIRED AND ACTIVE TEMPLATES RECREATES THE DEFECT NAME-UNIQUENESS EXISTS
+        TO PREVENT. This contract's own conflict ruling says "two Templates called School are
+        indistinguishable to the operator choosing one, and the choice is permanent for every
+        Organization that adopts the wrong one"; an active School beside a retired School in a
+        picker is that sentence one field along. Retire without a filter is a half-built feature.
+      whyItIsADDITIVEANDNOTBREAKING: >-
+        THE SERVER DEFAULT IS UNCHANGED AND STAYS UNFILTERED. Changing it to `active` was considered
+        and REJECTED: it is a semantic change to a published operation, and although it is
+        unobservable today — every Template is active — it would become observable the first time
+        the retire route is used. A change that is invisible until the feature that makes it visible
+        ships is not a safe change, it is a delayed one.
+      whereTheDEFAULTTHATMATTERSLIVES: >-
+        IN THE CLIENT, STATED NORMATIVELY IN THE SCHEMA. An operator-facing list of Templates SENDS
+        `status=active`. That is a presentation decision, it belongs where presentation decisions
+        belong, and putting it in the contract is what stops the web and Apple clients choosing
+        differently — the same reason level_labels' defaults are filled server-side.
+      theENUMPOLICYNOTE: >-
+        `templateStatusFilter` IS `closed` WHILE `templateStatus` IS `extensible`, ON THE IDENTICAL
+        VALUE SET. Both are correct — docs/decisions/0041 amendment 1: `extensible` is a claim about
+        what the SERVER sends, so a request enum is always `closed`. The duplicate-policy check is
+        expected to flag this pair and is wrong to; both defs carry a mutual `enumPolicyDivergence`
+        marker. See template-lifecycle-v1 -> theEnumPolicyDivergence, which is where the exemption's
+        semantics and its owed known-failing input are recorded.
     response: { schemaRef: "urn:dudo:schema:template:1#/$defs/listTemplatesOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, rate_limited, unavailable]
@@ -305,6 +364,72 @@ operations:
       first.
       NO not_found, EVER. Zero Templates returns 200 with data: [] — an empty collection is not a
       missing one.
+
+  # =======================================================================================
+  - id: platform.templates.count
+    title: "How many Templates exist"
+    method: GET
+    path: "/templates/count"
+    surface: platform
+    provenance: >-
+      NEW WORK, 2026-09-11. AMENDMENT TO AN ACCEPTED CONTRACT, additive under architecture.md §1.
+      Ruled in docs/decisions/0042 and held until the Template lifecycle operations were registered.
+    description: >-
+      The total number of Templates. THE NUMBER THE LIST ROUTE CANNOT STATE: a paginated list can
+      only say "at least 25" until its last page.
+    permission: core.template.list
+    scope: platform
+    request: "No body, no query parameters, no path parameters."
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateCountOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, unavailable]
+    maxRowWrites: 4
+    audit: required
+    theCOUNTISUNFILTEREDANDTAKESNOSTATUSPARAMETER: >-
+      *** IT COUNTS BOTH STATUSES AND DOES NOT ACCEPT `templateStatusFilter`. *** The list route
+      gained that filter because a picker must not offer a retired Template beside an active one;
+      A TOTAL IS A DIFFERENT QUESTION. A number that changed with a filter would be a different
+      number under the same name, and an operator asking "how many Templates are there" is asking
+      about the table.
+      IF A FILTERED COUNT IS EVER WANTED IT IS A SEPARATE OPERATION WITH A SEPARATE NAME, not a
+      parameter on this one — stated as the reason rather than as a prohibition, so whoever wants
+      one is not left reading this as a refusal of the requirement.
+    whyITNEEDSNOPERMISSIONOFITSOWN_ANDTHEADOPTIONCOUNTDID: >-
+      *** READ THIS BEFORE CONCLUDING THE TWO RULINGS DISAGREE — THEY ARE THE SAME TEST WITH
+      DIFFERENT POPULATIONS. ***
+      security.md §2a: A COUNT IS SAFE EXACTLY WHEN ITS CONSUMER ALREADY HOLDS ENUMERATION OVER THE
+      COUNTED POPULATION, AND DANGEROUS EXACTLY WHEN IT DOES NOT.
+      THIS COUNT COUNTS TEMPLATES, and a `core.template.list` holder enumerates Templates. It reaches
+      nothing past that right: walking the pages yields the same number, more slowly and at an audit
+      row per page.
+      `organizations_using` COUNTS ORGANIZATIONS, and `core.template.list` grants NOTHING over the
+      Organization population — so that count reaches PAST its consumer's enumeration right, which is
+      why template-lifecycle-v1 gives it a `sensitive` permission of its own,
+      `core.template-adoption.read`, rather than leaving it in this family.
+      *** AND THE FAMILY IS WHY THAT SEPARATION MATTERS RATHER THAN BEING PEDANTRY. *** Permissions
+      are granted BY FAMILY: anyone composing a role that "can read Templates" reaches for
+      `core.template.*`, and a census permission filed there would arrive with the set silently,
+      looking like a fourth member of something the grantor had already decided about. THIS count
+      belongs in the family; THAT one does not.
+    theSHAPEISSCALAR: >-
+      A SINGLE `total` AND NOTHING ELSE — no breakdown, no grouping, no count-by-status map. Each
+      transposes into a MAPPING and the mapping is what docs/decisions/0028 Decision 1 refuses.
+      `additionalProperties: false` on the response is the enforcement; this sentence is why.
+    theRATELIMITPOSITION: >-
+      The route declares `rate_limited` and the platform class's limits apply. A RATE LIMIT IS NOT A
+      SUBSTITUTE FOR THE PERMISSION ON ANY COUNT ROUTE: the vector is LONGITUDINAL, NOT BURST, and a
+      limit bounding requests per minute bounds a scrape rather than sampling over months. Stated
+      here as well as on platform.organizations.count because the substitution is proposed per route,
+      not per platform.
+      NOTE THAT THIS ROUTE'S OWN CENSUS RISK IS LOW: the Template population is platform
+      configuration bounded by operator effort, not a customer base. The paragraph is here so the
+      REASONING is beside every count rather than only beside the one that needed it.
+    notes: >-
+      maxRowWrites IS 2 ON A READ — platform-operator-v1 P4 requires every platform route to write an
+      audit record. Same reasoning as platform.templates.list records.
+      NO not_found, EVER. Zero Templates returns 200 with `total: 0`; an empty catalogue is not a
+      missing one, and today it is the ordinary state.
+      IT MUST BE A COUNT AND NEVER A FETCH-AND-LENGTH.
 
   # =======================================================================================
   - id: platform.templates.read
@@ -389,10 +514,34 @@ openQuestions:
     question: "There is no update. An operator who mistypes a name must retire and recreate — and retirement is TM-2, so today they cannot even do that."
     recommendation: "Add update in version 2, with explicit thinking about what changing a label does to Organizations already rendering it. Not a PATCH added quietly."
     blocks: "Nothing. It is a usability limitation, stated."
+    ANSWERED: >-
+      2026-09-09 BY template-lifecycle-v1, WHICH IS AUTHORED AND NOT YET BUILT — and those are
+      different states, so this entry stays open rather than being struck.
+      THE "EXPLICIT THINKING" THIS ENTRY DEMANDED WAS DONE RATHER THAN SKIPPED, and it is in that
+      contract's theReachRuling: notification was considered and rejected because nothing delivers
+      anything to a tenant today (AZ5); blocking the edit while in use was considered and rejected
+      because it pushes operators toward retire-and-recreate, which is worse; and what was ADOPTED is
+      making the reach VISIBLE — every write returns `organizations_using`.
+      ITS OWN HONEST LIMIT IS RECORDED THERE AS TL-1: the count is visible AFTER the act, not before.
   - id: TM-2
     question: "`status` exists in the shape with two values and no route sets it. Every Template is active forever."
     recommendation: "The retire operation belongs with update in version 2. The field is declared now so adding the route later changes no published shape."
     blocks: "Nothing today, and it becomes real the first time a Template is created in error."
+    ANSWERED: >-
+      2026-09-09 BY template-lifecycle-v1's platform.templates.retire and platform.templates.restore.
+      *** THE PREDICTION IN THE RECOMMENDATION HELD: adding the routes changed no published shape. ***
+      `templateStatus` is untouched, and the only schema addition is `templateStatusFilter`, which is
+      a new request-side def rather than a change to a response.
+      TWO THINGS THAT ENTRY DID NOT ANTICIPATE, BOTH RECORDED IN THE NEW CONTRACT:
+      RETIREMENT HAD TO BE REVERSIBLE. One-way retirement spends the Template's UNIQUE NAME
+      permanently — retire "School" by mistake and you can neither recreate it nor undo it — so a
+      restore route exists and shares the permission (theRetirementRuling).
+      AND THE STATUS IS NOT TRANSMITTED. The transition is the ROUTE; there is no `status` field in
+      any request shape, which keeps core.template.update from being able to perform
+      core.template.retire's act through a field.
+      *** THIS ENTRY'S OWN SENTENCE — "no route sets it" — BECOMES FALSE WHEN THE ROUTE LANDS, NOT
+      WHEN THIS CONTRACT WAS AUTHORED. *** The same trigger is recorded on templateStatus in the
+      schema. Whoever ships the route owes both sentences an edit.
   - id: TM-3
     question: "No Idempotency-Key on create. A retried create after a network failure returns conflict rather than succeeding idempotently."
     recommendation: >-

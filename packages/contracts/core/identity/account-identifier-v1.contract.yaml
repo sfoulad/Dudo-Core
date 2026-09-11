@@ -81,8 +81,54 @@ apiVersion: null           # Defines a value used by several contracts; binds to
 namespace: core
 domain: identity
 status: proposed
-updated: "2026-09-05"
+updated: "2026-09-09"
 documentsExistingImplementation: partial
+
+# ---------------------------------------------------------------------------
+# publishesOperations — THE EXPLICIT MARKER, docs/decisions/0039 and 0037's admission check
+# ---------------------------------------------------------------------------
+# *** THIS CONTRACT BINDS TO NO ROUTE, BY DESIGN, AND SAYS SO RATHER THAN LEAVING AN ABSENCE. ***
+# It is a shared VOCABULARY contract: it defines what a Dudo login identifier IS, and six other
+# contracts restate that definition because no URN resolver existed when they were written.
+# `apiVersion: null` already says the same thing one field up — "defines a value used by several
+# contracts; binds to no route itself" — and an absent `operations:` block said it a third time, in
+# the one form indistinguishable from an omission.
+#
+# AN ABSENT KEY AND A FORGOTTEN ONE ARE THE SAME CHARACTER. That is the argument that put an
+# explicit `permission: none` on every pre-auth entry point, and it applies unchanged here.
+publishesOperations: false
+
+# ---------------------------------------------------------------------------
+# requestClass — deliberately ABSENT, and that is not the same as forgotten
+# ---------------------------------------------------------------------------
+# `0039` requires a declared request class for a contract that PUBLISHES ROUTES. This one publishes
+# none, so it has no class to declare — a class is a property of a route, and there is no route
+# here to have one. Declaring `requestClass` would be inventing a fact.
+# The generator asks for it only where a block of operations exists; `publishesOperations: false`
+# is what makes this absence legible rather than a gap.
+
+# ---------------------------------------------------------------------------
+# tenancy — A VOCABULARY HAS NO TENANT, AND THE REASON IS WORTH MORE THAN THE FACT
+# ---------------------------------------------------------------------------
+tenancy:
+  scope: >-
+    NONE. This contract defines a VALUE, not an operation. There is no request, no principal, no
+    store and no query, so there is nothing for a tenant scope to scope.
+  whyThisIsNotAGAP: >-
+    THE IDENTIFIER ITSELF IS DELIBERATELY TENANT-FREE, AND THAT IS A SECURITY PROPERTY RATHER THAN
+    AN OVERSIGHT. A login identifier is presented BEFORE any Organization is known — it is what the
+    pre-authentication path hashes to find a credential, and `control-plane/0001_principal.sql`
+    refuses an email column outright so that no tenant-free directory of personal identifiers
+    exists anywhere. An identifier that carried a tenant would make "which Organization is this
+    person in" answerable from the login screen.
+  whereTenantScopingACTUALLYAPPLIES: >-
+    IN THE CONTRACTS THAT USE THIS VALUE, EACH ON ITS OWN TERMS, AND THEY DIFFER. `login-v1` reads
+    an identifier with no tenant at all; `organization-detail-v1`'s member resolve reads one WITHIN
+    ONE NAMED ORGANIZATION and writes that Organization's audit trail; `credential-reset-v1` reads
+    one that may belong to a principal in several. THE SALT PROBLEM docs/decisions/0015 §D created
+    has a DIFFERENT ANSWER ON EACH, and architecture.md §3b exists because a single sentence
+    dismissing it was written here-ish once and was true of the client and false of the server.
+    THIS CONTRACT MUST NOT ANSWER IT CENTRALLY — assume a fourth route has a fourth answer.
 
 # ---------------------------------------------------------------------------
 # theRuling

@@ -30,6 +30,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { useT } from '@/lib/i18n';
 
 export interface NotBuiltYetProps {
   readonly title: string;
@@ -50,6 +51,7 @@ export function NotBuiltYet({
   contractStatus,
   blockedOn,
 }: NotBuiltYetProps) {
+  const t = useT();
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-3xl">
       <h1 id="section-heading" className="text-xl font-bold text-ink sm:text-2xl">
@@ -63,30 +65,42 @@ export function NotBuiltYet({
         screenshot should be able to tell the two apart without reading.
       */}
       <div className="mt-5 rounded-[12px] border-2 border-dashed border-line-strong bg-sunk/60 p-6 sm:p-8">
+        {/*
+          ⚠ "NOT BUILT YET" IS THE ONE PLACE ON THIS CONSOLE WHERE THE ABSENCE
+          CLAIM IS THE ENTIRE POINT, and it is the reason the absence check scans
+          the DICTIONARY rather than the screens: it would flag this, correctly
+          by its pattern and wrongly by its purpose.
+
+          **The difference from every other "yet" on the console:** this is a
+          claim about a section that renders nothing, makes no request, and whose
+          replacement IS the thing being waited for. It cannot outlive its
+          subject, because building the section deletes the component's use.
+        */}
         <p className="text-[0.6875rem] font-bold uppercase tracking-[0.16em] text-ink-faint">
-          Not built yet
+          {t('notBuilt.badge')}
         </p>
         <p className="mt-3 leading-relaxed text-ink-soft">{purpose}</p>
 
         <p className="mt-4 leading-relaxed text-ink">
-          <span className="font-semibold">There is nothing to show here.</span> This section makes
-          no request to Core and displays no data — real or otherwise.
+          <span className="font-semibold">{t('notBuilt.nothing')}</span>{' '}
+          {t('notBuilt.noRequest')}
         </p>
 
         <dl className="mt-6 grid gap-x-6 gap-y-3 border-t border-line pt-5 text-[0.875rem] sm:grid-cols-[auto_1fr]">
-          <dt className="font-semibold text-ink-soft">Contract</dt>
+          <dt className="font-semibold text-ink-soft">{t('notBuilt.contract')}</dt>
           <dd className="min-w-0 text-ink-muted">
             {contract === null ? (
-              'None drafted.'
+              t('notBuilt.noneDrafted')
             ) : (
-              <code className="font-mono text-[0.8125rem] break-all">{contract}</code>
+              /* A contract filename. Not translated; isolated for RTL. */
+              <bdi className="font-mono text-[0.8125rem] break-all">{contract}</bdi>
             )}
           </dd>
 
-          <dt className="font-semibold text-ink-soft">Status</dt>
+          <dt className="font-semibold text-ink-soft">{t('notBuilt.status')}</dt>
           <dd className="text-ink-muted">{contractStatus}</dd>
 
-          <dt className="font-semibold text-ink-soft">Waiting on</dt>
+          <dt className="font-semibold text-ink-soft">{t('notBuilt.waitingOn')}</dt>
           <dd className="text-ink-muted">
             <ul className="grid list-disc gap-1 ps-4">
               {blockedOn.map((item) => (

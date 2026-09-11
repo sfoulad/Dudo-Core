@@ -173,6 +173,43 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
           'platform.templates.create': 'none — a Template is tenant-independent configuration and names neither an Organization nor a principal, so template_id is not one of the two kinds D5 permits',
           'platform.templates.list': 'none — an enumeration, as above',
           'platform.templates.read': 'none — the target would be a template_id, which D5 does not permit',
+          // ===================================================================================
+          // THE FIVE LIFECYCLE ROUTES, ARGUED 2026-09-11. FOUR ARE `none` AND ONE IS NOT.
+          // ===================================================================================
+          //
+          // The four Template-scoped routes follow `create`/`list`/`read` exactly: **a Template is
+          // tenant-independent configuration and names neither an Organization nor a principal**,
+          // so the only target they could offer is a `template_id`, which is not one of the two
+          // kinds D5 permits. `retire` and `restore` are the two where that answer is least
+          // comfortable — they are the most consequential writes in the set — and the discomfort
+          // is not a reason to record a kind the decision forbids. **What is lost is stated rather
+          // than glossed: the row says an operator retired something and not which Template.**
+          'platform.templates.usage': 'none — a count over Organizations, and D5 forbids recording what a read returned as much as it forbids a template_id',
+          'platform.templates.update': 'none — a template_id is not one of the two kinds, exactly as create and read',
+          'platform.templates.retire': 'none — the same, and it is the least comfortable of the four because retiring is consequential; that is not a reason to record a kind D5 does not permit',
+          'platform.templates.restore': 'none — the mirror of retire, and it takes the same answer for the same reason',
+          // *** THE ONE THAT IS NOT `none`, AND IT IS AN ORGANIZATION FOR THE SAME REASON
+          // *** `identity.update` IS. *** This route edits one control-plane `organization` row,
+          // so there is a real Organization to name and D5 permits naming it.
+          //
+          // **The Template it was set to is a VALUE, not a target**, and recording it would be the
+          // line `identity.update` already draws — *"the Organization edited, never the values
+          // written."* A reader wanting to know which Template was set has the Organization and
+          // the timestamp; a reader wanting to know which Organizations an operator has been
+          // touching is what this field is for.
+          //
+          // **AND THIS IS THE ROUTE THAT ALSO WRITES INTO THE CUSTOMER'S OWN DATABASE** through
+          // `recordOrganizationAccess` with the `charge` receipt (SR-4). Two records, two trails,
+          // two ports — and `0024`'s mutual exclusion is what makes the split load-bearing rather
+          // than tidy. This entry argues only the PLATFORM-side row.
+          'platform.organizations.set-template': 'organization — the Organization whose Template changed, never which Template it was set to',
+          // ---- `0042`'s counts, ARGUED 2026-09-11. Both `none`, and it is `list`'s argument
+          // unchanged rather than a new one: an aggregate names no single affected party, and D5
+          // forbids recording what a read RETURNED as firmly as it forbids a third target kind.
+          // **A count is the one shape where naming a target would be most tempting and least
+          // defensible** — the only candidate is the population it counted.
+          'platform.organizations.count': 'none — an aggregate names no one, and D5 forbids recording what a read returned',
+          'platform.templates.count': 'none — the same, and the counted population is Templates, which is not one of the two kinds anyway',
         };
         const declared = TARGET_KINDS[route.id];
         assertTrue(
@@ -268,10 +305,72 @@ export function buildPlatformAuditSuite(make: MakePlatformWorld = createPlatform
     }
   });
 
+  suite.test('*** THE AUDIT CHARGE IS THE ONLY CEILING ON AN UNINDEXED READ — SO ITS VALUE IS PINNED ***', () => {
+    // ===================================================================================
+    // THE WRITE CEILING IS WHAT CURRENTLY BOUNDS THE READ COST, AND THAT IS AN ACCIDENT
+    // RATHER THAN A DESIGN.
+    // ===================================================================================
+    //
+    // Every platform call charges `PLATFORM_OPERATOR_ACTION_ROW_WRITES` for its audit row. **Writes
+    // are metered four ways. READS ARE METERED BY NOTHING.** So the audit requirement is the only
+    // thing bounding four routes that now scan `organization` in full —
+    // `countOrganizationsUsingTemplate` has no index on `organization.template_id`, which
+    // `0013_organization_template.sql` left out in terms and the route that would want one now
+    // exists.
+    //
+    // *** THE HAZARD IS THE OPTIMISATION NOBODY WOULD QUESTION: *** *"this is a read, it changes
+    // nothing, why is it charging four row-writes?"* — **arriving as tidying, with a good
+    // performance argument, removing the only ceiling on an unindexed scan.**
+    // `architecture.md` §3a-i's highest-suspicion shape: a proposal to make something skip a check,
+    // indistinguishable from correct at the moment it is proposed.
+    //
+    // *** WHAT THE PER-ROUTE CASES ALREADY COVER, AND WHAT THEY DO NOT. *** Every route in this
+    // class has a case asserting it writes exactly one action record, and those iterate the live
+    // route table — so a NEW route that skipped auditing goes red without anyone remembering. **But
+    // they are blind to the CHARGE.** Drop this constant to 1, or to 0, and every one of them stays
+    // green: the row is still written, and nothing anywhere asserts what it cost.
+    //
+    // **`workflow.md` §12 names this exactly: a symbol that MOVES is caught by the compiler; a
+    // symbol whose VALUE moves is caught by nobody.** This constant was imported by this file and
+    // never asserted, which is how its value went 2 → 4 while the comment below still said two.
+    //
+    // *** THE RECOMMENDATION THIS REPLACES, AND WHY IT COULD NOT BE BUILT AS WRITTEN. *** The
+    // security review proposed asserting that no route declares `audit` other than `required`.
+    // **There is no `audit` field on a platform route** — measured: the route keys are `id`,
+    // `method`, `path`, `permission`, `fields`, `objectFields`, `queryParameters`, `successStatus`.
+    // `audit: required` lives in the CONTRACT, which is `architecture-agent`'s. **The mechanism on
+    // this side is the charge**, so this is what pins.
+    assertEqual(
+      `${ISOLATION} every platform call charges ${PLATFORM_OPERATOR_ACTION_ROW_WRITES} row-writes for its audit row`,
+      PLATFORM_OPERATOR_ACTION_ROW_WRITES,
+      4,
+    );
+    assertTrue(
+      'and it is NON-ZERO, which is the property rather than the number — a free audit row bounds nothing',
+      PLATFORM_OPERATOR_ACTION_ROW_WRITES > 0,
+      'THE AUDIT CHARGE IS ZERO. Reads in this class are now bounded by nothing at all, and four ' +
+        'routes scan `organization` in full. This is not a test to update — it is the ceiling ' +
+        'being gone',
+    );
+    // *** IF YOU ARE HERE BECAUSE THIS WENT RED: THE NUMBER IS NOT THE POINT AND MOVING IT IS NOT
+    // *** THE FIX. *** A deliberate change to the charge is legitimate and this pin is how it
+    // becomes a decision rather than a side effect — the same terms as the NUL pin and the
+    // permission envelope. **Read why the value moved, confirm the read cost is still bounded by
+    // something, and then move the pin in the same change.**
+  });
+
   suite.test('an exhausted control-plane budget locks the operator out rather than serving unaudited', async () => {
     // The alternative is serving the request without recording it, which is the audit event
-    // failing open — `0013` D2 forbids exactly that. Two row-writes per record, so a ceiling of
-    // two admits one request and defers the next.
+    // failing open — `0013` D2 forbids exactly that. **A ceiling of exactly one record's worth
+    // admits one request and defers the next**, which is why the ceiling is set from the constant
+    // rather than from a number.
+    //
+    // *** THIS COMMENT SAID "Two row-writes per record" UNTIL 2026-09-11. THE CONSTANT IS 4. ***
+    // It went 2 → 4 in `0016_platform_operator_action_indexes.sql` and **the case never went red,
+    // because it reads the constant rather than a literal** — which is the right construction and
+    // is exactly what let the prose beside it rot unnoticed. `architecture.md` §3c: a wrong value
+    // carrying an explanation is durable, because the explanation is what stops the next reader
+    // checking. The code was never wrong; the sentence was, for as long as anyone had read it.
     const world = await make({ dailyCeilings: { system: PLATFORM_OPERATOR_ACTION_ROW_WRITES } });
     try {
       expectOk('the first request is served', await world.call('platform.session.whoami', { sessionId: SESSION_ADMIN }));

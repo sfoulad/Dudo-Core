@@ -3,6 +3,8 @@
   "$id": "urn:dudo:schema:capability-manifest:1",
   "title": "Dudo Capability Manifest",
   "description": "Two documents share this schema, distinguished by 'kind'. kind='capability' defines a vendor-neutral interface that Apps request (CAPABILITY_STANDARD.md). kind='provider' declares that a Connector implements one capability version for one vendor (CONNECTOR_STANDARD.md). They share a schema because a provider is only meaningful against the capability it implements, and keeping them in one place makes the pairing checkable.",
+  "enumPolicy": "closed",
+  "$comment": "`closed`, discriminated on `kind`. docs/decisions/0041 as extended to `oneOf` variant sets.\n\nA third document kind is a change to what the registry DOES, not a value a manifest may invent: every kind needs a validator, a storage location and a lifecycle before anything may declare it. An unknown-variant arm would let a Connector or App author present a document this platform has no procedure for and have it pass the shape check — and a manifest is an untrusted document throughout (SECURITY_STANDARD.md §1 threat 2), which is the case where tolerance is exactly the wrong instinct.\n\nNOTE FOR WHOEVER READS THE GENERATOR'S CLASSIFIER AGAINST THIS NODE: the two members share TWO `const` properties, `manifestVersion` and `kind`, and two candidate discriminants is a refusal. `manifestVersion` is excluded on two independent clauses — its value is the integer 1, and it is IDENTICAL in both members rather than disjoint. It is the corpus's only live test of either clause; do not remove one on the grounds that the other covers it.",
   "oneOf": [
     { "$ref": "#/$defs/capabilityDefinition" },
     { "$ref": "#/$defs/providerDeclaration" }
@@ -40,7 +42,9 @@
         "status": {
           "type": "string",
           "enum": ["proposed", "active", "deprecated"],
-          "default": "proposed"
+          "default": "proposed",
+          "enumPolicy": "closed",
+          "$comment": "`closed`: each value decides whether a capability may be BOUND to a provider and whether an App may request it. That is a routing decision, so an unrecognised state has no defensible reading — treat it as bindable and an unbuilt capability becomes requestable, treat it as unbindable and a live one goes dark. A fourth lifecycle state is a decision about the registry, not a value a manifest may invent (docs/decisions/0041).\n\nSINGLETON IN THE SCHEMA CORPUS: no other JSON Schema under packages/contracts/** carries this value set. The WORD 'proposed' is also the lifecycle vocabulary of the three registry YAMLs (permission-catalog, event-catalog, core-object-registry), where it means NOT YET BUILT. Those files are not JSON Schema, carry no `enum`, and are outside what the duplicate-policy check reads — so nothing compares this set with theirs, and I have not established that their set is these three values."
         },
         "errors": {
           "type": "array",
@@ -65,7 +69,9 @@
               "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
               "type": {
                 "type": "string",
-                "enum": ["string", "integer", "boolean", "enum", "secret-ref"]
+                "enum": ["string", "integer", "boolean", "enum", "secret-ref"],
+                "enumPolicy": "closed",
+                "$comment": "`closed`, and 'secret-ref' is what makes it non-negotiable. THIS FIELD IS HOW THE PLATFORM LEARNS THAT A CONFIGURATION VALUE IS A SECRET — 'secret-ref' means the manifest carries the NAME and never the value (security.md §5). A type the platform does not recognise is a value it cannot classify, and the fail-open reading is 'an ordinary string', which would put a provider credential into a manifest, into validation output and into whatever renders it. An unknown arm here is a secrets-handling hole reached through a type name.\n\nNEAR-DUPLICATE THE CHECK DOES NOT COMPARE: registries/app-manifest.schema.json's entity-field `type` shares this field NAME and three values ('string', 'integer', 'boolean'), and is a different set for a different subject — storage column types there, provider configuration parameters here. The duplicate-policy check matches on the VALUE SET, so it will never compare the two, and it should not: agreeing them would drag 'secret-ref' into a storage vocabulary and 'money' into a credentials one.\n\n*** WHAT `closed` DOES NOT DO, STATED BECAUSE THIS IS THE FIELD WHERE THE MISREADING IS MOST EXPENSIVE. *** It makes adding a type A DECISION. It does not classify anything, it does not enforce that a 'secret-ref' value is a name rather than a secret, and it does not stop a manifest putting a credential in a field declared 'string'. THE SCHEMA CANNOT SEE THE VALUE — it sees the declared type, and the declaration is made by the untrusted document. Everything that actually protects a credential here is downstream: the validator, the secret store, and the rule that a manifest is never trusted (security.md §5, SECURITY_STANDARD.md §1 threat 2). A reader meeting `closed` must not conclude secrets are handled.\n\nRECORDED BY TEAM LEAD RULING, 2026-09-09: changing this field to `extensible` requires `security-agent` AND the user. It is not a Team Lead ruling and it is not an architecture-agent declaration."
               },
               "description": { "type": "string", "minLength": 10 },
               "required": { "type": "boolean", "default": true },
@@ -297,7 +303,9 @@
         "timeout",
         "not_supported",
         "internal"
-      ]
+      ],
+      "enumPolicy": "closed",
+      "$comment": "`closed`: this is the set every Connector maps its provider's errors INTO, and a code no Connector has been taught cannot be mapped to. Adding one is a change to every provider adapter, which is the definition of breaking under docs/decisions/0041. It also reaches an App that requested a CAPABILITY and not a vendor (architecture-agent hard rule 5): an unknown arm would hand that App a code it cannot branch on from a provider it never chose.\n\n*** NOT THE SAME SET AS THE API ERROR TAXONOMY, AND THE CHECK CANNOT SAY SO. *** Twelve values here and twelve in `errorCode` (common/error-envelope.schema.json and registries/app-manifest.schema.json), overlapping on nine. Only here: 'provider_unavailable', 'provider_rejected', 'not_supported'. Only there: 'quota_exceeded', 'not_implemented', 'unavailable'. The duplicate-policy check is keyed on the VALUE SET, so it compares neither the sets nor the same-length coincidence — this is the near-duplicate gap recorded on $defs/entityFieldClassification in the App manifest, at its widest. The divergence is DELIBERATE: 'provider_unavailable' is not 'unavailable', because one says the third party is down and the other says Dudo is, and collapsing them would tell a tenant we failed when a vendor did.\n\nAND THE NEIGHBOURING DESCRIPTION DOES NOT SETTLE THIS. `capability.errors` calls it 'the closed error set every provider maps into' — true, and about what may be EMITTED. `enumPolicy` is about what may be ADDED. 0041 records that a description using 'closed' without saying which question it answers is evidence about neither; the policy above is declared on the versioning question independently."
     },
     "capabilityAction": {
       "type": "object",
@@ -334,7 +342,9 @@
         },
         "sensitivity": {
           "type": "string",
-          "enum": ["read", "write", "sensitive", "critical"]
+          "enum": ["read", "write", "sensitive", "critical"],
+          "enumPolicy": "closed",
+          "$comment": "DUPLICATED VALUE SET: identical, value-for-value and in the same order, to `$defs/sensitivity` in registries/app-manifest.schema.json. Both are declared `closed` in the same change, so the duplicate-policy check never observes a half-declared state (docs/decisions/0041).\n\n`closed` for the reason recorded on the other copy: 0026/0027's confirmation ladder and the App manifest's audit predicate are both defined over these four rungs, so adding a fifth is a change to what those mechanisms cover rather than an evolution.\n\n*** CORRECTED 2026-09-10, IN STEP WITH THE OTHER COPY. *** This said BOTH mechanisms 'fail OPEN on a rung they do not name'. THE APP MANIFEST'S AUDIT PREDICATE NO LONGER DOES — it was rewritten to key on the EXCEPTION (`not: {enum: ['read','write']}`), so an unforeseen rung requires audit by default. 0026/0027's ladder is unrepaired and is not this schema's to repair.\n\n*** AND WHAT THIS COPY DOES NOT CARRY IS NOW THE LARGER GAP, NOT A FOOTNOTE. *** The App manifest enforces its sensitivity with a predicate; A CAPABILITY ACTION HERE HAS NO PREDICATE AT ALL. The rung is declared and nothing in this schema acts on it — no audit obligation, fail-closed or otherwise. That is not an oversight this correction fixes: `platform/capabilities/` and `packages/sdk/` are README-only, so there is nothing to enforce against yet. IT BECOMES A REAL GAP THE DAY EITHER LANDS, and the repair is the App manifest's predicate copied with its exception form — never the member form, which is what had to be undone there."
         }
       }
     }

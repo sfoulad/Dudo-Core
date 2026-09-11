@@ -77,54 +77,72 @@
  * scroll firing requests on scroll position.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
-import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
-import { OnboardOrganization } from '@/screens/OnboardOrganization';
-import { cn } from '@/lib/cn';
-import { buildHash, organizationDetailPath } from '@/lib/router';
+import { useCallback, useState, type ReactNode } from 'react';
+import { Button } from '@dudo/ui';
 import {
-  PLATFORM_DEFAULT_PAGE_SIZE,
-  isKnownStatus,
-  type ListOrganizationsOutput,
-  type PlatformClient,
-} from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+  EmptyBlock,
+  ErrorBlock,
+  LoadingBlock,
+  PermissionDeniedBlock,
+} from '@/components/StateBlock';
+import { OnboardOrganization } from '@/screens/OnboardOrganization';
+import { cn } from '@dudo/ui';
+import { Link } from '@tanstack/react-router';
+import { useOrganizationList } from '@/lib/queries';
+import {
+  fill,
+  formatCount,
+  useLocale,
+  useT,
+  type MessageKey,
+  type PluralCategory,
+} from '@/lib/i18n';
+
+/* "Showing N Organizations" — six forms in Arabic, chosen by `Intl`. */
+const SHOWING_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'organizations.showing.zero',
+  one: 'organizations.showing.one',
+  two: 'organizations.showing.two',
+  few: 'organizations.showing.few',
+  many: 'organizations.showing.many',
+  other: 'organizations.showing.other',
+};
+import { isKnownStatus, type ListOrganizationsOutput } from '@/api/platform';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'loading' }
   | { readonly kind: 'loaded'; readonly page: ListOrganizationsOutput }
   | { readonly kind: 'failed'; readonly error: ApiError };
 
-export function Organizations({ platform }: { platform: PlatformClient }) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+export function Organizations() {
+  const { locale, t } = useLocale();
   /** The cursor for the page currently being shown. `null` is the first page. */
   const [cursor, setCursor] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
   /** How many pages deep, for a position line. Not a page number from Core. */
   const [depth, setDepth] = useState(1);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform
-      .listOrganizations({ pageSize: PLATFORM_DEFAULT_PAGE_SIZE, cursor })
-      .then(
-        (page) => {
-          if (!cancelled) setLoad({ kind: 'loaded', page });
-        },
-        (thrown: unknown) => {
-          if (!cancelled) setLoad({ kind: 'failed', error: toApiError(thrown) });
-        },
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, [platform, cursor, nonce]);
+  /*
+   * THE READ IS A QUERY, AND THE `nonce` IS GONE.
+   *
+   * `Load` is derived rather than stored — a parallel copy in `useState` is how
+   * the two drift. `isFetching` rather than `isPending` is what reproduces the
+   * previous screen: the effect set `{ kind: 'loading' }` at the top of every
+   * run. `lib/queries.ts` records why that equivalence holds on this console —
+   * no fetch happens here that an operator did not cause.
+   */
+  const list = useOrganizationList(cursor);
+  const load: Load =
+    list.isPending || list.isFetching
+      ? { kind: 'loading' }
+      : list.error !== null
+        ? { kind: 'failed', error: list.error }
+        : { kind: 'loaded', page: list.data };
 
+  /* One audited call, the same cost as the nonce bump it replaces. */
   const retry = useCallback(() => {
-    setNonce((value) => value + 1);
-  }, []);
+    void list.refetch();
+  }, [list]);
 
   const restart = useCallback(() => {
     setCursor(null);
@@ -132,26 +150,31 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
   }, []);
 
   /*
-   * After onboarding, return to the first page and re-fetch.
+   * After onboarding, return to the first page.
    *
    * BACK TO THE FIRST PAGE RATHER THAN RE-FETCHING THE CURRENT ONE: the cursor
    * is bound to the query and a new row changes what the enumeration contains,
    * so resuming mid-list after an insert shows a page whose meaning has quietly
-   * changed. `nonce` is bumped as well because `restart` alone is a no-op when
-   * the operator is already on the first page — and that is exactly the common
-   * case here.
+   * changed.
+   *
+   * THE `nonce` BUMP THAT USED TO SIT HERE IS GONE, AND THE CASE IT EXISTED FOR
+   * IS STILL COVERED. It was here because resetting the cursor is a no-op when
+   * the operator is already on the first page — "exactly the common case here" —
+   * so nothing would have re-read. `useOnboardOrganization` invalidates the
+   * list instead, which does not care whether the cursor changed. **The
+   * refresh is now a consequence of the write succeeding rather than something
+   * this callback has to remember.**
    */
   const refreshAfterOnboarding = useCallback(() => {
     setCursor(null);
     setDepth(1);
-    setNonce((value) => value + 1);
   }, []);
 
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-4xl">
       <header className="mb-5">
         <h1 id="section-heading" className="text-xl font-bold text-ink sm:text-2xl">
-          Organizations
+          {t('nav.organizations')}
         </h1>
         <p className="mt-2 max-w-prose leading-relaxed text-ink-muted">
           Every Organization on the platform, from the control plane. Name, identifier and status
@@ -170,35 +193,47 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
         much trouble that navigation has already caused.
       */}
       <div className="mb-8">
-        <OnboardOrganization platform={platform} onOnboarded={refreshAfterOnboarding} />
+        <OnboardOrganization onOnboarded={refreshAfterOnboarding} />
       </div>
 
-      {load.kind === 'loading' ? <LoadingBlock label="Asking Core for the Organizations…" /> : null}
+      {load.kind === 'loading' ? <LoadingBlock label={t('loading.organizations')} /> : null}
 
-      {load.kind === 'failed' ? (
+      {/* `forbidden` before the generic error — a permission boundary is not a
+          malfunction, and a blank list would say the platform holds nothing. */}
+      {load.kind === 'failed' && load.error.code === 'forbidden' ? (
+        <PermissionDeniedBlock error={load.error} />
+      ) : null}
+
+      {load.kind === 'failed' && load.error.code !== 'forbidden' ? (
         <ErrorBlock error={load.error} onRetry={retry}>
           {cursor !== null ? (
             <Button variant="secondary" size="sm" className="mt-4 me-2" onClick={restart}>
-              Start again from the first page
+              {t('page.startAgain')}
             </Button>
           ) : null}
         </ErrorBlock>
       ) : null}
 
+      {/*
+        ⚠ THE TITLE BELOW SAID "There are no Organizations YET." **An absence
+        claim the absence check could not see either** — that check scans the
+        DICTIONARY, and this string was never in one. **A string has to be
+        translated before the absence check can look at it**, which makes the
+        two instruments' blind spots the same blind spot. Corrected to the fact
+        the query returned, as `dashboard.none` was.
+      */}
       {load.kind === 'loaded' && load.page.data.length === 0 ? (
         <EmptyBlock
-          title={cursor === null ? 'There are no Organizations yet.' : 'No more Organizations.'}
+          title={
+            cursor === null ? t('organizations.empty.title') : t('page.emptyPage.title')
+          }
           body={
             cursor === null ? (
               <>
-                Core answered, and the platform has none. This is not a failure to load — when an
-                Organization is onboarded it appears here.
+                {t('organizations.empty.body')}
               </>
             ) : (
-              <>
-                Core answered, and this page is empty. Start again from the first page to see the
-                current list.
-              </>
+              <>{t('page.emptyPage')}</>
             )
           }
         />
@@ -209,7 +244,7 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
           <OrganizationTable page={load.page} />
 
           <nav
-            aria-label="Pagination"
+            aria-label={t('a11y.pagination')}
             className="mt-4 flex flex-wrap items-center justify-between gap-3"
           >
             <p className="text-[0.8125rem] text-ink-muted">
@@ -218,14 +253,13 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
                 and a keyset cursor cannot produce one — a count would have to be
                 invented or fetched from somewhere that does not exist.
               */}
-              Showing {load.page.data.length}{' '}
-              {load.page.data.length === 1 ? 'Organization' : 'Organizations'}
-              {depth > 1 ? ` · page ${String(depth)}` : null}
+              {formatCount(locale, load.page.data.length, SHOWING_FORMS, t)}
+              {depth > 1 ? ` · ${fill(t('audit.page'), locale, { page: depth })}` : null}
             </p>
             <div className="flex gap-2">
               {cursor !== null ? (
                 <Button variant="secondary" size="sm" onClick={restart}>
-                  First page
+                  {t('page.firstPage')}
                 </Button>
               ) : null}
               <Button
@@ -238,7 +272,7 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
                   setDepth((value) => value + 1);
                 }}
               >
-                {load.page.next_cursor === null ? 'No more pages' : 'Next page'}
+                {load.page.next_cursor === null ? t('audit.noMorePages') : t('page.next')}
               </Button>
             </div>
           </nav>
@@ -249,18 +283,23 @@ export function Organizations({ platform }: { platform: PlatformClient }) {
 }
 
 function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
+  const t = useT();
   return (
     <div className="overflow-hidden rounded-[12px] border border-line bg-surface">
       <table className="w-full border-collapse">
         <caption className="sr-only">
-          Organizations on the platform, with their name where one is recorded, their identifier,
-          status and creation date.
+          {/*
+            THE TABLE'S ACCESSIBLE DESCRIPTION. A screen-reader user hears this
+            before the rows, so it is the only place the shape of the table is
+            announced — not decoration.
+          */}
+          {t('organizations.tableCaption')}
         </caption>
         <thead>
           <tr>
-            <Th>Organization</Th>
-            <Th>Status</Th>
-            <Th className="hidden sm:table-cell">Created</Th>
+            <Th>{t('platformAudit.targetColumn')}</Th>
+            <Th>{t('column.status')}</Th>
+            <Th className="hidden sm:table-cell">{t('column.created')}</Th>
           </tr>
         </thead>
         <tbody>
@@ -283,8 +322,9 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                   `<tr onClick>` gives none of that and is invisible to a screen
                   reader.
                 */}
-                <a
-                  href={buildHash(organizationDetailPath(organization.organization_id))}
+                <Link
+                  to="/organizations/$organizationId"
+                  params={{ organizationId: organization.organization_id }}
                   className={cn(
                     'text-[0.8125rem] font-semibold text-navy-600 no-underline hover:underline',
                     organization.display_name === null
@@ -293,7 +333,7 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                   )}
                 >
                   {organization.display_name ?? organization.organization_id}
-                </a>
+                </Link>
                 {organization.display_name !== null ? (
                   <span className="mt-0.5 block font-mono text-xs break-all text-ink-muted">
                     {organization.organization_id}
@@ -301,7 +341,7 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                 ) : null}
                 {/* The date, on phones, where its own column is hidden. */}
                 <span className="mt-1 block text-xs text-ink-muted sm:hidden">
-                  Created <CreatedAt value={organization.created_at} />
+                  {t('column.createdOn')} <CreatedAt value={organization.created_at} />
                 </span>
               </td>
               <td className="px-4 py-3">
@@ -367,14 +407,18 @@ function StatusBadge({ status }: { status: string }) {
  *
  * A value that does not parse is shown verbatim rather than as "Invalid Date".
  */
+/* The locale was `undefined` — the browser's. See `Templates.tsx`'s `CreatedAt`. */
 function CreatedAt({ value }: { value: string }) {
+  const { locale } = useLocale();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return <span className="font-mono text-xs">{value}</span>;
+    return <bdi className="font-mono text-xs">{value}</bdi>;
   }
   return (
     <time dateTime={value} title={value}>
-      {parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+      <bdi>
+        {parsed.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })}
+      </bdi>
     </time>
   );
 }

@@ -172,11 +172,84 @@ export function unescapeSourceText(text: string): number[] | null {
 }
 
 /**
+ * ===========================================================================================
+ * *** A CONSTRUCTED INPUT CAN BE WRONG ABOUT THE SHAPE OF THE CORRECT ANSWER. ***
+ * ===========================================================================================
+ *
+ * Added 2026-09-09, and the lesson is deliberately not "teach it the interpolation form".
+ *
+ * This file already shipped a fixture row labelled *"escaped encode / fromCharCode(0) — the
+ * NUL-removal fix, correct"*, which modelled the coming repair as a **backslash escape**. When
+ * `core-agent` actually made that repair it wrote an **interpolation** —
+ * `${String.fromCharCode(0)}` inside the template literal — a notation this reader had never met,
+ * on a side it had never met it on. `decodeSeparator` understood `String.fromCharCode(N)`;
+ * `encodeSeparator` did not.
+ *
+ * **The result was two red assertions on a source that was correct**, and the floor is the only
+ * reason it was not worse: it failed with *"the reader understood BOTH sides"* rather than
+ * comparing one real value against nothing.
+ *
+ * **THE FIXTURE WAS NOT WRONG ABOUT THE DEFECT. IT WAS WRONG ABOUT THE REPAIR.** Every warning in
+ * this repository about constructed inputs is aimed at the first — *"these inputs are my model of
+ * the defect rather than the defect"*. This is the other half, and it is less obvious: **you can
+ * model the broken state correctly and still guess wrong about what the fix will look like**, and
+ * a reader built around that guess manufactures a defect at exactly the moment someone does the
+ * right thing.
+ *
+ * **SO DO NOT READ THE ROWS BELOW AS THE SET OF NOTATIONS THAT WILL EVER APPEAR.** The next
+ * respelling will be wrong in some third way — a named constant, a shared module, a helper that
+ * returns the byte. **What protects this file is not the list; it is that an unrecognised notation
+ * returns `null` and the floor turns that into a loud failure** rather than a comparison. Keep
+ * that property ahead of coverage of any particular spelling.
+ */
+
+/** `${String.fromCharCode(N)}` — the only interpolation this reader resolves. */
+const FROM_CHAR_CODE_INTERPOLATION = /^String\.fromCharCode\(\s*(\d+)\s*\)$/;
+
+/**
+ * Resolves a run of template-literal source into the character codes it denotes, across BOTH
+ * notations: literal text and escapes via `unescapeSourceText`, and `${String.fromCharCode(N)}`.
+ *
+ * **An interpolation of any other form returns `null` rather than being skipped.** Skipping one
+ * would silently shorten the separator and hand back a value — the original defect in a new
+ * costume, which is the hazard `unescapeSourceText`'s own header names.
+ */
+function resolveSeparatorSource(text: string): number[] | null {
+  const codes: number[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const open = text.indexOf('${', index);
+    const literalEnd = open === -1 ? text.length : open;
+    if (literalEnd > index) {
+      const literal = unescapeSourceText(text.slice(index, literalEnd));
+      if (literal === null) {
+        return null;
+      }
+      codes.push(...literal);
+    }
+    if (open === -1) {
+      return codes;
+    }
+    const close = text.indexOf('}', open);
+    if (close === -1) {
+      return null;
+    }
+    const matched = FROM_CHAR_CODE_INTERPOLATION.exec(text.slice(open + 2, close).trim());
+    if (matched === null) {
+      return null;
+    }
+    codes.push(Number(matched[1]!));
+    index = close + 1;
+  }
+  return codes;
+}
+
+/**
  * The separator `encodeAuditAnchor` emits, as character codes.
  *
- * It is the text between the two interpolations in the function's template literal, resolved
- * through `unescapeSourceText`, so a raw byte and its escape are the same answer — which is what
- * a cursor will actually carry.
+ * It is the text between the two interpolations in the function's template literal, resolved so
+ * that a raw byte, its escape and `${String.fromCharCode(0)}` are all the same answer — which is
+ * what a cursor will actually carry.
  */
 export function encodeSeparator(source: string): number[] | null {
   const body = /function encodeAuditAnchor\([^)]*\)[^{]*\{\s*return `([\s\S]*?)`;/.exec(source);
@@ -187,7 +260,7 @@ export function encodeSeparator(source: string): number[] | null {
   if (between === null) {
     return null;
   }
-  return unescapeSourceText(between[1]!);
+  return resolveSeparatorSource(between[1]!);
 }
 
 /**
@@ -379,7 +452,7 @@ export function buildAuditAnchorSuite(): Suite {
     assertEqual('and it is NUL, which neither component can contain', encodeSeparator(source)![0], 0);
   });
 
-  suite.test('THE READER\'S OWN FAILING INPUTS: six pairs, and it gets each one right', () => {
+  suite.test('THE READER\'S OWN FAILING INPUTS: ten pairs, and it gets each one right', () => {
     // =====================================================================================
     // *** THE READER IS A CHECKER, SO IT NEEDS ITS OWN KNOWN-FAILING INPUTS. ***
     // =====================================================================================
@@ -397,6 +470,10 @@ export function buildAuditAnchorSuite(): Suite {
     const NUL = String.fromCharCode(0);
     const SINGLE = `'${BACKSLASH}u0000'`;
     const DOUBLED = `'${BACKSLASH}${BACKSLASH}u0000'`;
+    // The interpolation form, built rather than typed for the same reason as the two above: it
+    // must appear in the FIXTURE's source text, not be evaluated by this file's own template.
+    const INTERPOLATED_NUL = '${String.fromCharCode(0)}';
+    const INTERPOLATED_SPACE = '${String.fromCharCode(32)}';
 
     const pair = (encodeBetween: string, decodeSplit: string): string =>
       'function encodeAuditAnchor(record: PlatformAuditRecord): string {\n' +
@@ -411,7 +488,12 @@ export function buildAuditAnchorSuite(): Suite {
 
     // Each row states what is TRUE of the pair at runtime, independently of what the reader
     // says. `agree` means the two sides really would carry the same separator.
-    const rows: Array<{ label: string; encode: string; decode: string; agree: boolean | 'floor' }> =
+    const rows: Array<{
+      label: string;
+      encode: string;
+      decode: string;
+      agree: boolean | 'floor' | 'encodeFloor';
+    }> =
       [
         {
           label: 'raw byte / fromCharCode(0) — what the file holds today',
@@ -449,20 +531,58 @@ export function buildAuditAnchorSuite(): Suite {
           decode: 'SEPARATOR',
           agree: 'floor',
         },
+        // ---- THE NOTATION THE FIXTURE ABOVE GUESSED WRONG. See the header on `encodeSeparator`.
+        // `core-agent`'s repair spelled the byte as an INTERPOLATION, not as a backslash escape,
+        // and these rows are what stops that going red on correct code the next time it happens.
+        {
+          label: 'INTERPOLATED encode / fromCharCode(0) — the repair as it was actually written',
+          encode: INTERPOLATED_NUL,
+          decode: 'String.fromCharCode(0)',
+          agree: true,
+        },
+        {
+          label: 'INTERPOLATED encode / SINGLE backslash escape — two notations, one byte',
+          encode: INTERPOLATED_NUL,
+          decode: SINGLE,
+          agree: true,
+        },
+        // *** THE ROW THAT PROVES THE READER RESOLVES THE NUMBER RATHER THAN RECOGNISING THE
+        // SHAPE. *** Without it, a reader that returned [0] for ANY `${String.fromCharCode(N)}`
+        // would pass every row above — sound by accident, and indistinguishable while passing.
+        {
+          label: 'INTERPOLATED SPACE / fromCharCode(0) — a genuine disagreement in the new notation',
+          encode: INTERPOLATED_SPACE,
+          decode: 'String.fromCharCode(0)',
+          agree: false,
+        },
+        // AND AN INTERPOLATION IT DOES NOT KNOW IS THE FLOOR, NOT A VALUE. A reader that skipped
+        // an unrecognised `${...}` would silently shorten the separator and hand back a real
+        // answer — the original defect wearing the newer costume.
+        {
+          label: 'an INTERPOLATION the reader does not know / fromCharCode(0)',
+          encode: '${SEPARATOR}',
+          decode: 'String.fromCharCode(0)',
+          agree: 'encodeFloor',
+        },
       ];
 
     for (const row of rows) {
       const source = pair(row.encode, row.decode);
       const encode = encodeSeparator(source);
       const decode = decodeSeparator(source);
-      if (row.agree === 'floor') {
+      if (row.agree === 'floor' || row.agree === 'encodeFloor') {
         // NOT "the reader disagrees" — `null` is the floor firing, and the two are different
         // outcomes. A reader that shrugged and returned a value would be compared against a
         // real one, which is the original defect wearing a new notation.
+        //
+        // NAMED PER SIDE, because the two sides learned their notations at different times and
+        // an unrecognised form must be the floor on EITHER. That asymmetry is exactly what let
+        // `encodeSeparator` manufacture a defect while `decodeSeparator` was fine.
+        const side = row.agree === 'floor' ? decode : encode;
         assertTrue(
           `${ISOLATION} ${row.label}: reported as NOT UNDERSTOOD rather than as a value`,
-          decode === null,
-          `the reader returned ${JSON.stringify(decode)} for a notation it does not implement`,
+          side === null,
+          `the reader returned ${JSON.stringify(side)} for a notation it does not implement`,
         );
         continue;
       }

@@ -42,6 +42,34 @@
  *
  * So: (1) and (2) hold and are asserted here; (3) is the strongest form of the property and it
  * belongs to a compiler this suite does not run. Reported to the Team Lead rather than rounded up.
+ *
+ * ===========================================================================================
+ * *** 4. AND A FOURTH LIMIT ON A DIFFERENT AXIS ENTIRELY — SCOPE, NOT STRENGTH. SR-18. ***
+ * ===========================================================================================
+ *
+ * **The three above are all about how STRONGLY the property is proven. None of them says anything
+ * about WHERE.** All three range over `platform/core/platform/**`, and a security review found that
+ * **not one of them would move if `platform.organizations.set-template` began writing arbitrary
+ * tenant rows** — because that write happens in `platform/core/directory/member-resolution.ts`,
+ * outside the scanned directory.
+ *
+ * *** P1 IS INTACT AND THE DELEGATION IS LEGITIMATE. *** `set-template` writes the tenant-side
+ * audit record into the named Organization's OWN database through
+ * `MemberResolutionPort.recordOrganizationAccess`, which requires an `OperatorWriteCharged`
+ * receipt. Keeping that write on a different port from the control-plane one is what makes `0024`'s
+ * mutual exclusion structural rather than observed.
+ *
+ * **What had drifted is the CERTIFICATE, not the code.** This suite's green reads as *"nothing in
+ * the class can reach a tenant"* and proves something narrower — and **the delegation path is
+ * exactly how the class legitimately does reach one.** `setOrganizationTemplate`'s own header states
+ * this correctly; the suite that certifies P1 did not. **That asymmetry is the defect, because a
+ * reader auditing tenant reach opens the suite and not the handler.**
+ *
+ * *** THE LIMIT IS BOUNDED RATHER THAN MERELY STATED, AND THAT IS THE DIFFERENCE WORTH THE CODE. ***
+ * A sentence would have been the whole fix and would have gone stale the first time a third file
+ * delegated. The case below asserts the delegation surface is EXACTLY what it is today: two files,
+ * one symbol, both `import type`. **A third delegation point, or a value import where a type import
+ * stands, goes red** — so the honest limit cannot silently widen into a hole.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -348,6 +376,68 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
     } finally {
       world.close();
     }
+  });
+
+  suite.test('*** THE DELEGATION SURFACE IS BOUNDED — SR-18, THE FOURTH LIMIT MADE MECHANICAL ***', () => {
+    // ===================================================================================
+    // THE OTHER CASES IN THIS FILE ASK *HOW STRONGLY*. THIS ONE ASKS *HOW FAR*.
+    // ===================================================================================
+    //
+    // Every other assertion here ranges over `platform/core/platform/**`, and **none of them would
+    // move if `set-template` began writing arbitrary tenant rows** — that write lives in
+    // `platform/core/directory/member-resolution.ts`, outside the scan. See the fourth limit in
+    // this file's header for why the delegation itself is legitimate and why the CERTIFICATE was
+    // the thing that had drifted.
+    //
+    // **This bounds it.** The class may delegate to exactly the surface it delegates to today, and
+    // a new delegation point is a change somebody has to make deliberately.
+    const files = listTypeScriptFiles(PLATFORM_CLASS_DIRECTORY);
+    assertTrue(
+      `${ISOLATION} THE FLOOR: the class directory was read (${files.length} files)`,
+      files.length > 3,
+      'a walk that finds nothing finds no delegation either, and would certify a bounded surface ' +
+        'it never looked at',
+    );
+
+    // Import lines only — not prose. This file's own headers discuss `MemberResolutionService` at
+    // length in order to state the limit, and an unstripped search would match the documentation
+    // that exists to record the property. The same trap the first case in this file already avoids.
+    const delegations: string[] = [];
+    for (const file of files) {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!/^\s*import\b/u.test(line)) continue;
+        if (!/from\s+'[^']*\/directory\//u.test(line)) continue;
+        delegations.push(
+          `${file.slice(REPOSITORY_ROOT.length)}: ${/^\s*import\s+type\b/u.test(line) ? 'type-only' : 'VALUE'}`,
+        );
+      }
+    }
+
+    console.log(`        delegation surface: ${delegations.length} import(s) out of the class into directory/`);
+
+    // *** EXACTLY THESE, AND `type-only` IS THE HALF THAT MATTERS. *** A `import type` carries no
+    // runtime value across the boundary — the service arrives through `createPlatformComposition`,
+    // where the runtime case above walks what a handler actually receives. **A VALUE import would
+    // mean the class had acquired a live handle at module scope, which is the exact shape case (2)
+    // exists to refuse and which it would not see, because it inspects the context and not the
+    // module.**
+    assertEqual(
+      `${ISOLATION} the class delegates out of itself in exactly the two known places, both type-only`,
+      delegations.sort().join(' · '),
+      'platform/core/platform/composition.ts: type-only · platform/core/platform/platform-route-handlers.ts: type-only',
+    );
+
+    // AND THE MIRROR, because an empty list would satisfy the equality above only by accident of
+    // the expected string — but a reader meeting a green here should know the surface is non-empty
+    // and deliberate rather than absent. `0024`'s mutual exclusion is a property of there BEING a
+    // separate port, not of there being no path at all.
+    assertTrue(
+      'and that surface is NOT empty — the separation is two ports, not the absence of a path',
+      delegations.length === 2,
+      `the class delegates ${delegations.length} times. Zero would mean the tenant-side audit write ` +
+        'has moved onto this class\'s own port, which is 0024 failing quietly rather than the ' +
+        `guarantee strengthening: ${JSON.stringify(delegations)}`,
+    );
   });
 
   return suite;

@@ -99,13 +99,47 @@ export function windowIsRequired(filters: {
 }
 
 /**
- * The local pre-check. Returns a sentence, or `null` when the window is usable.
+ * What the local pre-check found wrong, as a value rather than as a sentence.
  *
- * The sentences mirror the three server tokens deliberately, so an operator who
+ * ===========================================================================
+ * ⚠ THIS RETURNED ENGLISH PROSE UNTIL 2026-09-11, AND NOTHING WAS COUNTING IT
+ * ===========================================================================
+ *
+ * Five operator-facing sentences lived in this module. **The console's copy
+ * coverage metric scans `.tsx` files**, so none of them was ever in the
+ * population — the pin said 89 prose nodes remained while about forty more sat
+ * in `src/api/**` where no instrument looked. `§11a`: *a floor proves the check
+ * found SOMETHING, not EVERYTHING*, and the half it was handed looked exactly
+ * like the whole.
+ *
+ * **The repair is not to translate this module.** A module that reaches for a
+ * dictionary is a module that needs a locale, and this one is called from a
+ * form submit handler where there is no component. **It returns a TOKEN and the
+ * component renders it** — which is what `describeWindowRefusal` already did
+ * for the SERVER's three tokens, so the local half now matches the remote half
+ * instead of diverging from it.
+ *
+ * `span` rides along on `too_wide` because the sentence names it. It is the
+ * measured span, not the limit.
+ */
+export type LocalWindowRefusal =
+  | { readonly kind: 'both_or_neither' }
+  | { readonly kind: 'required' }
+  | { readonly kind: 'not_a_date' }
+  | { readonly kind: 'inverted' }
+  | { readonly kind: 'too_wide'; readonly span: number };
+
+/**
+ * The local pre-check. Returns a refusal, or `null` when the window is usable.
+ *
+ * The refusals mirror the three server tokens deliberately, so an operator who
  * hits the local check and one who hits the server's sees the same explanation
  * of the same rule.
  */
-export function windowRefusal(draft: WindowDraft, required: boolean): string | null {
+export function windowRefusal(
+  draft: WindowDraft,
+  required: boolean,
+): LocalWindowRefusal | null {
   const hasSince = draft.since !== '';
   const hasUntil = draft.until !== '';
 
@@ -114,24 +148,24 @@ export function windowRefusal(draft: WindowDraft, required: boolean): string | n
     // and sending it would earn a refusal for a question the operator could
     // have been told about here.
     if (hasSince !== hasUntil) {
-      return 'Give both dates or neither. A single date is not a window, and Dudo refuses it rather than guessing at the other end.';
+      return { kind: 'both_or_neither' };
     }
     return null;
   }
 
   if (!hasSince || !hasUntil) {
-    return `Filtering by operator or action needs a date range — both ends, at most ${String(MAX_WINDOW_DAYS)} days apart. Dudo refuses an open-ended filtered search rather than quietly narrowing it, because a narrowed answer looks exactly like an empty one.`;
+    return { kind: 'required' };
   }
 
   const span = spanInDays(draft);
   if (span === null) {
-    return 'One of those dates is not a real date.';
+    return { kind: 'not_a_date' };
   }
   if (span <= 0) {
-    return 'The end of the range is before its start.';
+    return { kind: 'inverted' };
   }
   if (span > MAX_WINDOW_DAYS) {
-    return `That range is ${String(span)} days. The most that can be searched at once is ${String(MAX_WINDOW_DAYS)} — search a month at a time and walk backwards.`;
+    return { kind: 'too_wide', span };
   }
   return null;
 }
@@ -151,13 +185,37 @@ export function spanInDays(draft: WindowDraft): number | null {
  * EXCLUSIVE next-day midnight, so deriving a display date from it means
  * subtracting a day — an off-by-one waiting to happen in the one sentence that
  * has to be exactly right. The dates the operator typed are already correct.
+ *
+ * ===========================================================================
+ * ⚠ THE LOCALE WAS `undefined`, WHICH IS THE BROWSER'S AND NOT THE CONSOLE'S
+ * ===========================================================================
+ *
+ * `toLocaleDateString(undefined, …)` reads the BROWSER's language. An operator
+ * who switched this console to Arabic would have got Arabic everywhere except
+ * these two dates, which would have stayed in whatever their browser was set
+ * to — **and the window is the one sentence on the empty state that has to be
+ * exactly right**, because misreading it turns "we did not look here" into
+ * "nothing happened".
+ *
+ * **It was never wrong in testing**, because the browser and the console agreed
+ * by default. It only diverges for the operator who deliberately switched — the
+ * one this whole pass exists for.
+ *
+ * `joiner` is passed in rather than looked up, for the same reason the refusals
+ * became tokens: this module has no locale of its own and must not acquire one.
+ * "to" is a translated word, not punctuation.
+ *
+ * **`(UTC)` is NOT translated and that is deliberate.** It is the name of the
+ * timezone, it is what the field labels say, and an operator comparing this
+ * sentence to an ISO timestamp in the feed needs the same three letters in both
+ * places.
  */
-export function describeWindow(draft: WindowDraft): string {
+export function describeWindow(draft: WindowDraft, locale: string, joiner: string): string {
   if (draft.since === '' || draft.until === '') return '';
   const format = (calendarDate: string): string => {
     const parsed = new Date(`${calendarDate}T00:00:00.000Z`);
     if (Number.isNaN(parsed.getTime())) return calendarDate;
-    return parsed.toLocaleDateString(undefined, {
+    return parsed.toLocaleDateString(locale, {
       timeZone: 'UTC',
       year: 'numeric',
       month: 'short',
@@ -166,7 +224,7 @@ export function describeWindow(draft: WindowDraft): string {
   };
   return draft.since === draft.until
     ? `${format(draft.since)} (UTC)`
-    : `${format(draft.since)} to ${format(draft.until)} (UTC)`;
+    : `${format(draft.since)} ${joiner} ${format(draft.until)} (UTC)`;
 }
 
 /** The server's token, when it sent one. */
@@ -186,33 +244,65 @@ export function windowRefusalToken(error: ApiError): WindowRefusalToken | null {
  * about any record, operator or Organization.
  */
 export function describeWindowRefusal(token: WindowRefusalToken): {
-  readonly title: string;
-  readonly body: string;
+  readonly titleKey: WindowMessageKey;
+  readonly bodyKey: WindowMessageKey;
 } {
   switch (token) {
     case 'time_window_required':
-      return {
-        title: 'This search needs a date range',
-        body:
-          'Filtering by operator or action requires both a start and an end date, at most ' +
-          `${String(MAX_WINDOW_DAYS)} days apart. Dudo refuses an open-ended filtered search ` +
-          'rather than narrowing it silently — a quietly narrowed answer is indistinguishable ' +
-          'from an empty one, and on an audit trail that is the difference between "nothing ' +
-          'happened" and "we did not look".',
-      };
+      return { titleKey: 'window.required.title', bodyKey: 'window.required.body' };
     case 'time_window_too_wide':
-      return {
-        title: `That range is longer than ${String(MAX_WINDOW_DAYS)} days`,
-        body:
-          `The most that can be searched at once is ${String(MAX_WINDOW_DAYS)} days. Search a ` +
-          'month at a time and walk backwards — the controls below move the range by its own ' +
-          'length without retyping it. Nothing was searched.',
-      };
+      return { titleKey: 'window.tooWide.title', bodyKey: 'window.tooWide.body' };
     case 'time_window_inverted':
-      return {
-        title: 'The end of that range is before its start',
-        body: 'Swap the two dates. Nothing was searched.',
-      };
+      return { titleKey: 'window.inverted.title', bodyKey: 'window.inverted.body' };
+  }
+}
+
+/**
+ * The message keys this module names.
+ *
+ * ===========================================================================
+ * DECLARED HERE AS A STRING UNION, NOT IMPORTED AS `MessageKey`
+ * ===========================================================================
+ *
+ * **`api/**` must not import from `lib/i18n`.** This module is imported by
+ * `platform.ts`'s consumers and by a form handler; pulling a React context
+ * module into the transport layer to borrow a type would put a provider
+ * dependency where there is deliberately none.
+ *
+ * **The union is narrow on purpose and it is CHECKED rather than trusted.**
+ * `lib/i18n.tsx` asserts `WindowMessageKey extends MessageKey` at compile time,
+ * so a key named here that the dictionary does not carry **does not compile** —
+ * the obligation is a mechanism rather than something to remember
+ * (`architecture.md` §3a). Without that line this would be a second copy of a
+ * fact in a file that cannot see the first, which is the defect this repository
+ * records under three different names.
+ */
+export type WindowMessageKey =
+  | 'window.required.title'
+  | 'window.required.body'
+  | 'window.tooWide.title'
+  | 'window.tooWide.body'
+  | 'window.inverted.title'
+  | 'window.inverted.body'
+  | 'window.local.bothOrNeither'
+  | 'window.local.required'
+  | 'window.local.notADate'
+  | 'window.local.inverted'
+  | 'window.local.tooWide';
+
+/** The key that renders a local refusal. `too_wide` also needs its `span`. */
+export function localRefusalKey(refusal: LocalWindowRefusal): WindowMessageKey {
+  switch (refusal.kind) {
+    case 'both_or_neither':
+      return 'window.local.bothOrNeither';
+    case 'required':
+      return 'window.local.required';
+    case 'not_a_date':
+      return 'window.local.notADate';
+    case 'inverted':
+      return 'window.local.inverted';
+    case 'too_wide':
+      return 'window.local.tooWide';
   }
 }
 

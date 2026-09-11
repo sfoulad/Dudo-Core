@@ -68,10 +68,18 @@
  * OWN DAILY ALLOCATION."
  */
 
-import { useCallback, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
-import { cn } from '@/lib/cn';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
+import { cn } from '@dudo/ui';
 import {
   MAX_DISPLAY_NAME_LENGTH,
   MAX_REGISTRATION_NUMBER_LENGTH,
@@ -85,6 +93,15 @@ import {
   type UpdateOrganizationIdentityInput,
 } from '@/api/platform';
 import { toApiError, type ApiError } from '@/api/errors';
+import {
+  fill,
+  formatCount,
+  refusalText,
+  useLocale,
+  useT,
+  type MessageKey,
+  type PluralCategory,
+} from '@/lib/i18n';
 
 /**
  * The two registrations, described rather than branched on.
@@ -94,29 +111,70 @@ import { toApiError, type ApiError } from '@/api/errors';
  * instances". So the registry name lives here, in the client, where it is
  * presentation rather than data.
  */
+/**
+ * ===========================================================================
+ * THE TABLE HOLDS KEYS, NOT SENTENCES — AND THE REGISTRY NAMES ARE THE
+ * INTERESTING PART
+ * ===========================================================================
+ *
+ * `label`, `short`, `registry` and `noneMeans` were four English strings per
+ * kind, and every one of them appears INSIDE another sentence — *"Nobody has
+ * confirmed it against Sijilat"*, *"they have no CR"*. So they are keys, and the
+ * sentences that name them use `{kind}` / `{registry}` placeholders rather than
+ * being split into fragments a translator cannot read.
+ *
+ * ⚠ **`Sijilat` AND `the National Bureau for Revenue` ARE REAL INSTITUTIONS AND
+ * ARE NAMED, NOT TRANSLATED-BY-GUESS.** Sijilat is Bahrain's commercial
+ * registration portal and is written سجلات; the Bureau's own Arabic name is
+ * الجهاز الوطني للإيرادات. **An operator is being told which registry to go and
+ * check a number against** — a paraphrase would send them looking for an
+ * organisation that does not exist under that name.
+ *
+ * This is the one place in the copy pass where getting a word wrong sends
+ * somebody to the wrong office rather than merely reading oddly.
+ */
 interface RegistrationKind {
   readonly key: 'commercial_registration' | 'vat_registration';
-  readonly label: string;
-  readonly short: string;
-  readonly registry: string;
+  readonly labelKey: MessageKey;
+  readonly shortKey: MessageKey;
+  readonly registryKey: MessageKey;
   /** What `not_registered` means for THIS registration, in the customer's terms. */
-  readonly noneMeans: string;
+  readonly noneMeansKey: MessageKey;
 }
+
+/* "N fields were updated" / "N fields will be sent" — six Arabic forms each. */
+const UPDATED_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'identity.updated.zero',
+  one: 'identity.updated.one',
+  two: 'identity.updated.two',
+  few: 'identity.updated.few',
+  many: 'identity.updated.many',
+  other: 'identity.updated.other',
+};
+
+const WILL_SEND_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'identity.willSend.zero',
+  one: 'identity.willSend.one',
+  two: 'identity.willSend.two',
+  few: 'identity.willSend.few',
+  many: 'identity.willSend.many',
+  other: 'identity.willSend.other',
+};
 
 const KINDS: readonly RegistrationKind[] = [
   {
     key: 'commercial_registration',
-    label: 'Commercial registration (CR)',
-    short: 'CR',
-    registry: 'Sijilat',
-    noneMeans: 'an entity with no commercial registration',
+    labelKey: 'identity.cr.label',
+    shortKey: 'identity.cr.short',
+    registryKey: 'identity.cr.registry',
+    noneMeansKey: 'identity.cr.noneMeans',
   },
   {
     key: 'vat_registration',
-    label: 'VAT registration',
-    short: 'VAT',
-    registry: 'the National Bureau for Revenue',
-    noneMeans: 'a business below the VAT threshold, for which registration is voluntary',
+    labelKey: 'identity.vat.label',
+    shortKey: 'identity.vat.short',
+    registryKey: 'identity.vat.registry',
+    noneMeansKey: 'identity.vat.noneMeans',
   },
 ];
 
@@ -210,6 +268,7 @@ export function OrganizationIdentityPanel({
   identity: OrganizationIdentity;
   onSaved: (identity: OrganizationIdentity) => void;
 }) {
+  const { locale, t } = useLocale();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(identity));
   const [saving, setSaving] = useState(false);
@@ -219,6 +278,47 @@ export function OrganizationIdentityPanel({
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+
+  /*
+   * ===========================================================================
+   * ⚠ THIS SURFACE HAD NO FOCUS MANAGEMENT AT ALL — NOT EVEN A CALL THAT DID
+   * NOTHING
+   * ===========================================================================
+   *
+   * Pressing Edit swaps a read view for a form; pressing Cancel swaps it back.
+   * **Neither moved focus.** A keyboard user pressed Edit and stayed on a
+   * button that had just been replaced by a fieldset, then pressed Cancel and
+   * stayed on a Cancel button that no longer existed — both times landing on
+   * `<body>` with nothing announced.
+   *
+   * It is the same defect as the confirmation gate and the two Template panels,
+   * **without even the appearance of a fix**: there was no line to read as
+   * working. My own focus audit scored this file blank on both columns and I
+   * treated the panels that had a non-functional call as the better case.
+   *
+   * `formRef` takes focus on open and `editRef` gets it back on cancel, with
+   * the restore in an effect because **the Edit button is unmounted while the
+   * form is up** — the same reason the other three needed one.
+   *
+   * **SAVE IS DELIBERATELY NOT A DISMISSAL.** On success `headingRef` already
+   * takes focus, beside the "N fields were updated" status — that is the
+   * outcome the operator needs, and dragging them back to Edit would replace an
+   * announcement with a button.
+   */
+  const formRef = useRef<HTMLFormElement>(null);
+  const editRef = useRef<HTMLButtonElement>(null);
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (editing) formRef.current?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing && cancelledRef.current) {
+      cancelledRef.current = false;
+      editRef.current?.focus();
+    }
+  }, [editing]);
 
   const startEditing = useCallback(() => {
     setDraft(draftFrom(identity));
@@ -231,12 +331,30 @@ export function OrganizationIdentityPanel({
   }, [identity]);
 
   const cancel = useCallback(() => {
+    cancelledRef.current = true;
     setEditing(false);
     setLocalError(null);
     setNameError(null);
     setNumberErrors({});
     setFailure(null);
   }, []);
+
+  /*
+   * ESCAPE CANCELS THE EDIT, like every other dismissible surface here — and it
+   * is bound only while editing AND not saving. **Escape during a save would
+   * abandon the form while a write is in flight**, leaving the operator with no
+   * view of whether their change landed.
+   */
+  useEffect(() => {
+    if (!editing || saving) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') cancel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [cancel, editing, saving]);
 
   /** The diff. Recomputed on every render so the save button can reflect it. */
   const change = useMemo<UpdateOrganizationIdentityInput>(() => {
@@ -272,7 +390,9 @@ export function OrganizationIdentityPanel({
       const nextNumberErrors: Record<string, string | null> = {};
 
       const nameRefusal =
-        change.display_name === undefined ? null : displayNameRefusal(change.display_name);
+        change.display_name === undefined
+          ? null
+          : refusalText(displayNameRefusal(change.display_name), locale, t);
       setNameError(nameRefusal);
       if (nameRefusal !== null) firstProblem = nameRefusal;
 
@@ -280,7 +400,7 @@ export function OrganizationIdentityPanel({
         const proposed = change[kind.key];
         const refusal =
           proposed !== undefined && proposed.state === 'registered'
-            ? registrationNumberRefusal(proposed.number)
+            ? refusalText(registrationNumberRefusal(proposed.number), locale, t)
             : null;
         nextNumberErrors[kind.key] = refusal;
         if (refusal !== null && firstProblem === null) firstProblem = refusal;
@@ -312,9 +432,11 @@ export function OrganizationIdentityPanel({
         (updated) => {
           setSaving(false);
           setEditing(false);
-          setSaved(
-            changedCount === 1 ? 'One field was updated.' : `${String(changedCount)} fields were updated.`,
-          );
+          /*
+            ⚠ A PLURAL TERNARY IN AN EXPRESSION — invisible to the copy pin,
+            which reads JSX TEXT NODES. Six Arabic forms, chosen by `Intl`.
+          */
+          setSaved(formatCount(locale, changedCount, UPDATED_FORMS, t));
           onSaved(updated);
           headingRef.current?.focus();
         },
@@ -340,17 +462,15 @@ export function OrganizationIdentityPanel({
             tabIndex={-1}
             className="text-lg font-bold text-ink outline-none focus-visible:ring-2 focus-visible:ring-navy-600"
           >
-            Who this business is
+            {t('identity.heading')}
           </h2>
           <p className="mt-1 max-w-prose text-[0.875rem] leading-relaxed text-ink-muted">
-            The name Dudo shows for them, and the two government registrations the platform
-            records. Operator-entered — there is no Sijilat or NBR integration, so every value here
-            was typed by someone.
+            {t('identity.intro')}
           </p>
         </div>
         {!editing ? (
-          <Button variant="secondary" size="sm" onClick={startEditing}>
-            Edit
+          <Button ref={editRef} variant="secondary" size="sm" onClick={startEditing}>
+            {t('identity.edit')}
           </Button>
         ) : null}
       </div>
@@ -360,19 +480,33 @@ export function OrganizationIdentityPanel({
           role="status"
           className="mt-4 rounded-[7px] border border-green-500 bg-green-50 p-3 text-[0.875rem] font-semibold text-green-700"
         >
-          {saved} Core answered with the whole record, and it is what is shown below.
+          {saved} {t('identity.savedWholeRecord')}
         </p>
       ) : null}
 
       {!editing ? (
         <IdentityReadView identity={identity} />
       ) : (
-        <form onSubmit={submit} noValidate className="mt-5 grid gap-6">
+        /*
+          FOCUS LANDS ON THE FORM, NOT ON ITS FIRST FIELD. `tabIndex={-1}` makes
+          it programmatically focusable without joining the tab order, and
+          `aria-label` is what a screen reader announces on arrival — so the
+          first thing heard is *what this form is*, not the label of a field
+          whose purpose has not been introduced.
+        */
+        <form
+          ref={formRef}
+          tabIndex={-1}
+          aria-label={t('identity.editForm')}
+          onSubmit={submit}
+          noValidate
+          className="mt-5 grid gap-6 outline-none focus-visible:ring-2 focus-visible:ring-navy-600"
+        >
           {failure ? <SaveFailure failure={failure} /> : null}
 
           <Field
             id="identity-display-name"
-            label="Name"
+            label={t('identity.nameLabel')}
             error={nameError}
             hint={
               identity.display_name === null
@@ -407,7 +541,7 @@ export function OrganizationIdentityPanel({
           */}
           {identity.display_name !== null && draft.display_name === '' ? (
             <p className="-mt-3 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-              <span className="font-semibold">A name cannot be removed once it exists.</span>{' '}
+              <span className="font-semibold">{t('identity.nameCannotBeRemoved')}</span>{' '}
               Leaving this blank changes nothing — Dudo has no way to un-name a business, because
               &ldquo;no name recorded&rdquo; describes businesses that predate the field rather
               than a state anyone chooses. Type a different name to rename it.
@@ -441,10 +575,10 @@ export function OrganizationIdentityPanel({
 
           <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
             <Button type="submit" variant="primary" disabled={saving} busy={saving}>
-              {saving ? 'Saving…' : 'Save changes'}
+              {saving ? t('identity.saving') : t('identity.saveChanges')}
             </Button>
             <Button variant="secondary" disabled={saving} onClick={cancel}>
-              Cancel
+              {t('gate.cancel')}
             </Button>
             {/*
               WHAT WILL BE SENT, COUNTED, BEFORE THE PRESS. The update is a diff
@@ -453,11 +587,10 @@ export function OrganizationIdentityPanel({
               misunderstanding before it costs a customer's write budget.
             */}
             <p aria-live="polite" className="text-[0.8125rem] text-ink-muted">
+              {/* "Nothing has changed YET" — the fact is that nothing has. */}
               {changedCount === 0
-                ? 'Nothing has changed yet.'
-                : changedCount === 1
-                  ? '1 field will be sent. The others are left untouched.'
-                  : `${String(changedCount)} fields will be sent. The others are left untouched.`}
+                ? t('identity.nothingChangedDraft')
+                : formatCount(locale, changedCount, WILL_SEND_FORMS, t)}
             </p>
           </div>
         </form>
@@ -471,10 +604,13 @@ export function OrganizationIdentityPanel({
    ========================================================================= */
 
 function IdentityReadView({ identity }: { identity: OrganizationIdentity }) {
+  const t = useT();
   return (
     <dl className="mt-5 grid gap-5">
       <div className="min-w-0">
-        <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">Name</dt>
+        <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
+          {t('identity.nameLabel')}
+        </dt>
         <dd className="mt-1">
           {identity.display_name === null ? (
             /*
@@ -486,12 +622,11 @@ function IdentityReadView({ identity }: { identity: OrganizationIdentity }) {
               and it is already the page heading.
             */
             <div className="rounded-[7px] border border-line bg-sunk/60 p-3">
-              <p className="text-[0.875rem] font-semibold text-ink-soft">No name recorded.</p>
+              <p className="text-[0.875rem] font-semibold text-ink-soft">{t('identity.noName')}</p>
               <p className="mt-1 max-w-prose text-[0.8125rem] leading-relaxed text-ink-muted">
-                Nobody has given this business a name in Dudo, so it is known by the identifier at
-                the top of this page. That is normal for a business onboarded before names existed
-                — it is not an error and nothing is missing. Press{' '}
-                <span className="font-semibold">Edit</span> to record one.
+                {t('identity.noNameExplainBefore')}{' '}
+                <span className="font-semibold">{t('identity.edit')}</span>{' '}
+                {t('identity.noNameExplainAfter')}
               </p>
             </div>
           ) : (
@@ -505,7 +640,7 @@ function IdentityReadView({ identity }: { identity: OrganizationIdentity }) {
       {KINDS.map((kind) => (
         <div key={kind.key} className="min-w-0 border-t border-line pt-4">
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            {kind.label}
+            {t(kind.labelKey)}
           </dt>
           <dd className="mt-1">
             <RegistrationReadView kind={kind} record={identity[kind.key]} />
@@ -523,14 +658,21 @@ function RegistrationReadView({
   kind: RegistrationKind;
   record: RegistrationRecord;
 }) {
+  const { locale, t } = useLocale();
   if (record.state === 'not_recorded') {
     return (
       <div>
-        <p className="text-[0.875rem] font-semibold text-ink-soft">Not recorded</p>
+        <p className="text-[0.875rem] font-semibold text-ink-soft">{t('identity.notRecorded')}</p>
         <p className="mt-1 max-w-prose text-[0.8125rem] leading-relaxed text-ink-muted">
-          Nobody has asked, or nobody has entered the answer.{' '}
+          {t('identity.notRecorded.body')}{' '}
+          {/*
+            THE EMPHASIS IS LOAD-BEARING. *Not recorded* and *they have none* are
+            different facts about a customer, and this is the sentence that keeps
+            them apart — an operator who reads the first as the second stops
+            asking a question nobody has answered.
+          */}
           <span className="font-semibold">
-            This does not mean they have no {kind.short} — it means Dudo does not know.
+            {fill(t('identity.notRecorded.notNone'), locale, { kind: t(kind.shortKey) })}
           </span>
         </p>
       </div>
@@ -548,14 +690,15 @@ function RegistrationReadView({
     return (
       <div>
         <p className="text-[0.875rem] font-semibold text-ink">
-          The customer states they have no {kind.short}.
+          {fill(t('identity.notRegistered.states'), locale, { kind: t(kind.shortKey) })}
         </p>
         <p className="mt-1 max-w-prose text-[0.8125rem] leading-relaxed text-ink-muted">
-          Recorded <Timestamp value={record.declared_at} />. This is an answer, not a gap —
-          typically {kind.noneMeans}. It dates{' '}
-          <span className="font-semibold">Dudo&rsquo;s record of the statement</span>, not their
-          circumstances: a business that registers tomorrow does not make this false, it makes it
-          stale.
+          {t('identity.recordedOn')} <Timestamp value={record.declared_at} />{' '}
+          {fill(t('identity.notRegistered.answerNotGap'), locale, {
+            meaning: t(kind.noneMeansKey),
+          })}{' '}
+          <span className="font-semibold">{t('identity.notRegistered.itDates')}</span>{' '}
+          {t('identity.notRegistered.notCircumstances')}
         </p>
       </div>
     );
@@ -564,9 +707,11 @@ function RegistrationReadView({
   if (record.state === 'registered') {
     return (
       <div>
-        <p className="font-mono text-[0.9375rem] break-all select-all text-ink">{record.number}</p>
+        <p className="text-[0.9375rem] text-ink">
+          <bdi className="font-mono break-all select-all">{record.number}</bdi>
+        </p>
         <p className="mt-1 text-[0.8125rem] text-ink-muted">
-          Number recorded <Timestamp value={record.recorded_at} />
+          {t('identity.numberRecorded')} <Timestamp value={record.recorded_at} />
         </p>
         <VerificationBadge kind={kind} verification={record.verification} />
       </div>
@@ -581,12 +726,10 @@ function RegistrationReadView({
   */
   return (
     <div className="rounded-[7px] border border-gold-500 bg-gold-50 p-3">
-      <p className="text-[0.875rem] font-semibold text-ink">
-        This console does not understand this record.
-      </p>
+      <p className="text-[0.875rem] font-semibold text-ink">{t('identity.unknownRecord')}</p>
       <p className="mt-1 text-[0.8125rem] leading-relaxed text-ink">
-        Core reported the state <code className="font-mono">{record.raw}</code>, which is newer
-        than this build. Nothing is shown for it rather than a guess. Report it.
+        {t('identity.unknownStateBefore')} <code className="font-mono">{record.raw}</code>{' '}
+        {t('identity.unknownStateAfter')}
       </p>
     </div>
   );
@@ -609,13 +752,14 @@ function VerificationBadge({
   kind: RegistrationKind;
   verification: { readonly verified_by_principal_id: string; readonly verified_at: string } | null;
 }) {
+  const { locale, t } = useLocale();
+  const registry = t(kind.registryKey);
   if (verification === null) {
     return (
       <div className="mt-2 rounded-[7px] border border-gold-500 bg-gold-50 p-3">
-        <p className="text-[0.875rem] font-semibold text-ink">Not verified</p>
+        <p className="text-[0.875rem] font-semibold text-ink">{t('identity.notVerified')}</p>
         <p className="mt-1 max-w-prose text-[0.8125rem] leading-relaxed text-ink">
-          Somebody typed this number. Nobody has confirmed it against {kind.registry}. Treat it as
-          the customer&rsquo;s claim rather than as a checked fact.
+          {fill(t('identity.notVerified.body'), locale, { registry })}
         </p>
       </div>
     );
@@ -623,16 +767,22 @@ function VerificationBadge({
   return (
     <div className="mt-2 rounded-[7px] border border-green-500 bg-green-50 p-3">
       <p className="text-[0.875rem] font-semibold text-green-700">
-        Verified against {kind.registry}
+        {fill(t('identity.verified.title'), locale, { registry })}
       </p>
       <p className="mt-1 text-[0.8125rem] leading-relaxed text-ink-soft">
-        Checked by{' '}
-        <span className="font-mono break-all select-all">
+        {t('identity.verified.checkedBy')}{' '}
+        <bdi className="font-mono break-all select-all">
           {verification.verified_by_principal_id}
-        </span>{' '}
-        on <Timestamp value={verification.verified_at} />. Dudo cannot confirm a check happened —
-        there is no {kind.registry} API — so this is a named operator&rsquo;s assertion about this
-        exact number, and it is cleared automatically if the number changes.
+        </bdi>{' '}
+        {t('identity.verified.on')} <Timestamp value={verification.verified_at} />{' '}
+        {/*
+          THIS SENTENCE IS THE WHOLE ARGUMENT FOR THE TICK NOT BEING A SYSTEM
+          FACT. Dudo cannot confirm a check happened; there is no registry API.
+          **A translation that shortened it to "verified" would turn a named
+          operator's assertion into something the system knows**, which is the
+          distinction this component exists to keep.
+        */}
+        {fill(t('identity.verified.noApi'), locale, { registry })}
       </p>
     </div>
   );
@@ -657,6 +807,7 @@ function RegistrationFieldset({
   disabled: boolean;
   onChange: (next: RegistrationDraft) => void;
 }) {
+  const { locale, t } = useLocale();
   const groupId = useId();
   const numberFieldId = `${groupId}-number`;
 
@@ -691,31 +842,30 @@ function RegistrationFieldset({
       aria-describedby={`${groupId}-help`}
     >
       <legend className="px-1 text-[0.8125rem] font-semibold tracking-[0.01em] text-ink-soft">
-        {kind.label}
+        {t(kind.labelKey)}
       </legend>
 
       <p id={`${groupId}-help`} className="max-w-prose text-[0.8125rem] leading-relaxed text-ink-muted">
-        &ldquo;Not recorded&rdquo; and &ldquo;they have none&rdquo; are different answers and Dudo
-        keeps them apart. Choosing the second records that the customer told you so, with
-        today&rsquo;s date.
+        {t('identity.twoAnswers')}
       </p>
 
       {draft.state === null ? (
         <p className="rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-          <span className="font-semibold">
-            The stored state is one this console does not recognise.
-          </span>{' '}
-          Nothing is preselected below. Choosing any option here <em>overwrites</em> whatever is
-          stored — leave it alone unless you mean to.
+          <span className="font-semibold">{t('identity.unrecognisedStored')}</span>{' '}
+          {t('identity.overwriteWarnBefore')} <em>{t('identity.overwrites')}</em>{' '}
+          {t('identity.overwriteWarnAfter')}
         </p>
       ) : null}
 
       <div className="grid gap-2">
         {(
           [
-            ['not_recorded', 'Not recorded — nobody has asked'],
-            ['not_registered', `They have no ${kind.short}`],
-            ['registered', 'They have one, and the number is'],
+            ['not_recorded', t('identity.choice.notRecorded')],
+            [
+              'not_registered',
+              fill(t('identity.choice.notRegistered'), locale, { kind: t(kind.shortKey) }),
+            ],
+            ['registered', t('identity.choice.registered')],
           ] as const
         ).map(([value, label]) => (
           <label
@@ -742,9 +892,12 @@ function RegistrationFieldset({
         <div className="grid gap-3 border-t border-line pt-3">
           <Field
             id={numberFieldId}
-            label={`${kind.short} number`}
+            label={fill(t('identity.numberLabel'), locale, { kind: t(kind.shortKey) })}
             error={error}
-            hint={`As ${kind.registry} issues it. Letters, digits, spaces and hyphens, up to ${String(MAX_REGISTRATION_NUMBER_LENGTH)} characters. Dudo checks nothing else about its shape — there is no digit count, deliberately, because a wrong one would refuse a legal registration.`}
+            hint={fill(t('identity.numberHint'), locale, {
+              registry: t(kind.registryKey),
+              max: MAX_REGISTRATION_NUMBER_LENGTH,
+            })}
           >
             {(aria) => (
               <Input
@@ -771,11 +924,21 @@ function RegistrationFieldset({
               className="rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink"
             >
               <span className="font-semibold">
-                Changing the number clears the existing verification.
+                {t('identity.numberChangeClearsVerification')}
               </span>{' '}
-              A verification attests to one specific number, so it cannot follow this one — the
-              tick below has been removed. Tick it again only if you have checked the{' '}
-              <em>new</em> number against {kind.registry}.
+              {t('identity.verificationCleared.why')}{' '}
+              {/*
+                THE EMPHASIS IS ON "THE NEW NUMBER" AS A PHRASE, not on the word
+                "new" alone. English puts the adjective before the noun and
+                Arabic after it, so an `<em>` wrapped around one word lands in a
+                different place in each — and an emphasis that moves is an
+                emphasis that is wrong in one of the two languages.
+              */}
+              {t('identity.verificationCleared.tickAgainBefore')}{' '}
+              <em>{t('identity.theNewNumber')}</em>{' '}
+              {fill(t('identity.verificationCleared.tickAgainAfter'), locale, {
+                registry: t(kind.registryKey),
+              })}
             </p>
           ) : null}
 
@@ -796,21 +959,25 @@ function RegistrationFieldset({
               as "Verified" would make it look like something the system knows.
             */}
             <span>
+              {/*
+                FIRST PERSON, AND IT MUST STAY FIRST PERSON IN TRANSLATION. "I
+                have checked this number against X" is a claim the operator makes
+                and Dudo attributes to them. **"Verified against X" would read as
+                something the system knows** — and nothing checks it, because
+                there is no registry API. The grammatical person is the security
+                property here.
+              */}
               <span className="font-semibold">
-                I have checked this number against {kind.registry}.
+                {fill(t('identity.verifyClaim'), locale, { registry: t(kind.registryKey) })}
               </span>{' '}
-              Dudo records your principal id and today&rsquo;s date against this exact number.
-              Nothing checks this for you.
+              {t('identity.verifyClaim.what')}
             </span>
           </label>
 
           {wasVerified && !draft.verified && !numberChanged ? (
             <p className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-              <span className="font-semibold">
-                Unticking this removes the existing verification.
-              </span>{' '}
-              The number stays; the record of who checked it and when is destroyed and cannot be
-              recovered.
+              <span className="font-semibold">{t('identity.untickRemovesVerification')}</span>{' '}
+              {t('identity.untickRemoves.what')}
             </p>
           ) : null}
         </div>
@@ -828,19 +995,16 @@ function RegistrationFieldset({
             className="mt-1 size-4 shrink-0 accent-navy-600"
           />
           <span>
-            <span className="font-semibold">The customer has told me this again today.</span>{' '}
-            Re-dates the declaration to now. Without this, saving leaves the original date alone —
-            which is usually what you want, because the date records when they said it.
+            <span className="font-semibold">{t('identity.verifyMeaning')}</span>{' '}
+            {t('identity.redeclare.what')}
           </span>
         </label>
       ) : null}
 
       {draft.state === 'not_recorded' && current.state !== 'not_recorded' ? (
         <p className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-          <span className="font-semibold">This destroys what is recorded.</span> The number, its
-          date and any verification are removed and cannot be recovered. The audit trail records
-          that a change happened, not what was lost. Use it to undo a mistake, not to clear a field
-          you are unsure about.
+          <span className="font-semibold">{t('identity.destroys')}</span>{' '}
+          {t('identity.destroys.what')}
         </p>
       ) : null}
     </fieldset>
@@ -848,6 +1012,7 @@ function RegistrationFieldset({
 }
 
 function SaveFailure({ failure }: { failure: ApiError }) {
+  const t = useT();
   return (
     <div
       role="alert"
@@ -855,36 +1020,42 @@ function SaveFailure({ failure }: { failure: ApiError }) {
     >
       <p className="font-bold text-scarlet-700">
         {failure.code === 'forbidden'
-          ? 'You may not change this'
+          ? t('identity.failed.forbidden')
           : failure.code === 'not_found'
-            ? 'This business no longer exists'
+            ? t('identity.failed.notFound')
             : failure.code === 'quota_exceeded'
-              ? 'The write limit has been reached'
-              : 'Nothing was saved'}
+              ? t('identity.failed.quota')
+              : t('identity.failed.other')}
       </p>
       <p className="mt-1 leading-relaxed text-ink-soft">
         {failure.code === 'forbidden' ? (
+          /*
+            SCREEN-SPECIFIC, AND NOT A DUPLICATE OF `error.body.forbidden`.
+            That sentence must be true of all FOUR collapsed conditions and
+            therefore names none of them. **Here the operation is known** —
+            changing an Organization's identity — so the console can say which
+            permission is missing without claiming anything about why.
+          */
           <>
-            Core refused the call. Changing an Organization&rsquo;s identity needs a permission
-            your operator role does not hold.{' '}
-            <span className="font-semibold">Nothing was changed.</span> Raise it with the Team Lead
-            rather than retrying.
+            {t('identity.failed.forbiddenBody')}{' '}
+            <span className="font-semibold">{t('identity.nothingChanged')}</span>{' '}
+            {t('identity.failed.forbiddenTail')}
           </>
         ) : failure.code === 'not_found' ? (
           <>
-            It may have been removed since this page loaded.{' '}
-            <span className="font-semibold">Nothing was changed.</span>
+            {t('identity.failed.notFoundBody')}{' '}
+            <span className="font-semibold">{t('identity.nothingChanged')}</span>
           </>
         ) : failure.code === 'quota_exceeded' ? (
           <>
-            Core deferred the write rather than performing it.{' '}
-            <span className="font-semibold">Nothing was changed.</span> This spends the
-            business&rsquo;s own daily allowance, so it will recover on its own. Try again later.
+            {t('identity.failed.quotaBody')}{' '}
+            <span className="font-semibold">{t('identity.nothingChanged')}</span>{' '}
+            {t('identity.failed.quotaTail')}
           </>
         ) : (
           <>
-            {failure.message} <span className="font-semibold">Nothing was changed</span> — the
-            update is applied whole or not at all, so there is no half-saved record.
+            {failure.message} <span className="font-semibold">{t('identity.nothingChanged')}</span>{' '}
+            {t('identity.wholeOrNothing')}
           </>
         )}
       </p>
@@ -892,14 +1063,16 @@ function SaveFailure({ failure }: { failure: ApiError }) {
         <ul className="mt-2 grid list-disc gap-1 ps-4 text-ink-soft">
           {failure.details.map((detail) => (
             <li key={`${detail.field}:${detail.issue}`}>
-              <code className="font-mono text-[0.8125rem]">{detail.field}</code> — {detail.issue}
+              {/* Core's wire field name. Not translated; isolated for RTL. */}
+              <bdi className="font-mono text-[0.8125rem]">{detail.field}</bdi> — {detail.issue}
             </li>
           ))}
         </ul>
       ) : null}
       {failure.request_id ? (
-        <p className="mt-2 font-mono text-xs break-all text-ink-muted">
-          Reference {failure.request_id}
+        <p className="mt-2 text-xs text-ink-muted">
+          {t('denied.reference')}{' '}
+          <bdi className="font-mono break-all">{failure.request_id}</bdi>
         </p>
       ) : null}
     </div>
@@ -914,14 +1087,18 @@ function SaveFailure({ failure }: { failure: ApiError }) {
  * AN OPERATOR COMPARING THIS TO AN AUDIT RECORD NEEDS THE ORIGINAL. A value that
  * does not parse is shown verbatim rather than as "Invalid Date".
  */
+/* The locale was `undefined` — the browser's. See `Templates.tsx`'s `CreatedAt`. */
 function Timestamp({ value }: { value: string }) {
+  const { locale } = useLocale();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return <span className="font-mono text-xs break-all">{value}</span>;
+    return <bdi className="font-mono text-xs break-all">{value}</bdi>;
   }
   return (
     <time dateTime={value} title={value} className={cn('whitespace-nowrap')}>
-      {parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+      <bdi>
+        {parsed.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })}
+      </bdi>
     </time>
   );
 }

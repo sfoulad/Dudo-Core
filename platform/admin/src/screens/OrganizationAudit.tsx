@@ -38,31 +38,44 @@
  * cursors are not interchangeable.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { useCallback, useState, type FormEvent } from 'react';
+import { Button, Input } from '@dudo/ui';
+import { AdminField as Field } from '@/components/AdminField';
 import { AuditRecordList } from '@/components/AuditRecordList';
-import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import {
+  EmptyBlock,
+  ErrorBlock,
+  LoadingBlock,
+  PermissionDeniedBlock,
+} from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
 import { WindowOrOtherError } from '@/components/WindowRefusal';
 import {
   MAX_WINDOW_DAYS,
   describeWindow,
+  localRefusalKey,
   shiftWindowByOwnLength,
   windowIsRequired,
   windowRefusal,
+  type LocalWindowRefusal,
   type WindowDraft,
 } from '@/api/audit-window';
-import { buildHash, organizationDetailPath } from '@/lib/router';
+import { Link } from '@tanstack/react-router';
+import { useOrganizationAuditRead } from '@/lib/queries';
 import {
-  PLATFORM_DEFAULT_PAGE_SIZE,
+  fill,
+  formatCount,
+  useLocale,
+  type MessageKey,
+  type PluralCategory,
+} from '@/lib/i18n';
+import {
   toUtcExclusiveDayEnd,
   toUtcDayStart,
   type OrganizationFeedFilters,
   type OrganizationFeedOutput,
-  type PlatformClient,
 } from '@/api/platform';
-import { toApiError, type ApiError } from '@/api/errors';
+import { type ApiError } from '@/api/errors';
 
 type Load =
   | { readonly kind: 'idle' }
@@ -78,13 +91,33 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { action: '', since: '', until: '' };
 
-export function OrganizationAudit({
-  platform,
-  organizationId,
-}: {
-  platform: PlatformClient;
-  organizationId: string;
-}) {
+/* Shared with the platform feed — the pagination vocabulary is identical. */
+const RECORD_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'audit.showing.zero',
+  one: 'audit.showing.one',
+  two: 'audit.showing.two',
+  few: 'audit.showing.few',
+  many: 'audit.showing.many',
+  other: 'audit.showing.other',
+};
+
+/*
+ * "3 reads this visit" — NOT shared, and the difference is the point of the
+ * screen. This counts reads that each cost a CUSTOMER five writes; the platform
+ * feed's counter counts records on a page. Two sentences about two things that
+ * happen to be integers.
+ */
+const READ_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'orgAudit.reads.zero',
+  one: 'orgAudit.reads.one',
+  two: 'orgAudit.reads.two',
+  few: 'orgAudit.reads.few',
+  many: 'orgAudit.reads.many',
+  other: 'orgAudit.reads.other',
+};
+
+export function OrganizationAudit({ organizationId }: { organizationId: string }) {
+  const { locale, t } = useLocale();
   /*
    * ===================================================================
    * IT DOES NOT LOAD ON MOUNT. THE FIRST PAGE IS ALSO A DELIBERATE ACT.
@@ -96,53 +129,85 @@ export function OrganizationAudit({
    * link, must not cost them anything. The operator presses Read, having been
    * told what it costs.
    */
-  const [load, setLoad] = useState<Load>({ kind: 'idle' });
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [applied, setApplied] = useState<OrganizationFeedFilters>({});
   /** The window in force, as typed. `null` means none was applied. */
   const [appliedWindowDraft, setAppliedWindowDraft] = useState<WindowDraft | null>(null);
-  const [windowError, setWindowError] = useState<string | null>(null);
+  const [windowError, setWindowError] = useState<LocalWindowRefusal | null>(null);
 
-  const appliedWindow = appliedWindowDraft === null ? null : describeWindow(appliedWindowDraft);
+  const appliedWindow =
+    appliedWindowDraft === null
+      ? null
+      : describeWindow(appliedWindowDraft, locale, t('window.joiner'));
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [requests, setRequests] = useState(0);
-  /** Incremented only by an explicit press. Nothing else triggers a fetch. */
-  const [nonce, setNonce] = useState(0);
 
-  useEffect(() => {
-    if (nonce === 0) return;
-    let cancelled = false;
-    setLoad({ kind: 'loading' });
-    void platform
-      .listOrganizationAudit(organizationId, {
-        pageSize: PLATFORM_DEFAULT_PAGE_SIZE,
-        cursor,
-        filters: applied,
-      })
-      .then(
-        (page) => {
-          if (cancelled) return;
-          setLoad({ kind: 'loaded', page });
-          setRequests((value) => value + 1);
-        },
-        (thrown: unknown) => {
-          if (cancelled) return;
-          setLoad({ kind: 'failed', error: toApiError(thrown) });
-          // A refused request still consumed the attempt from the operator's
-          // point of view; counting it keeps the tally honest rather than
-          // flattering.
-          setRequests((value) => value + 1);
+  /*
+   * ===================================================================
+   * A MUTATION, FOR A READ. `lib/queries.ts` CARRIES THE FULL ARGUMENT.
+   * ===================================================================
+   *
+   * In short: this read spends FIVE WRITES FROM A CUSTOMER'S OWN DAILY
+   * ALLOCATION, so it must not fire on mount, every press must fire even when
+   * nothing changed, and a refusal still counts as an attempt. A cache would
+   * defeat the middle one — serving a repeat press from memory shows the
+   * operator an answer while the business's log records fewer reads than
+   * happened.
+   *
+   * **`useMutation`'s four states ARE this screen's four states**, which is the
+   * clearest sign it is the right mapping rather than a workaround:
+   *
+   *     idle    -> nothing has been asked, and nothing has been spent
+   *     pending -> loading
+   *     error   -> failed
+   *     success -> loaded
+   *
+   * So `Load` is derived here too, and the `nonce` that armed the old effect is
+   * gone: a mutation does not fire until it is called, which is the property
+   * the `if (nonce === 0) return;` guard was simulating.
+   */
+  const feed = useOrganizationAuditRead();
+  const load: Load =
+    feed.status === 'idle'
+      ? { kind: 'idle' }
+      : feed.status === 'pending'
+        ? { kind: 'loading' }
+        : feed.status === 'error'
+          ? { kind: 'failed', error: feed.error }
+          : { kind: 'loaded', page: feed.data };
+
+  /*
+   * ONE PRESS, ONE REQUEST — and the cursor and filters are passed EXPLICITLY
+   * rather than read from state at call time.
+   *
+   * The old effect re-ran when `cursor` or `applied` changed, so a caller could
+   * set state and let the dependency array carry the new value. A mutation
+   * fires immediately, and `setCursor` has not landed yet when the handler runs
+   * — reading state here would send the PREVIOUS page's cursor and spend a
+   * customer's write on the wrong question.
+   *
+   * The tally is incremented on SETTLE rather than on press, and it counts
+   * refusals: a refused request still consumed the attempt from the operator's
+   * point of view, and counting only successes would flatter the number.
+   */
+  const fire = useCallback(
+    (nextCursor: string | null, nextFilters: OrganizationFeedFilters) => {
+      feed.mutate(
+        { organizationId, cursor: nextCursor, filters: nextFilters },
+        {
+          onSettled: () => {
+            setRequests((value) => value + 1);
+          },
         },
       );
-    return () => {
-      cancelled = true;
-    };
-  }, [platform, organizationId, cursor, applied, nonce]);
+    },
+    [feed, organizationId],
+  );
 
   const read = useCallback(() => {
-    setNonce((value) => value + 1);
-  }, []);
+    fire(cursor, applied);
+  }, [applied, cursor, fire]);
 
   /* A cursor is bound to the query shape, so a filter change resets it. */
   const applyFilters = useCallback(
@@ -182,9 +247,10 @@ export function OrganizationAudit({
       );
       setCursor(null);
       setDepth(1);
-      setNonce((value) => value + 1);
+      // Fired with `next` directly. `applied` does not hold it yet.
+      fire(null, next);
     },
-    [draft],
+    [draft, fire],
   );
 
   /* Rewrites the dates only. Fires nothing — see the platform feed's note. */
@@ -197,8 +263,9 @@ export function OrganizationAudit({
 
   return (
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-4xl">
-      <a
-        href={buildHash(organizationDetailPath(organizationId))}
+      <Link
+        to="/organizations/$organizationId"
+        params={{ organizationId }}
         className="text-[0.875rem] font-semibold text-navy-600 no-underline hover:underline"
       >
         {/*
@@ -223,18 +290,17 @@ export function OrganizationAudit({
         >
           <path d="M10 3L5 8l5 5" />
         </svg>
-        Back to this Organization
-      </a>
+        {t('orgAudit.back')}
+      </Link>
 
       <h1 id="section-heading" className="mt-3 text-xl font-bold text-ink sm:text-2xl">
-        Audit trail
+        {t('orgAudit.title')}
       </h1>
-      <p className="mt-1 font-mono text-[0.8125rem] break-all text-ink-muted">{organizationId}</p>
-
-      <p className="mt-3 max-w-prose leading-relaxed text-ink-muted">
-        Every platform-operator action affecting this business, newest first — including which
-        person each action named.
+      <p className="mt-1 text-[0.8125rem] text-ink-muted">
+        <bdi className="font-mono break-all">{organizationId}</bdi>
       </p>
+
+      <p className="mt-3 max-w-prose leading-relaxed text-ink-muted">{t('orgAudit.intro')}</p>
 
       {/*
         THE COST, STATED BEFORE THE OPERATOR SPENDS IT rather than after. This
@@ -242,11 +308,7 @@ export function OrganizationAudit({
         at, and an operator who does not know that will page through it idly.
       */}
       <p className="mt-4 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-        <span className="font-semibold">Reading this writes to it.</span> Each page costs five
-        writes from this business&rsquo;s own daily allowance, and leaves a record in their trail
-        saying the platform read it. That is deliberate — the customer should be able to see that
-        they were looked at. It also means you will find your own earlier visits here, and that
-        nothing on this screen refreshes on its own.
+        <span className="font-semibold">{t('orgAudit.costLead')}</span> {t('orgAudit.costBody')}
       </p>
 
       <form
@@ -254,7 +316,11 @@ export function OrganizationAudit({
         className="mt-6 grid gap-4 rounded-[12px] border border-line bg-surface p-4 sm:p-5"
       >
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field id="org-filter-action" label="Action" hint="An action id.">
+          <Field
+            id="org-filter-action"
+            label={t('audit.filter.action')}
+            hint={t('orgAudit.filter.actionHint')}
+          >
             {(aria) => (
               <Input
                 {...aria}
@@ -262,13 +328,18 @@ export function OrganizationAudit({
                 onChange={(event) => {
                   setDraft((prev) => ({ ...prev, action: event.target.value }));
                 }}
+                /* A wire identifier. Not translated — see the platform feed. */
                 placeholder="platform.credentials.reset"
                 autoComplete="off"
                 spellCheck={false}
               />
             )}
           </Field>
-          <Field id="org-filter-since" label="From (UTC)" hint="Whole days, in UTC.">
+          <Field
+            id="org-filter-since"
+            label={t('audit.filter.from')}
+            hint={t('audit.filter.fromHint')}
+          >
             {(aria) => (
               <Input
                 {...aria}
@@ -280,7 +351,11 @@ export function OrganizationAudit({
               />
             )}
           </Field>
-          <Field id="org-filter-until" label="To (UTC)" hint="Inclusive.">
+          <Field
+            id="org-filter-until"
+            label={t('audit.filter.to')}
+            hint={t('orgAudit.filter.toHint')}
+          >
             {(aria) => (
               <Input
                 {...aria}
@@ -295,8 +370,7 @@ export function OrganizationAudit({
         </div>
 
         <p className="text-[0.8125rem] leading-relaxed text-ink-muted">
-          Filtering by action needs a date range of at most {MAX_WINDOW_DAYS} days. Reading this
-          business&rsquo;s whole trail needs no range.
+          {fill(t('orgAudit.windowRule'), locale, { days: MAX_WINDOW_DAYS })}
         </p>
 
         {windowError !== null ? (
@@ -304,13 +378,16 @@ export function OrganizationAudit({
             role="alert"
             className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.875rem] leading-relaxed text-ink"
           >
-            {windowError}
+            {fill(t(localRefusalKey(windowError)), locale, {
+              days: MAX_WINDOW_DAYS,
+              ...(windowError.kind === 'too_wide' ? { span: windowError.span } : {}),
+            })}
           </p>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="primary">
-            {load.kind === 'idle' ? 'Read the trail' : 'Apply filters and read'}
+            {load.kind === 'idle' ? t('orgAudit.read') : t('orgAudit.applyAndRead')}
           </Button>
           {/* Rewrites the dates; fires nothing. Each read costs the customer. */}
           {draft.since !== '' && draft.until !== '' ? (
@@ -321,7 +398,7 @@ export function OrganizationAudit({
                   shiftWindow(-1);
                 }}
               >
-                Earlier window
+                {t('audit.earlierWindow')}
               </Button>
               <Button
                 variant="ghost"
@@ -329,13 +406,13 @@ export function OrganizationAudit({
                   shiftWindow(1);
                 }}
               >
-                Later window
+                {t('audit.laterWindow')}
               </Button>
             </>
           ) : null}
           {requests > 0 ? (
             <p className="text-[0.8125rem] text-ink-muted">
-              {requests} {requests === 1 ? 'read' : 'reads'} this visit
+              {formatCount(locale, requests, READ_FORMS, t)}
             </p>
           ) : null}
         </div>
@@ -343,22 +420,41 @@ export function OrganizationAudit({
 
       <div className="mt-6">
         {load.kind === 'idle' ? (
+          /*
+            ⚠ THE TITLE SAID "Nothing has been read yet." and the "yet" survived
+            into the dictionary review as a KEEP rather than a correction.
+            Unlike every other "yet" in this pass, it is not a claim about a
+            missing capability — it describes the operator's own session, one
+            button press away from being false, and the body says what to press.
+            **The absence check scans the dictionary, so this key WOULD have
+            been flagged**; it is worded around instead, saying what is true
+            (nothing has been read) rather than what is coming.
+          */
           <EmptyBlock
-            title="Nothing has been read yet."
+            title={t('orgAudit.idle.title')}
             body={
               <>
-                This screen does not load on its own, because opening it would spend the
-                customer&rsquo;s allowance. Press{' '}
-                <span className="font-semibold">Read the trail</span> when you need it.
+                {t('orgAudit.idle.body')}{' '}
+                <span className="font-semibold">{t('orgAudit.read')}</span>{' '}
+                {t('orgAudit.idle.bodyTail')}
               </>
             }
           />
         ) : null}
 
-        {load.kind === 'loading' ? <LoadingBlock label="Reading this business's trail…" /> : null}
+        {load.kind === 'loading' ? <LoadingBlock label={t('loading.organizationAudit')} /> : null}
 
         {load.kind === 'failed' ? (
-          isCeilingCode(load.error.code) ? (
+          /*
+            `forbidden` FIRST, and on this screen the distinction is sharper
+            than elsewhere: the Organization feed declares its own permission,
+            so an operator who can read the platform feed may still be refused
+            here. **A refusal must not read as "this business has no trail"** —
+            that is a false statement about a customer's records.
+          */
+          load.error.code === 'forbidden' ? (
+            <PermissionDeniedBlock error={load.error} />
+          ) : isCeilingCode(load.error.code) ? (
             /*
               THE TWO CEILINGS MEAN OPPOSITE THINGS HERE and are rendered as
               different statements: `rate_limited` is about operator activity
@@ -370,7 +466,7 @@ export function OrganizationAudit({
           ) : load.error.code === 'not_found' ? (
             <ErrorBlock error={load.error} onRetry={read}>
               <p className="mt-2 leading-relaxed text-ink-soft">
-                No Organization has this identifier.
+                {t('orgAudit.notFound')}
               </p>
             </ErrorBlock>
           ) : (
@@ -390,26 +486,24 @@ export function OrganizationAudit({
           <EmptyBlock
             title={
               appliedWindow !== null
-                ? 'No records in this window.'
+                ? t('audit.empty.inWindow')
                 : filtered
-                  ? 'No records match those filters.'
-                  : 'Nothing has happened here.'
+                  ? t('audit.empty.filtered')
+                  : t('orgAudit.empty.title')
             }
             body={
               appliedWindow !== null ? (
                 <>
-                  Core answered, and nothing in this business&rsquo;s trail matches{' '}
-                  <span className="font-semibold text-ink">within {appliedWindow}</span>. Records
-                  outside this range were not searched, so this says nothing about any other
-                  period.
+                  {t('orgAudit.empty.windowLead')}{' '}
+                  <span className="font-semibold text-ink">
+                    <bdi>{appliedWindow}</bdi>
+                  </span>
+                  {t('audit.empty.windowStop')} {t('orgAudit.empty.windowNotSearched')}
                 </>
               ) : filtered ? (
-                <>Core answered, and nothing in this trail matches.</>
+                <>{t('orgAudit.empty.filteredBody')}</>
               ) : (
-                <>
-                  Core answered, and the platform has taken no recorded action against this
-                  business. This read is now itself in the trail.
-                </>
+                <>{t('orgAudit.empty.body')}</>
               )
             }
           />
@@ -419,7 +513,7 @@ export function OrganizationAudit({
           <>
             <AuditRecordList
               records={load.page.data}
-              targetHeading="Person"
+              targetHeading={t('orgAudit.targetColumn')}
               /*
                 THIS FEED'S EXTRA COLUMN. The closure holds an
                 `OrganizationFeedRecord`, which is the only record type that has
@@ -427,20 +521,21 @@ export function OrganizationAudit({
                 property, so that screen could not pass this callback.
               */
               renderTarget={(record) =>
-                record.target_principal_id ?? (
-                  <span className="font-sans text-ink-muted">none</span>
+                record.target_principal_id === null ? (
+                  <span className="font-sans text-ink-muted">{t('audit.noTarget')}</span>
+                ) : (
+                  <bdi>{record.target_principal_id}</bdi>
                 )
               }
             />
 
             <nav
-              aria-label="Pagination"
+              aria-label={t('a11y.pagination')}
               className="mt-4 flex flex-wrap items-center justify-between gap-3"
             >
               <p className="text-[0.8125rem] text-ink-muted">
-                Showing {load.page.data.length}{' '}
-                {load.page.data.length === 1 ? 'record' : 'records'}
-                {depth > 1 ? ` · page ${String(depth)}` : null}
+                {formatCount(locale, load.page.data.length, RECORD_FORMS, t)}
+                {depth > 1 ? ` · ${fill(t('audit.page'), locale, { page: depth })}` : null}
               </p>
               <div className="flex gap-2">
                 {cursor !== null ? (
@@ -450,10 +545,10 @@ export function OrganizationAudit({
                     onClick={() => {
                       setCursor(null);
                       setDepth(1);
-                      setNonce((value) => value + 1);
+                      fire(null, applied);
                     }}
                   >
-                    Newest
+                    {t('audit.newest')}
                   </Button>
                 ) : null}
                 <Button
@@ -464,16 +559,17 @@ export function OrganizationAudit({
                     if (load.page.next_cursor === null) return;
                     setCursor(load.page.next_cursor);
                     setDepth((value) => value + 1);
-                    setNonce((value) => value + 1);
+                    // The new cursor is passed straight through — `setCursor`
+                    // has not landed, and sending the old one would re-read the
+                    // page already on screen at the customer's expense.
+                    fire(load.page.next_cursor, applied);
                   }}
                 >
-                  {load.page.next_cursor === null ? 'No more pages' : 'Older'}
+                  {load.page.next_cursor === null ? t('audit.noMorePages') : t('audit.older')}
                 </Button>
               </div>
             </nav>
-            <p className="mt-2 text-[0.8125rem] text-ink-muted">
-              Each page is another five writes against this business.
-            </p>
+            <p className="mt-2 text-[0.8125rem] text-ink-muted">{t('orgAudit.pageCost')}</p>
           </>
         ) : null}
       </div>

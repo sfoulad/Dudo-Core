@@ -250,6 +250,64 @@ script: a one-word affordance is wrong for an action that needs a decision.
 - [ ] Free-tier usage checked after the smoke test, against
       `docs/operations/free-tier-register.md`
 
+### ⚠ THREE WAYS A POST-DEPLOY PROBE LIES, ALL THREE HIT IN ONE SESSION
+
+Added 2026-09-08, after verifying a deploy and reaching a wrong conclusion three times before
+reaching a right one. **None of the three was a product defect. All three were the probe.**
+
+**1. A HASH-ONLY NAVIGATION DOES NOT RELOAD THE DOCUMENT.** Navigating from
+`https://host/#/a` to `https://host/#/b` — or to the same URL — changes the SPA route and
+**re-fetches nothing.** The old bundle stays in memory and the screen looks unchanged, which reads
+exactly like a deploy that did not take.
+
+> **To force a real document load, change the PATH or the QUERY, not the fragment.** `?cb=<date>`
+> is enough. Then confirm the served bundle hash matches the local build:
+> `curl -s https://host/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'` against `ls dist/assets/`.
+
+**And check the cache headers before blaming the cache.** `index.html` is served
+`cache-control: public, max-age=0, must-revalidate`, so a normal reload always revalidates. The
+stale page was the probe's fault, not the CDN's, and half an hour went into the wrong suspect.
+
+**2. RESOLVE THE BASE-PATH CONSTANT. DO NOT INFER IT FROM A ROUTE TABLE.** The route reads
+``path: `${PLATFORM_BASE_PATH}/organizations/{organization_id}/identity` ``. `PLATFORM_BASE_PATH` is
+**`/api/v1/platform`**, not `/platform`.
+
+Probing the inferred path returned **200 with the SPA shell** — because `/platform/*` matches no
+asset and falls to `not_found_handling`. That is indistinguishable from the real
+`run_worker_first` defect this file documents elsewhere, **and it was very nearly reported as one.**
+
+**3. A `404` CAN BE THE PATH PARAMETER, NOT THE ROUTE.** `PATCH /organizations/org_x/identity`
+returned 404 — same as a route that does not exist. `org_x` fails the identifier shape, so the
+matcher finds nothing. With a well-formed id the same route returns **401**.
+
+> **Probe every route with a WELL-FORMED but non-existent identifier, and pair it with a negative
+> control on a sibling path that genuinely does not exist.** `401` on the real route and `404` on
+> the control is the only pair that proves "registered and gated". Two 404s prove nothing, and two
+> 405s — which is what a wrong method on both produces — prove less.
+
+**The habit underneath all three: every probe needs a control, and the control has to be run even
+when the first result looks conclusive.** All three wrong answers were self-consistent. The
+negative control is what separated them from the truth each time.
+
+### And the console will show a sign-in form to someone who IS signed in
+
+**Not a defect. `use-session.ts` keeps a per-tab hint in `sessionStorage` that decides the FIRST
+PAINT ONLY.** With no hint the console shows the form rather than spending a `whoami` — and that is
+deliberate, because **`whoami` writes a platform-operator audit record on every call**, so probing
+speculatively bills an audit row to a browser that has never signed in.
+
+**So a fresh tab, or an automation-driven load, shows the form while the server-side session is
+still live.** Confirm before treating it as a regression:
+
+```
+npx wrangler d1 execute dudo-control-plane --remote --json \
+  --command "SELECT principal_id, created_at, expires_at FROM session WHERE expires_at > '<now>'"
+```
+
+**A live row for that principal means the deploy did not sign anyone out.** Session state is in D1
+and keyed by `SESSION_HMAC_KEY`; deploying a Worker version does not invalidate it, and only
+rotating that secret would.
+
 ## 8b. `verify-staging.ts` — run this first, it does most of §8a for you
 
 ```
@@ -412,6 +470,53 @@ a single machine.
 > rewired networking is not the same evidence as a green run without it.
 
 ## 9. Rollback
+
+## ⚠ THERE ARE TWO WORKERS SHARING ONE `main`, AND "THE ROLLBACK VERSION" IS AMBIGUOUS WITHOUT NAMING ONE
+
+Added 2026-09-11, before a deploy rather than during one. **This runbook was 491 lines and mentioned
+`dudo-admin` nowhere.**
+
+```
+wrangler.jsonc         name: dudo-core    routes: app.dudo.work, api.dudo.work   main: worker.ts
+wrangler.admin.jsonc   name: dudo-admin   routes: admin.dudo.work                main: worker.ts   <- SAME FILE
+```
+
+**Both Workers are built from the same `worker.ts`. They are deployed separately and versioned
+separately.**
+
+**Consequences, none of which are obvious from either config:**
+
+- **`npx wrangler rollback` and the version list are PER-WORKER.** *"Capture the current rollback
+  version"* is not a well-formed instruction until it names `dudo-core` or `dudo-admin`. **Pass
+  `--config wrangler.admin.jsonc` (or `--name dudo-admin`) or you will capture and roll back the
+  wrong surface.**
+- **DEPLOYING ONE DOES NOT DEPLOY THE OTHER, AND THEY SHARE SOURCE.** After an admin-only deploy the
+  two surfaces run **different builds of the same file** — indefinitely, and silently. That is not a
+  defect and it is the normal state during a milestone; **it is only dangerous when someone reasons
+  from "the code is deployed" without naming which Worker.**
+- **`dudo-admin` binds the Durable Object with `script_name: dudo-core`.** The admin Worker depends on
+  a class that lives in the core Worker's script. **Rolling `dudo-core` back past a DO class change
+  affects `dudo-admin` too**, and nothing in `wrangler.admin.jsonc` says so on its own face.
+- **`assets.directory` is `./platform/admin/dist`** with SPA `not_found_handling` and
+  `run_worker_first` for `/api/*`, `/auth/*`, `/health`. **A stale `dist/` deploys silently** — the
+  Worker is fine and the bundle is old. **Build immediately before deploying, and verify the deployed
+  bundle rather than assuming the build ran.**
+
+### Why an admin-only deploy is SAFE for tenants, verified rather than assumed
+
+**Platform routes are host-bound in Core** — `api.ts:325`,
+`isPlatformHost(dependencies.platformRoutes.adminHosts, url.hostname)` — and the wrong host answers
+**404, not 403**, so a caller cannot confirm the route exists off-host.
+
+**The comment at `api.ts:314` is the part that matters and it is correct:** the host binding is
+**defence in depth, not the enforcement** — the `platform_operator` check is, *"authorization runs on
+the `platform_operator` row and not on the hostname"*. **An implementation that bound the host and
+skipped the operator check would be the defect**, and this one does not.
+
+**So deploying `dudo-admin` alone puts the platform surface live without touching what tenants
+reach**, and `app.dudo.work` never served those routes to begin with.
+
+---
 
 `npx wrangler rollback` reverts the Worker. **It does not revert a migration.** D1
 migrations are forward-only here; there are no down-migrations, which is why step 3

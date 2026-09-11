@@ -2,47 +2,81 @@
  * The customer directory — the main screen.
  *
  * ListCustomers and SearchCustomers return the same row shape, so this screen
- * renders one table and swaps which Action fills it. That is deliberate: the
- * two Actions differ in how the candidate set is chosen, never in what a row
- * looks like.
+ * renders one table and swaps which Action fills it. That is deliberate: the two
+ * Actions differ in how the candidate set is chosen, never in what a row looks
+ * like.
  *
  * WHAT IS SEARCHED, AND WHAT IS NOT. display_name, email and phone. Notes and
- * address are not searchable, by contract (README §7.1) — making free-text
- * notes searchable would turn an arbitrary phrase into a probe over the most
- * sensitive field in the record, and hand back through the search box what the
- * list projection withholds. The empty state says so, so nobody concludes the
- * search is broken.
+ * address are not searchable, by contract (README §7.1) — making free-text notes
+ * searchable would turn an arbitrary phrase into a probe over the most sensitive
+ * field in the record, and hand back through the search box what the list
+ * projection withholds. The empty state says so, so nobody concludes the search
+ * is broken.
  *
  * NO TOTAL COUNT is shown anywhere. The contract returns none and the reason is
  * tenant isolation rather than performance. "Showing 25 customers" is true;
- * "25 of 247" is not available and is not invented here.
+ * "25 of 247" is not available and is not invented here. `ui/pagination.tsx`
+ * has no prop that could carry one.
  *
- * One thing React genuinely improves over the zero-dependency build: the search
- * box keeps focus and caret position for free, because filtering is a state
- * change rather than a re-render of the whole screen.
+ * ===========================================================================
+ * WHAT THE MIGRATION CHANGED, AND ONE THING IT DELIBERATELY DID NOT
+ * ===========================================================================
+ *
+ * The URL state is now parsed and typed once by the route
+ * (`routes/customer-list-search.ts`), the read is a TanStack Query, and the
+ * table, the tab strip and the pager are `ui/` primitives that the next admin
+ * list uses unchanged.
+ *
+ * SORTING IS STILL NOT OFFERED, AND `ui/data-table.tsx` MAKES THAT A CHOICE
+ * RATHER THAN AN OMISSION. TanStack Table can sort, and on this screen it would
+ * sort the twenty-five rows in hand out of an unknown total — putting page two's
+ * alphabetically-first name nowhere near the top under a header claiming
+ * otherwise. On a cursor-paginated list the sort belongs in the request, which
+ * is a contract question. Every column below therefore declares
+ * `enableSorting: false`.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { buildHash, navigate, useLocation } from '@/lib/router';
-import { Button, ButtonLink } from '@/components/ui/button';
-import { Input, Select } from '@/components/ui/field';
-import { StatusBadge, TypeTag } from '@/components/ui/badge';
-import { ErrorBlock, LoadingRows, Panel, StateBlock } from '@/components/StateBlock';
+import { Link, useNavigate } from '@tanstack/react-router';
+import {
+  Button,
+  buttonVariants,
+  DataTable,
+  Input,
+  NotRecorded,
+  Pagination,
+  Panel,
+  SegmentedControl,
+  Select,
+  SkeletonRows,
+  StateBlock,
+  type DataTableColumn,
+} from '@dudo/ui';
+import { StatusBadge, TypeTag } from '@/components/CustomerBadges';
+import { ErrorBlock } from '@/components/ErrorBlock';
 import { LIMITS } from '@/contracts/field-rules';
-import { PAGE_SIZE_DEFAULT, type CustomerSummary, type StatusFilter } from '@/contracts/customer-directory';
-import { toApiError, type ApiError } from '@/api/errors';
-import type { CustomerDirectoryClient } from '@/api/client';
-import { makeBusinessLabeller, useAuthorizedBusinesses } from '@/lib/use-businesses';
+import type { CustomerSummary, StatusFilter } from '@/contracts/customer-directory';
+import { useAuthorizedBusinesses, useCustomerList } from '@/lib/queries';
+import { makeBusinessLabeller } from '@/lib/business-label';
 import { businessLabel } from '@/contracts/business-read';
-import { cn } from '@/lib/cn';
+import { setLastListSearch } from '@/lib/last-list';
+import { DEFAULT_STATUS, tidySearch, type CustomerListSearch } from '@/routes/customer-list-search';
 
 const SEARCH_DEBOUNCE_MS = 260;
 
-const STATUS_TABS: { value: Extract<StatusFilter, 'active' | 'archived' | 'all'>; label: string }[] = [
+/**
+ * The three the tab strip offers.
+ *
+ * `pending_deletion` is a legal filter the schema accepts from the URL and this
+ * strip does not offer, because nothing in this slice can produce that state.
+ * When it arrives, no tab is pressed — which is the honest rendering of a URL
+ * asking for something the strip has no button for.
+ */
+const STATUS_TABS = [
   { value: 'active', label: 'Active' },
   { value: 'archived', label: 'Archived' },
   { value: 'all', label: 'All' },
-];
+] as const satisfies readonly { value: StatusFilter; label: string }[];
 
 /**
  * Cursor trail.
@@ -65,49 +99,68 @@ function trailIndexFor(key: string, cursor: string | null): number {
   return index;
 }
 
-export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
-  const { query } = useLocation();
+export function CustomerList({ search }: { search: CustomerListSearch }) {
+  const navigate = useNavigate();
 
-  const searchTerm = query.q ?? '';
-  const status = (STATUS_TABS.find((t) => t.value === query.status)?.value ?? 'active') as StatusFilter;
-  const businessId = query.business ?? '';
-  const cursor = query.cursor ?? '';
-
-  // The authorized set fills the Business filter and labels every row. An
-  // empty set is valid and is simply a filter with no options — the directory
-  // itself still renders, because a principal's Business authorization and the
-  // customers it can see are answered by different Actions.
-  const { businesses } = useAuthorizedBusinesses(client);
-  const businessName = useMemo(() => makeBusinessLabeller(businesses), [businesses]);
+  const searchTerm = search.q ?? '';
+  const status = search.status ?? DEFAULT_STATUS;
+  const businessId = search.business ?? '';
+  const cursor = search.cursor ?? '';
   const searching = searchTerm.trim().length >= LIMITS.search_query.min;
+
+  useEffect(() => {
+    document.title = 'Customers · Dudo';
+  }, []);
+
+  // Remember the directory the person was looking at, so a record's back link
+  // returns to the filtered list rather than to the top of the directory.
+  useEffect(() => {
+    setLastListSearch(tidySearch(search));
+  }, [search]);
+
+  // The authorized set fills the Business filter and labels every row. An empty
+  // set is valid and is simply a filter with no options — the directory itself
+  // still renders, because a principal's Business authorization and the
+  // customers it can see are answered by different Actions.
+  const { businesses } = useAuthorizedBusinesses();
+  const businessName = useMemo(() => makeBusinessLabeller(businesses), [businesses]);
 
   const pageIndex = trailIndexFor(`${searchTerm}|${status}|${businessId}`, cursor || null);
 
-  const [rows, setRows] = useState<CustomerSummary[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [reloadNonce, setReloadNonce] = useState(0);
+  const listQuery = useCustomerList({
+    status,
+    businessId: businessId || undefined,
+    cursor: cursor || undefined,
+    query: searching ? searchTerm.trim() : undefined,
+  });
 
-  // The box is local state so typing is never gated on a round trip; the
-  // address catches up on a debounce.
+  const rows = listQuery.data?.data ?? null;
+  const nextCursor = listQuery.data?.next_cursor ?? null;
+  const loading = listQuery.isPending;
+  const error = listQuery.error ?? null;
+
+  // The box is local state so typing is never gated on a round trip; the address
+  // catches up on a debounce.
   const [draft, setDraft] = useState(searchTerm);
   useEffect(() => setDraft(searchTerm), [searchTerm]);
 
   const debounceRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(debounceRef.current), []);
 
-  function go(changes: Partial<Record<'q' | 'status' | 'business' | 'cursor', string>>, replace = false) {
-    navigate(
-      '/customers',
-      {
-        q: changes.q ?? searchTerm,
-        status: changes.status ?? status,
-        business: changes.business ?? businessId,
-        cursor: changes.cursor ?? cursor,
-      },
-      { replace },
-    );
+  /**
+   * Every change to the directory's state is a navigation, which is the point of
+   * putting it in the URL: filter, open a record, press Back, and the list you
+   * return to is the one you left.
+   *
+   * `replace` is used for the debounced search term so that typing eight
+   * characters leaves one history entry rather than eight.
+   */
+  function go(changes: Partial<CustomerListSearch>, replace = false) {
+    void navigate({
+      to: '/customers',
+      search: tidySearch({ q: searchTerm, status, business: businessId, cursor, ...changes }),
+      replace,
+    });
   }
 
   function onSearchChange(value: string) {
@@ -118,41 +171,86 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
     }, SEARCH_DEBOUNCE_MS);
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    const request = {
-      status,
-      business_id: businessId || undefined,
-      page_size: PAGE_SIZE_DEFAULT,
-      cursor: cursor || undefined,
-    };
-
-    const promise = searching
-      ? client.searchCustomers({ ...request, query: searchTerm.trim() })
-      : client.listCustomers(request);
-
-    promise
-      .then((response) => {
-        if (cancelled) return;
-        setRows(response.data);
-        setNextCursor(response.next_cursor);
-      })
-      .catch((thrown) => {
-        if (cancelled) return;
-        setRows(null);
-        setError(toApiError(thrown));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [client, searchTerm, searching, status, businessId, cursor, reloadNonce]);
+  const columns = useMemo<DataTableColumn<CustomerSummary>[]>(
+    () => [
+      {
+        id: 'name',
+        header: 'Name',
+        enableSorting: false,
+        meta: { placement: 'primary' },
+        cell: ({ row }) => (
+          <Link
+            to="/customers/$customerId"
+            params={{ customerId: row.original.customer_id }}
+            className="text-base font-semibold text-navy-800 no-underline [overflow-wrap:anywhere] hover:underline hover:underline-offset-2"
+          >
+            {row.original.display_name}
+          </Link>
+        ),
+      },
+      {
+        id: 'type',
+        header: 'Type',
+        enableSorting: false,
+        meta: { label: 'Type' },
+        cell: ({ row }) => <TypeTag type={row.original.customer_type} />,
+      },
+      {
+        id: 'email',
+        header: 'Email',
+        enableSorting: false,
+        meta: { label: 'Email', truncate: true },
+        cell: ({ row }) =>
+          row.original.email ? (
+            <span title={row.original.email} className="text-ink-muted">
+              {row.original.email}
+            </span>
+          ) : (
+            <NotRecorded />
+          ),
+      },
+      {
+        id: 'phone',
+        header: 'Phone',
+        enableSorting: false,
+        meta: { label: 'Phone', nowrap: true },
+        cell: ({ row }) =>
+          row.original.phone ? (
+            /*
+             * `dir="ltr"` is required, not decorative. A phone number begins
+             * with a neutral "+", so in an RTL document the bidi algorithm
+             * reorders the groups and "+973 3901 2244" is displayed as
+             * "2244 3901 973+". Marking the value LTR pins it. Verified by
+             * rendering the directory with dir="rtl".
+             */
+            <span dir="ltr" className="tabular-nums text-ink-muted">
+              {row.original.phone}
+            </span>
+          ) : (
+            <NotRecorded />
+          ),
+      },
+      {
+        id: 'business',
+        header: 'Business',
+        enableSorting: false,
+        meta: { label: 'Business', truncate: true },
+        cell: ({ row }) => (
+          <span title={businessName(row.original.business_id)} className="text-ink-muted">
+            {businessName(row.original.business_id)}
+          </span>
+        ),
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        enableSorting: false,
+        meta: { placement: 'trailing' },
+        cell: ({ row }) => <StatusBadge status={row.original.status} />,
+      },
+    ],
+    [businessName],
+  );
 
   const announcement = loading
     ? 'Loading customers.'
@@ -175,9 +273,9 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
           </h1>
           <p className="mt-1 text-ink-muted">{subtitleFor(status, searching)}</p>
         </div>
-        <ButtonLink variant="primary" href="#/customers/new">
+        <Link to="/customers/new" className={buttonVariants({ variant: 'primary' })}>
           New customer
-        </ButtonLink>
+        </Link>
       </div>
 
       <div className="grid gap-3 rounded-t-xl border border-b-0 border-line bg-surface p-4">
@@ -223,24 +321,12 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <div role="group" aria-label="Filter by status" className="inline-flex rounded-[7px] border border-line bg-sunk p-0.5">
-            {STATUS_TABS.map((tab) => (
-              <button
-                key={tab.value}
-                type="button"
-                aria-pressed={tab.value === status}
-                onClick={() => go({ status: tab.value, cursor: '' })}
-                className={cn(
-                  'min-h-7.5 cursor-pointer rounded-sm border-0 px-3 py-1 text-[0.8125rem] font-semibold',
-                  tab.value === status
-                    ? 'bg-surface text-navy-800 shadow-[var(--shadow-card)]'
-                    : 'bg-transparent text-ink-muted hover:text-ink',
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            label="Filter by status"
+            options={STATUS_TABS}
+            value={status}
+            onChange={(value) => go({ status: value, cursor: '' })}
+          />
 
           <div className="flex items-center gap-2">
             <label htmlFor="directory-business" className="text-[0.8125rem] font-semibold text-ink-soft">
@@ -268,11 +354,11 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
 
       <Panel className="rounded-t-none">
         {loading ? (
-          <LoadingRows />
+          <SkeletonRows />
         ) : error ? (
           <ErrorBlock
             error={error}
-            onRetry={() => setReloadNonce((n) => n + 1)}
+            onRetry={() => void listQuery.refetch()}
             extraActions={
               cursor ? (
                 <Button onClick={() => go({ cursor: '' })}>Back to the first page</Button>
@@ -280,7 +366,20 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
             }
           />
         ) : rows && rows.length > 0 ? (
-          <DirectoryTable rows={rows} businessName={businessName} />
+          <DataTable
+            columns={columns}
+            rows={rows}
+            getRowId={(row) => row.customer_id}
+            columnWidths={['26%', '9%', '25%', '15%', '16%', '9%']}
+            onRowActivate={(row) => {
+              // Convenience only. Every row is already reachable by its name
+              // link, so nothing here is the sole route to a record.
+              void navigate({
+                to: '/customers/$customerId',
+                params: { customerId: row.customer_id },
+              });
+            }}
+          />
         ) : (
           <EmptyState
             searching={searching}
@@ -298,10 +397,13 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
       </p>
 
       {!loading && !error && rows && rows.length > 0 ? (
-        <Pager
+        <Pagination
+          label="Directory pages"
+          noun={{ one: 'customer', many: 'customers' }}
           shown={rows.length}
           pageIndex={pageIndex}
-          nextCursor={nextCursor}
+          hasPrevious={pageIndex > 0}
+          hasNext={Boolean(nextCursor)}
           onPrevious={() => go({ cursor: trail.cursors[pageIndex - 1] ?? '' })}
           onNext={() => go({ cursor: nextCursor ?? '' })}
         />
@@ -313,179 +415,9 @@ export function CustomerList({ client }: { client: CustomerDirectoryClient }) {
 function subtitleFor(status: StatusFilter, searching: boolean): string {
   if (searching) return 'Search results across the Businesses you can see.';
   if (status === 'archived') return 'Archived customers, kept indefinitely and withdrawn from everyday use.';
+  if (status === 'pending_deletion') return 'Customers scheduled for permanent deletion.';
   if (status === 'all') return 'Every customer, whatever its status.';
   return 'The people and companies you do business with.';
-}
-
-/**
- * A real `<table>` at desktop widths for row/column semantics, becoming a stack
- * of record cards below 55rem. The column labels are real DOM rather than CSS
- * pseudo-content, so nothing is lost from the accessibility tree when the
- * header row disappears.
- */
-function DirectoryTable({
-  rows,
-  businessName,
-}: {
-  rows: CustomerSummary[];
-  businessName: (id: string) => string;
-}) {
-  return (
-    <table className="directory">
-      <colgroup>
-        <col style={{ width: '26%' }} />
-        <col style={{ width: '9%' }} />
-        <col style={{ width: '25%' }} />
-        <col style={{ width: '15%' }} />
-        <col style={{ width: '16%' }} />
-        <col style={{ width: '9%' }} />
-      </colgroup>
-      <thead>
-        <tr>
-          {['Name', 'Type', 'Email', 'Phone', 'Business', 'Status'].map((heading) => (
-            <th key={heading} scope="col">
-              {heading}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <Row key={row.customer_id} row={row} businessName={businessName} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Row({ row, businessName }: { row: CustomerSummary; businessName: (id: string) => string }) {
-  const href = buildHash(`/customers/${encodeURIComponent(row.customer_id)}`);
-
-  return (
-    <tr
-      onClick={(event) => {
-        // Convenience only. Every row is already reachable by its name link, so
-        // nothing here is the sole route to a record.
-        if ((event.target as HTMLElement).closest('a, button')) return;
-        if (window.getSelection()?.toString()) return;
-        window.location.hash = href.replace(/^#/, '');
-      }}
-    >
-      <Cell area="name">
-        <a
-          href={href}
-          className="cell-value text-base font-semibold text-navy-800 no-underline [overflow-wrap:anywhere] hover:underline hover:underline-offset-2"
-        >
-          {row.display_name}
-        </a>
-      </Cell>
-      <Cell area="type" label="Type">
-        <TypeTag type={row.customer_type} className="cell-value" />
-      </Cell>
-      <Cell area="email" label="Email">
-        {row.email ? (
-          <span title={row.email} className="cell-value text-ink-muted">
-            {row.email}
-          </span>
-        ) : (
-          <NotRecorded />
-        )}
-      </Cell>
-      <Cell area="phone" label="Phone">
-        {row.phone ? (
-          // `dir="ltr"` is required, not decorative. A phone number begins with
-          // a neutral "+", so in an RTL document the bidi algorithm reorders the
-          // groups and "+973 3901 2244" is displayed as "2244 3901 973+".
-          // Marking the value LTR pins it. Verified by rendering the directory
-          // with dir="rtl".
-          <span dir="ltr" className="cell-value tabular-nums text-ink-muted">
-            {row.phone}
-          </span>
-        ) : (
-          <NotRecorded />
-        )}
-      </Cell>
-      <Cell area="business" label="Business">
-        <span title={businessName(row.business_id)} className="cell-value text-ink-muted">
-          {businessName(row.business_id)}
-        </span>
-      </Cell>
-      <Cell area="status">
-        <StatusBadge status={row.status} className="cell-value" />
-      </Cell>
-    </tr>
-  );
-}
-
-/**
- * The placement classes are plain CSS in styles/index.css — see the `.directory`
- * component layer. The card layout below 55rem changes `display` on five
- * elements and re-places two of them on a grid, which is clearer as CSS than as
- * a stack of arbitrary variants.
- */
-function Cell({ area, label, children }: { area: string; label?: string; children: React.ReactNode }) {
-  return (
-    <td className={`cell-${area}`}>
-      {label ? (
-        <span aria-hidden="true" className="cell-label">
-          {label}
-        </span>
-      ) : null}
-      {children}
-    </td>
-  );
-}
-
-function NotRecorded() {
-  return (
-    <span aria-label="Not recorded" className="cell-value text-ink-faint">
-      —
-    </span>
-  );
-}
-
-function Pager({
-  shown,
-  pageIndex,
-  nextCursor,
-  onPrevious,
-  onNext,
-}: {
-  shown: number;
-  pageIndex: number;
-  nextCursor: string | null;
-  onPrevious: () => void;
-  onNext: () => void;
-}) {
-  const hasPrevious = pageIndex > 0;
-  const hasNext = Boolean(nextCursor);
-  const noun = shown === 1 ? 'customer' : 'customers';
-
-  if (!hasPrevious && !hasNext) {
-    return (
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[0.8125rem] text-ink-muted">
-          Showing {shown} {noun}.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <nav aria-label="Directory pages" className="mt-4 flex flex-wrap items-center justify-between gap-3">
-      <p className="text-[0.8125rem] text-ink-muted">
-        Page {pageIndex + 1} · showing {shown} {noun}
-      </p>
-      <div className="flex gap-2">
-        <Button size="sm" disabled={!hasPrevious} onClick={onPrevious}>
-          Previous
-        </Button>
-        <Button size="sm" disabled={!hasNext} onClick={onNext}>
-          Next
-        </Button>
-      </div>
-    </nav>
-  );
 }
 
 function EmptyState({
@@ -501,7 +433,7 @@ function EmptyState({
   status: StatusFilter;
   businessId: string;
   businessName: (id: string) => string;
-  go: (changes: Partial<Record<'q' | 'status' | 'business' | 'cursor', string>>) => void;
+  go: (changes: Partial<CustomerListSearch>) => void;
 }) {
   if (searching) {
     return (
@@ -559,9 +491,9 @@ function EmptyState({
       title="No customers yet"
       body="This is where the people and companies you do business with will be listed. Add the first one to get started."
       actions={
-        <ButtonLink variant="primary" href="#/customers/new">
+        <Link to="/customers/new" className={buttonVariants({ variant: 'primary' })}>
           New customer
-        </ButtonLink>
+        </Link>
       }
     />
   );

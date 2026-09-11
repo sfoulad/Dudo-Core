@@ -342,6 +342,16 @@ operations:
         cost, which is what the platform route's own reservation covers; the tenant-side write draws
         from the Organization's allocation exactly as organization-onboarding-v1's does. THE TWO
         LEDGERS ARE SEPARATE AND BOTH MUST BE RESERVED.
+        *** THE CONTROL-PLANE HALF INCLUDES THE P4 AUDIT RECORD, WHOSE COST IS
+        `PLATFORM_OPERATOR_ACTION_ROW_WRITES` IN platform/core/identity/control-plane-admission.ts —
+        READ THE CONSTANT, NOT A FIGURE IN A CONTRACT. *** It was 2 when the figures above were
+        written and migration 0016 took it to 4; the constant moved and the contracts did not.
+        Annotated 2026-09-11. THE TWO FIGURES ON THIS CONTRACT'S ROUTES ARE NOT YET CORRECTED —
+        scripts/check-row-writes.mjs cannot hold them, because neither operation declares a
+        `requestClass:` and the check is keyed on the declared class (docs/decisions/0039 phase 1).
+        *** SO THIS NOTE IS THE ONLY THING STANDING BETWEEN A READER AND A WRONG NUMBER HERE, AND
+        THAT IS THE STATE RATHER THAN A COMPLAINT ABOUT IT. *** The figures are corrected when this
+        contract declares its class; doing it by hand first would produce numbers nothing can verify.
     notFoundCOLLAPSE: >-
       AN UNKNOWN ORGANIZATION, AN IDENTIFIER BELONGING TO NOBODY, AN IDENTIFIER BELONGING TO SOMEONE
       WHO IS NOT A MEMBER OF THIS ORGANIZATION, A SUSPENDED MEMBERSHIP, AND A PLATFORM OPERATOR ALL
@@ -353,11 +363,22 @@ operations:
       this surface.
       THE SAME WORK MUST HAPPEN ON ALL FIVE PATHS, not merely the same code — the property
       organization-selection-v1's theHintRuling establishes, applied here.
-    theRENAMEISINPHASEONE:
+    theRENAMEISCOMPLETE:
       ruling: >-
-        *** THE ROUTE ACCEPTS `target_identifier` AND `identifier`. `target_identifier` IS THE
-        NAME A CLIENT SHOULD SEND. `identifier` IS DEPRECATED. IF BOTH ARE PRESENT THE REQUEST IS
-        REFUSED WITH `invalid_argument`. *** Team Lead ruling, 2026-09-07.
+        *** THE ROUTE ACCEPTS `target_identifier` AND NOTHING ELSE. *** Phase 3 landed 2026-09-09
+        (docs/decisions/0034), removing the deprecated `identifier` from this contract and from
+        Core's route table in one change.
+        THE KEY WAS RENAMED FROM `theRENAMEISINPHASEONE` WITH THE PHASE, DELIBERATELY. A block
+        named for a phase that has passed is read as current by whoever greps for it —
+        `workflow.md` §12's residue in a structural key rather than in prose, and the same
+        under-scoping that left "phase 1" in the schema description.
+      thePREVIOUSRULING_STRUCKANDKEPTVISIBLE: >-
+        Team Lead ruling, 2026-09-07: *"THE ROUTE ACCEPTS `target_identifier` AND `identifier`.
+        `target_identifier` IS THE NAME A CLIENT SHOULD SEND. `identifier` IS DEPRECATED. IF BOTH
+        ARE PRESENT THE REQUEST IS REFUSED WITH `invalid_argument`."*
+        KEPT RATHER THAN DELETED because it was right on its own terms and the reasoning below is
+        why phase 3 was safe. It is no longer in force: there is one name, so there is nothing for
+        a both-present rule to refuse.
       theDIVERGENCETHATCAUSEDIT: >-
         `core-agent`'s route-field checker found it on its first run and CORRECTLY REFUSED TO FIX
         IT ON ITS OWN INITIATIVE. Core's route table declared `identifier`; this contract published
@@ -372,7 +393,22 @@ operations:
         THE CLIENT READ THE CODE RATHER THAN THE CONTRACT — which `workflow.md` §12 names exactly:
         once one client has done that successfully, the contract has stopped being the source of
         truth for everyone.
-      theSEQUENCE: "Core accepts both → the console switches → Core drops `identifier`. Phases 1, 2, 3."
+      theSEQUENCE: >-
+        Core accepts both → the console switches → Core drops `identifier`. Phases 1, 2, 3.
+        ALL THREE ARE DONE. The sequence is kept because it is the reusable part: a change that is
+        correct in isolation is an outage when one side is already deployed, and the order is
+        always WIDEN, SWITCH, NARROW.
+      theBREAKINGCHANGE_RECORDEDWHEREVERSIONINGCANSEEIT: >-
+        *** PHASE 3 IS A BREAKING CHANGE TO A PUBLISHED CONTRACT, AND IT DID NOT TAKE A NEW
+        CONTRACT VERSION. *** `contractVersion` stays 1. That is `0034`'s decision rather than an
+        omission here: `architecture.md` §1 requires Team Lead review and a decision record for a
+        breaking change, and `0034` IS that record — phases 1 and 2 exist precisely so the removal
+        lands on a surface no live caller depends on. A new version would publish two contracts for
+        one route to serve a population that `0024`'s mutual exclusion already proves is one
+        console and one or two named operators.
+        WHAT A STRAGGLER GETS: `invalid_argument`, before authentication, because the platform
+        class refuses an undeclared field. Loud, recoverable, immediately diagnosable — the priced
+        residual, not a silent failure.
       whyNOTJUSTRENAMECORE: >-
         A SERVER REFUSING A FIELD THE DEPLOYED CLIENT SENDS. The same outage `0031` sequenced
         `display_name` to avoid, in the same direction. THIS CONTRACT SET HAS NOW MET THAT SHAPE
@@ -503,11 +539,21 @@ openQuestions:
       "one or two operators" and none of them is proportionate to twenty.
     blocks: "Nothing at current scale."
   - id: OD-5
-    status: "OPEN, OWNED, AND TRIGGERED BY AN EVENT RATHER THAN BY A DATE."
+    status: >-
+      *** DISCHARGED 2026-09-09. PHASE 3 LANDED. *** `identifier` is removed from
+      `resolveMemberInput` and from Core's route table, in one change. The entry is kept rather
+      than deleted because the reasoning below — enumeration over measurement, and the withdrawn
+      precondition — is what a future rename should copy, and a deleted entry teaches nobody.
+      THE TRIGGER FIRED AS SPECIFIED: it was an event, not a date, and the event was the change
+      following the console's switch.
     question: >-
       PHASE 3 OF THE `identifier` → `target_identifier` RENAME: `identifier` must be dropped from
       `resolveMemberInput` and from Core's route table. Until then the route accepts a deprecated
       alias and this contract publishes two names for one field.
+      *** ANSWERED. Both halves removed 2026-09-09; `required: ["target_identifier"]` replaces the
+      two-branch `oneOf`, and the removal is recorded in a `$comment` rather than as a tombstoned
+      property — under `additionalProperties: false` a `_removed_identifier` would be A PERMITTED
+      OPTIONAL FIELD, which is `workflow.md` §12's same-defect-one-size-smaller. ***
     theTRIGGER: >-
       *** IT LANDS IN THE CHANGE THAT FOLLOWS THE CONSOLE'S SWITCH TO `target_identifier`. NOT A
       DATE, NOT A BACKLOG ITEM, AND NOT A CONDITIONAL FOR SOMEBODY TO NOTICE. *** `workflow.md`
@@ -519,6 +565,83 @@ openQuestions:
       `required: ["target_identifier"]`; Core removes it from the route table's `fields`. BOTH IN
       ONE CHANGE — `core-agent`'s route-field checker compares the two and will go red if they are
       split across two commits, which is the check working rather than a problem.
+
+    theEVIDENCEREQUIRED_ANDITISENUMERATIONRATHERTHANMEASUREMENT:
+      ruling: >-
+        *** PHASE 3 IS DISCHARGED ON AN ENUMERATED SENDER POPULATION, NOT ON A MEASUREMENT OF
+        WHICH SPELLING ARRIVED. NOTHING RECORDS THE SPELLING AND NOTHING SHOULD. *** Ruling
+        2026-09-08, on the Team Lead's question of whether to add a field for it. The reasoning is
+        in `theRECORDINGWASCONSIDEREDANDREFUSED` below.
+      whyENUMERATIONISAVAILABLEHERE: >-
+        *** THE SENDER POPULATION IS CLOSED BY AUTHENTICATION, NOT BY POLICY. *** This is a
+        platform-class route: reaching it requires a `platform_operator` row, and `0024`'s mutual
+        exclusion means a principal holding one has NO `organization_membership` row. SO NO TENANT
+        CLIENT CAN AUTHENTICATE TO THIS ROUTE AT ALL, whatever it sends — the Apple client and the
+        web client are STRUCTURALLY outside the population rather than merely unlikely to be in it.
+        The host binding (`core-object-registry.yaml`, platform routes mounted only on the admin
+        host) is a second layer and not the argument.
+        MEASUREMENT IS THE RIGHT TOOL FOR AN OPEN POPULATION. This one is one console, the scripts
+        in two repositories, and one or two named operators.
+      theConditions:
+        - "1. BOTH REPOSITORIES SEARCHED for a sender of `identifier` on this route, by a recorded search, WITH THE SEARCHES THAT RETURNED NOTHING REPORTED. Verified 2026-09-08: the console sends `target_identifier` as a single unconditional literal, and `verify:platform` asserts the LEGACY NAME IS ABSENT rather than only that the new one is present — an absence assertion, which is the half that would otherwise pass while both names were sent."
+        - "2. THE OPERATOR POPULATION IS TOLD. It is one or two people by name, which is why this is a message and not a migration."
+        - "3. THE EXISTING AUDIT FEED IS CONSULTED. See theFREEEVIDENCEALREADYAVAILABLE."
+      theFAILUREMODEIFTHEENUMERATIONISWRONG: >-
+        *** PRICED RATHER THAN ASSUMED AWAY. *** A straggler sending `identifier` after phase 3
+        receives `invalid_argument` — the class refuses undeclared parameters before
+        authentication. LOUD, IMMEDIATE, ATTRIBUTABLE TO ONE OPERATOR ON ONE INTERNAL ROUTE, AND
+        REPAIRED BY CHANGING ONE STRING LITERAL. No silent data loss, no security regression, no
+        customer-visible effect, and nothing written wrongly. THAT IS THE WHOLE RISK THE
+        MEASUREMENT WOULD HAVE BOUGHT DOWN, and it is smaller than the schema it would have cost.
+
+    theFREEEVIDENCEALREADYAVAILABLE: >-
+      *** THE PLATFORM AUDIT FEED ALREADY ANSWERS A WEAKER QUESTION THAT IS SUFFICIENT, AT ZERO
+      COST AND WITH NO SCHEMA CHANGE. *** `platform.audit.list` filtered by
+      `action_id = platform.organizations.members.resolve` over a bounded window returns every
+      resolve any operator has performed.
+      IF IT RETURNS NOTHING SINCE PHASE 2 LANDED, THE SPELLING QUESTION IS MOOT — nobody has
+      called the route, so nobody can have called it with the deprecated name.
+      IF IT RETURNS A FEW, THEY CARRY `actor_principal_id` AND `correlation_id`, so each is
+      attributable to one operator who can simply be asked. A handful of records is a
+      conversation, not a telemetry problem.
+      THIS IS THE ANSWER THE CONTRACT SET ALREADY PAID FOR. A new field would have been a second
+      way to learn something the first way already tells us, bought with a migration.
+
+    theRECORDINGWASCONSIDEREDANDREFUSED:
+      whatWasProposed: "A column on `platform_operator_action` recording which spelling arrived, surfaced through the platform audit feed. It costs no extra ROW-WRITE, because the row is already written."
+      whyITISSTILLREFUSED_ANDTHEROWWRITECOSTISNOTTHEPOINT: >-
+        *** IT SPENDS SCHEMA ON A QUESTION THAT EXPIRES. *** `0030` binds the inverse — the free
+        tier may cost us CONFIGURATION, never SCHEMA — and the same asymmetry governs here: a
+        column is permanent, and the fact it records stops mattering the day it is read. Removing
+        it afterwards is a second migration on an APPEND-ONLY table that `0009` says cannot be
+        rolled back once it holds records, so the realistic outcome is a dead column that outlives
+        everyone who knows what it was for.
+      andTHESECONDOBJECTIONISTHEONETHATDECIDESIT: >-
+        *** AN AUDIT RECORD IS A PERMANENT EVIDENTIARY ARTIFACT AND THIS IS A TRANSIENT FACT ABOUT
+        OUR OWN API. *** `0009`'s schema note is normative that the log holds "who acted, what they
+        did, which Organization or principal they named, and when". WHICH SPELLING OF A FIELD NAME
+        ARRIVED IS NONE OF THOSE. It is a fact about Dudo's rename, filed in the record that
+        answers what Dudo did to a customer, read years later by someone who cannot ask.
+      theTEAMLEADSOBJECTIONISCORRECTINCONCLUSIONANDAIMEDATTHEWRONGTABLE: >-
+        STATED BECAUSE THE DISTINCTION MATTERS IF ANYONE REVISITS THIS. The concern raised was that
+        "every future reader of a CUSTOMER'S action log sees a field about our internal rename".
+        THE PROPOSED COLUMN WOULD SIT ON `platform_operator_action`, WHICH IS THE PLATFORM'S OWN
+        LOG, read by operators through `platform-audit-read-v1`. THE CUSTOMER'S LOG IS
+        `audit_event`, a different table in a different database, and nothing proposed putting it
+        there. So `0025`'s customer-facing property is not what refuses this — the permanence
+        argument above is. The conclusion was right and the reason needed moving.
+      theSHAPEIFTHISISEVEROVERRULED: >-
+        SO THAT AN OVERRULE DOES NOT HAVE TO REDESIGN IT. A BOOLEAN COLUMN
+        `used_deprecated_target_field` on `platform_operator_action`, surfaced ONLY on
+        `platformFeedRecord` — never on the Organization feed and never on the tenant-side
+        `audit_event` — REQUIRED AND NULLABLE, with `null` meaning "this action has no deprecated
+        field" so that every other operation reads null rather than a misleading `false`.
+        THE NAME IS DELIBERATELY NOT `spelling`, `variant` OR `field_version`. `architecture.md`
+        §1a reserves a name platform-wide the moment a cross-cutting mechanism defines it, and a
+        generic word here would forbid the natural name for every future deprecation on every
+        route. `used_deprecated_target_field` names THIS deprecation, cannot be wanted by anything
+        else, and reads as obviously dead the day phase 3 lands — which is the property a
+        temporary field should have.
     whyITMUSTACTUALLYHAPPEN: >-
       A DEPRECATED ALIAS THAT IS NEVER REMOVED IS JUST A SECOND NAME. The reservation
       `architecture.md` §1a creates is that `identifier` says nothing about WHOSE it is; every day

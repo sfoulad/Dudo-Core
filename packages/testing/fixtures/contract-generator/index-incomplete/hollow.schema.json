@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:hollow:1",
+  "$comment": "DELIBERATELY UNPARSEABLE, AND BY A DIFFERENT MALFORMATION FROM `carrier.schema.json` — a trailing comma rather than a missing one. Two copies of one defect would prove the count moves with the number of FILES; two different defects prove it moves with the number of UNREADABLE files, which is what the message claims. NOTHING REFERENCES THIS FILE. That is its job: it is the unrelated unparseable schema that makes a genuinely-unresolvable URN report as `derived`, which is the cost the generator's own header writes down and which nothing had ever observed.",
+  "$defs": {
+    "unused": { "type": "boolean" },
+  }
+}

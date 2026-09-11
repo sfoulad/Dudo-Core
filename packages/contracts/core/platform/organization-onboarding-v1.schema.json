@@ -59,6 +59,8 @@
     "onboardingWarning": {
       "type": "string",
       "enum": ["first_workspace_not_created", "tenant_audit_record_not_written"],
+      "enumPolicy": "extensible",
+      "$comment": "`extensible`, for the same reason as `credential-reset-v1`'s `resetWarning` and consistent with it: a warning taxonomy grows as new bounded, deliberate incompletenesses are found in the operation, and a client must not break on a warning it cannot name. Onboarding returns 201 WITH a non-empty warnings array — a step-7 failure is not a failed creation — so a client refusing to render an unrecognised warning would turn a customer that exists into a reported failure.",
       "description": "A CLOSED SET OF STABLE TOKENS, never free text. These report the two things that can fail AFTER the Organization irrevocably exists — the step-7 failures. A closed set means a console can render each one specifically and qa-agent can assert them; free text would be a message nobody could branch on and everybody would log."
     },
 

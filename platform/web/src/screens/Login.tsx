@@ -38,11 +38,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
-import { Panel } from '@/components/StateBlock';
-import { CredentialDerivationError, identifierRefusal } from '@/api/kdf';
-import type { DerivationProgress } from '@/api/kdf-client';
+import { Button, Field, Input, Panel } from '@dudo/ui';
+import { CredentialDerivationError, identifierRefusal } from '@dudo/client-kdf';
+import type { DerivationProgress } from '@dudo/client-kdf/client';
 import { type AuthClient, type LoginResult } from '@/api/auth';
 import { ApiError, errorBody, errorTitle, toApiError } from '@/api/errors';
 import { transportBadge } from '@/api/config';

@@ -1,21 +1,32 @@
 /**
  * ===========================================================================================
- * THE FOUR CHECKS THAT CLOSE GATE STEP 5. `docs/product/mvp-delivery-policy.md` §4.
+ * THE FOUR CHECKS THAT PRODUCE A MILESTONE'S TEST EVIDENCE FOR BOTH CLIENTS.
  * ===========================================================================================
  *
- *   node packages/testing/verify-staging.ts --url https://<staging-host> --email <address>
+ *   node packages/testing/verify-staging.ts --url https://<host> --email <address>
+ *
+ * **THE STEP NUMBERS ARE GONE AND ARE NOT RENUMBERED.** This file used to describe itself as
+ * closing *"gate step 5"* of the seven-step per-feature gate. **`0030` withdrew that gate on
+ * 2026-09-06** and `0035` made the target the full system, built admin-first. What the numbers
+ * stood for did not go anywhere, so it is named directly below instead of by index.
+ * `docs/product/mvp-delivery-policy.md`'s Apple, web and public-repository requirements still
+ * hold; **its per-feature gate does not.**
  *
  * ===========================================================================================
- * WHY THIS EXISTS: EVERY BINDING IN THIS SLICE HAS ONLY EVER BEEN TESTED AGAINST A STUB.
+ * WHY THIS EXISTS: EVERY BINDING HERE HAS ONLY EVER BEEN TESTED AGAINST A STUB.
  * ===========================================================================================
  *
  * The web client is verified against a fixture transport, the Apple client against `StubCore`,
  * and Core against an in-memory SQLite. Each half passes. **The join between the halves has
- * never been executed once.** Step 5 asks for exact test evidence for both clients, and evidence
- * that both work against stubs is not evidence that either works against Dudo.
+ * never been executed once.** Evidence that both work against stubs is not evidence that either
+ * works against Dudo, and a milestone owes **exact evidence for both clients** — passed, failed,
+ * skipped and NOT RUN being four distinct states.
  *
- * These four checks are the join. They are the reason QA reported step 5 as NOT SATISFIED, and
- * running them green is what changes that answer.
+ * These four checks are the join. **Running them green produces the evidence; it does not
+ * produce a milestone.** What still has to happen afterwards, and none of it is this script's:
+ * the URL, the deployed commit and version, release notes, a test checklist, the gaps stated
+ * rather than rounded up — **and then acceptance, which is the user's alone and is never
+ * inferred from a green run.**
  *
  *   1. THE WORKER IS REACHABLE and serves its API surface.
  *   2. THE SEEDED PRINCIPAL CAN LOG IN — the check that matters most, because its real-world
@@ -52,7 +63,7 @@ import {
   normalizeIdentifier,
   toBase64Url,
 } from '../../platform/core/identity/credential-store.ts';
-import { deriveCredential } from '../../platform/web/src/api/kdf.ts';
+import { deriveCredential } from '@dudo/client-kdf';
 
 // =============================================================================================
 // Reporting
@@ -198,7 +209,7 @@ async function main(): Promise<void> {
   const seedSqlPath = argument(argv, 'seed-sql');
   const allowWrites = argv.includes('--allow-writes');
 
-  console.log('\n=== Dudo — staging verification, the four checks that close gate step 5 ===\n');
+  console.log('\n=== Dudo — deployed verification: the four checks that join both clients to a real Core ===\n');
 
   // ---- Refusals, before a single packet is sent.
   if (baseUrl === '' || email === '') {
@@ -1036,7 +1047,7 @@ function summarise(): void {
       `${String(notRun)} not run (${String(outcomes.length)} recorded)\n`,
   );
 
-  // The four that gate step 5, named individually — a total is not evidence.
+  // The four gating checks, named individually — a total is not evidence.
   const gating = gatingSteps;
   const gatingOutcomes = gating.map((step) => outcomes.find((o) => o.step === step));
   const allGreen = gatingOutcomes.every((o) => o?.status === 'passed');
@@ -1051,16 +1062,18 @@ function summarise(): void {
   if (allGreen) {
     console.log(
       '  ALL FOUR GATING CHECKS PASSED.\n\n' +
-        '  This is the evidence gate step 5 was missing: both clients exercised against a real\n' +
-        '  Core rather than against stubs. It is NOT step 6 and NOT step 7 — the Team Lead still\n' +
-        '  owes the user a URL, a TestFlight build number, release notes and a checklist, and\n' +
-        '  ONLY THE USER ACCEPTS.\n\n' +
+        '  This is the evidence that was missing: both clients exercised against a real Core\n' +
+        '  rather than against stubs. THAT IS ALL IT IS. The Team Lead still owes the user the\n' +
+        '  URL, the deployed commit and version, a TestFlight build number, release notes, a\n' +
+        '  test checklist, and the gaps stated rather than rounded up — and then\n' +
+        '  ONLY THE USER ACCEPTS. Acceptance is never inferred from a green run.\n\n' +
         '  Note CHECK 4b: the two-tenant probe is still not run. Say so when reporting.\n',
     );
   } else {
     console.log(
-      '  STEP 5 IS NOT CLOSED. Read the → lines above; each names what to do rather than only\n' +
-        '  what failed. Report the actual result — a partial run is reported as partial.\n',
+      '  THE EVIDENCE IS NOT COMPLETE. Read the → lines above; each names what to do rather\n' +
+        '  than only what failed. Report the actual result — a partial run is reported as\n' +
+        '  partial, and NOT RUN is its own state, distinct from failed.\n',
     );
     (globalThis as { process?: { exitCode?: number } }).process!.exitCode = 1;
   }

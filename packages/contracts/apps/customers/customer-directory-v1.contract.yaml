@@ -69,8 +69,32 @@
 contractVersion: 1
 apiVersion: v1
 appId: customers
-status: proposed
-updated: "2026-09-02"
+status: accepted
+acceptedBy: >-
+  Dudo Team Lead, 2026-09-08. Unblocked by evidence from an ALREADY-ACCEPTED contract that this
+  one's wire form is published and load-bearing: `template-v1`'s acceptedNote records that
+  "`business_id` turned out to be a published wire field in customer-directory-v1 that two clients
+  have shipped against", and DECLINES THE `Workspace` RENAME BECAUSE OF IT — "the customer wire
+  keeps `business_id`".
+  A CONTRACT WHOSE FIELD NAME AN ACCEPTED CONTRACT REFUSES TO BREAK IS NOT A PROPOSAL. It was
+  already being treated as published by a decision that cost something real; this records what
+  was already true rather than granting it.
+  IT DOES NOT ACCEPT THE TWO DEFERRED ACTIONS AS BUILT. `customers.DeleteCustomer` and
+  `customers.RestoreDeletedCustomer` are registered `kind: 'deferred'` in
+  apps/customers/api/routes.ts — no action object, no handler. The contract specifies them and
+  Core does not implement them, which is a stated gap rather than a claim of completeness.
+  AND DELETE STAYS UNREACHABLE FOR A SECOND, INDEPENDENT REASON: `customers.customer.delete` is
+  `critical`, the Action-side confirmation gate exists and is fail-closed, and the ACTION-CLASS
+  CHALLENGE ROUTE `confirmation-v1` §whereItLIVES.theTWOCHALLENGEROUTES requires does not exist.
+  The lock is fitted; the key cannot be minted.
+updated: "2026-09-08"
+# ADDED 2026-09-08. Its absence was a finding: this and business-read-v1 were the two contracts
+# with the most live routes and the two missing the field that says whether the contract was
+# TRANSCRIBED FROM CODE or SPECIFIED AHEAD OF IT.
+# `partial`, and the split is per Action rather than per contract: eight Actions are specified
+# here and implemented in apps/customers/**; TWO ARE SPECIFIED AND NOT IMPLEMENTED. A contract
+# that is ahead of its code for two of ten operations is neither `true` nor `false`.
+documentsExistingImplementation: partial
 
 # ---------------------------------------------------------------------------
 # tenancy — applies to every Action below, without exception

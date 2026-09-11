@@ -146,10 +146,11 @@
         "required": ["action", "surface"],
         "properties": {
           "action": { "$ref": "#/$defs/actionId" },
-          "surface": { "type": "string", "enum": ["internal", "public"] },
+          "surface": { "type": "string", "enum": ["internal", "public"], "enumPolicy": "closed" },
           "method": {
             "type": "string",
-            "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"]
+            "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"],
+            "enumPolicy": "closed"
           },
           "path": {
             "type": "string",
@@ -216,7 +217,9 @@
           "confirmation": {
             "type": "string",
             "enum": ["none", "user", "approval", "mfa"],
-            "description": "Elevation required when invoked by an AI principal. Collected by the platform from the human, never asserted by a model (MCP_STANDARD.md §5)."
+            "enumPolicy": "closed",
+            "description": "Elevation required when invoked by an AI principal. Collected by the platform from the human, never asserted by a model (MCP_STANDARD.md §5).",
+            "$comment": "SINGLETON: a search of packages/contracts/** for 'mfa' returns this line and nothing else, so no second copy of this value set exists to agree or disagree with (docs/decisions/0041).\n\n`closed`, and the direction of the failure is what decides it. This is a LADDER, not a label: the platform must map each value onto an elevation it can actually collect. A value the platform has never been taught cannot be collected, so an `extensible` reading would oblige a manifest reader to treat an unknown rung as SOMETHING — and every available answer is wrong: treat it as 'none' and an App has downgraded its own AI gate by inventing a word; refuse the call and the manifest has become a denial-of-service on itself. Adding a rung is a decision under 0027, taken once, centrally."
           }
         }
       }
@@ -259,6 +262,8 @@
         "onUninstall": {
           "type": "string",
           "enum": ["retain", "export", "archive", "delete"],
+          "enumPolicy": "closed",
+          "$comment": "SINGLETON: a search of packages/contracts/** for 'retain' finds this enum, the predicates below, and one manifest that declares a value — no second copy of the value set (docs/decisions/0041).\n\n`closed`, and the audience is what settles it: this block is rendered to a tenant immediately before an irreversible act, so `extensible` would license showing that tenant a disposition word this platform cannot explain.\n\n*** AND BE PRECISE ABOUT WHAT `closed` DOES HERE, BECAUSE THE FIRST VERSION OF THIS COMMENT WAS NOT. *** It said the two predicates below partitioned the set and that a FIFTH disposition would fail open. **The set was already unpartitioned**: predicates keyed on 'archive' and 'retain' left 'export' and 'delete' matched by neither, so retentionDays was optional under both, today, with nothing added. The comment described a future hazard while standing next to a live one — the author had chosen the widening axis before looking, which is workflow.md §11a's own lesson turned on this file.\n\n`closed` MAKES ADDING A VALUE A DECISION. IT DOES NOT MAKE THE PREDICATES COVER THE SET, and a reader meeting `closed` must not conclude the disposition is guarded. What guards it is the negated predicate below — 'anything but archive prohibits retentionDays' — which covers all four values now and defaults a fifth to prohibited.",
           "description": "What happens to tenant data on uninstall. The tenant is told before it proceeds, and this is what actually happens. 'retain' means held INDEFINITELY — removed only by an explicit authorized action, never by elapsed time, a quota, inactivity or a background job (ADR 0011). 'archive' means held for a BOUNDED period stated in retentionDays and then disposed of. 'export' hands the data to the tenant. 'delete' destroys it on uninstall. An App that must never lose tenant data declares 'retain'; an App that wants a bounded hold declares 'archive' and says how long."
         },
         "retentionDays": {
@@ -283,10 +288,10 @@
           "then": { "required": ["retentionDays"] }
         },
         {
-          "$comment": "ADR 0011, clause 2. Under 'retain' the field is PROHIBITED, not optional. Optional would let two manifests declaring the same disposition mean different things, and would leave the reading 'retain for N days' available to anyone who supplies N — which is the exact false statement 0011 removed. A manifest declaring both FAILS VALIDATION and the App does not install; it is never accepted and then evaluated as though the number were advisory. Absence is not a gap to be filled at install time: under 'retain' there is nothing further to say, which is the whole point of the word.",
+          "$comment": "ADR 0011, clause 2, WIDENED FROM 'retain' TO 'ANYTHING BUT archive' ON 2026-09-09. The original text is preserved in the next paragraph because its reasoning is unchanged and still carries the rule; what changed is its SCOPE.\n\nORIGINAL, AND STILL THE ARGUMENT: 'Under retain the field is PROHIBITED, not optional. Optional would let two manifests declaring the same disposition mean different things, and would leave the reading \"retain for N days\" available to anyone who supplies N — which is the exact false statement 0011 removed. A manifest declaring both FAILS VALIDATION and the App does not install; it is never accepted and then evaluated as though the number were advisory. Absence is not a gap to be filled at install time: under retain there is nothing further to say, which is the whole point of the word.'\n\n*** WHY IT WIDENED: THE PARTITION WAS ALREADY INCOMPLETE, WITH NO FUTURE VALUE REQUIRED. *** Two predicates keyed on 'archive' and 'retain' left 'export' and 'delete' matched by NEITHER, so retentionDays was optional under both — which is precisely the 'means either' that 0011 exists to remove, live on two of the four declared dispositions. Found by the Team Lead, 2026-09-09, after this file's author checked what happens when a value is ADDED and did not check the coverage of the set as it stands. Both are the same defect; only one of them needed anybody to do anything first.\n\nTHE RULING ON THE TWO UNCOVERED VALUES, AND IT IS ONE ARGUMENT RATHER THAN TWO:\n  'delete'  destroys the data on uninstall, so there is no window to state. Permitting a number here would make 'delete' + retentionDays a SECOND SPELLING OF 'archive' — two words for one behaviour, which is the ambiguity 0011 removed wearing different clothes.\n  'export'  hands the data to the tenant. If Dudo ALSO holds a copy for a bounded period, that hold IS 'archive' and must be declared as 'archive'; permitting a number here creates the same second spelling. So the field is prohibited and the disposition means what it says.\n\n*** THE MECHANISM CHANGED, NOT ONLY THE COVERAGE, AND THAT IS THE POINT. *** This is no longer a predicate keyed on a MEMBER. It is keyed on 'not archive', so 'archive' is the sole exception and EVERY OTHER VALUE — including one nobody has invented yet — prohibits the field by default. A fifth disposition is therefore refused a retentionDays automatically rather than silently permitted one. architecture.md §3a: a guard that must be REMEMBERED when the enum grows is a discipline; a guard whose default catches the new value is a mechanism. The enum's `closed` policy makes adding a value a decision; it does NOT make the predicates cover it, and only this negation does.\n\nWHAT THIS STILL CANNOT SAY, STATED AS A REASON RATHER THAN A VERDICT so it does not become an instruction the day someone reads it: 'export' is not on the same axis as the other three. 'retain', 'archive' and 'delete' say what happens to Dudo's copy; 'export' says the tenant gets one, and is silent about the copy. An App that must export AND hold for a window cannot say so in this vocabulary — it must declare 'archive' and lose the export in the declaration. Splitting the axis is a breaking change to a published registry schema and belongs to the Team Lead and ADR 0011, not to this predicate.",
           "if": {
             "properties": {
-              "onUninstall": { "const": "retain" }
+              "onUninstall": { "not": { "const": "archive" } }
             },
             "required": ["onUninstall"]
           },
@@ -384,7 +389,8 @@
         "team",
         "own",
         "resource"
-      ]
+      ],
+      "enumPolicy": "closed"
     },
     "appRequestableScope": {
       "type": "string",
@@ -396,11 +402,15 @@
         "own",
         "resource"
       ],
+      "enumPolicy": "closed",
+      "$comment": "MATCHES `audit-read-v1`'s `tenantScope` VALUE FOR VALUE — the same six, and docs/decisions/0041 requires identical value sets to carry identical policies. `closed` there and `closed` here, for the same reason: `permission-catalog.yaml` AZ10 examined the one candidate seventh scope — relationship-based access, a parent over one student's records — and ruled it is NOT a scope, because every member of the §4 ladder is a STRUCTURAL CONTAINER and a parent-student link is neither. The answer is a delegation edge evaluated as a fourth input alongside role and scope. So the ladder is not awaiting a member.\n\nAND `closed` IS THE ONLY DEFENSIBLE POLICY HERE FOR A SECOND REASON THAT DOES NOT APPLY TO THE AUDIT COPY: this enum IS the platform-scope prohibition. It is `$defs/scope` minus `platform`, and an unknown arm would say an App manifest may request a scope this list does not name — which is CRIT-3 restated as a type.",
       "description": "The scopes an App manifest may request a permission at. This is $defs/scope minus 'platform'. 'platform' is the only scope that spans Organizations, it belongs to platform operators, and it is reserved: an App is untrusted by assumption (SECURITY_STANDARD.md §1 threat 2), so a manifest requesting it fails validation and the App does not install. AUTHORIZATION_STANDARD.md §4 and §8."
     },
     "sensitivity": {
       "type": "string",
-      "enum": ["read", "write", "sensitive", "critical"]
+      "enum": ["read", "write", "sensitive", "critical"],
+      "enumPolicy": "closed",
+      "$comment": "DUPLICATED VALUE SET: identical, value-for-value and in the same order, to `capabilityAction.sensitivity` in registries/capability-manifest.schema.json. Both are declared `closed` in the same change, so the duplicate-policy check never observes a half-declared state (docs/decisions/0041).\n\n`closed` because two mechanisms are defined over this set rather than over a value: the `allOf` audit predicate on `$defs/action` below, and 0026/0027's confirmation ladder. Adding a fifth level is therefore not an evolution — it is a change to what those two mechanisms cover.\n\n*** CORRECTED 2026-09-10. THIS COMMENT PREVIOUSLY SAID BOTH MECHANISMS 'fail OPEN on a level they do not name'. ONE OF THEM NO LONGER DOES, AND THE DIFFERENCE IS THE POINT. ***\n\nTHE AUDIT PREDICATE IS NOW FAIL-CLOSED. It was rewritten from `enum: ['sensitive','critical']` to `not: {enum: ['read','write']}`, so an unforeseen rung REQUIRES AUDIT BY DEFAULT instead of escaping the requirement. It no longer names the levels it catches, so it no longer stops catching when the set grows. The old form, and the confidently-wrong paragraph that argued the repair was impossible, are preserved in that predicate's own `$comment`.\n\n0026/0027's CONFIRMATION LADDER IS STILL DEFINED OVER THESE FOUR RUNGS AND IS NOT REPAIRED BY THIS FILE. It lives in decision records, this schema cannot reach it, and whether it fails open on a fifth rung is a question for those records rather than a claim to be made here. NAMED AS UNRESOLVED RATHER THAN SWEPT INTO THE FIXED HALF — a correction that quietly widens to cover what it did not fix is the same defect in the opposite direction.\n\nSO THE OBLIGATION ON WHOEVER ADDS A RUNG IS NARROWER THAN IT WAS AND STILL REAL: the schema predicate will hold; the confirmation ladder must be visited."
     },
     "dataClassification": {
       "$comment": "ORPHANED AND RESERVED — referenced by nothing in this schema, and it must stay that way. Retained as the full SECURITY_STANDARD.md §3 classification vocabulary for documentation and for future non-App-facing schemas. This enum is the only remaining place the classification value 'secret' appears in this file — the other occurrences are prose — so re-pointing any App-facing field at $defs/dataClassification — entity.fields[].classification or any successor — silently reopens CRIT-5 and lets a manifest declare App-owned storage holding secret material. App-facing fields reference $defs/entityFieldClassification. Do not add a $ref to this definition.",
@@ -413,6 +423,7 @@
         "financial-instrument",
         "secret"
       ],
+      "enumPolicy": "closed",
       "description": "The full SECURITY_STANDARD.md §3 classification set, including 'secret'. NOT usable on an App entity field — see $defs/entityFieldClassification, which is what entity.fields[].classification references."
     },
     "entityFieldClassification": {
@@ -424,6 +435,8 @@
         "sensitive-personal",
         "financial-instrument"
       ],
+      "enumPolicy": "closed",
+      "$comment": "`closed`, AND IT IS A NEAR-DUPLICATE OF `$defs/dataClassification` RATHER THAN A DUPLICATE — five values against six, the difference being `secret`. docs/decisions/0041's duplicate-policy check groups by value SET, so these two are never compared with each other and the agreement is maintained by hand. **That is the subset case the check does not cover** and it is exactly the pair where it matters: this enum exists to be `dataClassification` MINUS `secret`, and an unknown arm here would say a manifest may declare a classification this list does not name — CRIT-5 restated as a type.",
       "description": "The classifications valid on an App-owned entity field. This is $defs/dataClassification minus 'secret'. SECURITY_STANDARD.md §3 and §5: secret material — API keys, tokens, signing keys, passwords — is never shown to an App and never readable by an App, so App-owned storage declared to hold it is a declared secret-exposure path. A manifest classifying a field 'secret' fails validation. Secrets are referenced by name through a capability credential reference, never stored by the App."
     },
     "errorCode": {
@@ -441,7 +454,9 @@
         "not_implemented",
         "unavailable",
         "timeout"
-      ]
+      ],
+      "enumPolicy": "closed",
+      "$comment": "A FOURTH COPY OF THE ERROR TAXONOMY, and `closed` here matches `common/error-envelope.schema.json`'s `errorCode` value-for-value. docs/decisions/0041: identical value sets carry identical policies, and the three copies in the envelope plus this one are all `closed` because adding a code is a decision rather than an evolution — the envelope's discriminated union depends on the compiler refusing a retry time beside `not_found`, and an unknown arm would gut it.\n\n*** THIS COPY IS WHY THE POLICY CHECK IS SCOPED TO THE CORPUS RATHER THAN TO THE GENERATOR'S REACH. *** No contract references this registry schema, so the type generator never opens it — and it was the ONLY live divergence the duplicate-policy check found on its first run. **Inert is not the same as harmless:** a manifest author reads this file, and a copy that said the taxonomy was open would license an App to invent a thirteenth code."
     },
     "entity": {
       "type": "object",
@@ -484,7 +499,9 @@
                   "money",
                   "json",
                   "reference"
-                ]
+                ],
+                "enumPolicy": "closed",
+                "$comment": "`closed`: this is the platform's storage type vocabulary, and every member has to be mapped to a column type, a serialisation and a validator before an App may name it. A type the platform cannot store is not a type — so an unknown arm here is not tolerance, it is an App declaring a schema the platform is unable to create.\n\nNEAR-DUPLICATE THE CHECK DOES NOT COMPARE: registries/capability-manifest.schema.json's configuration-parameter `type` shares this field NAME and three of its values ('string', 'integer', 'boolean') and is a different set for a different subject — nine storage types here, five config-parameter types there, with 'enum' and 'secret-ref' appearing only there. The duplicate-policy check is keyed on the VALUE SET, so it will never compare these two, and it should not: agreeing them would be the mistake of harmonising two rules that merely look alike (workflow.md §12). Recorded because a future editor adding a value to one will find nothing pointing at the other."
               },
               "classification": { "$ref": "#/$defs/entityFieldClassification" },
               "required": { "type": "boolean", "default": false },
@@ -561,20 +578,29 @@
         "exposure": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string", "enum": ["internal", "public", "mcp"] },
+          "items": {
+            "type": "string",
+            "enum": ["internal", "public", "mcp"],
+            "enumPolicy": "closed",
+            "$comment": "`closed`: each member names a SURFACE the platform has to actually expose the Action on — an internal route, a public route, an MCP tool. A value the platform does not recognise names no surface, so the only readings available are 'expose it somewhere' and 'expose it nowhere', and the first is a manifest widening its own reach by inventing a word. This field's whole design is opt-in and fail-closed, and an unknown arm would be the one place it stopped being.\n\nSTRICT SUPERSET OF `$defs/operations.items.surface` ['internal','public'], and the value-set-keyed duplicate check compares neither pair — it matches on equality, so a superset relation is invisible to it. That is the subset case the check does not cover, recorded here and on `$defs/entityFieldClassification` as the same gap seen twice."
+          },
           "default": ["internal"],
           "description": "Opt-in. Absent means internal only: nothing becomes public or AI-callable by accident."
         },
         "audit": {
           "type": "boolean",
-          "description": "Must be true for 'sensitive' and 'critical' actions."
+          "description": "MUST BE TRUE FOR ANY ACTION WHOSE SENSITIVITY IS NOT 'read' OR 'write'. Stated as the exception rather than as the pair ('sensitive' and 'critical') so that this sentence and the predicate that enforces it say the same thing — including about a rung nobody has added yet. Reworded 2026-09-10 with that predicate; the pair form was correct and would have gone stale the moment the ladder grew."
         }
       },
       "allOf": [
         {
+          "$comment": "The audit predicate. 'Must be true for sensitive and critical actions' is stated in the `audit` description; THIS is what enforces it, and it is keyed on the EXCEPTION rather than on the members (architecture.md §3a-i). See the `$comment` on the `sensitivity` subschema below for why `read` and `write` are the safe half to enumerate.\n\n*** THIS PREDICATE FAILED OPEN UNTIL 2026-09-10, AND WHAT KEPT IT OPEN WAS A PARAGRAPH RIGHT HERE ASSERTING THE REPAIR WAS IMPOSSIBLE. THE HISTORY IS KEPT BECAUSE THE DISMISSAL IS THE LESSON, NOT THE BUG. ***\n\nThe old form matched `enum: [\"sensitive\", \"critical\"]` — the MEMBERS. Add a rung above `critical` and the predicate would not match it, the `then` would never fire, and THE MOST SENSITIVE ACTION IN THE SYSTEM WOULD INSTALL WITH NO AUDIT REQUIREMENT. Nothing would have gone red: the parent's policy still `closed`, the subset still `closed`, the two declarations agreeing with each other while covering strictly less than before.\n\nAND THIS COMMENT ARGUED, AT LENGTH AND PRECISELY, THAT NOTHING COULD BE DONE ABOUT IT. Verbatim, so it is not quietly rewritten: 'THE SAME REPAIR IS NOT AVAILABLE HERE... the safe default would be to REQUIRE audit on any rung above write, and above is an ordering this enum does not carry — a JSON Schema enum is a set, not a ladder, so the rungs cannot be compared. The obligation is therefore assigned to a person rather than encoded.'\n\n*** EVERY CLAUSE OF THAT IS TRUE AND THE CONCLUSION IS FALSE. *** A JSON Schema enum is indeed a set and the rungs indeed cannot be compared — AND NO COMPARISON WAS NEEDED. The repair required the EXCEPTION SET, which here is two values (`read`, `write`) at the stable bottom of the ladder, enumerated positively and negated. The argument reached for ORDERING because the sibling `$defs/lifecycle` predicate had used a single `const` exception, and never asked whether an exception could be a SET.\n\nSO IT IS architecture.md §3b EXACTLY, AND FOUND BY REVIEW RATHER THAN BY READING: an assertion that a known problem cannot be solved needs the same scrutiny as a claim that it can, and THE PRECISION IS WHAT MADE IT SURVIVE. A hedge would have invited someone to check. A specific, correct-sounding impossibility argument — with a worked contrast against a sibling predicate — told every subsequent reader the question was settled. The author had just written the sibling repair and was the worst-placed person to see its mirror image (§3b's closing clause, demonstrated on the person who cited it).\n\nWHAT STILL HOLDS FROM THE OLD TEXT, because it was right about the keyword: `enumPolicy: closed` on `$defs/sensitivity` MAKES ADDING A RUNG A DECISION. It does not make a predicate cover the rung that decision adds. A reader meeting `closed` must not conclude a downstream predicate is guarded — that is what the predicate's own shape has to say, and now does.",
           "if": {
             "properties": {
-              "sensitivity": { "enum": ["sensitive", "critical"] }
+              "sensitivity": {
+                "not": { "enum": ["read", "write"] },
+                "$comment": "THE EXCEPTION SET, NOT THE MEMBER SET, AND THAT IS THE WHOLE REPAIR. This predicate reads 'anything that is NOT read or write requires audit', so `sensitive` and `critical` are caught by the DEFAULT rather than by being named — and so is any rung nobody has invented yet. architecture.md §3a-i.\n\nWHY THE EXCEPTION SIDE IS THE SAFE SIDE TO ENUMERATE HERE: `read` and `write` are the STABLE BOTTOM of the ladder. A new sensitivity level is added ABOVE `critical`, not below `write` — nobody proposes a rung less consequential than reading — so the enumerated set is the half that does not move, and the open half is the half that requires audit.\n\n*** THIS NODE CARRIES NO `enumPolicy`, DELIBERATELY, AND THAT IS THE ONLY ENUM IN THE CORPUS THAT DOES NOT. DO NOT ADD ONE. *** Ruled 2026-09-10.\n\nIT DID CARRY ONE, declared on the reasoning that 0041 admitted no exemption. 0041 NOW HAS ONE AND IT IS THE ARGUMENT THIS COMMENT ALREADY MADE: `enumPolicy` decides WHAT THE GENERATOR EMITS — `closed` emits the exact union, `extensible` emits it plus an unknown arm — and A CONSTRAINT-POSITION ENUM EMITS NOTHING AT ALL. There is no type, so no client sees a union, so `closed` and `extensible` have no consequence to choose between. The sentence justifying the declaration — 'this is a predicate over `$defs/sensitivity`, not a domain of its own' — was the argument for it needing no policy, written while declaring one.\n\nAND KEEPING IT WAS ACTIVELY HARMFUL, WHICH IS WHY THIS IS A RULING RATHER THAN A TIDY-UP. `enumPolicy` sat as a sibling of `not` while every other instance in the corpus is a sibling of `enum` — ONE KEYWORD, TWO PLACEMENTS, each locally coherent (architecture.md §1a's exact shape). A checker looking beside the `enum` key reported this node as UNDECLARED while it was declared, and a reader meeting the odd one out would reasonably 'fix' it into agreement with the majority. THE RULE IS NOW SINGLE AND HAS NO EXCEPTIONS TO REMEMBER: `enumPolicy` is a sibling of `enum` and governs an emitted type. A node where it would govern nothing does not carry it.\n\nWHAT THE GENERATOR DOES WITH THIS NODE: nothing, and that is checked rather than assumed. `countCorpusShapes` counts enums under `not`/`if`/`then`/`else` into a SEPARATE, PRINTED `constraint-position enums (EXCLUDED)` figure, so this one is visible in every run and is not silently dropped from the corpus. Counting it in the main total is what made `enumsExamined === enumsInCorpus` unsatisfiable — 38 against a target of 39 — so the phase-2 'DUE' arm could never print."
+              }
             },
             "required": ["sensitivity"]
           },

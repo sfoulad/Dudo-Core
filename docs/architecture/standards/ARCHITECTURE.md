@@ -115,10 +115,46 @@ describe, each skipping stages, each argued in its own record.
 
 | Class | Record | Stages 1–9 it runs | Where |
 |---|---|---|---|
-| **Pre-authentication entry point** | `0014` §B | **None of them.** No principal, no tenant, no permission, no Action. Five paths, closed union, never manifest-declarable | `platform/core/identity/pre-auth-registry.ts:95–100`, dispatched at `platform/core/http/api.ts:197–233` |
-| **Session route** | `0021` | Stage 1 **at session level only**. No principal, no tenant, no permission | `platform/core/identity/session-routes.ts:62–64`, dispatched at `api.ts:252–288` |
-| **Platform route** | `0025` decision 3 | Stages 1, 3, 4, 5, 8. **No stage 2** — no tenant, deliberately | `platform/core/platform/platform-routes.ts:332–709`, dispatched at `api.ts:321–379` |
-| **Action** | this table | All nine, unchanged | `api.ts:499–511` → `platform/core/action/pipeline.ts` |
+| **Pre-authentication entry point** | `0014` §B | **None of them.** No principal, no tenant, no permission, no Action. Five paths, closed union, never manifest-declarable | The `PreAuthEntryPointId` union and `preAuthEntryPoints()` in `platform/core/identity/pre-auth-registry.ts`; dispatched from the `matchPreAuthEntryPoint` branch in `platform/core/http/api.ts` |
+| **Session route** | `0021` | Stage 1 **at session level only**. No principal, no tenant, no permission | The `SessionRouteId` union and `sessionRoutes()` in `platform/core/identity/session-routes.ts`; dispatched from the `matchSessionRoute` branch in `api.ts` |
+| **Platform route** | `0025` decision 3 | Stages 1, 3, 4, 5, 8. **No stage 2** — no tenant, deliberately | The frozen `ROUTES` array in `platform/core/platform/platform-routes.ts`; dispatched from the `matchPlatformRoute` branch in `api.ts` |
+| **Action** | this table | All nine, unchanged | The `invokeAction` call in `api.ts` → `platform/core/action/pipeline.ts` |
+
+> **DE-NUMBERED 2026-09-09, AND THE RANGES WERE NOT REPLACED WITH BIGGER RANGES.** Every cell above
+> carried a line range — `pre-auth-registry.ts:95–100`, `session-routes.ts:62–64`,
+> `platform-routes.ts:332–709`, `api.ts:499–511`, plus four dispatch ranges. **Renumbering buys a
+> few days and rots identically**, so each now names the file and the exported symbol, which is
+> what a reader can check. `architecture.md` §3c: *in a file of repeated same-shaped blocks a line
+> number is not an identifier.*
+>
+> **THE PLATFORM RANGE HAD ALREADY GONE WRONG, AND BY MORE THAN ONE ROUTE.** `ROUTES` runs to line
+> 805 today and the range stopped at 709, so **it covered 11 of the 15 platform routes** —
+> `templates.create`, `templates.list`, `templates.read` and `organizations.identity.update` all
+> sit below it. It was accurate when this section was written on 2026-09-06 and the array has
+> grown twice since.
+>
+> **THAT IS A DIFFERENT FAILURE FROM A MISCITED PIN AND THE DIFFERENCE MATTERS.** A pin quoting a
+> value from the wrong block **misattributes** — `§3c`'s worst variant. A range naming where a
+> table lives **UNDER-COVERS**: it does not error, nothing goes red, and **it reads exactly like a
+> correct citation**, because an agent that follows it gets a real answer to a silently truncated
+> question. That is `workflow.md` §11a's *"a floor proves the check found SOMETHING, not
+> EVERYTHING"* wearing a citation's clothes, and **this repository has no check that catches a
+> pointer resolving to less than the thing it names.**
+>
+> **AND THE LARGER DEFECT WAS NOT STALENESS AT ALL — THIS TABLE WAS NEVER INTERNALLY CONSISTENT.**
+> Rows 1 and 2 cited **id union types** (`PreAuthEntryPointId:95–100`, `SessionRouteId:62–64`) while
+> row 3 cited **the routes array** (`platform-routes.ts:332–709`). Those are **two different notions
+> of "where the class lives"** — a closed union of identifiers, and the table of route definitions
+> — sitting in adjacent rows with **nothing in the citations to reveal that the question had been
+> answered two different ways.** A reader comparing rows 1 and 3 was comparing two kinds of answer
+> and had no way to know it, **in the document whose job is telling an agent where the request
+> classes are.** Every row now names both where the ids are declared and where the routes are
+> defined, so the rows answer the same question.
+>
+> **De-numbering removes this class of defect rather than policing it.** A check over ranges would
+> have to know what each range *should* span — which is the thing the range was standing in for —
+> so there is no cheap validator here and none is proposed. Where a citation can be made
+> unfalsifiable-by-inspection into one a reader can check, that is the fix.
 
 **The skips are the point, not a shortcut, and the argument is worth carrying here rather
 than leaving in three records.** `0021`, on refusing a tenant-optional branch inside the

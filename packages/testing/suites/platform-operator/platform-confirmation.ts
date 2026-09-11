@@ -91,7 +91,7 @@ import {
   REAUTH_IDENTIFIER_FIELD,
 } from '../../../../platform/core/confirmation/confirmation-gate.ts';
 import { ok } from '../../../../platform/core/kernel/result.ts';
-import { deriveLoginCredential as adminDerive } from '../../../../platform/admin/src/api/kdf.ts';
+import { deriveLoginCredential as adminDerive } from '@dudo/client-kdf';
 
 /**
  * ===========================================================================================

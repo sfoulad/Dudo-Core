@@ -11,13 +11,53 @@
  *   denies it, with the same codes an unknown principal receives."
  *
  * BOTH HALVES OF THAT SENTENCE ARE TESTED SEPARATELY BELOW, because they are enforced in two
- * different files and only one of them exists. The platform half is
- * `platform/core/platform/platform-authority.ts`, which reads both tables on every request. The
- * ACTION half would have to be `platform/core/identity/session-resolution.ts`, which knows nothing
- * about `platform_operator` — and `platform-authority.ts`'s own header says so. The case at the
- * bottom of this file asserts the contract's requirement rather than the implementation's current
- * behaviour, and it is expected to be RED. A test that described the gap as acceptable would be
- * the suite agreeing to the defect.
+ * different files. The platform half is `platform/core/platform/platform-authority.ts`, which
+ * reads both tables on every request. The ACTION half is
+ * `platform/core/identity/session-resolution.ts`.
+ *
+ * ===========================================================================================
+ * ⚠ THIS PARAGRAPH SAID THE ACTION HALF DID NOT EXIST AND THAT ITS CASE WAS "EXPECTED TO BE
+ * RED". BOTH WERE TRUE WHEN WRITTEN AND BOTH ARE FALSE NOW. Corrected 2026-09-11.
+ * ===========================================================================================
+ *
+ * It read: *"only one of them exists… `session-resolution.ts`, which KNOWS NOTHING about
+ * `platform_operator`… the case at the bottom of this file asserts the contract's requirement
+ * rather than the implementation's current behaviour, and IT IS EXPECTED TO BE RED."*
+ *
+ * **The Action half was built. That case passes.** `session-resolution.ts` now splits the fact from
+ * the refusal — `liveSession` refuses with the Action class's `unauthenticated`, and
+ * `resolvePrincipalId` passes the principal through to `platform-authority.ts`, which refuses with
+ * this class's `forbidden`. The comment at the platform-half case records that repair in full.
+ *
+ * *** THE DRIFT DIRECTION IS THE ONE NOBODY CATCHES, AND IT IS THE OPPOSITE OF `no-tenant-reach.ts`'s
+ * *** — SR-18. *** There, a certificate read WIDER than the property it proved. Here a header
+ * claimed a GAP THAT HAD BEEN CLOSED, so the certificate read NARROWER. **`workflow.md` §11a:
+ * an optimistic stale claim is caught by the first person who relies on it; a PESSIMISTIC one is
+ * believed indefinitely, because acting on it always looks like the safe choice.** A reader
+ * auditing `0024` would have concluded the Action side was unenforced — and either built a
+ * redundant guard or scoped a security claim around a hole that is not there.
+ *
+ * **Nothing about the suite changed. The sentence describing it did not keep up**, and the case it
+ * described as expected-red has been quietly green for long enough that nobody noticed the
+ * contradiction between the header and the run.
+ *
+ * *** AND THE ORIGINAL SENTENCE'S PRINCIPLE STANDS AND IS NOT STRUCK: *** a test that described the
+ * gap as acceptable would have been the suite agreeing to the defect. **Asserting the contract's
+ * requirement against an implementation that did not yet meet it is what made the repair
+ * necessary rather than optional** — the red was the mechanism, and it worked.
+ *
+ * ===========================================================================================
+ * THE ROUTE COVERAGE IS DERIVED, WHICH IS WHY NEW ROUTES NEED NO EDIT HERE
+ * ===========================================================================================
+ *
+ * `ROUTE_IDS` is `platformRoutes().map(route => route.id)` — **read from the live route table, not
+ * transcribed** — and four cases below loop it. So the five Template lifecycle routes and both
+ * `0042` count routes were covered the moment they were registered, with no change to this file.
+ *
+ * **Stated because a security review could not tell from outside**, and because the day someone
+ * replaces that line with a literal array is the day this suite silently stops covering whatever
+ * ships next. The header is the only place that says the coverage is derived; the line itself
+ * looks like an ordinary constant.
  *
  * ===========================================================================================
  * WHY "DENIED" IS NOT ENOUGH, AND WHAT THE THIRD IDENTIFIER IS FOR
@@ -408,6 +448,51 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       },
       async recordAction() {
         return ok(undefined);
+      },
+      // ===================================================================================
+      // ADDED 2026-09-11 with the Template lifecycle port. *** THEY THROW, AND IN THIS SUITE
+      // THAT IS NOT A STYLE CHOICE. ***
+      // ===================================================================================
+      //
+      // This file is where `0024`'s mutual exclusion lives. **A double that answers a PLAUSIBLE
+      // value for `countOrganizationsUsingTemplate` — `ok(0)` is the obvious one — is a double
+      // that could let an isolation assertion pass over a shape the invariant should refuse.**
+      // Zero organizations use the Template is a perfectly reasonable answer and it is
+      // indistinguishable from the method never having been consulted.
+      //
+      // `setOrganizationTemplate` is worse, because it is a WRITE into an Organization's row. A
+      // stub returning success in a suite whose entire subject is that platform-side and
+      // tenant-side reach stay separate would be **manufacturing the outcome the suite exists to
+      // rule out**, and it would do it silently.
+      //
+      // Neither is reached: this case's membership write is refused at the receipt, long before
+      // any Template call. **Throwing costs nothing while that stays true and is the only thing
+      // that says so the moment it stops.**
+      async countOrganizationsUsingTemplate(): Promise<never> {
+        throw new Error(
+          '0024 MUTUAL EXCLUSION: a Template read was reached from a double built for the ' +
+            'membership-refusal path. This suite proves platform-side and tenant-side reach stay ' +
+            'separate; a plausible answer here would have let that assertion pass over a shape it ' +
+            'should refuse. Do not replace this with ok(0) — establish why the path now reaches it.',
+        );
+      },
+      async setOrganizationTemplate(): Promise<never> {
+        throw new Error(
+          '0024 MUTUAL EXCLUSION: a WRITE to an Organization row was reached from a double whose ' +
+            'case asserts the membership write is refused at the receipt. If this fires, the ' +
+            'refusal did not happen and a success returned here would have concealed it.',
+        );
+      },
+      // ADDED 2026-09-11 with `0042`. **`ok(0)` here would be the most cooperative possible answer
+      // in the suite least able to afford one:** a count of Organizations is exactly the shape
+      // 0024 separates platform-side reach from tenant-side reach over, and zero is indistinguishable
+      // from never having been asked.
+      async countOrganizations(): Promise<never> {
+        throw new Error(
+          '0024 MUTUAL EXCLUSION: an Organization COUNT was reached from a double built for the ' +
+            'membership-refusal path. Do not replace this with ok(0) — establish why the path now ' +
+            'reaches it.',
+        );
       },
     };
     expectError(

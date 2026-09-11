@@ -35,9 +35,13 @@ against Dudo's palette." See `src/styles/index.css`.
 - Copyright (c) shadcn
 
 Components are **copied into the codebase by design** rather than installed as a package —
-that is shadcn/ui's distribution model, and ADR 0010 adopts it on that basis. The copies in
-this directory are `src/components/ui/button.tsx` and `src/components/ui/field.tsx`, both
-modified for Dudo's tokens and for logical (RTL-safe) properties.
+that is shadcn/ui's distribution model, and ADR 0010 adopts it on that basis.
+
+**THE COPIES ARE NO LONGER IN THIS DIRECTORY.** They were `src/components/ui/button.tsx` and
+`src/components/ui/field.tsx`; ADR 0040 merged them with `platform/web`'s equivalents into
+**`packages/ui` (`@dudo/ui`)**, which this console consumes as a workspace dependency. Both
+remain modified for Dudo's tokens and for logical (RTL-safe) properties, and **the attribution
+travels with the code** — `packages/ui` carries its own notice.
 
 ## Runtime and build dependencies
 
@@ -59,6 +63,16 @@ require. Licences read from each package's own `package.json` and `LICENSE` in
 | `@tailwindcss/vite` | 4.3.3 | MIT | The v4 Tailwind plugin for Vite. |
 | `@types/react` | 19.2.18 | MIT | Type definitions (DefinitelyTyped). |
 | `@types/react-dom` | 19.2.7 | MIT | Type definitions (DefinitelyTyped). |
+| `@tanstack/react-router` | 1.170.33 | MIT | ADR 0036. Routing; replaced a hand-rolled hash router. |
+| `@tanstack/react-query` | 5.102.8 | MIT | ADR 0036. Server state; every read and write goes through `src/lib/queries.ts`. |
+
+**Three of the four workspace packages this console depends on are Dudo's own and carry no
+third-party obligation of their own beyond what their notices record:** `@dudo/ui` (see
+`packages/ui/NOTICE.md` — it holds the shadcn/ui copies), `@dudo/client-kdf` (zero
+dependencies), and `@dudo/contracts` (types only, zero dependencies).
+
+`@tanstack/react-table` is **not** a dependency of this console. It reaches the build through
+`@dudo/ui`, which declares it, and is recorded there.
 
 `class-variance-authority` and `typescript` are **Apache-2.0, not MIT**. Both are permissive
 and compatible; the distinction is recorded because ADR 0010 requires each licence to be
@@ -67,13 +81,22 @@ gets missed.
 
 ### Deliberately not installed
 
+> **⚠ THIS TABLE LISTED `@tanstack/react-router`, `@tanstack/react-query` AND
+> `@tanstack/react-table` AS NOT INSTALLED WHILE TWO OF THEM WERE RUNNING THE CONSOLE.**
+> Corrected 2026-09-09. ADR 0036 approved them and they landed; nothing sent anyone back to
+> the file that asserted their absence.
+>
+> **A "not installed" table is a claim about ABSENCE, and it rots in the direction nobody
+> checks.** A wrong entry in the table above is caught the moment someone needs the licence.
+> A wrong entry *here* is only caught by someone who already knows the package is present —
+> and for a NOTICE file on a public repository the failure is **under-disclosure**, which is
+> the direction that matters. **Adding a dependency means editing two tables in this file.**
+
 | Package | Why not |
 |---|---|
 | `axios` | ADR 0010: "The platform runs on `fetch`. A second HTTP client is a second place for auth headers and error handling to diverge." |
 | `@faker-js/faker` | Fabricated data. Removed by 0010 and never reintroduced. |
-| `@tanstack/react-router` | The shell has four flat, parameterless sections. 0010 permits TanStack "only where actually required"; it is not required yet. See `src/lib/router.ts`. |
-| `@tanstack/react-query` | Nothing in the shell fetches data. |
-| `@tanstack/react-table` | Nothing in the shell renders a table. |
+| `@tanstack/react-table` | Not a direct dependency. It arrives through `@dudo/ui`, which declares it for the headless table state, and is recorded in `packages/ui/NOTICE.md`. |
 | `zustand` | No client state beyond two hooks. |
 | `recharts` | 0010: "Only if the dashboard genuinely charts something. Not for decoration." There is no dashboard. |
 | Radix UI packages | The shell has no dialog, menu, combobox or popover. Adding one is the moment to add Radix. |

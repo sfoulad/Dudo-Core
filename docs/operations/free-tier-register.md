@@ -31,13 +31,24 @@ Current usage is **0** for every row: no Cloudflare resource has been created, a
 workflow exists. `Last verified` is the date the *allowance* was checked against the
 official source, not the date usage was measured.
 
-| Service | Source | Free allowance | Expected MVP usage | Current | Warn (70%) | Hard stop | Owner | Last verified |
+> **The fourth column read "Expected MVP usage" until 2026-09-08.** The MVP framing was
+> withdrawn by `0030` on 2026-09-06 and the scope is now the full system, built admin-first
+> (`0035`). **This is not only a wording fix: the figures under that heading were budgeted
+> against a smaller system than the one being built**, and each is owed a re-check against
+> Milestones 1–6 rather than inherited. `0008` and its zero-cost ceiling are unchanged.
+>
+> **The `D1 — databases` row allocates slot 3 to "combined staging". There is no staging
+> environment** —
+> the user ruled on 2026-09-08 that `dudo.work` **is** the test environment (`0035`), so
+> that allocation describes a database nothing uses.
+
+| Service | Source | Free allowance | Expected usage (full system) | Current | Warn (70%) | Hard stop | Owner | Last verified |
 |---|---|---|---|---|---|---|---|---|
 | **D1 — databases** | `developers.cloudflare.com/d1/platform/limits/` | **10 per account** | **4 allocated of 10** — 1 control-plane/tenant directory (**now schema-defined by `0014` §C: principal, organization, organization_membership, session, tenant_directory — slot 1 was already reserved for it, so this is not a fifth database**), 2 production shared tenant data, 3 combined staging, 4 reserved migration/recovery; 5–10 unallocated reserve (`0006` §0.3). Local dev and CI consume **no** remote slots | 0 | 7 | Refuse to create an 11th; degrade rather than upgrade | core-agent | 2026-09-02 |
 | **D1 — size per database** | same | **500 MB** | **Production shared tenant-data database: 500 MB ceiling.** One shared database holds every Organization's business data (`0006` §0.1). Files and large exports go to R2, never here | 0 | 350 MB (70%) | 425 MB (85%) stop onboarding new Organizations; 450 MB (90%) emergency gate — essential existing-customer operations only. **Never delete financial, audit, or customer data to stay free** | core-agent | 2026-09-01 |
 | **D1 — total storage** | same | **5 GB** | Sum of the 4 allocated databases; production shared DB is the dominant consumer | 0 | 3.5 GB | Block further growth, notify user | core-agent | 2026-09-01 |
 | D1 — queries per invocation | same | 50 | < 50 by design | 0 | 35 | Fail the request, do not batch around it | core-agent | 2026-09-01 |
-| **D1 — rows READ per day** | `developers.cloudflare.com/d1/platform/pricing/` | **5,000,000 / day** | Point lookups and bounded pages by design | 0 | 3.5M | **Queries FAIL account-wide — not billed.** See the warning below | core-agent | **2026-09-02** |
+| **D1 — rows READ per day** | `developers.cloudflare.com/d1/platform/pricing/` | **5,000,000 / day** | ⚠ **NO LONGER "bounded by design" — see the note below this table.** Four routes now scan `organization` in full, and their cost is a function of the customer count | 0 | 3.5M | **Queries FAIL account-wide — not billed.** See the warning below | core-agent | **2026-09-11** |
 | **D1 — rows WRITTEN per day** | same | **100,000 / day** | **Governed by `0014` §A: Dudo admits at most 80,000 estimated row-writes/day, leaving 20,000 as margin that is NOT spendable.** Split 60,000 business · 10,000 security · 10,000 system | 0 | 70,000 | **Queries FAIL account-wide — not billed.** Every writer reserves worst-case cost through one admission port; direct D1 writes outside it cannot be expressed | core-agent | **2026-09-03** |
 | **D1 — Dudo's business allocation** | `0014` §A.5 | **60,000 / day** of the 80,000 | Customer mutations and their audit rows. **A Customer create costs 8** — D1 bills an index row per indexed column, so `customer` 3 + `audit_event` 5. Per-Organization ceiling **10,000/day → 1,250 creates** | 0 | 42,000 | `429` + retry time; **reads stay available** | core-agent | **2026-09-03** |
 | **D1 — Dudo's security allocation** | `0013`, `0014` §A.5 | **10,000 / day** | Denial summaries. Four all-day campaigns commit 9,216 of it | 0 | 7,000 | Writes stop, counting continues, **caller's response unchanged** — deliberately not a refusal | core-agent | **2026-09-03** |
@@ -54,6 +65,54 @@ official source, not the date usage was measured.
 | **CodeRabbit** | `coderabbit.ai/pricing` | **PUBLISHED OFFER ONLY:** published as free for public repositories; verified against the pricing page on 2026-09-01. **Subject to provider terms and to separate account-level verification.** This is the advertised offer, **not** evidence about Dudo's account | Automated PR review on `Dudo-Core`. **Active**: real reviews completed on `c09693f`, `477753f`, `1b8e2fa`, `685b99e`, `3cc5018` | active — **account plan UNVERIFIED** | n/a | Rate limiting only, which is **acceptable and must never trigger an upgrade**. **Dudo's own plan, billing status, paid add-ons and spending configuration remain UNVERIFIED** — C5 / B-CodeRabbit, blocked on user dashboard evidence | Team Lead | Offer 2026-09-01; **account state not verified** |
 | **GitHub Packages** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not publish packages. Not verified in detail because it is prohibited, not merely unused | Team Lead | 2026-09-01 (prohibited) |
 | **GitHub Codespaces** | `docs.github.com` billing | Free allowance exists; **not used and not planned** | **None planned** | 0 | n/a | Do not use. Prohibited by `0008` | Team Lead | 2026-09-01 (prohibited) |
+
+> ## ⚠ ROWS READ: "BOUNDED BY DESIGN" WAS TRUE UNTIL 2026-09-11 AND IS NOW FALSE
+>
+> **Found by `security-agent` (SR-15) during a review commissioned for something else.** The
+> justification in that row had stood since **2026-09-02**, and it went false without anyone editing
+> it — which is the residue class this whole register is exposed to, since **a justification column is
+> prose and nothing derives it.**
+>
+> **WRITES ARE BOUNDED FOUR WAYS. READS ARE BOUNDED BY NOTHING.**
+>
+> | | layers |
+> |---|---|
+> | **Writes** | `D1_FREE_DAILY_ROW_WRITES` 100,000 → Dudo's 80,000 → `CONTROL_PLANE_DAILY_ROW_WRITES` 3,000 → `PER_PRINCIPAL_DAILY_ROW_WRITES` 600, plus per-Organization 10,000 and platform-originated 1,000 |
+> | **Reads** | **NONE.** A search of `platform/core/**` for `rowsRead`, `reserveReads`, `readBudget`, `ROWS_READ` finds no read admission control anywhere in this codebase |
+>
+> **Four routes now scan `organization` in full**, and `0013_organization_template.sql` deliberately
+> created no index on `template_id` — *"add it with the route that needs it"* — **and the route that
+> needs it is here while the index is not**: `platform.templates.usage`, the counts embedded in the
+> `update` / `retire` / `restore` responses, and `platform.organizations.count`.
+>
+> **The threshold, derived from the constants rather than from a contract's declared `maxRowWrites`:**
+>
+> ```
+> PER_PRINCIPAL_DAILY_ROW_WRITES 600 / PLATFORM_OPERATOR_ACTION_ROW_WRITES 4 = 150 calls/operator/day
+> 150 × operators × N_organizations >= 5,000,000  ->  rows-read exhausted
+>     1 operator  ->  N ~= 33,300        3 operators ->  N ~= 11,100        6 -> ~= 5,600
+> ```
+>
+> **`security-agent` first reported these thresholds at half these values and corrected itself** — it
+> had taken the call rate from the contract's declared `maxRowWrites: 2` rather than from
+> `PLATFORM_OPERATOR_ACTION_ROW_WRITES = 4`, which is what the dispatcher actually charges. **The
+> wrong figures were PESSIMISTIC**, which is `§11a`'s rot direction that nobody audits: this register
+> would have been re-verified against a number that was wrong in our favour, and acting on it would
+> have looked like diligence.
+>
+> **THE CONSEQUENCE IS THE HARD-STOP COLUMN OF THIS ROW AND IT IS NOT THIS ROUTE DEGRADING.**
+> *"Queries FAIL account-wide — not billed"* means **every D1 query, for every tenant, including
+> session creation.** The symptom is *"nobody can log in"* and the cause is a Template screen. Same
+> shape `write-admission.ts` already records for the Durable Object ledger, on a different allowance.
+>
+> **The mechanical fix is an index on `organization(template_id)`. It is a MIGRATION and therefore the
+> user's, every time** (`security.md` §7). It is named here with the route that wants it rather than
+> left as an observation.
+>
+> **AND THE GENERAL ITEM IS LARGER THAN THIS MILESTONE:** this platform has **no read-side ceiling at
+> all**, and this is the first time a route's read cost has been a function of the customer count.
+> **Not scoped here. Flagged, with an owner: the Team Lead, before Milestone 2 adds tenant-facing
+> reads at customer scale.**
 
 > ## ⚠ THE DURABLE OBJECT BUDGET IS SHARED, AND THAT IS A HAZARD, NOT AN ALLOWANCE
 >

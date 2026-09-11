@@ -1,0 +1,67 @@
+---
+# THE NEGATIVE CONTROL FOR THE DRIFT CHECK. NOT A REAL CONTRACT.
+#
+# `docs/decisions/0037` requirement 3, and `.claude/rules/workflow.md` §11a's remedy:
+# "constructing the input the check should fail on is the only thing that distinguishes
+# sound-by-design from sound-by-accident, because both look identical while passing."
+#
+# This pair exists so that `generate-types.mjs --self-test` can prove the drift check is capable
+# of going red. The committed output beside it in `generated/` is DELIBERATELY STALE and must stay
+# stale. A future reader who "fixes" it has deleted the only evidence the check works.
+#
+# IT IS ALSO THE ADMISSION CHECK'S POSITIVE CONTROL. It declares all five of the things
+# `admitContract` requires — a request shape, a response shape, error cases, an authorization
+# expectation and a tenant scope — so a self-test that refuses this contract is reporting a bug in
+# the admission check rather than in the fixture.
+#
+# NOTHING IMPORTS IT, NO ROUTE SERVES IT, AND THE PERMISSION IT NAMES DOES NOT EXIST IN
+# `permission-catalog.yaml` ON PURPOSE. `0007` rule 4 says an unregistered permission does not
+# exist; this fixture must never be mistaken for a real declaration, and a name that cannot
+# resolve is the cheapest way to guarantee that.
+
+contractVersion: 1
+apiVersion: v1
+namespace: fixture
+domain: fixture
+status: proposed
+updated: "2026-09-08"
+documentsExistingImplementation: none
+
+# ---------------------------------------------------------------------------
+# tenancy — present because `admitContract` requires it, and its absence is one of the five
+# refusals under test.
+# ---------------------------------------------------------------------------
+tenancy:
+  scope: >-
+    NONE. This fixture binds to no route and reaches no store. It is a test input for the
+    generator and has no tenant, no principal and no data.
+
+# ---------------------------------------------------------------------------
+# operations
+#
+# THE PROSE BELOW IS A TRAP FOR THE SCANNER, DELIBERATELY. This block scalar contains lines that
+# look exactly like YAML structure — a `permission:` and a `status:` at plausible indentation —
+# because `yaml-outline.mjs`'s block-scalar skipping is the one part of it that would fail
+# SILENTLY and CONFIDENTLY. If the scanner ever stops skipping block bodies, this fixture is what
+# notices: the outline would gain keys nothing declared.
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: fixture.Echo
+    title: "Echo — a fixture operation"
+    description: >-
+      A deliberately trivial operation whose only job is to have a shape.
+      permission: fixture.trap.should-never-be-read
+      status: accepted
+      errors: [this_is_prose_not_a_list]
+      The three lines above are PROSE INSIDE A BLOCK SCALAR. If any of them reaches the outline as
+      structure, the scanner is broken and this fixture is how you found out.
+    request: { schemaRef: "urn:dudo:schema:drift-fixture:1#/$defs/echoInput" }
+    response: { schemaRef: "urn:dudo:schema:drift-fixture:1#/$defs/echoOutput" }
+    errors: [invalid_argument, internal]
+    permission: fixture.echo.invoke
+    scope: none
+    sensitivity: read
+    idempotent: true
+    maxRowWrites: 0
+    httpStatusOnSuccess: 200

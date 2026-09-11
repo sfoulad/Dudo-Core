@@ -28,8 +28,62 @@ namespace: core
 domain: platform
 status: accepted
 acceptedBy: "Dudo Team Lead, 2026-09-05, recorded as docs/decisions/0027, with the CF-4 locale amendment applied. AMENDED 2026-09-06 by docs/decisions/0029, WHICH SUPERSEDES 0027's DEFINITION OF THE BOUND PARAMETER SET — the binding is body-minus-three UNION the route's declared path parameters. A reader arriving at 0027 for that definition has the superseded one; see theSUBMITTEDPARAMETERSAREDEFINED.recordedAs."
-updated: "2026-09-05"
+updated: "2026-09-09"
 documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. DECLARED, NEVER INFERRED FROM THE BLOCK KEY.
+# ---------------------------------------------------------------------------
+# *** THERE IS NO CONTRACT-LEVEL `requestClass` HERE, AND THAT IS THE CORRECTION RATHER THAN AN
+# OMISSION. IT IS DECLARED PER OPERATION, BELOW. ***
+#
+# This file carried `requestClass: platform` at the contract level, with a note saying the
+# Action-class route "carries `requestClass: action` when it lands, and this note is what stops
+# someone widening the contract-level value to cover it."
+#
+# THE NOTE STOPPED A PERSON. IT DID NOT STOP A TOOL THAT READS THE FIELD. This contract publishes
+# TWO operations — `platform.confirmations.request` and `core.confirmations.request` — and a
+# contract-level value applies to both, so the field was asserting `platform` for an ACTION-CLASS
+# route. `workflow.md` §12: prose describes, machine-readable fields instruct, and a comment
+# explaining why a field is not wrong does not stop the field being read.
+#
+# NOTHING WAS RED. `scripts/check-request-class.mjs` compares a declaration against the registry
+# Core registers the route in, and the Action-class route is not registered yet — so the
+# contradiction was scheduled rather than live, and would have arrived as a check failure on the
+# day someone built the route rather than on the day the wrong thing was written.
+#
+# `whereItLIVES.theTWOCHALLENGEROUTES` is why two classes are correct here: the challenge route is
+# ONE PER EXISTING CLASS THAT CONTAINS A CRITICAL OPERATION — "two today: one Action, one platform
+# route" — because confirming a `DeleteCustomer` needs a tenant and confirming a `credential.reset`
+# needs the absence of one. `0039` allows the per-operation form for exactly this case.
+
+# ---------------------------------------------------------------------------
+# tenancy — CONFIRMATION IS A PIPELINE CONCERN, SO ITS TENANT SCOPE IS THE HOST CLASS'S
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-09. This contract had no `tenancy:` block, and the absence was indistinguishable
+# from an oversight — the same defect as an absent `permission:` key.
+tenancy:
+  scope: >-
+    NONE FOR THE PUBLISHED ROUTE. `platform.confirmations.request` is a platform-class route: it
+    authenticates a principal, evaluates a permission, and obtains no tenant store.
+  whyThisContractCannotHaveONETenantScope: >-
+    BECAUSE CONFIRMATION IS NOT A ROUTE CLASS AND DELIBERATELY SO. theDECISION rules that it is a
+    PIPELINE CONCERN derived from the permission's `sensitivity`, enforced centrally, and NOT
+    DECLARABLE ANYWHERE ELSE. So the mechanism runs in every class that contains a critical
+    operation, and IT INHERITS THE TENANT SCOPE OF WHATEVER CLASS IT IS RUNNING IN: confirming a
+    `DeleteCustomer` needs exactly the context an Action needs, INCLUDING A TENANT; confirming a
+    `credential.reset` needs exactly the context a platform route needs, including the ABSENCE of
+    one. whyNOTAFIFTHROUTECLASS is explicit that a class containing both "would be a class with no
+    consistent context, which is the one thing a class is."
+  whatThisMEANSFORAREADER: >-
+    DO NOT READ "scope: NONE" AS A PROPERTY OF CONFIRMATION. It is a property of the ONE route
+    published here. The Action-class challenge, when it is built, is tenant-scoped like every other
+    Action, and the shared Core confirmation service is where every rule in this contract is
+    enforced for both.
+  theBINDINGISNOTTENANTSCOPED_ANDTHATISSEPARATE: >-
+    A confirmation is bound to one principal and ONE SESSION, never to a tenant. That is not a
+    tenancy statement and must not be read as one: a session belongs to a principal, and a platform
+    principal has no tenant at all. See theBinding.
 
 # ---------------------------------------------------------------------------
 # whatConfirmationPROVES — THE FIRST QUESTION THE TEAM LEAD ASKED. It has two answers.
@@ -289,6 +343,9 @@ operations:
   # =======================================================================================
   - id: platform.confirmations.request
     title: "Request a confirmation — platform route class"
+    # PER-OPERATION, docs/decisions/0039. This contract spans two classes; see the header for why a
+    # contract-level value asserted the wrong class for the operation below.
+    requestClass: platform
     method: POST
     path: "/api/v1/platform/confirmations"
     surface: platform
@@ -327,6 +384,12 @@ operations:
   # =======================================================================================
   - id: core.confirmations.request
     title: "Request a confirmation — Action class"
+    # *** `action`, NOT `platform`, AND THIS DECLARATION IS THE POINT OF THE PER-OPERATION FORM. ***
+    # A contract-level `requestClass: platform` covered this operation and asserted the wrong class
+    # for it — silently, because the route is not registered yet, so nothing could compare the
+    # declaration against a registry. It is declared here now rather than "when the route lands",
+    # which is what the header's note used to promise and what a note cannot enforce.
+    requestClass: action
     method: POST
     path: "/api/v1/confirmations"
     surface: public

@@ -1,0 +1,46 @@
+{
+  "name": "@dudo/ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dudo presentation primitives — shared by app.dudo.work and admin.dudo.work. NO AUTHORITY (ADR 0036, 0040).",
+  "//": [
+    "IT SHIPS TypeScript SOURCE, NOT A BUILD, AND THAT IS DELIBERATE.",
+    "",
+    "`exports` points at `.tsx` because both consumers are Vite applications that",
+    "already transpile TypeScript, and a workspace link is a symlink Vite follows",
+    "into its normal pipeline. A build step here would add an artifact that can be",
+    "stale — the one failure mode a shared package must not have, because a stale",
+    "copy is exactly the divergence 0040 exists to end.",
+    "",
+    "REACT IS A PEER DEPENDENCY, NOT A DEPENDENCY. Two copies of React in one page",
+    "is a broken application, not a slow one: hooks resolve against whichever copy",
+    "the importing module found, and the failure is an unmountable tree rather than",
+    "a compile error. Declaring it as a peer means the hosts supply it and npm",
+    "hoists exactly one.",
+    "",
+    "@tanstack/react-table IS A REAL DEPENDENCY and is the ONLY one of the six",
+    "approved libraries that belongs here. It is headless: it computes a column",
+    "model and renders nothing, so it carries no route, no request and no opinion",
+    "about who may look. Router and Query are FORBIDDEN here and check:ui-purity",
+    "enforces it — a primitive that routes or fetches has picked one of the two",
+    "administrations."
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check:ui-purity": "node scripts/check-ui-purity.mjs",
+    "verify": "npm run check:ui-purity"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "9.2.4",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.6.0"
+  },
+  "peerDependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

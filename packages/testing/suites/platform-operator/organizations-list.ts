@@ -152,6 +152,37 @@ export function buildOrganizationsListSuite(make: MakePlatformWorld = createPlat
           'MOST ONE member out. It takes a hash rather than an identifier, so it cannot be swept; ' +
           'it answers one or none, so it is not a search; and the route that calls it is bound to ' +
           'core.credential.reset, so a caller who may not reset may not resolve',
+        countOrganizationsUsingTemplate:
+          'ADDED 2026-09-11 for template-lifecycle-v1. One Template id in, a NUMBER out, and the ' +
+          'return type is the guarantee: `number` is a shape that cannot carry an identifier, so ' +
+          'this cannot become the Organization enumeration 0028 CO1 forbids arriving through a ' +
+          'different door. **AND security.md §2a IS THE ENTRY THAT MATTERS HERE, NOT THE SHAPE:** a ' +
+          'count is safe exactly when its consumer already holds enumeration over the counted ' +
+          'population, and a `core.template.read` holder does NOT enumerate Organizations — so this ' +
+          'count reaches PAST its consumer\'s right and is a new disclosure that owes its own ' +
+          '`sensitive` permission rather than borrowing the Template read. **A justification that ' +
+          'stopped at "it returns a number" would have been true and would have missed that.**',
+        countOrganizations:
+          'ADDED 2026-09-11 for docs/decisions/0042. No arguments, a NUMBER out, and it is the ' +
+          'MIRROR of countOrganizationsUsingTemplate rather than a repeat of it — security.md §2a ' +
+          'gives the two opposite answers and the difference is the whole rule. This one is gated ' +
+          'by core.organization.list, whose holder ALREADY enumerates every Organization, ' +
+          'deliberately, at sensitive. **A count that stays inside its consumer\'s enumeration ' +
+          'right discloses nothing obtainable more slowly by other means**, so it needs no new ' +
+          'permission; the adoption count reaches PAST its consumer\'s right and needed one. It ' +
+          'takes no filter and returns a scalar: a total that accepts a filter is a query, and a ' +
+          'breakdown transposes into the mapping 0028 Decision 1 refuses',
+        setOrganizationTemplate:
+          'ADDED 2026-09-11 for template-lifecycle-v1 PA-17. The second real write, and it takes a ' +
+          'reservation, so it cannot be reached without capacity having been charged. **IT WRITES ' +
+          'ONE COLUMN ON ONE CONTROL-PLANE `organization` ROW AND REACHES NO TENANT STORE.** That ' +
+          'is what keeps 0024 true across this feature: the tenant-side audit record for the same ' +
+          'operation goes into the named Organization\'s OWN database through ' +
+          'MemberResolutionPort.recordOrganizationAccess, which requires an OperatorWriteCharged ' +
+          'receipt. **The two writes live on two ports deliberately, and this port must not learn ' +
+          'how to do the other one** — a single method that did both would put tenant reach behind ' +
+          'a platform permission, which is the mutual exclusion failing quietly rather than loudly. ' +
+          '`null` CLEARS the Template and clearing is a real operation, not a hole',
       };
       const actualQuestions = Object.keys(world.store).sort();
       assertEqual(
