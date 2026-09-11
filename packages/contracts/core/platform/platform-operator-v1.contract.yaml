@@ -190,6 +190,51 @@ theClass:
         EVERY OPERATION IN THIS CLASS WRITES AN AUDIT RECORD. Not the sensitive ones, not the
         writes — every one, including core.template.list. There is no unaudited platform route and
         none may be added.
+      theWRITECEILINGISWHATBOUNDSTHEREADCOST_ANDTHATISANACCIDENT: >-
+        *** ADDED 2026-09-11. P4 IS DOING LOAD-BEARING WORK THIS RECORD CREDITED ONLY TO DETECTION,
+        AND WHOEVER REMOVES IT WILL HAVE A GOOD ARGUMENT. ***
+        Reads in this class are bounded by NOTHING of their own — no page cap on a count, no index on
+        the columns four routes now scan. What bounds them is that P4 makes every read a WRITE, so
+        every read is charged against the control-plane write ceiling and refused with
+        quota_exceeded at the limit. THE READ COST IS BOUNDED BY A CONTROL BUILT FOR ANOTHER PURPOSE.
+        *** SO THE OBVIOUS FUTURE OPTIMISATION IS THE DANGEROUS ONE: "this is a READ, it changes
+        nothing, why is it charging four row-writes?" *** It arrives as tidying, with a real
+        performance argument, from somebody who has read the route and not this paragraph — and it
+        removes the only thing bounding an unindexed scan. architecture.md §3a-i: a proposal to make
+        something skip a check is the highest-suspicion change there is, and it is indistinguishable
+        from correct at the moment it is proposed.
+        IT IS RECORDED HERE RATHER THAN ONLY IN docs/decisions/0042, WHERE IT WAS FOUND. A reader
+        proposing that optimisation opens P4; they do not open the ADR about count routes.
+        THE CORRECT REPLACEMENT, IF THE CHARGE IS EVER REMOVED: an explicit read bound — a page cap,
+        an index, or a rate limit — LANDED IN THE SAME CHANGE. Removing the charge first and adding
+        the bound later is an unbounded scan on a shared database for however long "later" is.
+      theROWWRITEFIGURES_SR22_20260911:
+        theDEFECT: >-
+          *** `maxRowWrites` ON EVERY PLATFORM ROUTE IN THIS CONTRACT SET IS STALE, AND IT HAS
+          ALREADY PRODUCED A WRONG NUMBER IN A SECURITY REVIEW. *** A free-tier exhaustion threshold
+          was derived from a contract's declared `2` and was wrong by a factor of two; it was caught
+          and corrected by its author. THE DEMONSTRATION IS THAT THE CONTRACT FIGURE IS READ AS
+          AUTHORITATIVE, because it is the number a reader reaches first.
+        whatHAPPENED: >-
+          THE AUDIT RECORD COST 2 ROW-WRITES WHEN THESE FIGURES WERE WRITTEN — one table row plus the
+          primary-key autoindex. `0016_platform_operator_action_indexes.sql` ADDED TWO INDEXES AND
+          TOOK IT TO 4, and its own comment says the constant "is moved in
+          identity/control-plane-admission.ts in the same change". THE CONSTANT WAS MOVED. THE
+          CONTRACT FIGURES WERE NOT. Nothing compares them, so nothing went red.
+          SO THE READ ROUTES DECLARING `2` ARE NOT MEASURING A DIFFERENT THING FROM THE DISPATCHER —
+          they are measuring the same thing at the old value. AND THE WRITE ROUTES ARE UNDERSTATED BY
+          THE SAME 2, which is why they LOOKED consistent: a route declaring 3 against a reservation
+          of 4 reads as a rounding difference rather than as a stale constant.
+        theRULE_ANDITNAMESTHEAUTHORITYRATHERTHANTHEVALUE: >-
+          `maxRowWrites` COUNTS THE ROUTE'S OWN WRITES *** PLUS *** THE P4 AUDIT RECORD, and the
+          audit record's cost is `PLATFORM_OPERATOR_ACTION_ROW_WRITES` in
+          `platform/core/identity/control-plane-admission.ts`. *** READ THE CONSTANT; DO NOT TRUST A
+          FIGURE IN A CONTRACT FOR FREE-TIER ARITHMETIC. *** It is 4 today and it moves whenever a
+          migration adds an index to `platform_operator_action` — which has happened once already.
+          THIS SENTENCE GOVERNS EVERY CONTRACT PUBLISHING PLATFORM ROUTES. It is stated once, here,
+          because this contract defines the class and the others restate none of it — and because
+          restating a NUMBER in nine contracts is the duplicated constraint that produced the defect
+          in the first place. workflow.md §11a: name the authority beside it, never the value.
       why: >-
         FOUR SEPARATE RECORDS NOW SAY "NO AUDITED PATH" — 0018, 0019, 0020 and 0023 each recorded
         that an operator applying SQL by hand produces no audit record, and 0007 rule 9 requires
@@ -546,8 +591,21 @@ operations:
     response: { schemaRef: "urn:dudo:schema:platform-operator:1#/$defs/listOrganizationsOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, rate_limited, unavailable]
-    maxRowWrites: 0
+    maxRowWrites: 4
     audit: required
+    theZERO_CORRECTED_20260911: >-
+      *** THIS DECLARED `0` AND CONTRADICTED THE SENTENCE THREE LINES BELOW IT. *** `notes` says
+      "THE AUDIT RECORD IS REQUIRED EVEN THOUGH THIS IS A READ. See P4", `audit: required` is on the
+      line above, and the figure said the route performs no writes — IN THE CONTRACT THAT DEFINES
+      THE CLASS WHERE EVERY ROUTE WRITES.
+      IT IS A DIFFERENT DEFECT FROM THE STALE-BY-2 FIGURES CORRECTED IN THE SAME PASS, and folding it
+      into them would lose what it teaches. A stale figure is an old value that was once right. THIS
+      WAS NEVER RIGHT: `0` is not `2` grown out of date, it is a claim that P4 does not apply here,
+      made by the contract that establishes P4. Nothing compared the figure with the neighbouring
+      prose, and the two had been disagreeing since the route was written.
+      NOW 4 — the P4 audit record alone, since the route itself writes nothing. That is
+      `PLATFORM_OPERATOR_ACTION_ROW_WRITES`; read the constant rather than this figure, per
+      theROWWRITEFIGURES_SR22_20260911.
     reads: "One bounded page of `organization`. No tenant read of any kind."
     notes: >-
       IT RETURNS IDENTIFIERS, STATUS AND `display_name`. AMENDED 2026-09-07: this previously said
@@ -566,6 +624,90 @@ operations:
       tenant read behind whereWithTenant, and a "how many customers does this Organization have"
       column is how a console acquires cross-tenant reach one convenient number at a time.
       THE AUDIT RECORD IS REQUIRED EVEN THOUGH THIS IS A READ. See P4.
+    theNOCOUNTSSENTENCEABOVEISNOTCONTRADICTEDBYplatformOrganizationsCount: >-
+      *** AMENDED 2026-09-11. A COUNT ROUTE NOW EXISTS AND THE SENTENCE ABOVE STANDS UNCHANGED —
+      READ THEM TOGETHER, BECAUSE THEY LOOK LIKE A CONTRADICTION AND ARE NOT. ***
+      "IT RETURNS NO COUNTS, NO CUSTOMER TOTALS, NO ACTIVITY AND NO USAGE" REFUSES A COUNT COLUMN ON
+      A ROW — "how many customers does this Organization have" — which is a PER-ORGANIZATION figure
+      over TENANT data behind whereWithTenant. That is a MAPPING from Organization to number, and the
+      mapping is the object docs/decisions/0028 Decision 1 refuses.
+      platform.organizations.count IS A SINGLE CONTROL-PLANE TOTAL OVER THE `organization` TABLE
+      ITSELF. It names no Organization, reads nothing behind whereWithTenant, and cannot be keyed by
+      anything. DIFFERENT OBJECT, DIFFERENT POPULATION — and the sentence that refuses the first is
+      precisely why the second must stay scalar.
+      THE ROW SHAPE IS UNCHANGED. `organizationSummary` gains nothing; this is a separate route with
+      its own response, deliberately, so that a count can never arrive as a column.
+
+  # =======================================================================================
+  - id: platform.organizations.count
+    title: "How many Organizations exist"
+    method: GET
+    path: "/organizations/count"
+    surface: platform
+    provenance: >-
+      NEW WORK, 2026-09-11. AMENDMENT TO AN ACCEPTED CONTRACT, additive under architecture.md §1.
+      Ruled in docs/decisions/0042 and held until the Template operations were registered.
+    description: >-
+      The total number of Organizations on the platform. THE NUMBER THE LIST ROUTE CANNOT STATE: a
+      paginated list can only say "at least 25" until its last page, so an operational summary opened
+      cold has no honest total.
+    permission: core.organization.list
+    scope: platform
+    request: "No body, no query parameters, no path parameters. THE COUNT TAKES NO FILTER — see theSHAPEISSCALAR."
+    response: { schemaRef: "urn:dudo:schema:platform-operator:1#/$defs/organizationCountOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, unavailable]
+    maxRowWrites: 4
+    audit: required
+    reads: "One aggregate over the control-plane `organization` table. NO TENANT READ OF ANY KIND, and no store handle is resolved."
+    whyITREUSEScoreOrganizationList:
+      theTEST: >-
+        security.md §2a: A COUNT IS SAFE EXACTLY WHEN ITS CONSUMER ALREADY HOLDS ENUMERATION OVER THE
+        COUNTED POPULATION, AND DANGEROUS EXACTLY WHEN IT DOES NOT. `core.organization.list` holders
+        enumerate Organizations deliberately, at `sensitive`. This count reaches nothing past that
+        right — walking the pages yields the same number.
+      soITISNOTANEWDISCLOSURE: >-
+        A NEW PERMISSION HERE WOULD BE A SPLIT WITH NO DECISION IN IT. Contrast
+        core.template-adoption.read, which IS a new permission for an aggregate over this same
+        Organization population, because ITS consumer — a Template reader — holds no enumeration
+        right over Organizations. Same test, opposite answers, and the difference is the right rather
+        than the object.
+      andTHEMERITSANSWERTOtheLineOut: >-
+        organization-detail-v1's theLine.out refuses "counts or summaries of business records — a
+        count is a read; 'how many customers' is how a console acquires cross-tenant reach one
+        convenient number at a time." IT IS ANSWERED ON THE MERITS RATHER THAN DISTINGUISHED ON
+        SCOPE: the operative fact is not that customers are business records, it is that A PLATFORM
+        OPERATOR HOLDS NO ENUMERATION RIGHT OVER CUSTOMERS, so each such count is genuinely new and
+        they compose into a picture of a tenant's business. That reasoning does not transfer here,
+        and it fails to transfer for a reason about the RIGHT.
+    theSHAPEISSCALAR: >-
+      *** A SINGLE `total` AND NOTHING ELSE. NO BREAKDOWN, NO GROUPING, NO `by_status` MAP, NO
+      PER-ORGANIZATION FIGURE, AND NO FILTER PARAMETER. *** Each of those transposes into a MAPPING,
+      and the mapping is what docs/decisions/0028 Decision 1 refuses. A count is one number; the
+      moment it is keyed by anything it has stopped being a count and become a table.
+      `additionalProperties: false` on the response is the enforcement, and it is stated here as well
+      because the schema cannot say WHY.
+    theRATELIMITPOSITION: >-
+      The route declares `rate_limited` and the platform class's limits apply. *** A RATE LIMIT IS
+      NOT THE CONTROL HERE AND MUST NOT BE OFFERED AS A SUBSTITUTE FOR THE PERMISSION. *** The vector
+      is LONGITUDINAL, NOT BURST: one call a day for a year is rate-limited by nothing and yields a
+      growth curve. A limit bounding requests per minute bounds a SCRAPE and does not bound SAMPLING
+      OVER MONTHS. THE PERMISSION IS THE CONTROL AND THE AUDIT TRAIL IS THE DETECTION. A limit added
+      ALONGSIDE is fine and closes the scrape; it does not license relaxing anything.
+    andTHECHEAPERROUTEISTHEMOREDETECTABLEONE: >-
+      RECORDED BECAUSE IT INVERTS THE USUAL INSTINCT TO REFUSE A CONVENIENCE ROUTE. Counting by
+      ENUMERATION is indistinguishable from ordinary browsing — page reads that look exactly like an
+      operator working. A dedicated count call is unambiguous about intent, so 365 identical count
+      entries in the audit trail are a CLEARER signal than 365 bursts of paginated reads. Refusing
+      this route would keep the capability, remove the audit clarity, and charge an audit row per
+      page for the privilege.
+    notes: >-
+      maxRowWrites IS 2 ON A READ, and that is not an error: P4 requires every platform route to
+      write an audit record, so a "read" route in this class always writes.
+      NO not_found, EVER. Zero Organizations returns 200 with `total: 0` — an empty platform is not a
+      missing one, and this is the ordinary first day.
+      IT MUST BE A COUNT AND NEVER A FETCH-AND-LENGTH. Reading every row to measure the length is the
+      same number on the wire and a different number against d1-rows-read.
 
   # =======================================================================================
   - id: platform.session.whoami
@@ -583,8 +725,20 @@ operations:
     response: { schemaRef: "urn:dudo:schema:platform-operator:1#/$defs/whoamiOutput" }
     successStatus: 200
     errors: [unauthenticated, forbidden, rate_limited, unavailable]
-    maxRowWrites: 0
+    maxRowWrites: 4
     audit: required
+    theZERO_CORRECTED_20260911: >-
+      *** DECLARED `0` WITH `audit: required` ON THE LINE BELOW IT. *** Same defect as
+      platform.organizations.list and found by the same check — see that route's
+      theZERO_CORRECTED_20260911 for why this is not the stale-by-2 class.
+      THIS ONE IS THE MORE INSTRUCTIVE OF THE TWO, because `whoami` is the route where `0` FEELS
+      RIGHT: it returns the caller's own context, touches no Organization, reads no table anyone
+      would call data, and is the cheapest thing in the class. NONE OF THAT MATTERS. P4 admits no
+      exemption — "not the sensitive ones, not the writes — every one" — so the cheapest route in
+      the class costs exactly what the most expensive read does, and the figure is 4 because the
+      audit record is 4.
+      A ROUTE THAT LOOKS FREE IS EXACTLY WHERE A ZERO GOES UNQUESTIONED. That is why it survived in
+      the contract that defines the rule it breaks.
     theSHAREDPERMISSIONISDELIBERATE:
       ruling: >-
         IT DECLARES core.organization.list RATHER THAN A PERMISSION OF ITS OWN, and no

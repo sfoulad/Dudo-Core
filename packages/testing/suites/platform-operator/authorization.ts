@@ -132,6 +132,42 @@ function storeWithUnrecognisedRole(principalId: string): PlatformOperatorStore {
     async recordAction() {
       return ok(undefined);
     },
+    // ===================================================================================
+    // ADDED 2026-09-11 with the Template lifecycle port, AND THEY THROW RATHER THAN ANSWER.
+    // ===================================================================================
+    //
+    // Every method above answers the empty, uninteresting value, on this double's own stated
+    // reasoning: *"a case using it can only be red for that cause."* **That convention rests on an
+    // assumption — that the case never reaches them — and an empty answer cannot tell the
+    // difference between "never reached" and "reached and quietly satisfied".**
+    //
+    // These two throw, which turns the same assumption into an enforced fact at no cost: this
+    // double exists to reach ONE cause, an unrecognised `platform_role`, and authority resolution
+    // refuses before any Template method could run. **If one ever fires, the case has started
+    // exercising a path nobody designed it for and should say so loudly rather than pass.**
+    async countOrganizationsUsingTemplate() {
+      throw new Error(
+        'storeWithUnrecognisedRole.countOrganizationsUsingTemplate was CALLED. This double exists ' +
+          'to reach one cause — an unrecognised platform_role — and authority resolution should ' +
+          'refuse before any Template read. Reaching this means the case under it is no longer ' +
+          'testing what its name says.',
+      );
+    },
+    async setOrganizationTemplate() {
+      throw new Error(
+        'storeWithUnrecognisedRole.setOrganizationTemplate was CALLED. A double built to exercise ' +
+          'an authorization refusal has reached a WRITE, which means the refusal did not happen.',
+      );
+    },
+    // ADDED 2026-09-11 with `0042`'s count routes, and it throws for the same reason as the two
+    // above: authority resolution refuses before any store read, so a call here means the case is
+    // no longer testing what its name says.
+    async countOrganizations() {
+      throw new Error(
+        'storeWithUnrecognisedRole.countOrganizations was CALLED. An unrecognised platform_role ' +
+          'should be refused before any count is reached.',
+      );
+    },
   };
 }
 
@@ -375,7 +411,7 @@ export function buildPlatformAuthorizationSuite(
     });
   });
 
-  suite.test('the envelope is exactly nine platform-scope permissions, and refuses a tenth', () => {
+  suite.test('the envelope is exactly thirteen platform-scope permissions, and refuses a fourteenth', () => {
     // SIX BECAME SEVEN ON 2026-09-05, and the guard is what made that a decision rather than a
     // side effect: adding `core.platform-audit.read` threw at module load until
     // `PLATFORM_ROUTE_PERMISSION_COUNT` was edited. Its argument is that `platform-audit-read-v1`
@@ -392,24 +428,58 @@ export function buildPlatformAuthorizationSuite(
     // count guard compares the envelope's size against the stated constant, and 7 == 7 was true
     // of a table that had eight routes' worth of permissions. The check that caught it is `and
     // the separation is real: the envelope is exactly what the ROUTES declare`.
-    assertEqual('nine, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 9);
+    //
+    // ===================================================================================
+    // NINE BECAME THIRTEEN ON 2026-09-11, AND THE REASON IS A USER GRANT — NOT A BUILD STEP.
+    // ===================================================================================
+    //
+    // The user granted the four Template permissions in terms — *"Finalize and register the four
+    // proposed Template permissions."* **`security.md` §8 is why that sentence is quoted here
+    // rather than summarised: no agent may grant a permission, and this pin is the record of who
+    // did.** The four are `core.platform-organization.set-template`, `core.template-adoption.read`,
+    // `core.template.retire` and `core.template.update`.
+    //
+    // *** THE ONE WORTH READING TWICE IS `core.template-adoption.read`, BECAUSE IT IS A SEPARATE
+    // *** PERMISSION RATHER THAN A FIFTH USE OF `core.template.read`. *** `security.md` §2a: a
+    // count is safe exactly when its consumer already holds enumeration over the counted
+    // population, and a Template reader does NOT enumerate Organizations — so
+    // `platform.templates.usage` reaches past its consumer's right and owes its own gate.
+    // `platform-routes.ts` records that security review overturned the first answer to get there.
+    // **If a later change collapses it back into `core.template.read`, the count below falls to
+    // twelve and this case is what says so.**
+    //
+    // THE COUNT AND THE LIST ARE BOTH PINNED, AND THAT IS NOT REDUNDANT: the count moving alone
+    // would mean a permission was added or dropped; the LIST moving with the count unchanged means
+    // one was SWAPPED for another, which no total can see. Composition and size are different
+    // facts, and this file has already been wrong about one while right about the other.
+    assertEqual('thirteen, as the class declares', PLATFORM_PERMISSION_ENVELOPE.declared.length, 13);
     assertEqual(
       'and every one is declared at platform scope',
       PLATFORM_PERMISSION_ENVELOPE.declared.filter((entry) => entry.scope !== 'platform').length,
       0,
     );
     assertEqual(
-      'they are the nine the platform contracts name',
+      'they are the thirteen the platform contracts name',
       PLATFORM_PERMISSION_ENVELOPE.declared.map((entry) => entry.permissionId).sort().join(','),
       'core.credential.reset,core.organization.create,core.organization.list,' +
-        'core.platform-audit.read,core.platform-organization.update,' +
-        'core.principal.revoke-platform-scope,core.template.create,' +
-        'core.template.list,core.template.read',
+        'core.platform-audit.read,core.platform-organization.set-template,' +
+        'core.platform-organization.update,core.principal.revoke-platform-scope,' +
+        'core.template-adoption.read,core.template.create,core.template.list,' +
+        'core.template.read,core.template.retire,core.template.update',
     );
     assertEqual('the envelope is attributed to platform, not to an App', PLATFORM_PERMISSION_ENVELOPE.appId, 'platform');
 
     const platformScope = 'platform' as const;
-    expectThrows('a seventh permission is refused at load', () => {
+    // *** THIS LABEL SAID "a seventh permission" UNTIL 2026-09-11, ON A CASE THAT HAS BEEN ADDING
+    // *** A TENTH SINCE SEVEN BECAME EIGHT. *** It is not decorative: the case appends ONE entry to
+    // the live envelope, so what it adds is `length + 1` and the number in the label was a
+    // transcribed copy of a fact three edits stale. Nothing depended on it and nothing went red —
+    // `architecture.md` §3c, in the cheapest possible form, found by re-reading my own file.
+    //
+    // **It is written as a relationship rather than a number, so the next envelope change cannot
+    // make it lie again.** A label that has to be edited in step with a constant is a label that
+    // will eventually not be.
+    expectThrows('ONE MORE than the envelope declares is refused at load', () => {
       assertPlatformPermissionModelIsCoherent(undefined, {
         appId: 'platform',
         declared: [
@@ -554,13 +624,20 @@ export function buildPlatformAuthorizationSuite(
       // still withholds are the permanently-unreachable pair above; `core.platform-audit.read`
       // moved into this list the day its routes shipped, which is the whole point of reporting
       // reachable rather than held: a console renders exactly the actions the operator can take.
+      // NINE BECAME THIRTEEN ON 2026-09-11 — and unlike the envelope pin, this one moved because
+      // the ROUTES shipped, not because the permissions were granted. The four sat in
+      // `unreachableUntilItsRouteShips` from the grant until the five operations registered, and
+      // `whoami` correctly withheld them the whole time. **That gap is the mechanism working: a
+      // console that rendered a Template-retire button on the strength of a grant would have
+      // offered an action every operator was refused.**
       assertEqual(
-        'whoami reports the reachable nine and not everything the role holds',
+        'whoami reports the reachable thirteen and not everything the role holds',
         [...answer.permissions].sort().join(','),
         'core.credential.reset,core.organization.create,core.organization.list,' +
-          'core.platform-audit.read,core.platform-organization.update,' +
-          'core.principal.revoke-platform-scope,core.template.create,' +
-          'core.template.list,core.template.read',
+          'core.platform-audit.read,core.platform-organization.set-template,' +
+          'core.platform-organization.update,core.principal.revoke-platform-scope,' +
+          'core.template-adoption.read,core.template.create,core.template.list,' +
+          'core.template.read,core.template.retire,core.template.update',
       );
     } finally {
       world.close();

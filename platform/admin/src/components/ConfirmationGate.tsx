@@ -37,6 +37,42 @@
  * checked is worse than refusing to offer the action.
  *
  * ===========================================================================
+ * ⚠ AND THE CONSOLE CAN NOW BE ARABIC WHILE THE STATEMENT IS ENGLISH
+ * ===========================================================================
+ *
+ * Added 2026-09-11, with the copy pass, because **the copy pass CREATED this
+ * case.** The rule above is about a statement arriving in an unexpected
+ * language; this is its mirror — **the statement arrives in exactly the
+ * expected language and the READER may not be an English reader.**
+ *
+ * It is the same family as the paragraph above: *asking someone to approve a
+ * destructive action described in a sentence they cannot check.* Nothing in the
+ * contract, the locale check, or the type system sees it, because every
+ * individual part is correct.
+ *
+ * **THREE THINGS FOLLOW, AND NONE OF THEM IS "TRANSLATE IT":**
+ *
+ *   - The statement is still rendered **verbatim**. This console does not
+ *     author it and must not translate it either — a translated statement is a
+ *     statement Core did not write, which is the whole defect the verbatim rule
+ *     exists to prevent, arriving through a well-meant feature.
+ *   - The region carries **`lang` and `dir` of the STATEMENT**, not of the page.
+ *     Without it an Arabic page announces English text through an Arabic
+ *     synthesiser — which `lib/i18n.tsx` records as *"unusable rather than
+ *     merely wrong"* — and the bidirectional algorithm lays out an LTR sentence
+ *     inside an RTL block.
+ *   - When the two differ, the operator is **told**, in their own language,
+ *     that the sentence below is Core's own English and is shown unaltered on
+ *     purpose. **Naming it is the honest move**; hiding it would leave someone
+ *     approving a sentence they were never told they could not read.
+ *
+ * **WHAT THIS DOES NOT DO IS BLOCK THE ACTION**, and that is a judgement rather
+ * than an oversight: refusing to offer approval in Arabic would make the
+ * console's own language switch a downgrade, and the operator population here
+ * reads English. **It is named, not prevented — and that distinction belongs to
+ * the Team Lead if it should be otherwise.**
+ *
+ * ===========================================================================
  * THE PASSWORD
  * ===========================================================================
  *
@@ -75,6 +111,7 @@ import {
   useState,
   type FormEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { Button, Input } from '@dudo/ui';
 import { AdminField as Field } from '@/components/AdminField';
@@ -88,6 +125,7 @@ import {
   type ConfirmationChallenge,
 } from '@/api/confirmation';
 import { toApiError, type ApiError } from '@/api/errors';
+import { directionOf, fill, isLocale, useLocale, type Locale } from '@/lib/i18n';
 
 type Phase =
   | { readonly kind: 'requesting' }
@@ -110,6 +148,34 @@ export interface ConfirmationGateProps {
     reauthDerivedValue: string;
   }) => Promise<void>;
   readonly onCancel: () => void;
+  /**
+   * ===========================================================================
+   * WHERE FOCUS GOES WHEN THIS PANEL CLOSES. REQUIRED, NOT OPTIONAL.
+   * ===========================================================================
+   *
+   * **This gate moved focus IN and never returned it.** Its own header argues
+   * the entry case — *"the panel replaces a button that a person just pressed,
+   * so without this a screen-reader user is left focused on a control that no
+   * longer exists"* — **and that reasoning covers the exit identically.** Press
+   * Cancel on a revoke gate and focus fell to `<body>`: a keyboard user dumped
+   * at the top of the document after abandoning a destructive confirmation,
+   * with nothing announced.
+   *
+   * **IT IS A REQUIRED PROP RATHER THAN A PER-PARENT DISCIPLINE, and the
+   * evidence for that was already in the tree** (`architecture.md` §3a):
+   *
+   *     per-parent      every current AND FUTURE consumer must remember
+   *     required prop   a gate mounted without saying where focus returns
+   *                     DOES NOT COMPILE
+   *
+   * **Both consumers restored nothing** — so the discipline had already failed
+   * twice before anyone relied on it, which is the whole argument for making
+   * omission a build error instead of a habit.
+   *
+   * The parent owns the ref because only the parent knows which control opened
+   * the gate; this component only knows that something did.
+   */
+  readonly openerRef: RefObject<HTMLElement | null>;
 }
 
 export function ConfirmationGate({
@@ -118,8 +184,88 @@ export function ConfirmationGate({
   requestChallenge,
   submit,
   onCancel,
+  openerRef,
 }: ConfirmationGateProps) {
+  const { locale, t } = useLocale();
   const [phase, setPhase] = useState<Phase>({ kind: 'requesting' });
+
+  /*
+   * ===========================================================================
+   * ONE DISMISSAL PATH, SO THE RETURN CANNOT BE FORGOTTEN ON ONE OF THREE
+   * ===========================================================================
+   *
+   * `onCancel` is called from THREE places in this component — the failure
+   * panel's Close, the form's Cancel, and the non-presentable branch's Close.
+   * **Restoring focus at each call site is three chances to miss one**, and the
+   * one that gets missed is whichever branch nobody tests.
+   *
+   * ===========================================================================
+   * ⚠ AND THE OBVIOUS IMPLEMENTATION DOES NOT WORK, BECAUSE BOTH CONSUMERS
+   * UNMOUNT THE OPENER WHILE THE GATE IS OPEN
+   * ===========================================================================
+   *
+   * The first version focused `openerRef` and then called `onCancel`. **At that
+   * moment the ref is `null`**: `Operators` renders its button as
+   * `{revoking === null ? <Button …/> : null}` and `ResetCredential` replaces
+   * the whole `idle` stage, **so in both cases the control that opened this
+   * panel has left the DOM for as long as the panel is up.** A `focus()` on a
+   * detached ref is a silent no-op — the exact defect, unfixed and now looking
+   * fixed.
+   *
+   * **So the restore happens in the UNMOUNT CLEANUP**, which runs after React
+   * has committed the parent's re-render — by which point the opener has
+   * remounted and `openerRef.current` is the new node.
+   *
+   * **AND IT IS CONDITIONAL ON HAVING BEEN DISMISSED.** When the gate closes
+   * because the action SUCCEEDED, focus belongs to the result panel —
+   * `ResetResult` and `ResetUncertain` both take it deliberately. An
+   * unconditional focus-on-unmount would fight them and win, dragging a
+   * screen-reader user back to a button instead of the password they must
+   * record.
+   *
+   * ⚠ **THE COMMIT ORDERING IS REASONED, NOT OBSERVED.** React attaches refs
+   * during the mutation phase and runs passive-effect cleanups afterwards, so
+   * the remounted opener should be in `openerRef.current` by then. **I cannot
+   * run a browser here to confirm it**, and this is named as the assumption
+   * this fix rests on — it belongs in the post-deploy keyboard pass beside the
+   * RTL check.
+   */
+  const dismissedRef = useRef(false);
+  const dismiss = useCallback(() => {
+    dismissedRef.current = true;
+    onCancel();
+  }, [onCancel]);
+
+  useEffect(
+    () => () => {
+      if (dismissedRef.current) openerRef.current?.focus();
+    },
+    [openerRef],
+  );
+
+  /*
+   * ESCAPE CLOSES IT, like the drawer — and the consistency IS the argument.
+   * **A keyboard user who learns Escape on the navigation drawer will try it
+   * here**, and an affordance that works in one place and silently fails in
+   * four is worse than one that exists nowhere.
+   *
+   * ⚠ **IT IS BOUND ONLY WHILE THE GATE IS DISMISSIBLE.** During `deriving` and
+   * `submitting` a request is in flight: Escape there would return focus and
+   * unmount the panel while a confirmed write is still travelling, leaving the
+   * operator with no way to learn the outcome of an act they approved.
+   */
+  const inFlight = phase.kind === 'deriving' || phase.kind === 'submitting';
+  useEffect(() => {
+    if (inFlight) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [dismiss, inFlight]);
+
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
@@ -260,7 +406,7 @@ export function ConfirmationGate({
   if (phase.kind === 'requesting') {
     return (
       <Panel title={title} headingId={headingId}>
-        <LoadingBlock label="Asking Core what this will do…" />
+        <LoadingBlock label={t('loading.challenge')} />
       </Panel>
     );
   }
@@ -272,14 +418,12 @@ export function ConfirmationGate({
           <CeilingNotice error={phase.error} scope="platform" />
         ) : (
           <ErrorBlock error={phase.error}>
-            <p className="mt-2 leading-relaxed text-ink-soft">
-              Nothing was changed. Close this and start again if you still need to.
-            </p>
+            <p className="mt-2 leading-relaxed text-ink-soft">{t('gate.failedNothingChanged')}</p>
           </ErrorBlock>
         )}
         <div className="mt-4">
-          <Button variant="secondary" onClick={onCancel}>
-            Close
+          <Button variant="secondary" onClick={dismiss}>
+            {t('gate.close')}
           </Button>
         </div>
       </Panel>
@@ -289,6 +433,24 @@ export function ConfirmationGate({
   const challenge = phase.challenge;
   const presentable = isPresentableStatement(challenge);
   const busy = phase.kind === 'deriving' || phase.kind === 'submitting';
+
+  /*
+   * THE STATEMENT'S OWN LANGUAGE, AND WHETHER IT IS THE READER'S.
+   *
+   * `statement_locale` is whatever Core sent. `isLocale` narrows it to one this
+   * console has a direction for; anything else is already refused by
+   * `presentable`, but this must not throw on the way there — the refusal panel
+   * has to render.
+   *
+   * **`ltr` IS THE FALLBACK RATHER THAN THE PAGE'S DIRECTION**, because an
+   * unrecognised locale on an RTL page would otherwise inherit `rtl` and lay out
+   * a sentence nobody can vouch for in a direction nobody chose.
+   */
+  const statementLocale: Locale | null = isLocale(challenge.statement_locale)
+    ? challenge.statement_locale
+    : null;
+  const statementDir = statementLocale === null ? 'ltr' : directionOf(statementLocale);
+  const readerCannotBeAssumed = presentable && challenge.statement_locale !== locale;
 
   return (
     <Panel title={title} headingId={headingId}>
@@ -328,27 +490,56 @@ export function ConfirmationGate({
         className="rounded-[7px] border-2 border-navy-600 bg-navy-50 p-4 sm:p-5"
       >
         <p className="text-xs font-bold tracking-[0.06em] uppercase text-navy-700">
-          What will happen
+          {t('gate.whatWillHappen')}
         </p>
-        <p id={statementId} className="mt-2 text-[0.9375rem] leading-relaxed font-semibold text-ink">
+        {/*
+          `lang` AND `dir` ARE THE STATEMENT'S, NOT THE PAGE'S. A screen reader
+          picks its voice and pronunciation rules from `lang`, so an English
+          sentence inside an Arabic page must say so or it is read by an Arabic
+          synthesiser — and `dir` stops the bidirectional algorithm laying an LTR
+          sentence out inside an RTL block. **This is the sentence being
+          approved; it is the last place to let either of those go wrong.**
+        */}
+        <p
+          id={statementId}
+          lang={challenge.statement_locale}
+          dir={statementDir}
+          className="mt-2 text-[0.9375rem] leading-relaxed font-semibold text-ink"
+        >
           {challenge.statement}
         </p>
       </div>
+
+      {/*
+        ⚠ THE STATEMENT IS IN A LANGUAGE THIS READER DID NOT CHOOSE.
+        Not a refusal — see the header. It is named, in the reader's own
+        language, so nobody approves a sentence they were never told they might
+        not be able to read. **The statement itself is still verbatim**; this
+        console does not translate what it did not write.
+      */}
+      {readerCannotBeAssumed ? (
+        <p
+          role="note"
+          className="mt-3 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink"
+        >
+          <span className="font-semibold">{t('gate.statementLanguageLead')}</span>{' '}
+          {t('gate.statementLanguageBody')}
+        </p>
+      ) : null}
 
       {!presentable ? (
         <div
           role="alert"
           className="mt-4 rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-4 text-[0.875rem]"
         >
-          <p className="font-bold text-scarlet-700">
-            This statement is not in the language this console asked for
-          </p>
+          <p className="font-bold text-scarlet-700">{t('gate.wrongLocale.title')}</p>
           <p className="mt-1 leading-relaxed text-ink-soft">
-            Dudo returned it as{' '}
-            <code className="font-mono">{challenge.statement_locale}</code> and this console
-            requested {EXPECTED_STATEMENT_LOCALE}. It will not ask you to approve a sentence it
-            cannot vouch for. <span className="font-semibold">Nothing was changed.</span> Report
-            this rather than retrying.
+            {fill(t('gate.wrongLocale.body'), locale, {
+              got: challenge.statement_locale,
+              expected: EXPECTED_STATEMENT_LOCALE,
+            })}{' '}
+            <span className="font-semibold">{t('gate.wrongLocale.nothingChanged')}</span>{' '}
+            {t('gate.wrongLocale.report')}
           </p>
         </div>
       ) : null}
@@ -356,21 +547,22 @@ export function ConfirmationGate({
       <BoundParameters parameters={boundParameters} />
 
       <p className="mt-4 text-[0.8125rem] text-ink-muted">
-        This approval expires at <ExpiresAt value={challenge.expires_at} />.
+        {t('gate.expiresAt')} <ExpiresAt value={challenge.expires_at} locale={locale} />
       </p>
 
       {presentable ? (
         <form onSubmit={approve} noValidate className="mt-5 grid gap-4">
           <p className="text-[0.875rem] leading-relaxed text-ink-soft">
-            Confirm with <span className="font-semibold">your own</span> sign-in details — not the
-            account being changed.
+            {t('gate.confirmWithLead')}{' '}
+            <span className="font-semibold">{t('gate.confirmWithYourOwn')}</span>{' '}
+            {t('gate.confirmWithTail')}
           </p>
 
           <Field
             id="reauth-identifier"
-            label="Your email address"
+            label={t('gate.emailLabel')}
             error={localError}
-            hint="The address you signed in with."
+            hint={t('gate.emailHint')}
           >
             {(aria) => (
               <Input
@@ -392,7 +584,7 @@ export function ConfirmationGate({
             )}
           </Field>
 
-          <Field id="reauth-password" label="Your password">
+          <Field id="reauth-password" label={t('gate.passwordLabel')}>
             {(aria) => (
               <Input
                 {...aria}
@@ -423,22 +615,24 @@ export function ConfirmationGate({
               aria-describedby={statementId}
             >
               {phase.kind === 'deriving'
-                ? 'Checking your password…'
+                ? t('gate.checking')
                 : phase.kind === 'submitting'
-                  ? 'Carrying it out…'
-                  : 'Approve'}
+                  ? t('gate.carryingOut')
+                  : t('gate.approve')}
             </Button>
-            <Button variant="secondary" onClick={onCancel} disabled={busy}>
-              Cancel
+            <Button variant="secondary" onClick={dismiss} disabled={busy}>
+              {t('gate.cancel')}
             </Button>
           </div>
 
-          {phase.kind === 'deriving' ? <DerivationBar progress={phase.progress} /> : null}
+          {phase.kind === 'deriving' ? (
+            <DerivationBar progress={phase.progress} label={t('gate.progressLabel')} />
+          ) : null}
         </form>
       ) : (
         <div className="mt-5">
-          <Button variant="secondary" onClick={onCancel}>
-            Close
+          <Button variant="secondary" onClick={dismiss}>
+            {t('gate.close')}
           </Button>
         </div>
       )}
@@ -490,33 +684,61 @@ function BoundParameters({ parameters }: { parameters: Readonly<Record<string, s
     <dl className="mt-4 grid gap-2 rounded-[7px] border border-line bg-sunk/60 p-3 text-[0.8125rem]">
       {entries.map(([name, value]) => (
         <div key={name} className="min-w-0">
+          {/*
+            THE PARAMETER NAMES ARE WIRE FIELD NAMES AND ARE NOT TRANSLATED —
+            `principal_id`, `target_identifier`, `derived_value`. They are what
+            the binding covers, and an operator comparing this panel to a
+            contract or to an audit record needs the same tokens in both places.
+            Both halves are isolated so an RTL page cannot reorder them.
+          */}
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            {name}
+            <bdi>{name}</bdi>
           </dt>
-          <dd className="font-mono break-all text-ink">{value}</dd>
+          <dd className="text-ink">
+            <bdi className="font-mono break-all">{value}</bdi>
+          </dd>
         </div>
       ))}
     </dl>
   );
 }
 
-function ExpiresAt({ value }: { value: string }) {
+/**
+ * ⚠ THE LOCALE WAS `undefined`, WHICH IS THE BROWSER'S AND NOT THE CONSOLE'S —
+ * the same defect found in `describeWindow`, in a second place, and neither was
+ * found by a check.
+ *
+ * An operator who switched this console to Arabic would have seen an expiry time
+ * formatted in whatever their browser was set to. **It is never wrong in testing
+ * because the browser and the console agree by default**; it diverges only for
+ * the operator who deliberately switched.
+ *
+ * `UTC` is not translated: it names the timezone, the audit feed's filters say
+ * `(UTC)` in both languages, and an operator comparing this to a timestamp needs
+ * the same three letters in both places. It is isolated so the bidirectional
+ * algorithm cannot move it to the other side of the time on an RTL page.
+ */
+function ExpiresAt({ value, locale }: { value: string; locale: Locale }) {
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return <span className="font-mono">{value}</span>;
+  if (Number.isNaN(parsed.getTime())) {
+    return <bdi className="font-mono">{value}</bdi>;
+  }
   return (
-    <time dateTime={value} title={value}>
-      {parsed.toLocaleTimeString(undefined, {
-        timeZone: 'UTC',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })}{' '}
-      UTC
-    </time>
+    <bdi>
+      <time dateTime={value} title={value}>
+        {parsed.toLocaleTimeString(locale, {
+          timeZone: 'UTC',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })}{' '}
+        UTC
+      </time>
+    </bdi>
   );
 }
 
-function DerivationBar({ progress }: { progress: DerivationProgress }) {
+function DerivationBar({ progress, label }: { progress: DerivationProgress; label: string }) {
   const percent = Math.round(progress.fraction * 100);
   return (
     <div
@@ -524,7 +746,7 @@ function DerivationBar({ progress }: { progress: DerivationProgress }) {
       aria-valuenow={percent}
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-label="Checking your password"
+      aria-label={label}
       className="h-1.5 w-full overflow-hidden rounded-full bg-sunk"
     >
       <div

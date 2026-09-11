@@ -63,23 +63,35 @@ import { Link } from '@tanstack/react-router';
 // From the leaf module, NOT from the route tree — importing it from there put
 // this file in a cycle and blanked the console. See `lib/routes.ts`.
 import { ROUTES, type RoutePath } from '@/lib/routes';
+import { useLocale, type MessageKey } from '@/lib/i18n';
+import { LocaleSwitch } from '@/components/LocaleSwitch';
 import type { WhoamiOutput } from '@/api/platform';
 import { CONFIG } from '@/api/config';
 
 interface NavItem {
   readonly path: RoutePath;
-  readonly label: string;
+  /**
+   * A MESSAGE KEY, NOT A LABEL. It was a literal English string, which made
+   * this array the one place a translation could not reach — a navigation
+   * hard-coded in English is the first thing an Arabic-reading operator sees
+   * and the last thing anyone remembers to translate.
+   */
+  readonly labelKey: MessageKey;
 }
 
 /**
- * The four sections, in the order an operator meets them: what exists, what
- * shapes it, who may act, and what was done.
+ * The five sections, in the order an operator meets them: **where the platform
+ * stands**, what exists, what shapes it, who may act, and what was done.
+ *
+ * The dashboard leads because it is the address `/` now resolves to and the
+ * only section that answers a question before one is asked.
  */
 const NAV_ITEMS: readonly NavItem[] = [
-  { path: ROUTES.organizations, label: 'Organizations' },
-  { path: ROUTES.templates, label: 'Templates' },
-  { path: ROUTES.operators, label: 'Operators' },
-  { path: ROUTES.audit, label: 'Audit' },
+  { path: ROUTES.dashboard, labelKey: 'nav.dashboard' },
+  { path: ROUTES.organizations, labelKey: 'nav.organizations' },
+  { path: ROUTES.templates, labelKey: 'nav.templates' },
+  { path: ROUTES.operators, labelKey: 'nav.operators' },
+  { path: ROUTES.audit, labelKey: 'nav.audit' },
 ];
 
 export interface AdminShellProps {
@@ -98,6 +110,7 @@ export function AdminShell({
   onSignOut,
   children,
 }: AdminShellProps) {
+  const { t } = useLocale();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerId = useId();
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -130,7 +143,7 @@ export function AdminShell({
   return (
     <div className="min-h-dvh bg-paper">
       <a href="#main" className="skip-link">
-        Skip to content
+        {t('app.skipToContent')}
       </a>
 
       {/*
@@ -151,12 +164,18 @@ export function AdminShell({
           }}
         >
           <MenuIcon />
-          Menu
+          {t('nav.menu')}
         </Button>
 
         <div className="min-w-0">
+          {/*
+            "Dudo" IS A BRAND NAME AND IS NOT TRANSLATED — it is the product's
+            name in both languages, and it is isolated so an RTL header cannot
+            reorder it against the words beside it.
+          */}
           <p className="truncate text-[0.9375rem] font-bold leading-tight">
-            Dudo <span className="font-normal text-navy-100">platform administration</span>
+            <bdi>Dudo</bdi>{' '}
+            <span className="font-normal text-navy-100">{t('app.subtitle')}</span>
           </p>
           {/*
             The build label is not a version number and says so in `config.ts`.
@@ -178,8 +197,16 @@ export function AdminShell({
             <span className="block font-mono break-all">{whoami.principal_id}</span>
             <span className="block">{whoami.platform_role}</span>
           </p>
+          {/*
+            THE SWITCH IS A SHARED COMPONENT AND NOT DECLARED HERE, because it
+            must also exist on the three session states this shell never
+            renders. See `components/LocaleSwitch.tsx` — the browser harness
+            found it unreachable from the sign-in screen, which is the first
+            page an Arabic-reading operator meets.
+          */}
+          <LocaleSwitch tone="onNavy" />
           <Button variant="onNavy" size="sm" busy={signingOut} onClick={onSignOut}>
-            {signingOut ? 'Signing out…' : 'Sign out'}
+            {signingOut ? t('nav.signingOut') : t('nav.signOut')}
           </Button>
         </div>
       </header>
@@ -199,7 +226,7 @@ export function AdminShell({
         <nav
           ref={navRef}
           id={drawerId}
-          aria-label="Sections"
+          aria-label={t('nav.label')}
           className={cn(
             'on-navy bg-navy-800 text-white',
 
@@ -314,7 +341,7 @@ export function AdminShell({
                         : 'text-navy-100 hover:bg-white/10 hover:text-white',
                     )}
                   >
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 </li>
               );
@@ -324,13 +351,17 @@ export function AdminShell({
           <div className="border-t border-navy-700 p-3 text-[0.75rem] leading-relaxed text-navy-100">
             {/* The identity again, for the phone layout where the header hides it. */}
             <p className="mb-3 sm:hidden">
-              <span className="block font-mono break-all text-white">{whoami.principal_id}</span>
-              <span className="block">{whoami.platform_role}</span>
+              <bdi className="block font-mono break-all text-white">{whoami.principal_id}</bdi>
+              <bdi className="block">{whoami.platform_role}</bdi>
             </p>
-            <p>
-              An operator belongs to no Organization and cannot reach customer records. That is
-              structural, not a setting.
-            </p>
+            {/*
+              "STRUCTURAL, NOT A SETTING" IS THE LOAD-BEARING HALF. `0024`'s
+              mutual exclusion is a property of how principals are stored, not a
+              permission somebody could grant. **A translation that read as "you
+              do not currently have access" would invite an operator to ask for
+              it**, and there is nothing to ask for.
+            */}
+            <p>{t('shell.noTenantReach')}</p>
             {/*
               The permission list, as Core reports it. RENDERING ONLY — the
               contract, the schema and the handler all say so, and it is shown

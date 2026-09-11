@@ -46,6 +46,10 @@ export type TemplateOutput = {
   readonly created_at: string;
 };
 
+export type TemplateCountOutput = {
+  readonly total: number;
+};
+
 export type ListTemplatesOutput = {
   readonly data: ReadonlyArray<TemplateOutput>;
   readonly next_cursor: string | null;
@@ -57,6 +61,9 @@ export const PlatformTemplatesCreatePermission = 'core.template.create' as const
 
 export type PlatformTemplatesListError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'rate_limited' | 'unavailable';
 export const PlatformTemplatesListPermission = 'core.template.list' as const;
+
+export type PlatformTemplatesCountError = 'unauthenticated' | 'forbidden' | 'rate_limited' | 'unavailable';
+export const PlatformTemplatesCountPermission = 'core.template.list' as const;
 
 export type PlatformTemplatesReadError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'rate_limited' | 'unavailable';
 export const PlatformTemplatesReadPermission = 'core.template.read' as const;

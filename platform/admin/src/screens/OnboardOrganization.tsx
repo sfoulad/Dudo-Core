@@ -71,6 +71,7 @@ import { identifierRefusal } from '@dudo/client-kdf';
 import type { DerivationProgress } from '@dudo/client-kdf/client';
 import { createOnboardingCredential } from '@/api/onboarding-credential';
 import { useOnboardOrganization, useTemplatePicker } from '@/lib/queries';
+import { formatSeconds, refusalText, useLocale, useT } from '@/lib/i18n';
 import {
   MAX_DISPLAY_NAME_LENGTH,
   displayNameRefusal,
@@ -125,6 +126,7 @@ type Phase =
   | { readonly kind: 'sending' };
 
 export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }) {
+  const { locale, t } = useLocale();
   /*
    * THE PICKER IS A QUERY, AND ITS TWO STATES ARE DERIVED RATHER THAN STORED.
    *
@@ -180,13 +182,16 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
        * recorded" — it is not an error, and treating it as one would make an
        * optional field required in the client while the contract says otherwise.
        */
-      const nameRefusal = displayName === '' ? null : displayNameRefusal(displayName);
+      const nameRefusal =
+        displayName === ''
+          ? null
+          : refusalText(displayNameRefusal(displayName), locale, t);
       if (nameRefusal !== null) {
         setNameError(nameRefusal);
         return;
       }
       if (templateId === '') {
-        setLocalError('Choose a business type.');
+        setLocalError(t('onboard.templateRequired'));
         return;
       }
       setLocalError(null);
@@ -246,7 +251,7 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
           setFailure(toApiError(thrown));
         });
     },
-    [busy, displayName, identifier, onboard, onOnboarded, templateId, templates],
+    [busy, displayName, identifier, locale, onboard, onOnboarded, t, templateId, templates],
   );
 
   if (outcome !== null) {
@@ -267,10 +272,9 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
       className="grid gap-5 rounded-[12px] border border-line bg-surface p-5 sm:p-6"
     >
       <div>
-        <h2 className="text-lg font-bold text-ink">Onboard a business</h2>
+        <h2 className="text-lg font-bold text-ink">{t('onboard.title')}</h2>
         <p className="mt-1 max-w-prose text-[0.875rem] leading-relaxed text-ink-muted">
-          Creates the Organization, its first administrator, and that
-          administrator&rsquo;s password. The password is generated here and shown once.
+          {t('onboard.intro')}
         </p>
       </div>
 
@@ -278,9 +282,9 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
 
       <Field
         id="admin-identifier"
-        label="First administrator's email address"
+        label={t('onboard.identifierLabel')}
         error={localError}
-        hint="They will sign in with this. Plain ASCII only; spaces are refused rather than trimmed."
+        hint={t('onboard.identifierHint')}
       >
         {(aria) => (
           <Input
@@ -317,9 +321,9 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
       */}
       <Field
         id="organization-display-name"
-        label="Business name — optional"
+        label={t('onboard.nameLabel')}
         error={nameError}
-        hint={`What operators will see instead of the identifier. Leave it blank if you do not have it yet — it, the CR and the VAT registration are all recorded on the business's own page. At most ${String(MAX_DISPLAY_NAME_LENGTH)} characters, and names are not unique in Dudo.`}
+        hint={`${t('onboard.nameHintPrefix')} ${String(MAX_DISPLAY_NAME_LENGTH)} ${t('onboard.nameHintSuffix')}`}
       >
         {(aria) => (
           <Input
@@ -340,8 +344,15 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
 
       <Field
         id="template-id"
-        label="Business type"
-        hint="Supplies the words this business sees for each level. It cannot be changed afterwards."
+        label={t('onboard.templateLabel')}
+        /*
+          ⚠ THIS SAID "It cannot be changed afterwards." IT CAN —
+          `platform.organizations.set-template`, which also CLEARS. Read at the
+          moment of the decision, so it made a reversible choice look like a
+          commitment and would have made an operator hesitate over something
+          they could undo.
+        */
+        hint={t('onboard.templateHint')}
       >
         {(aria) => (
           <select
@@ -361,10 +372,10 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
           >
             <option value="">
               {templates === null
-                ? 'Loading business types…'
+                ? t('onboard.templatesLoading')
                 : templates.length === 0
-                  ? 'No business types exist yet'
-                  : 'Choose a business type'}
+                  ? t('onboard.templatesEmpty')
+                  : t('onboard.templatesChoose')}
             </option>
             {(templates ?? []).map((template) => (
               <option key={template.template_id} value={template.template_id}>
@@ -377,15 +388,13 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
 
       {templatesError ? (
         <p role="alert" className="text-[0.875rem] text-scarlet-700">
-          The business types could not be loaded, so none can be chosen. Reload the page to try
-          again.
+          {t('onboard.templatesFailed')}
         </p>
       ) : null}
 
       {templates !== null && templates.length === 0 ? (
         <p className="rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.875rem] leading-relaxed text-ink">
-          A business cannot be onboarded until at least one business type exists. Create one under
-          Templates first.
+          {t('onboard.templatesNeeded')}
         </p>
       ) : null}
 
@@ -393,12 +402,16 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
         THE WORKSPACE NAME IS NOT ASKED FOR, AND THE ABSENCE IS EXPLAINED WHERE
         AN OPERATOR WOULD LOOK FOR THE FIELD — not in a footnote, and not left to
         be noticed.
+
+        ⚠ THE WORDING CHANGED WHEN IT MOVED INTO THE DICTIONARY. It said Dudo
+        has nowhere to store a workspace name YET and that naming ARRIVES with
+        the organization-structure work — an absence claim plus a schedule, both
+        of which expire silently. It now says which surface OWNS the field,
+        which stays true after that surface ships. See `onboard.workspaceBody`.
       */}
       <p className="rounded-[7px] border border-line bg-sunk/60 p-3 text-[0.8125rem] leading-relaxed text-ink-soft">
-        <span className="font-semibold">The first workspace is created and is not named.</span>{' '}
-        Dudo has nowhere to store a workspace name yet, so this form does not ask for one rather
-        than accepting a name it would discard. Naming arrives with the organization-structure
-        work.
+        <span className="font-semibold">{t('onboard.workspaceLead')}</span>{' '}
+        {t('onboard.workspaceBody')}
       </p>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -409,23 +422,22 @@ export function OnboardOrganization({ onOnboarded }: { onOnboarded: () => void }
           busy={busy}
         >
           {phase.kind === 'deriving'
-            ? 'Preparing the credential…'
+            ? t('onboard.submitDeriving')
             : phase.kind === 'sending'
-              ? 'Creating…'
-              : 'Onboard business'}
+              ? t('onboard.submitSending')
+              : t('onboard.submit')}
         </Button>
-        <p className="text-[0.8125rem] text-ink-muted">
-          The password is shown once and cannot be recovered.
-        </p>
+        <p className="text-[0.8125rem] text-ink-muted">{t('onboard.shownOnce')}</p>
       </div>
 
       {phase.kind === 'deriving' ? <DerivationBar progress={phase.progress} /> : null}
-      {phase.kind === 'sending' ? <LoadingBlock label="Creating the business in Core…" /> : null}
+      {phase.kind === 'sending' ? <LoadingBlock label={t('onboard.creating')} /> : null}
     </form>
   );
 }
 
 function OnboardingFailure({ failure }: { failure: ApiError }) {
+  const t = useT();
   return (
     <div
       role="alert"
@@ -433,38 +445,36 @@ function OnboardingFailure({ failure }: { failure: ApiError }) {
     >
       <p className="font-bold text-scarlet-700">
         {failure.code === 'conflict'
-          ? 'That email address is already in use'
+          ? t('onboard.failed.conflict')
           : failure.code === 'not_found'
-            ? 'That business type no longer exists'
+            ? t('onboard.failed.notFound')
             : failure.code === 'quota_exceeded'
-              ? 'The platform write limit has been reached'
-              : 'The business was not created'}
+              ? t('onboard.failed.quota')
+              : t('onboard.failed.other')}
       </p>
       <p className="mt-1 leading-relaxed text-ink-soft">
         {failure.code === 'conflict' ? (
           <>
-            One email address belongs to one person across the whole platform, and this one already
-            has an account. <span className="font-semibold">Nothing was created.</span> Use a
-            different address.
+            {t('onboard.failed.conflictBody')}{' '}
+            <span className="font-semibold">{t('onboard.failed.nothingCreated')}</span>{' '}
+            {t('onboard.failed.conflictTail')}
           </>
         ) : failure.code === 'not_found' ? (
           <>
-            It may have been removed since this page loaded.{' '}
-            <span className="font-semibold">Nothing was created.</span> Reload and choose again.
+            {t('onboard.failed.notFoundBody')}{' '}
+            <span className="font-semibold">{t('onboard.failed.nothingCreated')}</span>{' '}
+            {t('onboard.failed.notFoundTail')}
           </>
         ) : failure.code === 'quota_exceeded' ? (
           <>
-            Core deferred the write rather than performing it.{' '}
-            <span className="font-semibold">Nothing was created</span> — there is no half-made
-            business to clean up. Try again later.
+            {t('onboard.failed.quotaBody')}{' '}
+            <span className="font-semibold">{t('onboard.failed.nothingCreatedBare')}</span>{' '}
+            {t('onboard.failed.quotaTail')}
           </>
         ) : (
           <>
             {failure.message}{' '}
-            <span className="font-semibold">
-              Check the Organizations list before retrying — if the business was created, retrying
-              will fail on the email address and the first password will be lost.
-            </span>
+            <span className="font-semibold">{t('onboard.failed.otherWarning')}</span>
           </>
         )}
       </p>
@@ -472,14 +482,21 @@ function OnboardingFailure({ failure }: { failure: ApiError }) {
         <ul className="mt-2 grid list-disc gap-1 ps-4 text-ink-soft">
           {failure.details.map((detail) => (
             <li key={`${detail.field}:${detail.issue}`}>
-              <code className="font-mono text-[0.8125rem]">{detail.field}</code> — {detail.issue}
+              {/*
+                THE FIELD NAME IS CORE'S AND IS NOT TRANSLATED — it is a wire
+                identifier the operator quotes when reporting. `bdi` isolates it
+                because a Latin token inside an RTL list item otherwise drags
+                the surrounding punctuation with it.
+              */}
+              <bdi className="font-mono text-[0.8125rem]">{detail.field}</bdi> — {detail.issue}
             </li>
           ))}
         </ul>
       ) : null}
       {failure.request_id ? (
-        <p className="mt-2 font-mono text-xs break-all text-ink-muted">
-          Reference {failure.request_id}
+        <p className="mt-2 text-xs text-ink-muted">
+          {t('denied.reference')}{' '}
+          <bdi className="font-mono break-all">{failure.request_id}</bdi>
         </p>
       ) : null}
     </div>
@@ -494,6 +511,7 @@ function OnboardingFailure({ failure }: { failure: ApiError }) {
  * and no way to recover the value afterwards.
  */
 function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: () => void }) {
+  const t = useT();
   const [confirming, setConfirming] = useState(false);
   const warnings = outcome.result.warnings;
 
@@ -502,30 +520,40 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
       aria-labelledby="credential-heading"
       className="rounded-[12px] border-2 border-green-500 bg-surface p-5 sm:p-6"
     >
+      {/*
+        ⚠ THE HEADING WAS `{outcome.templateName} business created`, AND THE
+        TEMPLATE NAME MOVED OUT OF IT RATHER THAN BEING INTERPOLATED.
+
+        An operator-typed Template name embedded mid-heading needs a different
+        word order in Arabic, and a prefix/suffix pair around a proper noun in a
+        HEADING reads badly in both languages. **The type is a recorded fact
+        about what was just created, so it belongs in the list of recorded
+        facts** — beside the Organization, the administrator and the workspace —
+        where it is also easier to find. The heading is now stable in both
+        languages and carries no interpolation at all.
+      */}
       <h2 id="credential-heading" className="text-lg font-bold text-green-700">
-        {outcome.templateName} business created
+        {t('onboard.createdTitle')}
       </h2>
 
       {warnings.length > 0 ? <WarningPanel warnings={warnings} /> : null}
 
       <p className="mt-4 leading-relaxed text-ink">
-        <span className="font-bold">Record this password now.</span> It exists only on this screen.
-        Dudo did not receive it and cannot show it again — if it is lost, the only way back in is
-        for an operator to reset the credential.
+        <span className="font-bold">{t('onboard.record')}</span> {t('onboard.recordWhy')}
       </p>
 
       <dl className="mt-4 grid gap-3">
         <div>
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Sign in with
+            {t('onboard.signInWith')}
           </dt>
-          <dd className="mt-1 font-mono text-[0.9375rem] break-all text-ink">
-            {outcome.identifier}
+          <dd className="mt-1 text-[0.9375rem] text-ink">
+            <bdi className="font-mono break-all">{outcome.identifier}</bdi>
           </dd>
         </div>
         <div>
           <dt className="text-xs font-semibold tracking-[0.04em] uppercase text-ink-faint">
-            Password
+            {t('onboard.password')}
           </dt>
           {/*
             `select-all` so one click selects the whole value — a 32-character
@@ -534,27 +562,44 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
             No "copy" button: the clipboard is a second copy this console cannot
             supervise, and writing one is a decision for whoever needs it.
           */}
-          <dd className="mt-1 rounded-[7px] border border-line-strong bg-sunk px-3 py-2 font-mono text-[0.9375rem] break-all select-all text-ink">
-            {outcome.password}
+          <dd className="mt-1 rounded-[7px] border border-line-strong bg-sunk px-3 py-2 text-[0.9375rem] text-ink">
+            <bdi className="font-mono break-all select-all">{outcome.password}</bdi>
           </dd>
         </div>
       </dl>
 
       <dl className="mt-5 grid gap-x-6 gap-y-2 border-t border-line pt-4 text-[0.8125rem] sm:grid-cols-2">
+        {/*
+          THE TEMPLATE NAME IS OPERATOR-TYPED AND IS NOT TRANSLATED — only its
+          LABEL is. `bdi` because the name may be Arabic on an English page or
+          the reverse, and this list sits beside three Latin identifiers.
+        */}
         <div className="min-w-0">
-          <dt className="font-semibold text-ink-soft">Organization</dt>
-          <dd className="font-mono break-all text-ink-muted">{outcome.result.organization_id}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="font-semibold text-ink-soft">Administrator</dt>
-          <dd className="font-mono break-all text-ink-muted">
-            {outcome.result.admin_principal_id}
+          <dt className="font-semibold text-ink-soft">{t('onboard.businessType')}</dt>
+          <dd className="break-words text-ink-muted">
+            <bdi>{outcome.templateName}</bdi>
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="font-semibold text-ink-soft">Workspace</dt>
-          <dd className="font-mono break-all text-ink-muted">
-            {outcome.result.workspace_id ?? 'not created — see the warning above'}
+          <dt className="font-semibold text-ink-soft">{t('onboard.organizationId')}</dt>
+          <dd className="text-ink-muted">
+            <bdi className="font-mono break-all">{outcome.result.organization_id}</bdi>
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="font-semibold text-ink-soft">{t('onboard.administratorId')}</dt>
+          <dd className="text-ink-muted">
+            <bdi className="font-mono break-all">{outcome.result.admin_principal_id}</bdi>
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="font-semibold text-ink-soft">{t('onboard.workspaceId')}</dt>
+          <dd className="text-ink-muted">
+            {outcome.result.workspace_id === null ? (
+              t('onboard.workspaceNotCreated')
+            ) : (
+              <bdi className="font-mono break-all">{outcome.result.workspace_id}</bdi>
+            )}
           </dd>
         </div>
       </dl>
@@ -565,10 +610,8 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
         temporary password in the usual sense.
       */}
       <p className="mt-5 rounded-[7px] border border-gold-500 bg-gold-50 p-3 text-[0.8125rem] leading-relaxed text-ink">
-        <span className="font-semibold">You will know this password until it is reset.</span> Dudo
-        has no self-service password change yet, so the administrator cannot replace it themselves
-        — an operator must reset the credential. Send it over a channel you would trust with a
-        password, and treat it as shared until then.
+        <span className="font-semibold">{t('onboard.youWillKnow')}</span>{' '}
+        {t('onboard.noSelfService')}
       </p>
 
       {/*
@@ -580,35 +623,47 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
         only copy in existence.
       */}
       <p className="mt-5 rounded-[7px] border border-line bg-sunk/60 p-3 text-[0.8125rem] leading-relaxed text-ink-soft">
-        <span className="font-semibold">Record the password before you follow this.</span> The
-        business has no name, no CR and no VAT registration recorded yet — nobody has asked, which
-        is a different fact from having none.{' '}
+        <span className="font-semibold">{t('onboard.recordBeforeFollowing')}</span>{' '}
+        {t('onboard.identityMissing')}{' '}
         <Link
           to="/organizations/$organizationId"
           params={{ organizationId: outcome.result.organization_id }}
           className="font-semibold text-navy-600 no-underline hover:underline"
         >
-          Open this business to record them
+          {t('onboard.openBusiness')}
         </Link>
-        . Leaving this screen loses the password.
+        {/*
+          THE FULL STOP MOVED INSIDE THE FOLLOWING SENTENCE. A bare `.` sitting
+          between a link and the next sentence is a lone punctuation node, and
+          in RTL the bidirectional algorithm resolves it against its
+          neighbours — so it can render on the wrong side of the link. Arabic
+          also does not want an English full stop here at all.
+        */}{' '}
+        {t('onboard.leavingLoses')}
       </p>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
         {confirming ? (
           <>
-            <p className="w-full font-semibold text-ink">
-              Have you recorded the password? It cannot be shown again.
-            </p>
+            <p className="w-full font-semibold text-ink">{t('onboard.dismissAsk')}</p>
             <Button variant="primary" onClick={onDismiss}>
-              Yes, I have recorded it
+              {t('onboard.dismissYes')}
             </Button>
+            {/*
+              ⚠ THIS BUTTON SAID "Not yet". It was the one place in the copy
+              pass where the absence check's `\byet\b` would have been a genuine
+              false positive — an operator's answer about their OWN state, not a
+              claim the system makes about itself. **The words changed rather
+              than the check**, because a skip is the highest-suspicion change
+              there is and this replacement says what the button DOES.
+            */}
             <Button
               variant="secondary"
               onClick={() => {
                 setConfirming(false);
               }}
             >
-              Not yet
+              {t('onboard.dismissNo')}
             </Button>
           </>
         ) : (
@@ -618,7 +673,7 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
               setConfirming(true);
             }}
           >
-            I have recorded the password
+            {t('onboard.dismissStart')}
           </Button>
         )}
       </div>
@@ -635,12 +690,13 @@ function CredentialPanel({ outcome, onDismiss }: { outcome: Outcome; onDismiss: 
  * the credential all exist.
  */
 function WarningPanel({ warnings }: { warnings: readonly string[] }) {
+  const t = useT();
   return (
     <div
       role="status"
       className="mt-4 rounded-[7px] border border-gold-500 bg-gold-50 p-4 text-[0.875rem] leading-relaxed text-ink"
     >
-      <p className="font-bold">The business was created, and part of the setup did not finish.</p>
+      <p className="font-bold">{t('onboard.warning.title')}</p>
       <ul className="mt-2 grid list-disc gap-2 ps-4">
         {warnings.map((warning) => (
           <li key={warning}>
@@ -657,24 +713,25 @@ function WarningPanel({ warnings }: { warnings: readonly string[] }) {
                * onboarding as a clean one.
                */
               <>
-                <span className="font-semibold">An unrecognised warning was returned:</span>{' '}
-                <code className="font-mono">{warning}</code>. This console does not know what it
-                means, which means Core reports something newer than this build. Report it.
+                <span className="font-semibold">{t('onboard.warning.unknownLead')}</span>{' '}
+                {/*
+                  THE TOKEN IS CORE'S AND IS SHOWN VERBATIM. `bdi` for the same
+                  reason as everywhere else on this screen; the trailing full
+                  stop was removed because a lone `.` after an isolated Latin
+                  token is exactly the character RTL reorders.
+                */}
+                <bdi className="font-mono">{warning}</bdi>{' '}
+                {t('onboard.warning.unknownBody')}
               </>
             ) : warning === 'first_workspace_not_created' ? (
               <>
-                <span className="font-semibold">The first workspace was not created.</span> The
-                business exists and can be signed into, but it has no workspace, and the customer
-                cannot use the product until one exists. There is no route to create one yet —
-                report this.
+                <span className="font-semibold">{t('onboard.warning.workspaceLead')}</span>{' '}
+                {t('onboard.warning.workspaceBody')}
               </>
             ) : (
               <>
-                <span className="font-semibold">
-                  The customer&rsquo;s own audit record was not written.
-                </span>{' '}
-                The platform recorded this action, but the business&rsquo;s own log did not — so
-                the customer has no record that their business was created. Report this.
+                <span className="font-semibold">{t('onboard.warning.auditLead')}</span>{' '}
+                {t('onboard.warning.auditBody')}
               </>
             )}
           </li>
@@ -685,6 +742,7 @@ function WarningPanel({ warnings }: { warnings: readonly string[] }) {
 }
 
 function DerivationBar({ progress }: { progress: DerivationProgress }) {
+  const { locale, t } = useLocale();
   const percent = Math.round(progress.fraction * 100);
   const remainingMs =
     progress.estimatedMs === null ? null : Math.max(0, progress.estimatedMs - progress.elapsedMs);
@@ -695,7 +753,7 @@ function DerivationBar({ progress }: { progress: DerivationProgress }) {
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label="Preparing the credential"
+        aria-label={t('onboard.progressLabel')}
         className="h-1.5 w-full overflow-hidden rounded-full bg-sunk"
       >
         <div
@@ -705,8 +763,17 @@ function DerivationBar({ progress }: { progress: DerivationProgress }) {
       </div>
       <p aria-live="polite" className="text-[0.8125rem] text-ink-muted">
         {remainingMs === null
-          ? 'Measuring how long this will take on this device…'
-          : `About ${String(Math.ceil(remainingMs / 1000))} seconds left — an estimate measured on this device.`}
+          ? t('derivation.measuring')
+          : /*
+              THREE PIECES, AND THE MIDDLE ONE IS `Intl`'s — the same shape
+              `SignIn` uses, from the same three keys. `${n} seconds` is wrong
+              in Arabic for almost every `n`, and `formatSeconds` defers that to
+              the engine. **The keys moved out of the `signIn.` namespace when
+              this screen became the second consumer**, rather than being
+              copied: two dictionaries of the same sentence drift, and nothing
+              goes red when they do.
+            */
+            `${t('derivation.remainingPrefix')} ${formatSeconds(locale, Math.ceil(remainingMs / 1000))} — ${t('derivation.estimateNote')}`}
       </p>
     </div>
   );

@@ -110,6 +110,16 @@ declare module '*/generate-types.mjs' {
    */
   export function refusalAuthorFor(code: string): 'contract' | 'generator' | 'derived';
 
+  /**
+   * The exit code one report implies. **Exported 2026-09-10 so the precedence can be ASSERTED
+   * rather than re-implemented** — `qa-agent` declined to write a second copy of the rule in its
+   * own file, and the export is the answer to that refusal.
+   *
+   * `0` clean · `1` the corpus is wrong · `2` the tool's own accounting is broken · `3` a decision
+   * is due. **Order is precedence and corpus problems win.**
+   */
+  export function exitCodeFor(report: unknown): 0 | 1 | 2 | 3;
+
   /** Pure: no file access, so it is testable without a filesystem. */
   export function emitModule(input: {
     readonly schema: unknown;

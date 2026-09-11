@@ -29,7 +29,8 @@
  */
 
 import { ErrorBlock } from '@/components/StateBlock';
-import { describeWindowRefusal, windowRefusalToken } from '@/api/audit-window';
+import { MAX_WINDOW_DAYS, describeWindowRefusal, windowRefusalToken } from '@/api/audit-window';
+import { fill, useLocale } from '@/lib/i18n';
 import type { ApiError } from '@/api/errors';
 
 export function WindowOrOtherError({
@@ -39,6 +40,7 @@ export function WindowOrOtherError({
   error: ApiError;
   onRetry?: () => void;
 }) {
+  const { locale, t } = useLocale();
   const token = windowRefusalToken(error);
 
   if (token === null) {
@@ -46,18 +48,36 @@ export function WindowOrOtherError({
     return <ErrorBlock error={error} onRetry={onRetry} />;
   }
 
-  const { title, body } = describeWindowRefusal(token);
+  /*
+   * THE SENTENCES COME FROM THE DICTIONARY AND THE LIMIT COMES FROM THE MODULE.
+   * `describeWindowRefusal` returns keys plus `days`, so the number in *"at most
+   * 31 days apart"* is `MAX_WINDOW_DAYS` rather than a numeral somebody typed
+   * into two translations. See `fill`'s header for why the prefix/suffix pattern
+   * used elsewhere could not carry this one.
+   */
+  const { titleKey, bodyKey } = describeWindowRefusal(token);
+  /*
+   * THE LIMIT IS SUPPLIED UNCONDITIONALLY, and `fill` ignores what a sentence
+   * does not name. `time_window_inverted` says nothing about days; carrying an
+   * optional `days` through the return type to express that produced a union
+   * the index signature rejects, and — more to the point — it would have made
+   * WHICH SENTENCES MENTION THE LIMIT a fact stated in two places. The
+   * dictionary is the only place that should know.
+   */
+  const values = { days: MAX_WINDOW_DAYS };
 
   return (
     <div
       role="alert"
       className="rounded-[12px] border border-scarlet-600 bg-scarlet-50 p-5 sm:p-6"
     >
-      <h2 className="text-base font-bold text-scarlet-700">{title}</h2>
-      <p className="mt-2 leading-relaxed text-ink-soft">{body}</p>
+      <h2 className="text-base font-bold text-scarlet-700">
+        {fill(t(titleKey), locale, values)}
+      </h2>
+      <p className="mt-2 leading-relaxed text-ink-soft">{fill(t(bodyKey), locale, values)}</p>
       {error.request_id ? (
-        <p className="mt-3 font-mono text-xs break-all text-ink-muted">
-          Reference {error.request_id}
+        <p className="mt-3 text-xs text-ink-muted">
+          {t('denied.reference')} <bdi className="font-mono break-all">{error.request_id}</bdi>
         </p>
       ) : null}
     </div>

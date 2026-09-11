@@ -37,6 +37,10 @@ export type ListOrganizationsOutput = {
   readonly next_cursor: Cursor;
 };
 
+export type OrganizationCountOutput = {
+  readonly total: number;
+};
+
 export type WhoamiOutput = {
   readonly principal_id: PrincipalId;
   readonly platform_role: PlatformRole;
@@ -46,6 +50,9 @@ export type WhoamiOutput = {
 
 export type PlatformOrganizationsListError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'rate_limited' | 'unavailable';
 export const PlatformOrganizationsListPermission = 'core.organization.list' as const;
+
+export type PlatformOrganizationsCountError = 'unauthenticated' | 'forbidden' | 'rate_limited' | 'unavailable';
+export const PlatformOrganizationsCountPermission = 'core.organization.list' as const;
 
 export type PlatformSessionWhoamiError = 'unauthenticated' | 'forbidden' | 'rate_limited' | 'unavailable';
 export const PlatformSessionWhoamiPermission = 'core.organization.list' as const;

@@ -433,7 +433,59 @@ const QUARANTINE = new Map([
       // is "the same count somewhere else", and the tree produced exactly that within the day. It
       // was caught only because the pin compares offsets rather than a count — a decision made for
       // a different reason, which is luck rather than foresight and is recorded as such.
-      nulOffsets: [42980, 48356, 48660],
+      // MOVED AGAIN 2026-09-11, from [42980, 48356, 48660], by exactly +160. Same mechanism as the
+      // 2026-09-09 move and the SECOND time this has happened — `core-agent`'s Template lifecycle
+      // work inserted content above the first separator. **Reported by `web-agent`, which stopped
+      // rather than editing**, because this file's own message names the Team Lead as the pin's
+      // owner. That instruction worked exactly as written.
+      //
+      // VERIFIED BY THE TEAM LEAD BEFORE MOVING IT, and the count is not what establishes it:
+      //   shift:  +160, +160, +160                    uniform
+      //   gaps:   5376, 304  ->  5376, 304            preserved exactly
+      //   bytes at 43140, 48516, 48820  ->  0, 0, 0   all three still NUL
+      //   total NULs in the file: 3                   none gained, none lost
+      //
+      // A byte removed and another added elsewhere would not preserve both gaps AND leave the total
+      // at three. Displacement, not substitution.
+      //
+      // *** THAT THIS HAS NOW HAPPENED TWICE IS THE ARGUMENT FOR OFFSETS OVER A COUNT. *** A pin on
+      // the count alone would have stayed green through both moves and told nobody the file had
+      // changed above the separators — and the second time, the change was a security repair to the
+      // charset rule on a deployed route. The 2026-09-09 note called catching the first one luck
+      // rather than foresight. It is no longer luck: it is the only reason either move was seen.
+      // MOVED A THIRD TIME 2026-09-11, from [43140, 48516, 48820], by exactly +21 — `core-agent`
+      // hoisting `TEMPLATE_STATUSES` to a single home while building the list `status` filter.
+      // **Reported by `core-agent`, which measured it, said plainly that `scripts/` is the Team
+      // Lead's, and did not touch the pin.** Second reporter, second time the instruction held.
+      //
+      // RE-DERIVED BY THE TEAM LEAD RATHER THAN TRANSCRIBED FROM THE REPORT, which matters more
+      // each time this happens — see the note below on where the risk has migrated:
+      //   shift:  +21, +21, +21                       uniform
+      //   gaps:   5376, 304  ->  5376, 304            preserved exactly
+      //   bytes at 43161, 48537, 48841  ->  0, 0, 0   all three still NUL
+      //   total NULs: 3        other control bytes: none      file size 123326
+      //   neighbourhoods: the cursor `.join(NUL)`, the doc COMMENT describing the separator, and
+      //                   encodeAuditAnchor — the same three sites, meaning unchanged
+      //
+      // *** THREE MOVES IN THREE DAYS, AND NOT ONE OF THEM WAS A DEFECT. *** A residue repair, a
+      // charset security fix, and a deduplication — all correct work, all landing above the first
+      // separator, because that is where this file's code lives and the separators are near its end.
+      // **The pin is now moving about once per session, and it will keep moving.**
+      //
+      // SO THE RISK HAS MIGRATED, AND THIS IS THE PART WORTH READING BEFORE THE FOURTH MOVE.
+      // The pin's VALUE is unchanged and proven: an offset pin caught all three displacements and a
+      // count-only pin would have stayed green through every one. **Its COST is that a human
+      // re-derives three numbers by hand each time** — and hand-transcribing a number from another
+      // agent's report is precisely the class this repository has been bitten by (an accurate row
+      // count attributed to a request that does not exist; accurate line numbers attributed to the
+      // wrong route). **The failure mode is no longer "nobody notices the file changed". It is "the
+      // owner pins what the reporter said."**
+      //
+      // The control that has held three times: THE MOVER REPORTS AND DOES NOT EDIT; THE OWNER
+      // MEASURES INDEPENDENTLY AND DOES NOT TRANSCRIBE. Two different reporters so far
+      // (`web-agent`, then `core-agent`), each stopping because this file's own refusal message
+      // names the Team Lead. **Keep that message pointing at a person, not at a procedure.**
+      nulOffsets: [43161, 48537, 48841],
       why:
         'Deliberate domain separators typed as raw bytes instead of String.fromCharCode(0). ' +
         'CORRECT IN MEANING, WRONG IN FORM — the value must not move. One is inside encodeAuditAnchor, ' +

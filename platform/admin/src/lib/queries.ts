@@ -48,12 +48,18 @@ import {
   type CreateTemplateInput,
   type ListOperatorsOutput,
   type ListOrganizationsOutput,
+  type OrganizationCountOutput,
+  type TemplateCountOutput,
   type ListTemplatesOutput,
   type OnboardOrganizationInput,
   type OnboardOrganizationOutput,
   type OrganizationDetail,
   type OrganizationFeedFilters,
   type OrganizationFeedOutput,
+  type OrganizationTemplateOutput,
+  type SetOrganizationTemplateInput,
+  type TemplateUsageOutput,
+  type UpdateTemplateInput,
   type PlatformFeedFilters,
   type PlatformFeedOutput,
   type RevokeOperatorOutput,
@@ -77,11 +83,21 @@ async function asApiError<T>(work: () => Promise<T>): Promise<T> {
 export const queryKeys = {
   templates: ['templates'] as const,
   templateList: (cursor: string | null) => ['templates', 'list', cursor] as const,
+  /*
+   * THE COUNTS SIT UNDER THEIR OWN PREFIXES, so `invalidateQueries` on
+   * `['templates']` after a create or a retire re-reads the total as well as
+   * the list. **A dashboard that kept reporting the old number after the
+   * operator changed it would be worse than the "at least N" it replaced** —
+   * a stale total reads as authoritative in a way a lower bound does not.
+   */
+  templateCount: ['templates', 'count'] as const,
   templatePicker: ['templates', 'picker'] as const,
+  templateUsage: (templateId: string) => ['templates', 'usage', templateId] as const,
   operators: ['operators'] as const,
   operatorList: (cursor: string | null) => ['operators', 'list', cursor] as const,
   organizations: ['organizations'] as const,
   organizationList: (cursor: string | null) => ['organizations', 'list', cursor] as const,
+  organizationCount: ['organizations', 'count'] as const,
   organizationDetail: (organizationId: string) =>
     ['organizations', 'detail', organizationId] as const,
   platformAudit: (cursor: string | null, filters: PlatformFeedFilters) =>
@@ -183,6 +199,147 @@ export function useCreateTemplate(): UseMutationResult<Template, ApiError, Creat
   return useMutation<Template, ApiError, CreateTemplateInput>({
     mutationFn: (input) => asApiError(() => platformClient.createTemplate(input)),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates });
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------
+   Template lifecycle — `template-lifecycle-v1`
+   ------------------------------------------------------------------------- */
+
+/**
+ * How many Organizations adopt one Template.
+ *
+ * ===========================================================================
+ * `enabled` IS THE WHOLE POINT: THIS MUST NOT FIRE WHEN THE CARD IS DRAWN
+ * ===========================================================================
+ *
+ * A Template list page can hold twenty rows. **A usage query mounted per row
+ * would be twenty audited calls to render a list nobody asked a question
+ * about** — and the read exists for one specific moment: the operator is
+ * deciding whether to retire, and needs to know what that affects.
+ *
+ * So it is `enabled` only while a retire decision is open on THAT Template.
+ * One card at a time, one call, when a person has asked.
+ *
+ * `staleTime: 0` — the figure is the basis for a destructive-shaped act, and a
+ * cached count is a count that may have moved since. **Being wrong here means
+ * retiring something on a stale belief about who is using it.**
+ */
+export function useTemplateUsage(
+  templateId: string | null,
+): UseQueryResult<TemplateUsageOutput, ApiError> {
+  return useQuery<TemplateUsageOutput, ApiError>({
+    queryKey: queryKeys.templateUsage(templateId ?? ''),
+    queryFn: () => asApiError(() => platformClient.templateUsage(templateId ?? '')),
+    enabled: templateId !== null,
+    staleTime: 0,
+  });
+}
+
+/**
+ * Edit a Template's name or labels.
+ *
+ * Invalidates the whole `templates` surface: the list shows the name, the
+ * picker shows the name, and a usage panel embeds the Template. **One
+ * invalidation covers all three because they share the prefix** — and it is
+ * still one audited call, because only the mounted list refetches.
+ */
+export function useUpdateTemplate(): UseMutationResult<
+  Template,
+  ApiError,
+  { templateId: string; input: UpdateTemplateInput }
+> {
+  const queryClient = useQueryClient();
+  return useMutation<Template, ApiError, { templateId: string; input: UpdateTemplateInput }>({
+    mutationFn: ({ templateId, input }) =>
+      asApiError(() => platformClient.updateTemplate(templateId, input)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates });
+    },
+  });
+}
+
+/**
+ * Retire, and restore, as TWO HOOKS FOR TWO ROUTES.
+ *
+ * ===========================================================================
+ * NOT ONE HOOK TAKING A DIRECTION, AND THE REASON IS THE AUDIT TRAIL
+ * ===========================================================================
+ *
+ * `useSetTemplateStatus(id, 'retired' | 'active')` would type-check, read as
+ * tidier, and be wrong. The contract splits these into two routes because
+ * **"a toggle's audit record cannot say which direction it went without
+ * reading the previous state"** — and a single client hook is how that split
+ * gets quietly re-merged one layer above the transport.
+ *
+ * **They share a permission (`core.template.retire`) BY DECISION** — restore
+ * exists because *"a mistaken retirement spends the Template's unique name
+ * permanently"*, so whoever may retire must be able to undo it. Sharing a
+ * permission is not sharing an act.
+ *
+ * ⚠ **THEY RETURN THE TEMPLATE, NOT THE USAGE — SR-14, 2026-09-11.** They used
+ * to return the census *"so the outcome states what it affected"*, which made
+ * an adoption count reachable through `core.template.retire` — **not the
+ * permission that gates one.** The figure an operator needs is read BEFORE the
+ * act, from `platform.templates.usage`, which is where the decision is made.
+ *
+ * Both invalidate the Template surface, so a cached "how many adopt this" is
+ * refetched: the status changed, and that count is now a statement about a
+ * different world.
+ */
+export function useRetireTemplate(): UseMutationResult<Template, ApiError, string> {
+  const queryClient = useQueryClient();
+  return useMutation<Template, ApiError, string>({
+    mutationFn: (templateId) => asApiError(() => platformClient.retireTemplate(templateId)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates });
+    },
+  });
+}
+
+export function useRestoreTemplate(): UseMutationResult<Template, ApiError, string> {
+  const queryClient = useQueryClient();
+  return useMutation<Template, ApiError, string>({
+    mutationFn: (templateId) => asApiError(() => platformClient.restoreTemplate(templateId)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates });
+    },
+  });
+}
+
+/**
+ * Set or clear one Organization's Template.
+ *
+ * **IT INVALIDATES TWO SURFACES AND THAT IS TWO SEPARATE FACTS.** The
+ * Organization's detail now embeds a different Template, and **every
+ * Template's usage count may have moved** — the one adopted and the one
+ * dropped. Invalidating `templates` rather than one usage entry is deliberate:
+ * this client does not know which Template was displaced without reading the
+ * previous state, **which is the same reason the retire/restore split exists.**
+ *
+ * `invalidateQueries` refetches ACTIVE queries only, so in practice this costs
+ * the detail read and nothing else — a usage query is enabled only while a
+ * retire decision is open, and one is not open on this screen.
+ */
+export function useSetOrganizationTemplate(): UseMutationResult<
+  OrganizationTemplateOutput,
+  ApiError,
+  { organizationId: string; input: SetOrganizationTemplateInput }
+> {
+  const queryClient = useQueryClient();
+  return useMutation<
+    OrganizationTemplateOutput,
+    ApiError,
+    { organizationId: string; input: SetOrganizationTemplateInput }
+  >({
+    mutationFn: ({ organizationId, input }) =>
+      asApiError(() => platformClient.setOrganizationTemplate(organizationId, input)),
+    onSuccess: (_result, { organizationId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.organizationDetail(organizationId),
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.templates });
     },
   });
@@ -326,6 +483,49 @@ export function useMergeOrganizationIdentity(): (
  * the reason the other list hooks carry it: a cursor page is bound to the query
  * that produced it.
  */
+/**
+ * ===========================================================================
+ * THE TWO TOTALS — `0042`, and the routes' first consumer
+ * ===========================================================================
+ *
+ * **A paginated list can only say *"at least 25"* until its last page.** These
+ * are the routes that exist so a summary opened cold can state a number, and
+ * until now they were built, registered, audited and **consumed by nothing.**
+ *
+ * **ONE AUDITED CALL EACH, ON MOUNT, AND NO POLLING.** Every platform read on
+ * this console costs control-plane row-writes against a per-operator daily
+ * ceiling, and a dashboard is the surface most likely to be left open — so
+ * `refetchInterval`, `refetchOnWindowFocus` and `refetchOnReconnect` are all
+ * off globally (`lib/query-client.ts`) and nothing here re-enables them.
+ *
+ * **`staleTime: 0` is deliberate and is NOT a refetch.** It means a total is
+ * re-read when something invalidates it — creating a Template, onboarding an
+ * Organization — rather than served from cache. **A dashboard reporting a
+ * number the operator has just changed is worse than the lower bound it
+ * replaced**, because a stale total reads as authoritative where "at least N"
+ * announces its own uncertainty.
+ *
+ * **THEY ARE SEPARATE HOOKS, NOT ONE `useQueries`.** The two counts fail
+ * independently — an operator may hold `core.organization.list` and not
+ * `core.template.read` — and a combined hook would make one refusal hide the
+ * other's answer.
+ */
+export function useOrganizationCount(): UseQueryResult<OrganizationCountOutput, ApiError> {
+  return useQuery<OrganizationCountOutput, ApiError>({
+    queryKey: queryKeys.organizationCount,
+    queryFn: () => asApiError(() => platformClient.countOrganizations()),
+    staleTime: 0,
+  });
+}
+
+export function useTemplateCount(): UseQueryResult<TemplateCountOutput, ApiError> {
+  return useQuery<TemplateCountOutput, ApiError>({
+    queryKey: queryKeys.templateCount,
+    queryFn: () => asApiError(() => platformClient.countTemplates()),
+    staleTime: 0,
+  });
+}
+
 export function useOrganizationList(
   cursor: string | null,
 ): UseQueryResult<ListOrganizationsOutput, ApiError> {

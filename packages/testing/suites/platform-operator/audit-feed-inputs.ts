@@ -512,11 +512,19 @@ export function buildCeilingFloorSuite(): Suite {
     },
   );
 
-  suite.test('the envelope is NINE, and a tenth still throws at module load', () => {
+  suite.test('the envelope is THIRTEEN, and one more still throws at module load', () => {
+    // NINE BECAME THIRTEEN ON 2026-09-11, on the user's grant of the four Template permissions.
+    //
+    // *** THIS IS THE SECOND PIN ON THE SAME NUMBER AND IT IS DELIBERATELY NOT THE SAME CHECK. ***
+    // `authorization.ts` pins the count AND the sorted list, so it sees a permission being swapped.
+    // This one pins the count and then proves the LOAD-TIME GUARD still bites — and neither
+    // subsumes the other: a run where the guard was deleted passes there, and a run where one
+    // permission replaced another passes here. `workflow.md` §11a — before deleting a check as
+    // duplicate, ask what input each would go red on that the other passes. Both have one.
     assertEqual(
-      'nine, as PLATFORM_ROUTE_PERMISSION_COUNT states',
+      'thirteen, as PLATFORM_ROUTE_PERMISSION_COUNT states',
       PLATFORM_PERMISSION_ENVELOPE.declared.length,
-      9,
+      13,
     );
     // AND THE GUARD STILL BITES. The count is only a control if adding one is refused; asserting
     // the number alone would pass with the guard deleted.

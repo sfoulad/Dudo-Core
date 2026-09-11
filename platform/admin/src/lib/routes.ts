@@ -29,6 +29,7 @@
  */
 
 export const ROUTES = {
+  dashboard: '/',
   organizations: '/organizations',
   templates: '/templates',
   operators: '/operators',
@@ -37,5 +38,13 @@ export const ROUTES = {
 
 export type RoutePath = (typeof ROUTES)[keyof typeof ROUTES];
 
-/** Where `/` sends an operator, and where an unmatched address falls back to. */
-export const HOME_ROUTE: RoutePath = ROUTES.organizations;
+/**
+ * Where an unmatched address falls back to.
+ *
+ * **IT IS THE DASHBOARD NOW, AND IT USED TO BE THE ORGANIZATION LIST.** `/` was
+ * a redirect to `/organizations` because there was nothing at the root worth
+ * showing; it now renders the platform summary, so the fallback lands somewhere
+ * that answers *"what is the state of the platform"* rather than somewhere that
+ * spends a paginated read on a question the arriver may not have asked.
+ */
+export const HOME_ROUTE: RoutePath = ROUTES.dashboard;

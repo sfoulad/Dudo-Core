@@ -65,6 +65,8 @@ import { buildContractSatisfiabilitySuite } from './suites/contracts/satisfiabil
 import { buildErrorCodePartitionSuite } from './suites/contracts/error-code-partition.ts';
 import { buildGeneratorBehaviourSuite } from './suites/contracts/generator-behaviour.ts';
 import { buildGeneratorGateSuite } from './suites/contracts/generator-gate.ts';
+import { buildUrlResolutionSuite } from './suites/platform-operator/url-resolution.ts';
+import { buildSuccessStatusSuite } from './suites/platform-operator/success-status.ts';
 import { buildRequestClassCheckSuite } from './suites/contracts/request-class-check.ts';
 import { buildEnumPolicyConsistencySuite } from './suites/contracts/enum-policy-consistency.ts';
 import { buildContractYamlStructureSuite } from './suites/contracts/yaml-structure.ts';
@@ -218,6 +220,21 @@ async function main(): Promise<void> {
     // compares it with Core's frozen transcriptions, the other greps `platform/core/**`. They run
     // in the primary set and in no negative control, because neither has a runtime port to break.
     buildRegistryCoherenceSuite(),
+    // *** THE URL LAYER, WHICH NOTHING EXERCISED UNTIL 2026-09-11. *** `matchPlatformRoute` had
+    // four call sites in the whole test tree, all `/whoami`, which carries no path parameter —
+    // while ELEVEN routes carry one, eight of them shipped weeks earlier. `world.call` takes path
+    // params from a hardcoded map and the handler probes pass them in directly, so neither ever
+    // asks the matcher to PRODUCE one: two derivations agreeing about entry point agree about what
+    // they cannot see. It is why a fixture could supply `pathParams: {}` — an input the real
+    // transport can never produce — and cost an afternoon attributed to Core.
+    buildUrlResolutionSuite(),
+    // *** `successStatus` REACHING THE RESPONSE — TWO CHECKS, NOT ONE. *** `registry-coherence`
+    // compares the route's declared status against its contract's: declaration against
+    // declaration, which says nothing about what `renderSuccess` does with either. Driving that
+    // function closes half; the other half is that `api.ts` passes `matched.route.successStatus`
+    // rather than a literal — a change to `200` there passes every test that drives the function,
+    // and the platform class is the only request class that reads the route table at all.
+    buildSuccessStatusSuite(),
     buildBusinessTypeBoundarySuite(),
     buildConfirmationSuite(),
     buildConfirmationRefusalShapeSuite(),

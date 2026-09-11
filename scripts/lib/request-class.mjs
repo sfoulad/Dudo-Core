@@ -83,7 +83,23 @@ const ID_LINE_LOOSE = /^\s{0,4}-\s+id:\s*(\S+)\s*$/u;
  * **`actionId:` is included for the deferred-route form**, and it is not hypothetical: two customer
  * routes are registered that way. A pattern that knew only `id:` found 32 of 34.
  */
-export const ID_LITERAL = /\b(?:action)?[iI]d:\s*'([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)'/gu;
+export const ID_LITERAL = /\b(?:action)?[iI]d:\s*'([A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+)'/gu;
+/*
+ * *** THE HYPHEN WAS ADDED 2026-09-11, AND THIS IS THE SECOND HALF OF A FIX MADE ON 2026-09-10. ***
+ *
+ * `platform.organizations.set-template` registered in Core and derivation B could not see it:
+ * `EXECUTED 39, TEXTUAL 38`. The A/B population check caught it, which is what it is for.
+ *
+ * **The instructive part is that this exact defect was already fixed once, in this file, on the
+ * contract side.** `ROUTE_ID` and `parseContract`'s `- id:` pattern both gained `-` when
+ * `platform.organizations.set-template` first appeared in a CONTRACT. `ID_LITERAL` — the SOURCE
+ * sweep — was left behind, and stayed correct only for as long as no hyphenated id was registered
+ * in Core.
+ *
+ * `workflow.md` §12: **budget for MORE homes than you find.** One character, two patterns, one day
+ * apart, and the second only surfaced because two derivations disagreed rather than because anyone
+ * re-read the fix. **A claim worth stating once is a claim someone restated.**
+ */
 
 /**
  * Read one contract's declared class and published operations from its YAML source.
@@ -146,6 +162,23 @@ export function parseContract(source) {
 
     const own = /^\s+requestClass:\s*([A-Za-z-]+)\s*$/u.exec(line);
     if (own !== null) current.ownClass = own[1];
+
+    /*
+     * `maxRowWrites`, captured HERE rather than by a second parser in check-row-writes.mjs.
+     *
+     * WHY THIS FIELD LIVES IN THIS FUNCTION AND NOT IN ITS OWN READER. The defect that produced
+     * `check:row-writes` is a duplicated constraint: `PLATFORM_OPERATOR_ACTION_ROW_WRITES` moved
+     * 2 -> 4 in `0016_platform_operator_action_indexes.sql` and nine contract figures did not follow,
+     * because nothing compared them. **Answering that with a SECOND contract parser would be the
+     * same shape one layer up** — two readers of one file, agreeing until they do not
+     * (`workflow.md` §11a, *two derivations that share a scope are one derivation*).
+     *
+     * The two checks ask different questions of the same parse: `check:request-class` compares a
+     * declared class against the registry Core puts the route in; `check:row-writes` compares a
+     * declared cost against the constant the dispatcher charges. **One parse, two consumers.**
+     */
+    const cost = /^\s+maxRowWrites:\s*(\d+)\s*$/u.exec(line);
+    if (cost !== null) current.maxRowWrites = Number(cost[1]);
   }
 
   return { contractClass, blockKey, operations, idLinesSeen };

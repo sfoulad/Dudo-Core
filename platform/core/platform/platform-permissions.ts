@@ -112,12 +112,35 @@ const ORGANIZATION_CREATE = 'core.organization.create';
 const TEMPLATE_READ = 'core.template.read';
 const TEMPLATE_LIST = 'core.template.list';
 const TEMPLATE_CREATE = 'core.template.create';
+// ---- `template-lifecycle-v1`, granted by the user 2026-09-11. See the role list for the grant.
+const TEMPLATE_UPDATE = 'core.template.update';
+/** GATES RETIRE **AND** RESTORE. One permission, two routes — `theRetirementRuling`. */
+const TEMPLATE_RETIRE = 'core.template.retire';
+/**
+ * NOT `core.template.usage-read`, AND THE NAME IS THE MECHANISM RATHER THAN A STYLE CHOICE.
+ * **Permissions are granted by family.** Filed under `core.template.*` it would sit beside read,
+ * list and create — three permissions about the Template RECORD — and **anyone composing a role
+ * that "can read Templates" would pick up a customer-base census silently**, looking like a fourth
+ * member of a set they had already decided about. The whole point of this permission is that
+ * reading a Template and counting its adopters are different decisions.
+ */
+const TEMPLATE_ADOPTION_READ = 'core.template-adoption.read';
 const CREDENTIAL_RESET = 'core.credential.reset';
 /** `platform-audit-read-v1`. BOTH feeds declare it; `0028` leaves them splittable later. */
 const PLATFORM_AUDIT_READ = 'core.platform-audit.read';
 /** `platform-operators-v1`. The revoke route, and the challenge that confirms it. */
 const PRINCIPAL_REVOKE_PLATFORM_SCOPE = 'core.principal.revoke-platform-scope';
 const PLATFORM_ORGANIZATION_UPDATE = 'core.platform-organization.update';
+/**
+ * *** DELIBERATELY NOT `PLATFORM_ORGANIZATION_UPDATE`, AND THAT ENTRY RULES ITSELF OUT IN TERMS. ***
+ * It is scoped to *"an Organization's display name, its commercial registration and its VAT
+ * registration"* and states *"IT DOES NOT COVER STATUS."* **A Template is not identity**: name, CR
+ * and VAT are facts ABOUT the Organization that the platform records on its behalf, while a Template
+ * decides what every user in that Organization READS AS THE NAME OF THEIR OWN STRUCTURE. Reusing the
+ * identity permission would widen it by adoption rather than by decision — exactly what its own
+ * entry refused to allow for status.
+ */
+const PLATFORM_ORGANIZATION_SET_TEMPLATE = 'core.platform-organization.set-template';
 
 /**
  * `core.organization.list`, exported because the two routes in this slice declare it.
@@ -171,6 +194,42 @@ export const PLATFORM_PERMISSION_ENVELOPE: AppPermissionEnvelope = Object.freeze
     Object.freeze({ permissionId: PLATFORM_AUDIT_READ, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: PRINCIPAL_REVOKE_PLATFORM_SCOPE, scope: PLATFORM_SCOPE }),
     Object.freeze({ permissionId: PLATFORM_ORGANIZATION_UPDATE, scope: PLATFORM_SCOPE }),
+    // =========================================================================================
+    // *** THE TENTH THROUGH THIRTEENTH, 2026-09-11. `template-lifecycle-v1`'s five routes.
+    // THE LARGEST SINGLE WIDENING THIS CEILING HAS HAD, AND IT OWES THE LARGEST ARGUMENT. ***
+    // =========================================================================================
+    //
+    // **GRANTED BY THE USER**, relayed by the Team Lead, who does not approve (`security.md` §8).
+    // The user's words, recorded in `permission-catalog.yaml`'s `platform-admin` entry: *"Finalize
+    // and register the four proposed Template permissions."* The catalogue is the register (`0007`
+    // rule 4); this is Core's transcription of it and decides nothing.
+    //
+    // WHY FOUR AT ONCE RATHER THAN ONE CONTRACT AT A TIME — the shape this file insists on. **They
+    // are one contract.** `template-lifecycle-v1` is a single capability — a Template's life after
+    // creation — and the contract argues at length that splitting it would be wrong: *"retirement
+    // without re-assignment strands adopters and re-assignment without retirement has no trigger."*
+    // Landing them separately would mean shipping a retire route with no way to move its adopters.
+    //
+    // WHAT SECURITY REVIEW SETTLED, so the rungs are not re-derived: **all four `sensitive`, none
+    // `critical`.** Nothing is destroyed, no authority changes, and a label alters no scope — which
+    // is `theBoundary`'s whole point. `set-template` is the closest to the line and the consistency
+    // argument decides it: `core.platform-organization.update` rewrites a customer's commercial and
+    // VAT registration at `sensitive`, and **renaming "Workspace" to "Campus" is a smaller claim on
+    // a customer's identity than rewriting their VAT number.**
+    //
+    // *** THE RUNGS REST ON A TEMPLATE CARRYING LABELS AND NOTHING ELSE, AND THE `apps` LIST IS
+    // DEFERRED RATHER THAN FORBIDDEN. *** With one, editing a Template changes WHICH Apps every
+    // adopting Organization has — **an installed App is code with permissions reaching data, not a
+    // label.** `core.template.update` is the first rung to revisit, ahead of `set-template`'s,
+    // because update reaches every adopter in one call where set-template reaches one Organization.
+    // That revisit is a security decision and is not a consequence an implementer absorbs while
+    // adding a field.
+    //
+    // FOUR PERMISSIONS, FIVE ROUTES: `TEMPLATE_RETIRE` gates retire AND restore.
+    Object.freeze({ permissionId: TEMPLATE_ADOPTION_READ, scope: PLATFORM_SCOPE }),
+    Object.freeze({ permissionId: TEMPLATE_UPDATE, scope: PLATFORM_SCOPE }),
+    Object.freeze({ permissionId: TEMPLATE_RETIRE, scope: PLATFORM_SCOPE }),
+    Object.freeze({ permissionId: PLATFORM_ORGANIZATION_SET_TEMPLATE, scope: PLATFORM_SCOPE }),
   ]),
 });
 
@@ -242,6 +301,45 @@ const HELD_BUT_UNREACHABLE: readonly string[] = Object.freeze([
   // done the job it was built for. Removing it from here also removes it from the ROLE, because
   // that list spreads this constant, so `PLATFORM_ADMIN_PERMISSIONS` names it explicitly now. That
   // is the exact trap recorded at the role's own comment, avoided by having been recorded. ***
+  //
+  // =============================================================================================
+  // ---- ADDED 2026-09-11. THE FOUR `template-lifecycle-v1` PERMISSIONS. **GRANTED BY THE USER**,
+  // relayed by the Team Lead, who does not approve (`security.md` §8). The catalogue records the
+  // grant and the user's words at `permission-catalog.yaml`'s `platform-admin` entry: *"Finalize
+  // and register the four proposed Template permissions."*
+  // =============================================================================================
+  //
+  // *** THEY ARRIVE HERE AND NOT IN THE ENVELOPE, WHICH IS THIS LIST DOING EXACTLY ITS JOB. ***
+  // `template-lifecycle-v1` is ACCEPTED and **Core registers none of its five routes**, so all four
+  // gate nothing. The catalogue says the same thing in the grant note — *"NO FAIL-OPEN —
+  // deny-by-default, and none is reachable until Core registers a route. FOUR PERMISSIONS THAT GATE
+  // NOTHING TODAY."*
+  //
+  // THIS IS A TRANSCRIPTION OF A RECORDED GRANT AND NOT A GRANT. The catalogue is the register;
+  // `0007` rule 4 makes it the thing that decides. Core's copy being SHORT of it is the divergence
+  // `registry-coherence` caught — *"a transcription that is no longer verbatim is a file whose
+  // header can no longer be trusted about anything"* — and the repair is to match the register,
+  // never to widen the ceiling ahead of a route.
+  //
+  // *** WHEN THE ROUTES LAND, ALL FOUR MOVE OUT OF HERE AND MUST BE NAMED EXPLICITLY IN
+  // `PLATFORM_ADMIN_PERMISSIONS` IN THE SAME EDIT. *** That list SPREADS this constant, so removing
+  // an entry here silently removes it from the ROLE, leaving it in the ceiling and in no floor —
+  // `forbidden` to every operator, from the opposite cause. **Two agents made that mistake on one
+  // day and it is recorded three times in this file.** Four permissions is four chances to make it
+  // once; `assertEveryRoutePermissionIsReachable` turns each into a build failure rather than a
+  // subtle defect.
+  //
+  // NOTE THE SPLIT IS 4 PERMISSIONS TO 5 ROUTES, NOT 4-TO-4. `core.template.retire` gates BOTH
+  // `platform.templates.retire` AND `platform.templates.restore`, deliberately — one reversible,
+  // non-destructive toggle on platform configuration. A reader counting one permission per route
+  // will conclude one is missing.
+  //
+  // *** ALL FOUR LEFT THIS LIST THE SAME DAY, when `template-lifecycle-v1`'s five routes were
+  // registered — which is what the paragraph above said would happen, and the fourth time this list
+  // has done the job it was built for. They are named explicitly in `PLATFORM_ADMIN_PERMISSIONS`
+  // below, because this list SPREADS this constant and removing an entry here would otherwise have
+  // taken all four out of the ROLE as well. That is the trap recorded three times in this file, met
+  // four times at once, and avoided by having read the record before the edit rather than after. ***
 ]);
 
 function platformGrant(permissionId: string): PermissionGrant {
@@ -343,6 +441,25 @@ const PLATFORM_ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
   // Two agents made that mistake on one day; this line is the third occasion and the first where
   // the record was read before the edit rather than after it.
   PLATFORM_ORGANIZATION_UPDATE,
+  // =========================================================================================
+  // ---- AND THE FOUR `template-lifecycle-v1` PERMISSIONS, 2026-09-11, MOVED OUT OF
+  // `HELD_BUT_UNREACHABLE` IN THE SAME CHANGE THAT REGISTERED THEIR FIVE ROUTES.
+  // =========================================================================================
+  //
+  // **NAMED EXPLICITLY, FOR THE REASON RECORDED THREE TIMES ABOVE**: this list SPREADS
+  // `HELD_BUT_UNREACHABLE`, so taking a permission out of that constant silently takes it out of the
+  // ROLE, leaving it in the ceiling and in no floor — `forbidden` to every operator, from the
+  // opposite cause. **Two agents made that mistake on one day.** Four permissions is four chances to
+  // make it once; `assertEveryRoutePermissionIsReachable` now checks the whole chain and turns each
+  // into a build failure.
+  //
+  // *** ENUMERATED AND NEVER A WILDCARD. *** The user restated it as a boundary with the grant, and
+  // this file's opening line already warns that `platform-admin: ['core.*']` *"would be shorter and
+  // would read as"* the obvious thing. Four ids, no pattern, no group grant.
+  TEMPLATE_ADOPTION_READ,
+  TEMPLATE_UPDATE,
+  TEMPLATE_RETIRE,
+  PLATFORM_ORGANIZATION_SET_TEMPLATE,
 ]);
 
 /**
@@ -495,9 +612,56 @@ export function reachablePlatformPermissions(role: PlatformRole | null): readonl
  * expense: `0028` requires the tenant to see what the platform did to them, and this is the
  * clearest instance the surface has, because they cannot see the field any other way.
  *
- * **A TENTH NEEDS ITS OWN.**
+ * ===========================================================================================
+ * THE TENTH THROUGH THIRTEENTH — `template-lifecycle-v1`'s four, 2026-09-11
+ * ===========================================================================================
+ *
+ * **FOUR AT ONCE IS THE LARGEST WIDENING THIS CEILING HAS HAD, AND THE PRECEDING ENTRIES DEMAND ONE
+ * ARGUMENT PER PERMISSION.** They get one each below — but the reason they arrive together is a
+ * single answer and it goes first: **they are one contract.** `template-lifecycle-v1` is one
+ * capability, a Template's life after creation, and it argues that splitting it would be wrong —
+ * *"retirement without re-assignment strands adopters and re-assignment without retirement has no
+ * trigger."* **Landing them one at a time would mean shipping a retire route with no way to move the
+ * Organizations it strands.** That is a worse state than either the before or the after.
+ *
+ * **GRANTED BY THE USER, 2026-09-11**, relayed by the Team Lead, who does not approve
+ * (`security.md` §8): *"Finalize and register the four proposed Template permissions."*
+ *
+ * **`core.template.update`.** `template-v1` TM-1 deferred editing with an obligation rather than a
+ * shrug, and this discharges it: an operator who mistypes a business type currently cannot fix it.
+ * **Not folded into `core.template.create`** — §3.2's splitting discipline applied before rather
+ * than after: *"an operator who may add a business type is not automatically an operator who may
+ * change one forty Organizations are rendering."* Update has STRICTLY MORE REACH than create — a
+ * create reaches nobody until something adopts it.
+ *
+ * **`core.template.retire`.** TM-2's route, and **the one that makes `retired` reachable for the
+ * first time**: `d1-template-store.ts` writes `'active'` as a literal in the INSERT, so the second
+ * value has never existed. **Separate from update because they are different authorities over
+ * different things** — update changes what a Template SAYS, retire changes whether it may be CHOSEN
+ * — and a single `core.template.write` covering both would grant exactly that conflation.
+ * **IT GATES RESTORE TOO, AND THE COST OF THAT MERGE IS RECORDED RATHER THAN IMPLIED: ANYONE WHO MAY
+ * RESTORE MAY ALSO RETIRE**, so a low-privilege recovery role cannot exist while it holds. It stands
+ * for version 1 and reopens on either of two named triggers.
+ *
+ * **`core.platform-organization.set-template`.** PA-17. **Not `core.platform-organization.update`,
+ * and that entry rules itself out in terms** — it covers display name, CR and VAT and states *"IT
+ * DOES NOT COVER STATUS"*. Reusing it would widen it by adoption rather than by decision, which is
+ * what it refused for status. **It authorises a write into the customer's own tenant database** —
+ * five row-writes from that Organization's allocation, reading nothing from it — bounded by
+ * `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`, which is keyed to the VICTIM rather than the attacker.
+ *
+ * **`core.template-adoption.read`.** **Added late, on security review, overturning this contract's
+ * own first answer** — the usage route originally reused `core.template.read` and argued a new
+ * permission *"would be a split with no decision in it"*, while the next key spent thirty lines
+ * identifying the decision. `core.template.list` is also a read, so a holder of read-plus-list
+ * **enumerates every Template and sums the counts: a customer-base census, and polled over time a
+ * customer growth rate.** `security.md` §2a is the general form — *a count is safe exactly when its
+ * consumer already holds enumeration over the counted population*, and a template reader does not.
+ * **A rate limit is not a substitute: the vector is longitudinal, not burst.**
+ *
+ * **A FOURTEENTH NEEDS ITS OWN.**
  */
-const PLATFORM_ROUTE_PERMISSION_COUNT = 9;
+const PLATFORM_ROUTE_PERMISSION_COUNT = 13;
 
 export class PlatformPermissionModelIncoherentError extends Error {
   constructor(message: string) {

@@ -52,6 +52,7 @@ import type {
 import { registrationColumns, registrationFromColumns } from '../../organization-identity.ts';
 import type { MembershipRole } from '../../../authorization/roles.ts';
 import type {
+  OrganizationTemplateOutcome,
   PlatformActionOutcome,
   PlatformAuditAnchor,
   PlatformAuditFilters,
@@ -630,6 +631,121 @@ export function createD1PlatformStore(database: D1Database): PlatformOperatorSto
         // is where to start.
         return ok(block);
       } catch {
+        return err(unavailable());
+      }
+    },
+
+    async countOrganizationsUsingTemplate(templateId: string): Promise<Result<number>> {
+      // *** `COUNT(*)`, NEVER A FETCH-AND-LENGTH. *** `template-lifecycle-v1`'s `freeTierImpact`:
+      // *"reading every row to count them is the same number on the wire and a different number
+      // against d1-rows-read."* The aggregate is computed by the database and one row comes back.
+      //
+      // ⚠ THIS IS A FULL SCAN OF `organization`. `0013_organization_template.sql` deliberately
+      // created no index on `template_id` — *"Add it with the route that needs it"* — and the route
+      // that needs it is now here while the index is not. Correct and cheap at the current
+      // population; it is a MIGRATION to fix, which is the user's call, and it is reported rather
+      // than taken.
+      const rows = await selectRows(
+        database,
+        'SELECT COUNT(*) AS adopters FROM organization WHERE template_id = ?',
+        [templateId],
+      );
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      // `COUNT(*)` ALWAYS RETURNS ONE ROW, INCLUDING FOR A TEMPLATE NOBODY ADOPTED — zero is the
+      // ordinary answer and not an empty state. An empty result set means the statement did not run
+      // as written, which is `internal()` rather than a silent zero: **"nothing was found" and
+      // "nothing was examined" must not render the same way** (`workflow.md` §11a).
+      if (rows.value.length !== 1) {
+        return err(internal());
+      }
+      const raw = rows.value[0]['adopters'];
+      const adopters = typeof raw === 'number' ? raw : Number(raw);
+      if (!Number.isInteger(adopters) || adopters < 0) {
+        return err(internal());
+      }
+      return ok(adopters);
+    },
+
+    async countOrganizations(): Promise<Result<number>> {
+      // ONE AGGREGATE OVER THE CONTROL-PLANE TABLE. No `WHERE`, no join, no tenant read, and no
+      // store handle — `0042`'s "control-plane only" is true of this statement rather than promised
+      // by a comment above it.
+      //
+      // `COUNT(*)`, NEVER A FETCH-AND-LENGTH. Reading every row to measure the length is the same
+      // number on the wire and a different number against `d1-rows-read`.
+      const rows = await selectRows(database, 'SELECT COUNT(*) AS total FROM organization', []);
+      if (!rows.ok) {
+        return err(rows.error);
+      }
+      // ONE ROW ALWAYS, INCLUDING ON AN EMPTY PLATFORM — zero is the ordinary first day, not a
+      // missing answer. An empty result set means the statement did not run as written.
+      if (rows.value.length !== 1) {
+        return err(internal());
+      }
+      const raw = rows.value[0]['total'];
+      const total = typeof raw === 'number' ? raw : Number(raw);
+      return Number.isInteger(total) && total >= 0 ? ok(total) : err(internal());
+    },
+
+    async setOrganizationTemplate(
+      organizationId: string,
+      templateId: string | null,
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<OrganizationTemplateOutcome>> {
+      // NO ADMISSION, NO WRITE — `0014` §A.11.
+      consumeControlPlaneWriteReservation(reservation, 1);
+      try {
+        // =====================================================================================
+        // THE RETIRED-TEMPLATE PRECONDITION IS IN THE STATEMENT THAT WRITES. `architecture.md` §3a.
+        // =====================================================================================
+        //
+        // The caller has already read the Template — the response embeds it — and **that read is
+        // stale by the time this runs.** An operator retiring a Template in the window would
+        // otherwise have it adopted immediately afterwards, which is precisely the hole
+        // *"retirement hides it from new adoption"* exists to close. The guard re-asks in the same
+        // statement, so there is no window.
+        //
+        // `? IS NULL OR EXISTS (...)` — CLEARING IS ALWAYS PERMITTED, whatever the CURRENT
+        // Template's status. The contract is explicit: *"the precondition is about what may be
+        // ADOPTED, never about what is held."*
+        //
+        // *** IT USES `RETURNING` AND NOT `batch`, UNLIKE `updateOrganizationIdentity` DIRECTLY
+        // ABOVE — DO NOT TIDY THE TWO INTO ONE SHAPE. *** That method cannot tell a matched row
+        // from an unmatched one because `D1Database.batch` returns `unknown[]`, and it says so at
+        // length. A single statement through `.all()` reads its own `RETURNING` rows, so this one
+        // CAN, and it needs to: the guard above makes "no row matched" a real and expected answer
+        // rather than an impossibility.
+        const written = await database
+          .prepare(
+            'UPDATE organization SET template_id = ? WHERE organization_id = ? ' +
+              "AND (? IS NULL OR EXISTS (SELECT 1 FROM template WHERE template_id = ? " +
+              "AND status = 'active')) " +
+              'RETURNING organization_id',
+          )
+          .bind(templateId, organizationId, templateId, templateId)
+          .all<{ organization_id: string }>();
+        if (written.results.length === 1) {
+          return ok('updated');
+        }
+        // Zero rows is either "no such Organization" or "that Template cannot be adopted". One
+        // point lookup separates them, on the refusal path only — the success path stays a single
+        // statement and keeps its no-window property.
+        const existing = await selectRows(
+          database,
+          'SELECT organization_id FROM organization WHERE organization_id = ? LIMIT 1',
+          [organizationId],
+        );
+        if (!existing.ok) {
+          return err(existing.error);
+        }
+        return ok(existing.value.length === 0 ? 'organization_not_found' : 'template_unusable');
+      } catch {
+        // A FOREIGN-KEY VIOLATION LANDS HERE and is `unavailable`, which is honest: the guard above
+        // turns every template state the caller can legitimately hit into an ANSWER, so reaching
+        // the constraint means the row vanished mid-statement rather than that the operator got an
+        // identifier wrong.
         return err(unavailable());
       }
     },

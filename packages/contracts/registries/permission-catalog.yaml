@@ -541,6 +541,145 @@ permissions:
     scopes: [platform]
     status: proposed
     phase: 1
+  # =========================================================================================
+  # THE FOUR TEMPLATE-LIFECYCLE PERMISSIONS. GRANTED BY THE USER, 2026-09-11.
+  # =========================================================================================
+  # RELAYED BY THE TEAM LEAD, WHO DOES NOT APPROVE — security.md §8 reserves the grant to the
+  # user and permits the Team Lead only to relay it. The user's words: "Finalize and register
+  # the four proposed Template permissions." Registered by architecture-agent on that relay.
+  #
+  # WHAT THE USER WAS APPROVING, recorded so the grant can be audited against the approval
+  # rather than against somebody's memory of it. All four come from template-lifecycle-v1
+  # (ACCEPTED 2026-09-10) and each carries its full argument there; the summaries below are
+  # pointers, not the argument. All four are `sensitive`, all four are scopes: [platform], and
+  # NONE OF THEM READS A CUSTOMER, AN INVOICE, OR ANY ROW BEHIND whereWithTenant — the property
+  # the platform group's preamble asserts and which these do not break.
+  #
+  # *** ONE OF THEM WRITES INTO A CUSTOMER'S DATABASE AND THAT IS THE DETAIL AN APPROVAL SHOULD
+  # CONTAIN RATHER THAN ACQUIRE: *** core.platform-organization.set-template writes a
+  # docs/decisions/0028 audit record into the named Organization's own database — five
+  # row-writes from that Organization's own daily allocation. It READS nothing of theirs. The
+  # write is performed FOR the customer rather than at their expense, and the customer CANNOT
+  # YET READ IT (`core.audit.read` has no route — PA-3); the record is written so they can when
+  # one exists. Bounded by PLATFORM_ORIGINATED_DAILY_ROW_WRITES = 1_000, which is inherited by
+  # construction only if the route goes through recordOrganizationAccess with the
+  # OperatorWriteCharged receipt — template-lifecycle-v1 -> theBUDGETMECHANISM_SR4_20260910.
+  #
+  # NO WILDCARDS. Four explicit ids, no pattern, no group grant. 0007 rule 3.
+  # NO FAIL-OPEN. Each is deny-by-default like every other entry; an unregistered permission is
+  # refused, not permitted, and none of these is reachable until Core registers a route.
+  # 0024's MUTUAL EXCLUSION IS UNTOUCHED: a platform_operator holds zero organization_membership
+  # rows, so no tenant store handle is resolved for them and no tenant read is reachable. If an
+  # implementation ever resolves one to perform set-template's audit write, that is a CRITICAL
+  # defect and not an implementation detail.
+  - id: core.template.update
+    group: platform
+    description: >-
+      Edit a Template — its name, its level labels, or both. NOT its status: retirement is
+      core.template.retire, and there is no `status` field in any request shape in
+      template-lifecycle-v1, so this permission cannot perform that one through a field.
+      SENSITIVE rather than write, and with STRICTLY MORE REACH THAN CREATE: a create reaches
+      nobody until something adopts it; an update reaches every Organization already adopting.
+      Not critical — nothing is destroyed, no authority changes (a label alters no scope), and a
+      wrong value is fixed by the same route that set it (docs/decisions/0026; 0031 Decision 2).
+      *** THE RUNG RESTS ON A TEMPLATE CARRYING LABELS AND NOTHING ELSE. *** The `apps` list is
+      DEFERRED, NOT FORBIDDEN. With one, editing a Template would change WHICH Apps every
+      adopting Organization has — an installed App is code with permissions reaching data, not a
+      label — and THIS rung is the first to revisit, ahead of set-template's, because update
+      reaches every adopter in one call and set-template reaches one Organization per call. The
+      trigger is also recorded on template-v1.schema.json's createTemplateInput and
+      templateOutput, where the person adding the field is standing.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.template.retire
+    group: platform
+    description: >-
+      Withdraw a Template from NEW adoption, and restore one. GATES BOTH DIRECTIONS —
+      platform.templates.retire AND platform.templates.restore — deliberately: the field is a
+      reversible, non-destructive toggle, and a separate restore permission could only ever be
+      held alongside this one, which is a split with no decision in it.
+      *** RESTORE EXISTS BECAUSE ONE-WAY RETIREMENT SPENDS THE TEMPLATE'S UNIQUE NAME
+      PERMANENTLY. *** Retire "School" by mistake and you can neither recreate it — the retired
+      row still holds the name — nor undo it. Retirement was designed as the SAFE alternative to
+      deletion; one-way retirement would make it a quieter deletion with the same permanence.
+      Existing adopters keep a retired Template and keep rendering its labels; retirement blocks
+      NEW adoption only.
+      NAMED `retire` AND NOT `archive`, correcting this repository's own earlier matrix rows: a
+      permission named `archive` gating a route that sets a status called `retired` is two words
+      for one act. Customer records archive; Templates retire.
+      *** WHAT THE MERGE COSTS, RECORDED RATHER THAN IMPLIED: ANYONE WHO MAY RESTORE MAY ALSO
+      RETIRE. *** That is the escalation direction, and A LOW-PRIVILEGE RECOVERY ROLE CANNOT
+      EXIST WHILE IT HOLDS — core.principal.revoke-platform-scope's break-glass argument
+      transposed. TWO TRIGGERS REOPEN THE SPLIT: a retirement carrying a reason that must not be
+      undone, OR a responder role needing recovery without destruction.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.platform-organization.set-template
+    group: platform
+    description: >-
+      Set or clear which Template an Organization has adopted, after onboarding. The operation an
+      operator performs after retiring a Template, to move its adopters.
+      *** IT IS SEPARATE FROM core.platform-organization.update BECAUSE THAT ENTRY RULES ITSELF
+      OUT IN TERMS: *** it is scoped to display name, commercial registration and VAT
+      registration, and says "IT DOES NOT COVER STATUS… a separate permission and a separate
+      argument — §3.2's splitting discipline applied before rather than after." A TEMPLATE IS NOT
+      IDENTITY: name, CR and VAT are facts ABOUT the Organization that the platform records on
+      their behalf; a Template decides what every user in that Organization READS AS THE NAME OF
+      THEIR OWN STRUCTURE. Reusing the identity permission would widen it by adoption rather than
+      by decision.
+      SENSITIVE, ON core.platform-organization.update's OWN LADDER ARGUMENT: a platform principal
+      editing a record inside a customer's own identity is not an ordinary record edit, and it is
+      not critical because nothing is destroyed, no authority changes, and the same route corrects
+      a wrong value.
+      *** THIS ONE IS CLOSER TO THE LINE THAN THE OTHER THREE AND SAYING SO BEATS ASSERTING THE
+      RUNG. *** It changes what every user in one named Organization sees, without their
+      involvement, and they cannot change it back themselves. What holds it below critical is that
+      it alters LABELS AND NOTHING ELSE — no scope, no permission, no money. It DOES write into
+      that Organization's database (see the block above); "no tenant reach" is true of READS and
+      does not survive being applied to WRITES.
+      A RETIRED TEMPLATE IS REFUSED with failed_precondition — retirement means "hides it from new
+      adoption", and this is the route most likely to meet one, because the workflow that brings
+      an operator here is "I retired the old Template, now let me move everyone".
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
+  - id: core.template-adoption.read
+    group: platform
+    description: >-
+      Read how many Organizations have adopted one Template. Gates platform.templates.usage, the
+      read an operator performs BEFORE retiring so the decision is not made blind.
+      *** SENSITIVE, NOT `read`, AND THE RUNGS DISAGREEING WITH EACH OTHER IS THE ARGUMENT. ***
+      core.organization.list — which discloses the Organization population — is `sensitive`. This
+      discloses an AGGREGATE OVER THAT SAME POPULATION, and at `read` it would have been the first
+      count in the platform surface reachable at `read` sensitivity. A ladder that files a
+      disclosure BELOW the population it discloses has stopped sorting anything.
+      *** IT IS A CENSUS AND NOT A BOUND. *** core.template.list is `read`, so a holder of
+      template read-plus-list would enumerate every Template and SUM the counts — the exact number
+      of Organizations holding any Template. Poll it over time and it is a customer GROWTH RATE.
+      Its own permission is what closes that: summing across Templates now requires a deliberate
+      grant rather than arriving free with core.template.read.
+      NAMED `core.template-adoption.` AND NOT `core.template.` DELIBERATELY, BECAUSE PERMISSIONS
+      ARE GRANTED BY FAMILY. Filed under core.template.* it would sit beside create, list and read
+      — three permissions about the Template RECORD — and a census permission would arrive with
+      them silently, looking like a fourth member of a set the grantor had already decided about.
+      Reading a Template and counting its adopters are different decisions.
+      RATE LIMITING IS NOT A SUBSTITUTE AND MUST NOT BE OFFERED AS ONE: the census vector is
+      LONGITUDINAL, not burst. One call a day for a year is rate-limited by nothing and yields a
+      growth curve. A limit that bounds requests per minute bounds a scrape and does not bound
+      sampling over months. A rate limit added ALONGSIDE is fine; it does not license relaxing the
+      rung.
+      WHAT NEITHER CONTROL REACHES: a legitimately-granted holder can still build the curve. The
+      permission buys a DELIBERATE grant and an AUDITED read — the trail is the detection, not the
+      gate.
+    sensitivity: sensitive
+    scopes: [platform]
+    status: proposed
+    phase: 1
   - id: core.principal.revoke-platform-scope
     group: platform
     description: >-
@@ -1035,15 +1174,28 @@ defaultRoles:
   # it was accepted for — a transcribed number in a file that cannot read its own source.
   #   shape:            the count of entries in `permissions` whose own `scopes` includes
   #                     `platform`. The entries are the source; this line is not.
-  #   figureOn_2026-09-08: 11 — derived by enumerating those entries, not by counting a string.
+  #   figureOn_2026-09-11: 15 — derived by enumerating those entries, not by counting a string.
   #   ifTheyDISAGREE:   THE ENTRIES ARE RIGHT AND THIS NOTE IS WRONG. Correct the note.
+  #   ITMOVEDAGAIN:     11 -> 15 on 2026-09-11, when the user granted template-lifecycle-v1's four.
+  #                     THIRD RECORDED MOVE (10 -> 11 -> 15). The 0033 form is doing its job: the
+  #                     figure is dated, its derivation is stated, and the entries are named as the
+  #                     authority — so correcting it is mechanical rather than an argument about
+  #                     which number was right.
   #
   # WHAT WOULD MAKE THE NEXT DRIFT FAIL LOUDLY, since a figure nobody must move is a figure
   # nobody moves: nothing here can, and that is the honest answer — no YAML parser exists in this
   # repository, so this file cannot check itself. THE CHECK BELONGS WHERE A PARSER ALREADY RUNS.
   # `platform-permissions.ts` holds the same set twice over in TypeScript — PLATFORM_PERMISSION_
-  # ENVELOPE (9) plus HELD_BUT_UNREACHABLE (2) — and 9 + 2 = 11 is an arithmetic identity a suite
-  # CAN assert. qa-agent's registry-coherence.ts is where it goes, with the two guards this
+  # ENVELOPE plus HELD_BUT_UNREACHABLE — and their sum equalling the entry count is an arithmetic
+  # identity a suite CAN assert.
+  #   *** THE FIGURES 9 + 2 = 11 ARE STRUCK, 2026-09-11, AND NOT REPLACED WITH 13 + 2 = 15. ***
+  #   `platform-permissions.ts` is platform/core/** and is core-agent's; THIS FILE CANNOT SEE IT,
+  #   so any split written here is a transcription of somebody else's file — the exact defect the
+  #   0033 form above exists to avoid, committed one paragraph below the paragraph avoiding it.
+  #   WHAT IS TRUE AND CHECKABLE FROM HERE: the ENTRY COUNT is 15 (dated and derived above). HOW
+  #   Core divides those between reachable and held-but-unreachable is Core's fact and the suite's
+  #   to assert. FOUR OF THE FIFTEEN GATE NO ROUTE TODAY, which is a consequence of the grant
+  #   landing before the implementation and is stated as a property rather than as a split. qa-agent's registry-coherence.ts is where it goes, with the two guards this
   # repository has learned to demand: a floor that fails loudly when either list parses as empty,
   # and a known-failing input — a fixture with a twelfth platform permission in neither list,
   # which must go RED.
@@ -1319,6 +1471,48 @@ defaultRoles:
       # kind of detail an approval should contain rather than acquire.
       # =======================================================================
       - core.platform-organization.update
+      # =======================================================================
+      # GRANTED BY THE USER, 2026-09-11. Relayed by the Team Lead, who does not
+      # approve — security.md §8 reserves the grant to the user and permits the
+      # Team Lead only to relay it. The user's words: "Finalize and register the
+      # four proposed Template permissions."
+      #
+      # THIS TAKES THE ROLE FROM ELEVEN PLATFORM PERMISSIONS TO FIFTEEN.
+      #
+      # WHAT THE USER WAS APPROVING, so the grant can be audited against the
+      # approval rather than against somebody's memory of it: the four
+      # permissions of template-lifecycle-v1 (ACCEPTED 2026-09-10), each argued
+      # in full there and summarised on its own entry above. All four
+      # `sensitive`, all four scopes: [platform].
+      #
+      # THE BOUNDARIES THE USER RESTATED WITH THE GRANT, AND HOW THIS
+      # REGISTRATION MEETS THEM:
+      #   NO WILDCARDS — four explicit ids, no pattern, no group grant.
+      #   NO FAIL-OPEN — deny-by-default, and none is reachable until Core
+      #     registers a route. FOUR PERMISSIONS THAT GATE NOTHING TODAY.
+      #   NO BLANKET TENANT DATA ACCESS FOR A PLATFORM OPERATOR — none of the
+      #     four reads a customer, an invoice, or any row behind
+      #     whereWithTenant. 0024's mutual exclusion is the mechanism and is
+      #     untouched: a platform_operator holds zero organization_membership
+      #     rows, so no tenant store handle resolves for them.
+      #   AUTHORIZATION IN CORE — these are catalogue entries. Nothing here
+      #     enforces anything; Core decides on every call.
+      #
+      # THE ONE THING THE SUMMARY ABOVE WOULD OTHERWISE ABSORB, recorded for the
+      # same reason it had to be recorded for core.platform-organization.update
+      # and was then INHERITED WITHOUT THE CORRECTION into the new entry:
+      # core.platform-organization.set-template WRITES ONE AUDIT RECORD INTO THE
+      # CUSTOMER'S OWN TENANT DATABASE — five row-writes from that
+      # Organization's daily allocation — and READS NOTHING FROM IT. "No new
+      # tenant reach" is true of READS and needs the qualification for WRITES.
+      # AND THE CUSTOMER CANNOT YET READ THAT RECORD: core.audit.read has no
+      # route (PA-3). It is written so they can when one exists, and writing it
+      # late would mean the trail begins after the acts it covers.
+      # =======================================================================
+      - core.template.update
+      - core.template.retire
+      - core.platform-organization.set-template
+      - core.template-adoption.read
   # core.app.read was removed from this role: it is declared scopes: [organization,
   # business], and a platform-scope role holding it reads every tenant's installed Apps
   # across the tenant boundary. Moderation reviews PUBLISHED App versions, which is a
@@ -1360,16 +1554,21 @@ defaultRoles:
   # stating once is a claim somebody restated, and the instance you did not fix is the one the
   # next reader finds.
   #
-  # THE TWELVE OMITTED, ENUMERATED RATHER THAN COUNTED, because a category absorbs the entry
+  # THE SIXTEEN OMITTED, ENUMERATED RATHER THAN COUNTED, because a category absorbs the entry
   # that does not belong to it:
-  #   ELEVEN declared scopes: [platform] — a tenant role must never reach platform scope, and
+  #   FIFTEEN declared scopes: [platform] — a tenant role must never reach platform scope, and
   #   this is the CRITICAL escalation the preamble's invariant exists to forbid:
   #     core.principal.grant-platform-scope   core.marketplace.moderate
   #     core.organization.create              core.organization.list
   #     core.platform-organization.update     core.template.read
   #     core.template.list                    core.template.create
   #     core.principal.revoke-platform-scope  core.platform-audit.read
-  #     core.credential.reset
+  #     core.credential.reset                 core.template.update
+  #     core.template.retire                  core.template-adoption.read
+  #     core.platform-organization.set-template
+  #   (ELEVEN until 2026-09-11; the four Template-lifecycle permissions were granted that day.
+  #    ENUMERATED RATHER THAN COUNTED, which is why adding four was a mechanical edit: a category
+  #    absorbs the entry that does not belong to it, and a list cannot.)
   #   ONE declared scopes: [own] — core.notification.read. Held at 'own', not at 'organization'.
   #   Reading one's own notifications is not an organization-scope power; see openQuestions AZ5.
   #

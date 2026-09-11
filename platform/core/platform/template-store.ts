@@ -28,7 +28,7 @@
 
 import type { Result } from '../kernel/result.ts';
 import type { ControlPlaneWriteReservation } from '../identity/control-plane-admission.ts';
-import type { TemplateLabels, TemplateRecord } from './templates.ts';
+import type { TemplateLabels, TemplateRecord, TemplateStatus } from './templates.ts';
 
 export type NewTemplate = {
   readonly templateId: string;
@@ -72,10 +72,60 @@ export type TemplateStore = {
    * read is every Organization's latency, and OFFSET pagination reads and discards every earlier
    * row.
    */
+  /**
+   * `status` FILTERS; `null` MEANS UNFILTERED, WHICH IS THE SERVER DEFAULT AND DOES NOT CHANGE.
+   *
+   * *** THE FILTER WAS ADDED WITH THE RETIRE ROUTE AND IS NOT A CONVENIENCE. *** `template-v1`'s
+   * `listFilterAmendment`: **the moment `retired` becomes reachable, a list that mixes retired and
+   * active Templates recreates the defect name-uniqueness exists to prevent.** This contract set's
+   * own words — *"two Templates called School are indistinguishable to the operator choosing one"* —
+   * become *"an active and a retired School are indistinguishable in a picker"*. Retire without a
+   * filter is a half-built feature.
+   *
+   * *** ABSENT STAYS UNFILTERED, SERVER-SIDE, AND THE DEFAULT THAT MATTERS LIVES IN THE CLIENT. ***
+   * Changing the server default to `active` was considered and rejected: it is a semantic change to
+   * a published operation, unobservable today and observable the first time retire is used, and
+   * *"a change that is invisible until the feature that makes it visible ships is not a safe change,
+   * it is a delayed one."* Both clients SEND `status=active` on an operator-facing list.
+   *
+   * IT TOUCHES NO INDEX. `0012_template.sql` creates none on `status` and none is needed: this is a
+   * bounded keyset page over the primary key, and the filter narrows a page that was already bounded.
+   */
   list(
     limit: number,
     afterTemplateId: string | null,
+    status: TemplateStatus | null,
   ): Promise<Result<readonly TemplateRecord[]>>;
+
+  /**
+   * ===========================================================================================
+   * HOW MANY TEMPLATES EXIST. A SCALAR, AND IT TAKES NO FILTER.
+   * `platform.templates.count` · `docs/decisions/0042`.
+   * ===========================================================================================
+   *
+   * *** NO `status` PARAMETER, AND ITS ABSENCE IS A RULING RATHER THAN AN OMISSION. *** `list`
+   * gained that filter one method up because **a picker must not offer a retired Template beside an
+   * active one**. A TOTAL IS A DIFFERENT QUESTION: *"a number that changed with a filter would be a
+   * different number under the same name, and an operator asking 'how many Templates are there' is
+   * asking about the table."* **A total that accepts a filter is a query** — the same disclosure
+   * arriving one parameter at a time.
+   *
+   * IF A FILTERED COUNT IS EVER WANTED IT IS A SEPARATE OPERATION WITH A SEPARATE NAME. Stated as
+   * the reason rather than as a prohibition, so whoever needs one does not read this as a refusal
+   * of the requirement.
+   *
+   * *** IT NEEDS NO PERMISSION OF ITS OWN, AND `organizations_using` DID — THE SAME TEST, DIFFERENT
+   * POPULATIONS. *** `security.md` §2a: a count is safe exactly when its consumer already holds
+   * enumeration over the counted population. **This counts TEMPLATES and a `core.template.list`
+   * holder enumerates Templates**, so it reaches nothing past that right — walking the pages yields
+   * the same number, more slowly and at an audit row per page. `countOrganizationsUsingTemplate`
+   * counts ORGANIZATIONS, over which a Template reader holds nothing, which is why that one has a
+   * `sensitive` permission of its own.
+   *
+   * A `COUNT`, NEVER A FETCH-AND-LENGTH. Reading every row to measure the length is the same number
+   * on the wire and a different number against `d1-rows-read`.
+   */
+  count(): Promise<Result<number>>;
 
   /**
    * One Template, or `null`.
@@ -90,4 +140,87 @@ export type TemplateStore = {
    * an inconsistency.
    */
   findById(templateId: string): Promise<Result<TemplateRecord | null>>;
+
+  /**
+   * ===========================================================================================
+   * EDIT ONE TEMPLATE'S NAME AND LABELS. `template-lifecycle-v1` · `template-v1` TM-1.
+   * ===========================================================================================
+   *
+   * *** IT CANNOT SET `status`, AND THAT IS THE PERMISSION SPLIT HELD IN A TYPE. *** `setStatus` is
+   * the only method that writes that column. The contract's reason is not tidiness: *"a `status` in
+   * a PATCH body would make `core.template.update` able to perform `core.template.retire`'s act,
+   * which is the permission split undone by a field."* **A port that cannot express the transition
+   * cannot be the route by which the split is lost.**
+   *
+   * *** EVERY REFUSAL IS DECIDED IN THE WRITING STATEMENT, NOT BY A PRIOR READ. ***
+   * `architecture.md` §3a ranks the layers and is explicit that the in-statement guard *"is the only
+   * layer with no window at all, because it re-asks the question in the same statement that
+   * writes."* The caller has read the Template — it needs the stored labels as the merge base — and
+   * **that read is stale by the time this runs.** Between the two, another operator may retire the
+   * Template or take the name. So both conditions are re-asked here.
+   *
+   * `name_taken` EXCLUDES THE ROW BEING UPDATED, and the contract says why the obvious version is
+   * wrong: *"the obvious implementation — 'does any row have this normalised name' — returns the row
+   * itself and refuses every edit that keeps the name."* Renaming a Template to its own current name
+   * alongside a label change is a 200.
+   *
+   * `raced` IS NOT A COLLISION AND IS NOT AN ERROR — it is the guard having refused while a
+   * follow-up read finds nothing wrong, which only a concurrent write explains. It is reported
+   * separately rather than folded into `name_taken` because **an outcome that says "collision" when
+   * there was none would send an operator hunting for a duplicate that does not exist.**
+   */
+  update(
+    templateId: string,
+    next: {
+      readonly name: string;
+      /** `normalizeTemplateName(name)`. The collision key; see `templates.ts`. */
+      readonly normalizedName: string;
+      readonly labels: TemplateLabels;
+    },
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<TemplateUpdateOutcome>>;
+
+  /**
+   * ===========================================================================================
+   * RETIRE OR RESTORE. ONE METHOD, BOTH DIRECTIONS, AND THE EXPECTED CURRENT STATE IS REQUIRED.
+   * ===========================================================================================
+   *
+   * *** `from` IS NOT A CONVENIENCE — IT IS THE `failed_precondition` GUARD, IN THE STATEMENT. ***
+   * `template-lifecycle-v1` refuses a second retire rather than treating it as idempotent, because
+   * *"a silent success writes an audit record saying an operator retired something that was already
+   * retired, and a trail whose entries do not correspond to changes is a trail that has to be read
+   * twice."* Making the expected state a required argument of the write means the check cannot be
+   * performed against a stale read: the statement matches no row unless the Template is still in the
+   * state the caller believed.
+   *
+   * *** ONE METHOD RATHER THAN `retire()` AND `restore()`, AND THE ROUTES ARE STILL TWO. *** The two
+   * routes exist because *"a toggle's audit record cannot say which direction it went without
+   * reading the previous state"* — that is a fact about the AUDIT TRAIL and the AUTHORIZED ACT, both
+   * of which live above this port. Down here the two directions are one column and one guard, and
+   * two methods would be two copies of one statement.
+   *
+   * IT TOUCHES NO INDEX. `0012_template.sql`: *"NO INDEX ON `status`."* If one is ever added,
+   * `TEMPLATE_STATUS_ROW_WRITES` moves with it.
+   */
+  setStatus(
+    templateId: string,
+    transition: {
+      /** The state the caller believes the Template is in. The guard, not a hint. */
+      readonly from: TemplateStatus;
+      readonly to: TemplateStatus;
+    },
+    reservation: ControlPlaneWriteReservation,
+  ): Promise<Result<TemplateStatusOutcome>>;
 };
+
+/**
+ * What `update` did, or why it did not.
+ *
+ * A CLOSED UNION RATHER THAN A BOOLEAN, because the four outcomes are four different HTTP answers —
+ * 200, 404, 409 and 422 — and a boolean would make the caller guess which. `create` returns a
+ * boolean legitimately: it has exactly two outcomes and one of them is the collision.
+ */
+export type TemplateUpdateOutcome = 'updated' | 'not_found' | 'retired' | 'name_taken' | 'raced';
+
+/** What `setStatus` did. `already_in_state` is the contract's `failed_precondition`, both ways. */
+export type TemplateStatusOutcome = 'updated' | 'not_found' | 'already_in_state';

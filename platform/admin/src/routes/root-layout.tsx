@@ -47,6 +47,8 @@ import type { ReactNode } from 'react';
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { AdminShell } from '@/components/AdminShell';
 import { ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import { LocaleSwitch } from '@/components/LocaleSwitch';
+import { useT } from '@/lib/i18n';
 import { Button } from '@dudo/ui';
 import { SignIn } from '@/screens/SignIn';
 import { useOperatorSession } from '@/lib/use-session';
@@ -54,16 +56,29 @@ import { OperatorProvider } from '@/lib/operator-context';
 import { authClient, platformClient } from '@/lib/clients';
 
 export function RootLayout() {
+  const t = useT();
   const session = useOperatorSession(authClient, platformClient);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
 
   if (session.state === 'anonymous') {
+    /*
+      THE SIGN-IN SCREEN GETS THE LANGUAGE CONTROL TOO, and it is the single
+      most important place for it: **it is the first page anyone sees.** It is
+      placed here rather than inside `SignIn` so that all four session states
+      get it from one decision — putting it in the screen would mean the next
+      pre-auth screen has to remember.
+    */
     return (
-      <SignIn
-        auth={authClient}
-        onSignedIn={session.signedIn}
-        signOutUncleared={session.signOutUncleared}
-      />
+      <div className="min-h-dvh bg-paper">
+        <div className="mx-auto flex w-full max-w-xl justify-end px-4 pt-4">
+          <LocaleSwitch />
+        </div>
+        <SignIn
+          auth={authClient}
+          onSignedIn={session.signedIn}
+          signOutUncleared={session.signOutUncleared}
+        />
+      </div>
     );
   }
 
@@ -71,7 +86,7 @@ export function RootLayout() {
     return (
       <Centred>
         {session.probeError === null ? (
-          <LoadingBlock label="Checking your operator session with Dudo…" />
+          <LoadingBlock label={t('loading.session')} />
         ) : (
           <ErrorBlock error={session.probeError} onRetry={session.retry}>
             <p className="mt-2 leading-relaxed text-ink-soft">
@@ -82,8 +97,7 @@ export function RootLayout() {
                 teach an operator to re-enter a password whenever the network
                 hiccups.
               */}
-              This does not mean you are signed out — Dudo could not be asked. Your session may
-              well still be live.
+              {t('session.probeFailed.notSignedOut')}
             </p>
             <Button
               variant="secondary"
@@ -92,7 +106,7 @@ export function RootLayout() {
               onClick={session.signOut}
               busy={session.signingOut}
             >
-              Sign out instead
+              {t('session.signOutInstead')}
             </Button>
           </ErrorBlock>
         )}
@@ -104,11 +118,14 @@ export function RootLayout() {
     return (
       <Centred>
         <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-8">
-          <h1 className="text-xl font-bold text-ink">This account cannot use the console</h1>
-          <p className="mt-3 leading-relaxed text-ink-soft">
-            You are signed in — your password was accepted — and Dudo refused this console to your
-            account.
-          </p>
+          <h1 className="text-xl font-bold text-ink">{t('session.refused.title')}</h1>
+          {/*
+            SAYS THE PASSWORD WAS ACCEPTED, which is the half that stops an
+            operator retyping it. **A translation that collapsed this into "you
+            cannot sign in" would send them round the login loop forever** — the
+            credential is fine and the console is refused.
+          */}
+          <p className="mt-3 leading-relaxed text-ink-soft">{t('session.refused.body')}</p>
           <p className="mt-3 leading-relaxed text-ink-soft">
             {/*
               Four conditions collapse into one argument-free `forbidden`, and
@@ -117,12 +134,12 @@ export function RootLayout() {
               condition it would be actively wrong. So the console says what it
               knows and stops.
             */}
-            Dudo does not say why, deliberately, and this console cannot tell. Signing in again
-            will not change it — ask whoever administers the platform.
+            {t('session.refused.noReason')}
           </p>
           {session.refusal?.request_id ? (
-            <p className="mt-4 font-mono text-xs break-all text-ink-muted">
-              Reference {session.refusal.request_id}
+            <p className="mt-4 text-xs text-ink-muted">
+              {t('denied.reference')}{' '}
+              <bdi className="font-mono break-all">{session.refusal.request_id}</bdi>
             </p>
           ) : null}
           <Button
@@ -131,7 +148,7 @@ export function RootLayout() {
             onClick={session.signOut}
             busy={session.signingOut}
           >
-            {session.signingOut ? 'Signing out…' : 'Sign out'}
+            {session.signingOut ? t('nav.signingOut') : t('nav.signOut')}
           </Button>
         </div>
       </Centred>
@@ -147,7 +164,7 @@ export function RootLayout() {
   if (session.whoami === null) {
     return (
       <Centred>
-        <LoadingBlock label="Loading your operator context…" />
+        <LoadingBlock label={t('loading.operatorContext')} />
       </Centred>
     );
   }
@@ -167,8 +184,27 @@ export function RootLayout() {
 }
 
 /** The frameless states — no sidebar, because none of them can be navigated. */
+/**
+ * The wrapper for every session state that is NOT `operator`.
+ *
+ * **IT CARRIES THE LANGUAGE CONTROL, and that is not decoration.** These are
+ * the states where an operator is being told something they may not expect —
+ * checking a session, refused platform authority, or asked to sign in — and
+ * `AdminShell` renders in none of them. Before this, the switch existed only
+ * behind a successful sign-in, so **the first screen anyone sees was English
+ * with no way out of it.**
+ *
+ * The control sits above the content rather than inside it because these
+ * screens own their own copy; a wrapper that injected a header into a refusal
+ * panel would be laying out someone else's message.
+ */
 function Centred({ children }: { children: ReactNode }) {
   return (
-    <main className="mx-auto min-h-dvh w-full max-w-xl px-4 py-16 sm:py-24">{children}</main>
+    <main className="mx-auto min-h-dvh w-full max-w-xl px-4 py-16 sm:py-24">
+      <div className="mb-6 flex justify-end">
+        <LocaleSwitch />
+      </div>
+      {children}
+    </main>
   );
 }

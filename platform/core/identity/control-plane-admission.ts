@@ -148,6 +148,17 @@ export const ORGANIZATION_ROW_WRITES = 2;
  * index. **If a secondary index is ever added to `organization`, this number moves and the insert's
  * does too** — the same instruction `PLATFORM_OPERATOR_ACTION_ROW_WRITES` carries, which `0016` is
  * the worked example of honouring.
+ *
+ * *** IT COVERS EVERY SINGLE-ROW `organization` UPDATE THAT TOUCHES NO INDEX, AND SINCE 2026-09-11
+ * THAT IS TWO ROUTES: `platform.organizations.identity.update` AND
+ * `platform.organizations.set-template`. *** The second writes one column where the first writes
+ * thirteen, and the cost is identical because the cost is the ROW rather than the columns.
+ *
+ * **A SECOND CONSTANT WITH THE SAME DERIVATION WAS THE OBVIOUS MOVE AND IS REFUSED**, because two
+ * numbers derived from one table are two numbers that must be moved together and one that will not
+ * be — `workflow.md` §12's duplicated constraint, on a value whose whole purpose is to track a
+ * schema. `0013_organization_template.sql` adds `template_id` with **no index**, deliberately, so
+ * set-template maintains nothing either. **One constant, one place to move when that changes.**
  */
 export const ORGANIZATION_UPDATE_ROW_WRITES = 1;
 
@@ -284,6 +295,46 @@ export const CONFIRMATION_ROW_WRITES = 2;
  * THIS NUMBER MUST MOVE WITH IT.
  */
 export const TEMPLATE_ROW_WRITES = 4;
+
+/**
+ * *** EDITING A TEMPLATE COSTS TWO, NOT FOUR, AND THE DIFFERENCE IS THE PRIMARY KEY. ***
+ * `template-lifecycle-v1` -> `platform.templates.update`.
+ *
+ * `TEMPLATE_ROW_WRITES` is an INSERT: a table row, the implicit primary-key index entry, and the
+ * uniqueness index on the normalised name. **An UPDATE touches no primary key**, so it is one table
+ * row plus the uniqueness index — which it DOES maintain, because `normalized_name` is one of the
+ * columns being written. Two.
+ *
+ * IT IS CHARGED EVEN WHEN THE NAME DOES NOT CHANGE. The statement always writes all five columns,
+ * so the index entry is always touched, and a conditional cost would be a number that depends on
+ * the request — which is the shape `0014` §A.12 warns against: *"over-reserving delays a write,
+ * under-reserving is a platform outage."*
+ *
+ * A SEPARATE CONSTANT RATHER THAN REUSING THE INSERT'S, for `ORGANIZATION_UPDATE_ROW_WRITES`'s
+ * reason exactly: reusing it would over-reserve by two on every edit and, worse, would make a future
+ * reader think an update maintains a primary key.
+ *
+ * WHEN A MIGRATION ADDS AN INDEX TO `template`, THIS NUMBER MOVES AND `TEMPLATE_ROW_WRITES` MOVES
+ * WITH IT — the pair has to stay consistent, and `0012_template.sql` names a `status` index for the
+ * retire route as the obvious candidate.
+ */
+export const TEMPLATE_UPDATE_ROW_WRITES = 2;
+
+/**
+ * *** RETIRING OR RESTORING A TEMPLATE COSTS ONE, AND IT IS ONE RATHER THAN TWO BECAUSE `status` IS
+ * NOT INDEXED. *** `template-lifecycle-v1` -> `platform.templates.retire` and `.restore`.
+ *
+ * `0012_template.sql` is explicit: *"NO INDEX ON `status`, and none is needed."* That sentence was
+ * written when no route set the column, and it stays true now that two do — a bounded keyset page
+ * over the primary key does not want one, and the `status` FILTER added to the list by
+ * `template-lifecycle-v1`'s amendment reads a page that is already bounded.
+ *
+ * *** IF THAT EVER CHANGES, THIS NUMBER MOVES — AND SO DO `TEMPLATE_ROW_WRITES` AND
+ * `TEMPLATE_UPDATE_ROW_WRITES`. *** Three constants over one table, and an index maintained by an
+ * INSERT is maintained by every UPDATE that writes the column. The obligation is stated on all
+ * three because a reader standing at one of them cannot see the other two.
+ */
+export const TEMPLATE_STATUS_ROW_WRITES = 1;
 
 /**
  * `principal_credential` (`0006`): 1 table row + 1 implicit primary-key index.

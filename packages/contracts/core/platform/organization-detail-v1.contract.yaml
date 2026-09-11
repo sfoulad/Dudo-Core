@@ -342,6 +342,16 @@ operations:
         cost, which is what the platform route's own reservation covers; the tenant-side write draws
         from the Organization's allocation exactly as organization-onboarding-v1's does. THE TWO
         LEDGERS ARE SEPARATE AND BOTH MUST BE RESERVED.
+        *** THE CONTROL-PLANE HALF INCLUDES THE P4 AUDIT RECORD, WHOSE COST IS
+        `PLATFORM_OPERATOR_ACTION_ROW_WRITES` IN platform/core/identity/control-plane-admission.ts —
+        READ THE CONSTANT, NOT A FIGURE IN A CONTRACT. *** It was 2 when the figures above were
+        written and migration 0016 took it to 4; the constant moved and the contracts did not.
+        Annotated 2026-09-11. THE TWO FIGURES ON THIS CONTRACT'S ROUTES ARE NOT YET CORRECTED —
+        scripts/check-row-writes.mjs cannot hold them, because neither operation declares a
+        `requestClass:` and the check is keyed on the declared class (docs/decisions/0039 phase 1).
+        *** SO THIS NOTE IS THE ONLY THING STANDING BETWEEN A READER AND A WRONG NUMBER HERE, AND
+        THAT IS THE STATE RATHER THAN A COMPLAINT ABOUT IT. *** The figures are corrected when this
+        contract declares its class; doing it by hand first would produce numbers nothing can verify.
     notFoundCOLLAPSE: >-
       AN UNKNOWN ORGANIZATION, AN IDENTIFIER BELONGING TO NOBODY, AN IDENTIFIER BELONGING TO SOMEONE
       WHO IS NOT A MEMBER OF THIS ORGANIZATION, A SUSPENDED MEMBERSHIP, AND A PLATFORM OPERATOR ALL

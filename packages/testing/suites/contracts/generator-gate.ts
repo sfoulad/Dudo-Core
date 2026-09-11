@@ -39,7 +39,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ISOLATION, Suite, assertEqual, assertTrue } from '../../harness/runner.ts';
-import { run } from '../../../contracts/generator/generate-types.mjs';
+import { exitCodeFor, run } from '../../../contracts/generator/generate-types.mjs';
 
 const CONTRACTS = fileURLToPath(new URL('../../../contracts/', import.meta.url));
 const GENERATED = join(CONTRACTS, 'generated');
@@ -309,10 +309,34 @@ export function buildGeneratorGateSuite(): Suite {
     // **The generator's exit code moved from 2 to 3 in the pass that introduced `migrationNotice`,
     // and anything asserting "non-zero" passed straight through that change without noticing.**
     //
-    // *** THIS IS A SUBPROCESS BECAUSE `exitCodeFor` IS NOT EXPORTED, AND RE-DERIVING IT HERE WOULD
-    // *** BE THE DUPLICATED CONSTRAINT `workflow.md` §12 IS ABOUT: *** a second copy of the
-    // precedence rule, in a file that cannot see the first, silently agreeing until it does not. So
-    // the real exit code of the real command is observed instead of computed.
+    // ===================================================================================
+    // *** THIS SAID "a subprocess BECAUSE `exitCodeFor` IS NOT EXPORTED". THE PREMISE IS NOW
+    // *** FALSE AND THE CONCLUSION IS STILL RIGHT — WHICH IS THE DANGEROUS COMBINATION. ***
+    // ===================================================================================
+    //
+    // `exitCodeFor` was exported on 2026-09-10 **because this file refused to re-implement it**;
+    // the export's own docblock says so. So the obstacle is gone, **and a reader who checks the
+    // premise, finds it false, and deletes the subprocess as obsolete would be removing real
+    // coverage while doing what looks like tidying.** `workflow.md` §12: *check whether an argument
+    // was resting on what you withdrew* — and re-derive the conclusion rather than leaving it
+    // propped up by a fact that has changed.
+    //
+    // **The two are different instruments and BOTH are kept, which is this suite's own rule about
+    // two anchors answering different questions:**
+    //
+    //   the subprocess        does a REAL run exit with what the rule says?  It is the only thing
+    //                         covering `process.exit(exitCodeFor(report))` at the CLI's last line.
+    //                         Blind to any input the corpus cannot produce.
+    //   `exitCodeFor` direct  is the PRECEDENCE right — refusals AND a notice, drift AND a notice,
+    //                         a reconciliation mismatch? Blind to whether anything is WIRED to it.
+    //
+    // **Neither subsumes the other**: change the CLI's last line to `process.exit(0)` and only the
+    // subprocess notices; break the precedence on an input the corpus cannot make and only the
+    // constructed reports notice. A disagreement between them is a finding.
+    //
+    // The sentence is now written as a REASON rather than as an obstacle, deliberately. **A reason
+    // survives the world changing; an obstacle becomes an argument for deletion the moment it
+    // lifts.**
     //
     // **It runs `--check`, which writes nothing.** `--emit` would write into
     // `packages/contracts/generated/**`, which is `architecture-agent`'s tree.
@@ -365,6 +389,59 @@ export function buildGeneratorGateSuite(): Suite {
       cli.status,
       3,
     );
+
+    // ===================================================================================
+    // AND THE PRECEDENCE ITSELF, ON INPUTS THE REAL CORPUS CANNOT PRODUCE ON DEMAND.
+    // ===================================================================================
+    //
+    // *** THE SUBPROCESS ABOVE PROVES ONE PATH THROUGH THE RULE. *** Today's corpus is clean with a
+    // notice, so it exercises exactly the `3` arm — and **every combination that decides whether the
+    // ORDER is right is one the corpus cannot be made to hold to order.** `exitCodeFor` is exported
+    // precisely so these can be asserted rather than re-implemented, and calling it is what makes
+    // the constructed half a check on the SHIPPED rule rather than on a copy of it.
+    //
+    // **ORDER IS PRECEDENCE AND CORPUS PROBLEMS WIN**, which the generator states in terms: a run
+    // with refusals AND a notice exits 1, because *the migration question is not answerable over a
+    // corpus that did not read.* Reporting 3 there would announce a decision is due on evidence
+    // that is missing — and **that is exactly the state `index-incomplete`'s clean run sits in**,
+    // which is why that fixture asserts the precedence and cannot assert the exit code.
+    const constructed = (population: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+      mode: 'check' as const,
+      refusals: [],
+      drift: [],
+      warnings: [],
+      population: { contractsAdmitted: 16, contractsRefused: 0, contractFilesFound: 16, modulesDrifted: 0, ...population },
+      ...extra,
+    });
+    const NOTICE = 'a phase boundary was reached';
+
+    for (const [label, input, expected] of [
+      ['clean, no notice', constructed({}), 0],
+      ['a notice and nothing wrong', constructed({}, { migrationNotice: NOTICE }), 3],
+      ['drift ALONE', constructed({ modulesDrifted: 2 }), 1],
+      // *** THE TWO THAT DECIDE THE ORDER. *** Each holds a condition that alone gives 3 AND one
+      // that alone gives 1 or 2. If the arms were reordered, these are the only inputs that notice.
+      ['drift AND a notice — the corpus wins', constructed({ modulesDrifted: 2 }, { migrationNotice: NOTICE }), 1],
+      [
+        'a refusal AND a notice — the corpus wins',
+        { ...constructed({}, { migrationNotice: NOTICE }), refusals: [{ code: 'GEN_UNRESOLVABLE_REF', message: 'x' }] },
+        1,
+      ],
+      [
+        '`fatal` AND a notice — the tool\'s own accounting wins over both',
+        constructed({}, { migrationNotice: NOTICE, fatal: 'admitted + refused != found' }),
+        2,
+      ],
+      // A reconciliation mismatch with nothing else wrong. The corpus cannot be made to hold this:
+      // it means the generator's own accounting disagrees with itself.
+      ['admitted + refused != found', constructed({ contractsAdmitted: 15 }), 2],
+    ] as const) {
+      assertEqual(
+        `${ISOLATION} precedence: ${label} -> ${expected}`,
+        exitCodeFor(input as never),
+        expected,
+      );
+    }
   });
 
   suite.test('BOTH PHASE CLASSIFIERS MEET THE OUTCOME THE REAL CORPUS CANNOT PRODUCE', () => {

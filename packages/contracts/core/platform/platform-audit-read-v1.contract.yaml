@@ -632,10 +632,18 @@ operations:
       Organizations, so the distinction discloses nothing. SPECIFIC TO THIS CLASS; do not copy it to
       a route a tenant principal can reach.
     notes: >-
-      maxRowWrites 4 counts the CONTROL-PLANE cost — the platform-operator record (2) plus the
-      reservation for the tenant write. The tenant `audit_event` write is 5 row-writes from the
-      `business` allocation. TWO LEDGERS, BOTH RESERVED, exactly as
-      platform.organizations.members.resolve.
+      maxRowWrites counts the CONTROL-PLANE cost — the platform-operator record plus the reservation
+      for the tenant write. The tenant `audit_event` write is 5 row-writes from the `business`
+      allocation. TWO LEDGERS, BOTH RESERVED, exactly as platform.organizations.members.resolve.
+      *** THIS SENTENCE SAID "the platform-operator record (2)" AND THAT VALUE HAS BEEN 4 SINCE
+      migration 0016. CORRECTED 2026-09-11 BY REMOVING THE NUMBER RATHER THAN UPDATING IT. *** The
+      record's cost is `PLATFORM_OPERATOR_ACTION_ROW_WRITES` in
+      platform/core/identity/control-plane-admission.ts; read it there.
+      IT IS RECORDED BECAUSE OF HOW IT WOULD HAVE SURVIVED. A check comparing declared FIGURES
+      against the constant finds every stale number and CANNOT SEE A SENTENCE — so the figures would
+      have gone green while this line kept saying 2, and it is the line a reader consults to
+      understand what the figure means. workflow.md §12: deriving protects the assertion and orphans
+      the explanation beside it. The remedy is to name the constant, never to restate its value.
 
 # ---------------------------------------------------------------------------
 # whatThisContractDOESNOTPUBLISH

@@ -158,6 +158,55 @@ and getting one right is how you miss the other).
 for those two requests, and a reader should know that is a property of the contract rather than a
 gap in the generator.
 
+## Authoring order in a closed object — `properties` FIRST, `additionalProperties: false` LAST
+
+Added 2026-09-11, by `architecture-agent`, after producing **two unsatisfiable response shapes in a
+single pass** — in the amendment that was itself about constraining a shape.
+
+> **`additionalProperties: false` IS A STATEMENT ABOUT A `properties` BLOCK. Write the block first
+> and close it last.**
+
+**The defect, twice, identically:**
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["total"],
+  "description": "…",
+  "$comment": "… forty lines …"
+}
+```
+
+**`required` demands `total`; `additionalProperties: false` forbids it. No valid instance exists** —
+the route is unreachable and a client built from the schema cannot make a legal call. **Neither line
+is wrong on its own.** The union is, which is `architecture.md` §1a's shape arriving inside a single
+object.
+
+**Why the object looked finished, and this is the part worth knowing rather than the rule:** both
+were authored in the order above, and **the long `$comment` sat where the `properties` block should
+have been.** It is the biggest thing in the def. The object reads as complete because something
+substantial is in the middle of it — **not carelessness, a shape that looks done.**
+
+**The general form, which is why the rule is mechanical rather than attentional:**
+
+> **`additionalProperties: false` and `required` are BOTH references to a `properties` block.**
+> Writing either before that block exists is a **dangling reference in a language with no compiler
+> to catch one** — and nothing in this repository executes JSON Schema, so no tool here will say a
+> word about it at authoring time.
+
+**It is caught downstream, and knowing where matters — because a schema author has no reason to know
+this exists.** `packages/testing/suites/contracts/satisfiability.ts` walks every `*.schema.json` in
+full — `$defs`, nested `properties`, `items`, `allOf` branches — and names the offending pointer.
+
+> **⚠ ITS TITLE SAYS *"EVERY CLOSED REQUEST OBJECT"* AND ITS WALK COVERS RESPONSES TOO.** The
+> implementation is broader than the sentence describing it. **An author checking whether their case
+> is covered by reading that title concludes it is not** — which is exactly what happened here, and
+> is why the pointer is recorded from this side. **Do not narrow that walk to match its title.**
+
+**And the check fires only after the file is already wrong.** The ordering is the half an author
+controls; the suite is the backstop. **Prefer the half that cannot produce the defect.**
+
 ## Form, and what is not yet decided
 
 **AS1 — the executable form and transport of a Dudo contract is still undecided**

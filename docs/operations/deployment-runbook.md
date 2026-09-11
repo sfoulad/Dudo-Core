@@ -471,6 +471,53 @@ a single machine.
 
 ## 9. Rollback
 
+## ⚠ THERE ARE TWO WORKERS SHARING ONE `main`, AND "THE ROLLBACK VERSION" IS AMBIGUOUS WITHOUT NAMING ONE
+
+Added 2026-09-11, before a deploy rather than during one. **This runbook was 491 lines and mentioned
+`dudo-admin` nowhere.**
+
+```
+wrangler.jsonc         name: dudo-core    routes: app.dudo.work, api.dudo.work   main: worker.ts
+wrangler.admin.jsonc   name: dudo-admin   routes: admin.dudo.work                main: worker.ts   <- SAME FILE
+```
+
+**Both Workers are built from the same `worker.ts`. They are deployed separately and versioned
+separately.**
+
+**Consequences, none of which are obvious from either config:**
+
+- **`npx wrangler rollback` and the version list are PER-WORKER.** *"Capture the current rollback
+  version"* is not a well-formed instruction until it names `dudo-core` or `dudo-admin`. **Pass
+  `--config wrangler.admin.jsonc` (or `--name dudo-admin`) or you will capture and roll back the
+  wrong surface.**
+- **DEPLOYING ONE DOES NOT DEPLOY THE OTHER, AND THEY SHARE SOURCE.** After an admin-only deploy the
+  two surfaces run **different builds of the same file** — indefinitely, and silently. That is not a
+  defect and it is the normal state during a milestone; **it is only dangerous when someone reasons
+  from "the code is deployed" without naming which Worker.**
+- **`dudo-admin` binds the Durable Object with `script_name: dudo-core`.** The admin Worker depends on
+  a class that lives in the core Worker's script. **Rolling `dudo-core` back past a DO class change
+  affects `dudo-admin` too**, and nothing in `wrangler.admin.jsonc` says so on its own face.
+- **`assets.directory` is `./platform/admin/dist`** with SPA `not_found_handling` and
+  `run_worker_first` for `/api/*`, `/auth/*`, `/health`. **A stale `dist/` deploys silently** — the
+  Worker is fine and the bundle is old. **Build immediately before deploying, and verify the deployed
+  bundle rather than assuming the build ran.**
+
+### Why an admin-only deploy is SAFE for tenants, verified rather than assumed
+
+**Platform routes are host-bound in Core** — `api.ts:325`,
+`isPlatformHost(dependencies.platformRoutes.adminHosts, url.hostname)` — and the wrong host answers
+**404, not 403**, so a caller cannot confirm the route exists off-host.
+
+**The comment at `api.ts:314` is the part that matters and it is correct:** the host binding is
+**defence in depth, not the enforcement** — the `platform_operator` check is, *"authorization runs on
+the `platform_operator` row and not on the hostname"*. **An implementation that bound the host and
+skipped the operator check would be the defect**, and this one does not.
+
+**So deploying `dudo-admin` alone puts the platform surface live without touching what tenants
+reach**, and `app.dudo.work` never served those routes to begin with.
+
+---
+
 `npx wrangler rollback` reverts the Worker. **It does not revert a migration.** D1
 migrations are forward-only here; there are no down-migrations, which is why step 3
 insists on local-first. Treat every remote migration as permanent.

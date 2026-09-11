@@ -79,11 +79,34 @@
 
 import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@dudo/ui';
-import { EmptyBlock, ErrorBlock, LoadingBlock } from '@/components/StateBlock';
+import {
+  EmptyBlock,
+  ErrorBlock,
+  LoadingBlock,
+  PermissionDeniedBlock,
+} from '@/components/StateBlock';
 import { OnboardOrganization } from '@/screens/OnboardOrganization';
 import { cn } from '@dudo/ui';
 import { Link } from '@tanstack/react-router';
 import { useOrganizationList } from '@/lib/queries';
+import {
+  fill,
+  formatCount,
+  useLocale,
+  useT,
+  type MessageKey,
+  type PluralCategory,
+} from '@/lib/i18n';
+
+/* "Showing N Organizations" — six forms in Arabic, chosen by `Intl`. */
+const SHOWING_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'organizations.showing.zero',
+  one: 'organizations.showing.one',
+  two: 'organizations.showing.two',
+  few: 'organizations.showing.few',
+  many: 'organizations.showing.many',
+  other: 'organizations.showing.other',
+};
 import { isKnownStatus, type ListOrganizationsOutput } from '@/api/platform';
 import { type ApiError } from '@/api/errors';
 
@@ -93,6 +116,7 @@ type Load =
   | { readonly kind: 'failed'; readonly error: ApiError };
 
 export function Organizations() {
+  const { locale, t } = useLocale();
   /** The cursor for the page currently being shown. `null` is the first page. */
   const [cursor, setCursor] = useState<string | null>(null);
   /** How many pages deep, for a position line. Not a page number from Core. */
@@ -150,7 +174,7 @@ export function Organizations() {
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-4xl">
       <header className="mb-5">
         <h1 id="section-heading" className="text-xl font-bold text-ink sm:text-2xl">
-          Organizations
+          {t('nav.organizations')}
         </h1>
         <p className="mt-2 max-w-prose leading-relaxed text-ink-muted">
           Every Organization on the platform, from the control plane. Name, identifier and status
@@ -172,32 +196,44 @@ export function Organizations() {
         <OnboardOrganization onOnboarded={refreshAfterOnboarding} />
       </div>
 
-      {load.kind === 'loading' ? <LoadingBlock label="Asking Core for the Organizations…" /> : null}
+      {load.kind === 'loading' ? <LoadingBlock label={t('loading.organizations')} /> : null}
 
-      {load.kind === 'failed' ? (
+      {/* `forbidden` before the generic error — a permission boundary is not a
+          malfunction, and a blank list would say the platform holds nothing. */}
+      {load.kind === 'failed' && load.error.code === 'forbidden' ? (
+        <PermissionDeniedBlock error={load.error} />
+      ) : null}
+
+      {load.kind === 'failed' && load.error.code !== 'forbidden' ? (
         <ErrorBlock error={load.error} onRetry={retry}>
           {cursor !== null ? (
             <Button variant="secondary" size="sm" className="mt-4 me-2" onClick={restart}>
-              Start again from the first page
+              {t('page.startAgain')}
             </Button>
           ) : null}
         </ErrorBlock>
       ) : null}
 
+      {/*
+        ⚠ THE TITLE BELOW SAID "There are no Organizations YET." **An absence
+        claim the absence check could not see either** — that check scans the
+        DICTIONARY, and this string was never in one. **A string has to be
+        translated before the absence check can look at it**, which makes the
+        two instruments' blind spots the same blind spot. Corrected to the fact
+        the query returned, as `dashboard.none` was.
+      */}
       {load.kind === 'loaded' && load.page.data.length === 0 ? (
         <EmptyBlock
-          title={cursor === null ? 'There are no Organizations yet.' : 'No more Organizations.'}
+          title={
+            cursor === null ? t('organizations.empty.title') : t('page.emptyPage.title')
+          }
           body={
             cursor === null ? (
               <>
-                Core answered, and the platform has none. This is not a failure to load — when an
-                Organization is onboarded it appears here.
+                {t('organizations.empty.body')}
               </>
             ) : (
-              <>
-                Core answered, and this page is empty. Start again from the first page to see the
-                current list.
-              </>
+              <>{t('page.emptyPage')}</>
             )
           }
         />
@@ -208,7 +244,7 @@ export function Organizations() {
           <OrganizationTable page={load.page} />
 
           <nav
-            aria-label="Pagination"
+            aria-label={t('a11y.pagination')}
             className="mt-4 flex flex-wrap items-center justify-between gap-3"
           >
             <p className="text-[0.8125rem] text-ink-muted">
@@ -217,14 +253,13 @@ export function Organizations() {
                 and a keyset cursor cannot produce one — a count would have to be
                 invented or fetched from somewhere that does not exist.
               */}
-              Showing {load.page.data.length}{' '}
-              {load.page.data.length === 1 ? 'Organization' : 'Organizations'}
-              {depth > 1 ? ` · page ${String(depth)}` : null}
+              {formatCount(locale, load.page.data.length, SHOWING_FORMS, t)}
+              {depth > 1 ? ` · ${fill(t('audit.page'), locale, { page: depth })}` : null}
             </p>
             <div className="flex gap-2">
               {cursor !== null ? (
                 <Button variant="secondary" size="sm" onClick={restart}>
-                  First page
+                  {t('page.firstPage')}
                 </Button>
               ) : null}
               <Button
@@ -237,7 +272,7 @@ export function Organizations() {
                   setDepth((value) => value + 1);
                 }}
               >
-                {load.page.next_cursor === null ? 'No more pages' : 'Next page'}
+                {load.page.next_cursor === null ? t('audit.noMorePages') : t('page.next')}
               </Button>
             </div>
           </nav>
@@ -248,18 +283,23 @@ export function Organizations() {
 }
 
 function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
+  const t = useT();
   return (
     <div className="overflow-hidden rounded-[12px] border border-line bg-surface">
       <table className="w-full border-collapse">
         <caption className="sr-only">
-          Organizations on the platform, with their name where one is recorded, their identifier,
-          status and creation date.
+          {/*
+            THE TABLE'S ACCESSIBLE DESCRIPTION. A screen-reader user hears this
+            before the rows, so it is the only place the shape of the table is
+            announced — not decoration.
+          */}
+          {t('organizations.tableCaption')}
         </caption>
         <thead>
           <tr>
-            <Th>Organization</Th>
-            <Th>Status</Th>
-            <Th className="hidden sm:table-cell">Created</Th>
+            <Th>{t('platformAudit.targetColumn')}</Th>
+            <Th>{t('column.status')}</Th>
+            <Th className="hidden sm:table-cell">{t('column.created')}</Th>
           </tr>
         </thead>
         <tbody>
@@ -301,7 +341,7 @@ function OrganizationTable({ page }: { page: ListOrganizationsOutput }) {
                 ) : null}
                 {/* The date, on phones, where its own column is hidden. */}
                 <span className="mt-1 block text-xs text-ink-muted sm:hidden">
-                  Created <CreatedAt value={organization.created_at} />
+                  {t('column.createdOn')} <CreatedAt value={organization.created_at} />
                 </span>
               </td>
               <td className="px-4 py-3">
@@ -367,14 +407,18 @@ function StatusBadge({ status }: { status: string }) {
  *
  * A value that does not parse is shown verbatim rather than as "Invalid Date".
  */
+/* The locale was `undefined` — the browser's. See `Templates.tsx`'s `CreatedAt`. */
 function CreatedAt({ value }: { value: string }) {
+  const { locale } = useLocale();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return <span className="font-mono text-xs">{value}</span>;
+    return <bdi className="font-mono text-xs">{value}</bdi>;
   }
   return (
     <time dateTime={value} title={value}>
-      {parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+      <bdi>
+        {parsed.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })}
+      </bdi>
     </time>
   );
 }

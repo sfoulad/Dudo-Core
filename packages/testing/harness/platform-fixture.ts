@@ -368,6 +368,102 @@ export async function successfulCallFor(
     // A case that read `internal` as "the route is broken" would have been reading the fixture.
     return { bodyText: '', pathParams: { template_id: TEMPLATE_SEEDED } };
   }
+
+  // ===========================================================================================
+  // THE FIVE TEMPLATE-LIFECYCLE ROUTES, ADDED 2026-09-11.
+  // ===========================================================================================
+  //
+  // *** WITHOUT THESE, EVERY LOOP ASSERTING "A PERMITTED OPERATOR IS SERVED" CALLED THEM WITH NO
+  // *** PATH PARAMETER AND READ `internal`. *** Five cases went red naming five Core routes, and
+  // the cause was this function not knowing them. **The branch immediately above already warned
+  // about exactly that** — *"a case that read `internal` as 'the route is broken' would have been
+  // reading the fixture"* — and I still spent a measurement on it before re-reading my own file.
+  //
+  // Worth keeping because the mis-attribution was one grep from being reported as a Core blocker:
+  // the first search for the handlers returned nothing, which looked like confirmation. **That
+  // grep was a NUL false negative** — `platform-route-handlers.ts` is the quarantined file — and
+  // `grep -a` found all five. **Two independent wrong answers pointing the same way.**
+  if (routeId === 'platform.templates.usage') {
+    return { bodyText: '', pathParams: { template_id: TEMPLATE_SEEDED } };
+  }
+  if (routeId === 'platform.templates.update') {
+    // IDEMPOTENT BY MEASUREMENT, NOT BY LUCK. `core-agent` ran the real adapter against the real
+    // migrations and recorded that renaming a Template to its OWN CURRENT NAME answers `updated`
+    // rather than `name_taken` — so a loop calling this twice succeeds twice. Had it answered
+    // `name_taken`, the second call in any repeated loop would read as a route defect.
+    return {
+      bodyText: templateCreateRequest({ name: TEMPLATE_RENAMABLE_NAME }),
+      pathParams: { template_id: TEMPLATE_RENAMABLE },
+    };
+  }
+  if (routeId === 'platform.templates.retire') {
+    // *** NOT IDEMPOTENT, AND IT ACTS ON ITS OWN TEMPLATE FOR THAT REASON. *** A second retire
+    // answers `already_in_state`, which is a refusal rather than a success. Using the shared
+    // `TEMPLATE_SEEDED` would additionally have left it retired for every later case in the world.
+    return { bodyText: '', pathParams: { template_id: TEMPLATE_RETIRABLE } };
+  }
+  if (routeId === 'platform.templates.restore') {
+    // Seeded ALREADY RETIRED. Restore against an active Template is `already_in_state`, so this
+    // route's success path is unreachable without a fixture that can build a retired one — which
+    // is why `seedTemplate` gained a `status` parameter rather than this case being skipped.
+    return { bodyText: '', pathParams: { template_id: TEMPLATE_RETIRED } };
+  }
+  if (routeId === 'platform.organizations.set-template') {
+    // `ORG_ALPHA` onto the SHARED template, which is the one Alpha is already associated with in
+    // the seeded world — and setting a Template an Organization already has is the one shape here
+    // that is safely repeatable. **This is the route that writes into a customer's own database
+    // through `recordOrganizationAccess` with the `charge` receipt (SR-4), so a case built on this
+    // helper is exercising the platform-origin sub-ceiling whether or not it mentions it.**
+    return {
+      bodyText: JSON.stringify({ template_id: TEMPLATE_SEEDED }),
+      pathParams: { organization_id: ORG_ALPHA },
+    };
+  }
+  // ===========================================================================================
+  // *** THE FALLBACK NOW REFUSES A ROUTE THAT NEEDS A PATH PARAMETER, AND THIS IS THE DEFECT
+  // *** THAT COST A FULL ROUTING CYCLE ON 2026-09-11.
+  // ===========================================================================================
+  //
+  // It used to return `pathParams: {}` for ANY unmapped route. **That is the correct answer for the
+  // many routes which take no path parameter, and a silently wrong one for a route that does** —
+  // and nothing distinguished the two. The five Template lifecycle routes landed unmapped, were
+  // called with no `template_id`, and `matchPlatformRoute`'s contract meant the handler read
+  // `undefined` and answered `internal()`.
+  //
+  // **`internal()` is correct and Core must not change it.** The path parameter is parsed and
+  // validated before any handler runs, so a missing one is unreachable through the transport and
+  // means Core called itself wrongly. Every path-param route in the class behaves this way; making
+  // five of them refuse differently would make them the five that disagree.
+  //
+  // *** THE COST WAS NOT THE FIVE RED CASES. IT WAS THE ATTRIBUTION. *** A plausible-looking
+  // `internal` from a real route sent the Team Lead to brief `core-agent` on a Core defect that did
+  // not exist, and every permission assertion beside those routes went vacuous without saying so —
+  // `§11a`'s empty-list reader wearing a fixture's clothes. It was settled by a control the
+  // diagnosis could not survive: `platform.templates.read`, shipped weeks earlier and touching none
+  // of the new code, **fails identically when its path parameter is withheld.**
+  //
+  // *** WHY IT THROWS ON A DERIVED CONDITION RATHER THAN ON EVERY UNMAPPED ROUTE. *** A blanket
+  // throw would be wrong: `whoami`, `organizations.list`, `templates.list` and the audit feeds
+  // legitimately need nothing, and forcing an entry for each would be a second list to keep true.
+  // **The route's own declared `path` already says which kind it is**, so the condition is READ
+  // FROM THE ARTIFACT rather than transcribed beside it (`workflow.md` §11a). A route added to the
+  // class with a `{placeholder}` and no entry here now fails **at the fixture, naming itself**,
+  // instead of producing an `internal` somebody spends an afternoon attributing to Core.
+  //
+  // The comment on `platform.templates.read` above said exactly this in prose — *"a case that read
+  // `internal` as 'the route is broken' would have been reading the fixture"* — **and prose does
+  // not fire.** It was read, by the party who then got it wrong.
+  const declared = platformRoutes().find((route) => route.id === routeId);
+  const placeholders = [...(declared?.path ?? '').matchAll(/\{([a-z_]+)\}/gu)].map((match) => match[1]);
+  if (placeholders.length > 0) {
+    throw new Error(
+      `successfulCallFor has no entry for '${routeId}', and that route's declared path needs ` +
+        `${placeholders.map((name) => `'${name}'`).join(', ')}. Returning no path parameters would ` +
+        'make the handler read `undefined` and answer `internal` — a PLAUSIBLE error from a working ' +
+        'route, which is the shape that cost a full routing cycle on 2026-09-11. Add the entry; do ' +
+        'not change Core.',
+    );
+  }
   return { bodyText: bodyForPlatformRoute(routeId), pathParams: {} };
 }
 import { createInProcessDayWriteBudget } from '../../../platform/core/protection/in-process-coordinator.ts';
@@ -588,6 +684,30 @@ export const ORG_GAMMA = 'org_gamma_000000001';
 /** EXISTS NOWHERE. */
 export const ORG_NOWHERE = 'org_exists_nowhere01';
 
+/**
+ * ===========================================================================================
+ * THREE TEMPLATES THAT EXIST TO BE MUTATED, ADDED 2026-09-11 WITH THE LIFECYCLE ROUTES.
+ * ===========================================================================================
+ *
+ * *** THE SHARED `TEMPLATE_SEEDED` MUST NOT BE THE ONE THE LIFECYCLE ROUTES ACT ON. *** It is read
+ * by `templates.read`, named by `organizations.create`, and referenced by `set-template`. A loop
+ * that called `templates.retire` against it would leave it retired **for every case that ran
+ * afterwards in the same world**, and the next `organizations.create` would fail with
+ * `template_unusable` — a red in a case that never mentions retirement, on a route that is fine.
+ *
+ * **That is order-dependence between cases through shared state, and it does not announce itself:**
+ * the failing case names the wrong subject, and re-running the suite in a different order changes
+ * which one goes red. One dedicated template per mutating route is what removes it, and it costs
+ * three rows.
+ */
+export const TEMPLATE_RENAMABLE = 'tpl_renamable000001';
+export const TEMPLATE_RENAMABLE_NAME = 'Fixture Renamable';
+export const TEMPLATE_RETIRABLE = 'tpl_retirable000001';
+export const TEMPLATE_RETIRABLE_NAME = 'Fixture Retirable';
+/** Seeded ALREADY RETIRED, because `templates.restore` cannot succeed against an active one. */
+export const TEMPLATE_RETIRED = 'tpl_retired00000001';
+export const TEMPLATE_RETIRED_NAME = 'Fixture Retired';
+
 export const SESSION_ADMIN = 'ses_admin_000000001';
 export const SESSION_MODERATOR = 'ses_moderator_00001';
 export const SESSION_TENANT_OWNER = 'ses_tenantowner0001';
@@ -702,14 +822,25 @@ export function seedTemplate(
   harness: SqliteHarness,
   templateId: string,
   name: string,
+  /**
+   * ADDED 2026-09-11 with the Template lifecycle routes, DEFAULTED so no existing caller changes.
+   *
+   * `platform.templates.restore` can only SUCCEED against a template that is already retired, and
+   * a fixture that could only build active ones would have left that route's success path
+   * untestable — so the loops asserting "every route in the class serves a permitted operator"
+   * would have had to skip it. **Excluding the one route that is inconvenient is how a class-wide
+   * claim quietly becomes a claim about the easy members**, which is the reasoning
+   * `successfulCallFor` already records for the confirmation-gated route.
+   */
+  status: 'active' | 'retired' = 'active',
 ): void {
   harness.raw
     .prepare(
       'INSERT INTO template (template_id, name, normalized_name, label_organization, ' +
         'label_workspace, label_branch, status, created_at) ' +
-        "VALUES (?, ?, ?, 'Organization', 'Workspace', 'Branch', 'active', ?)",
+        'VALUES (?, ?, ?, \'Organization\', \'Workspace\', \'Branch\', ?, ?)',
     )
-    .run(templateId, name, normalizeTemplateName(name), FIXTURE_CREATED_AT);
+    .run(templateId, name, normalizeTemplateName(name), status, FIXTURE_CREATED_AT);
 }
 
 /**
@@ -1032,6 +1163,12 @@ function seedWorld(harness: SqliteHarness, withTriggers: boolean): void {
   // a row every onboarding case would answer `not_found` and every one of them would pass for the
   // wrong reason. `TEMPLATE_NOWHERE` is the fabricated control and is deliberately not seeded.
   seedTemplate(harness, TEMPLATE_SEEDED, TEMPLATE_SEEDED_NAME);
+  // The three the lifecycle routes mutate. See their declarations for why they are not the one
+  // above: a retired shared template breaks `organizations.create` in a case that never mentions
+  // retirement.
+  seedTemplate(harness, TEMPLATE_RENAMABLE, TEMPLATE_RENAMABLE_NAME);
+  seedTemplate(harness, TEMPLATE_RETIRABLE, TEMPLATE_RETIRABLE_NAME);
+  seedTemplate(harness, TEMPLATE_RETIRED, TEMPLATE_RETIRED_NAME, 'retired');
 
   // The forbidden state. See the header above for why it is created this way and not another.
   if (withTriggers) {

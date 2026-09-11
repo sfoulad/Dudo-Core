@@ -50,18 +50,27 @@ import { useCallback, useState, type FormEvent } from 'react';
 import { Button, Input } from '@dudo/ui';
 import { AdminField as Field } from '@/components/AdminField';
 import { AuditRecordList } from '@/components/AuditRecordList';
-import { EmptyBlock, LoadingBlock } from '@/components/StateBlock';
+import { EmptyBlock, LoadingBlock, PermissionDeniedBlock } from '@/components/StateBlock';
 import { CeilingNotice, isCeilingCode } from '@/components/CeilingNotice';
 import { WindowOrOtherError } from '@/components/WindowRefusal';
 import {
   MAX_WINDOW_DAYS,
   describeWindow,
+  localRefusalKey,
   shiftWindowByOwnLength,
   windowIsRequired,
   windowRefusal,
+  type LocalWindowRefusal,
   type WindowDraft,
 } from '@/api/audit-window';
 import { usePlatformAudit } from '@/lib/queries';
+import {
+  fill,
+  formatCount,
+  useLocale,
+  type MessageKey,
+  type PluralCategory,
+} from '@/lib/i18n';
 import {
   toUtcExclusiveDayEnd,
   toUtcDayStart,
@@ -85,7 +94,22 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { actor: '', action: '', since: '', until: '' };
 
+/*
+ * "Showing 3 records" — six forms, chosen by `Intl.PluralRules`. See
+ * `formatCount`; `Record<PluralCategory, MessageKey>` is total, so omitting one
+ * does not compile.
+ */
+const RECORD_FORMS: Record<PluralCategory, MessageKey> = {
+  zero: 'audit.showing.zero',
+  one: 'audit.showing.one',
+  two: 'audit.showing.two',
+  few: 'audit.showing.few',
+  many: 'audit.showing.many',
+  other: 'audit.showing.other',
+};
+
 export function PlatformAudit() {
+  const { locale, t } = useLocale();
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   /** The filters actually in force. Changing them resets the cursor. */
   const [applied, setApplied] = useState<PlatformFeedFilters>({});
@@ -100,9 +124,12 @@ export function PlatformAudit() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   /** A local refusal, shown instead of spending a request that would be refused. */
-  const [windowError, setWindowError] = useState<string | null>(null);
+  const [windowError, setWindowError] = useState<LocalWindowRefusal | null>(null);
 
-  const appliedWindow = appliedWindowDraft === null ? null : describeWindow(appliedWindowDraft);
+  const appliedWindow =
+    appliedWindowDraft === null
+      ? null
+      : describeWindow(appliedWindowDraft, locale, t('window.joiner'));
 
   /*
    * ===================================================================
@@ -224,15 +251,12 @@ export function PlatformAudit() {
     <section aria-labelledby="section-heading" className="mx-auto w-full max-w-4xl">
       <header className="mb-5">
         <h1 id="section-heading" className="text-xl font-bold text-ink sm:text-2xl">
-          Platform audit
+          {t('platformAudit.title')}
         </h1>
         <p className="mt-2 max-w-prose leading-relaxed text-ink-muted">
-          Every platform-operator action, newest first. Who acted, against which Organization, and
-          with what outcome.{' '}
-          <span className="font-semibold text-ink-soft">
-            It does not say which person an action was about
-          </span>{' '}
-          — for that, open an Organization and read its own trail, which records that you did.
+          {t('platformAudit.intro')}{' '}
+          <span className="font-semibold text-ink-soft">{t('platformAudit.noTargetPerson')}</span>{' '}
+          {t('platformAudit.noTargetPersonWhere')}
         </p>
       </header>
 
@@ -243,8 +267,8 @@ export function PlatformAudit() {
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
             id="filter-actor"
-            label="Operator"
-            hint="A principal id. Filters by who acted, not by who was acted on."
+            label={t('audit.filter.operator')}
+            hint={t('audit.filter.operatorHint')}
           >
             {(aria) => (
               <Input
@@ -253,14 +277,18 @@ export function PlatformAudit() {
                 onChange={(event) => {
                   setDraft((prev) => ({ ...prev, actor: event.target.value }));
                 }}
-                placeholder="principal id"
+                placeholder={t('audit.filter.operatorPlaceholder')}
                 autoComplete="off"
                 spellCheck={false}
               />
             )}
           </Field>
 
-          <Field id="filter-action" label="Action" hint="An action id, such as platform.audit.list.">
+          <Field
+            id="filter-action"
+            label={t('audit.filter.action')}
+            hint={t('audit.filter.actionHint')}
+          >
             {(aria) => (
               <Input
                 {...aria}
@@ -268,6 +296,11 @@ export function PlatformAudit() {
                 onChange={(event) => {
                   setDraft((prev) => ({ ...prev, action: event.target.value }));
                 }}
+                /*
+                  AN ACTION ID IS A WIRE IDENTIFIER AND IS NOT TRANSLATED. It is
+                  what the operator types verbatim into the filter, so a
+                  localised example would be an example that does not work.
+                */
                 placeholder="platform.templates.create"
                 autoComplete="off"
                 spellCheck={false}
@@ -275,7 +308,11 @@ export function PlatformAudit() {
             )}
           </Field>
 
-          <Field id="filter-since" label="From (UTC)" hint="Whole days, in UTC.">
+          <Field
+            id="filter-since"
+            label={t('audit.filter.from')}
+            hint={t('audit.filter.fromHint')}
+          >
             {(aria) => (
               <Input
                 {...aria}
@@ -288,7 +325,7 @@ export function PlatformAudit() {
             )}
           </Field>
 
-          <Field id="filter-until" label="To (UTC)" hint="Inclusive of the whole day.">
+          <Field id="filter-until" label={t('audit.filter.to')} hint={t('audit.filter.toHint')}>
             {(aria) => (
               <Input
                 {...aria}
@@ -308,9 +345,7 @@ export function PlatformAudit() {
           oversight and someone requests it.
         */}
         <p className="text-[0.8125rem] leading-relaxed text-ink-muted">
-          There is deliberately no filter for the person an action was about. Filtering by someone
-          and counting the results would reveal which Organizations they belong to, one answer at a
-          time — which is exactly what leaving that column out of this feed prevents.
+          {t('platformAudit.noPersonFilter')}
         </p>
 
         {/*
@@ -318,8 +353,7 @@ export function PlatformAudit() {
           it before being refused rather than by being refused.
         */}
         <p className="text-[0.8125rem] leading-relaxed text-ink-muted">
-          Filtering by operator or action needs a date range of at most{' '}
-          {MAX_WINDOW_DAYS} days. Without a filter you can search the whole log, unbounded.
+          {fill(t('audit.windowRule'), locale, { days: MAX_WINDOW_DAYS })}
         </p>
 
         {windowError !== null ? (
@@ -327,13 +361,23 @@ export function PlatformAudit() {
             role="alert"
             className="rounded-[7px] border border-scarlet-600 bg-scarlet-50 p-3 text-[0.875rem] leading-relaxed text-ink"
           >
-            {windowError}
+            {/*
+              THE LIMIT AND THE MEASURED SPAN BOTH COME FROM CODE. `{days}` is
+              `MAX_WINDOW_DAYS` and `{span}` is what the operator's dates
+              actually cover — neither is a numeral in a dictionary, which would
+              be a second copy of a constant in the two files least likely to be
+              re-derived when it changes.
+            */}
+            {fill(t(localRefusalKey(windowError)), locale, {
+              days: MAX_WINDOW_DAYS,
+              ...(windowError.kind === 'too_wide' ? { span: windowError.span } : {}),
+            })}
           </p>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="secondary">
-            Apply filters
+            {t('audit.apply')}
           </Button>
           {/*
             WALKING BACKWARDS ONE WINDOW AT A TIME. These only rewrite the two
@@ -354,7 +398,7 @@ export function PlatformAudit() {
                   shiftWindow(-1);
                 }}
               >
-                Earlier window
+                {t('audit.earlierWindow')}
               </Button>
               <Button
                 variant="ghost"
@@ -362,25 +406,31 @@ export function PlatformAudit() {
                   shiftWindow(1);
                 }}
               >
-                Later window
+                {t('audit.laterWindow')}
               </Button>
             </>
           ) : null}
           {filtered ? (
             <Button variant="ghost" onClick={clearFilters}>
-              Clear
+              {t('audit.clear')}
             </Button>
           ) : null}
-          <p className="text-[0.8125rem] text-ink-muted">
-            Applying resets to the newest page. Each page read is itself recorded.
-          </p>
+          <p className="text-[0.8125rem] text-ink-muted">{t('audit.applyResets')}</p>
         </div>
       </form>
 
-      {load.kind === 'loading' ? <LoadingBlock label="Reading the platform log…" /> : null}
+      {load.kind === 'loading' ? <LoadingBlock label={t('loading.platformAudit')} /> : null}
 
+      {/*
+        `forbidden` FIRST. An operator may hold `core.organization.list` and not
+        `core.platform-audit.read` — the two are separate grants — so a refusal
+        here is an ordinary, expected state on a console whose other sections
+        work. Rendering it as an error would say the feed is broken.
+      */}
       {load.kind === 'failed' ? (
-        isCeilingCode(load.error.code) ? (
+        load.error.code === 'forbidden' ? (
+          <PermissionDeniedBlock error={load.error} />
+        ) : isCeilingCode(load.error.code) ? (
           <CeilingNotice error={load.error} scope="platform" onRetry={retry} />
         ) : (
           /*
@@ -418,27 +468,33 @@ export function PlatformAudit() {
         <EmptyBlock
           title={
             appliedWindow !== null
-              ? 'No records in this window.'
+              ? t('audit.empty.inWindow')
               : filtered
-                ? 'No records match those filters.'
-                : 'The log is empty.'
+                ? t('audit.empty.filtered')
+                : t('platformAudit.empty.title')
           }
           body={
             appliedWindow !== null ? (
               <>
-                Core answered, and nothing matches{' '}
-                <span className="font-semibold text-ink">within {appliedWindow}</span>. This is
-                not a statement about any other period — records outside this range were not
-                searched. Use <span className="font-semibold text-ink">Earlier window</span> to
-                keep looking.
+                {t('audit.empty.windowLead')}{' '}
+                {/*
+                  THE WINDOW IS BOLD AND ISOLATED. It is a formatted date range
+                  built from the operator's own input, and it is the one phrase
+                  on this screen that must be exactly right — misreading it turns
+                  "we did not look here" into "nothing happened". `bdi` keeps the
+                  numerals and the `(UTC)` from being reordered around it.
+                */}
+                <span className="font-semibold text-ink">
+                  <bdi>{appliedWindow}</bdi>
+                </span>
+                {t('audit.empty.windowStop')} {t('audit.empty.windowNotSearched')}{' '}
+                <span className="font-semibold text-ink">{t('audit.earlierWindow')}</span>{' '}
+                {t('audit.empty.windowKeepLooking')}
               </>
             ) : filtered ? (
-              <>Core answered, and nothing in the log matches. Widen or clear the filters.</>
+              <>{t('audit.empty.filteredBody')}</>
             ) : (
-              <>
-                Core answered, and no operator action has been recorded yet. Reading this page is
-                itself recorded — so the first entry here will usually be someone reading it.
-              </>
+              <>{t('platformAudit.empty.body')}</>
             )
           }
         />
@@ -448,7 +504,7 @@ export function PlatformAudit() {
         <>
           <AuditRecordList
             records={load.page.data}
-            targetHeading="Organization"
+            targetHeading={t('platformAudit.targetColumn')}
             /*
               THE ONE COLUMN THAT DIFFERS. This closure holds a
               `PlatformFeedRecord`, which HAS NO `target_principal_id` — so this
@@ -456,20 +512,27 @@ export function PlatformAudit() {
               shared list component never sees one.
             */
             renderTarget={(record) =>
-              record.target_organization_id ?? (
-                <span className="font-sans text-ink-muted">none</span>
+              record.target_organization_id === null ? (
+                <span className="font-sans text-ink-muted">{t('audit.noTarget')}</span>
+              ) : (
+                <bdi>{record.target_organization_id}</bdi>
               )
             }
           />
 
           <nav
-            aria-label="Pagination"
+            aria-label={t('a11y.pagination')}
             className="mt-4 flex flex-wrap items-center justify-between gap-3"
           >
+            {/*
+              "Showing 3 records" — SIX FORMS IN ARABIC, chosen by `Intl`. The
+              old `length === 1 ? 'record' : 'records'` is right for English and
+              wrong for Arabic at almost every count; `formatCount` defers the
+              rule to the engine rather than to a ternary written here.
+            */}
             <p className="text-[0.8125rem] text-ink-muted">
-              Showing {load.page.data.length}{' '}
-              {load.page.data.length === 1 ? 'record' : 'records'}
-              {depth > 1 ? ` · page ${String(depth)}` : null}
+              {formatCount(locale, load.page.data.length, RECORD_FORMS, t)}
+              {depth > 1 ? ` · ${fill(t('audit.page'), locale, { page: depth })}` : null}
             </p>
             <div className="flex gap-2">
               {cursor !== null ? (
@@ -481,7 +544,7 @@ export function PlatformAudit() {
                     setDepth(1);
                   }}
                 >
-                  Newest
+                  {t('audit.newest')}
                 </Button>
               ) : null}
               <Button
@@ -495,7 +558,7 @@ export function PlatformAudit() {
                   setDepth((value) => value + 1);
                 }}
               >
-                {load.page.next_cursor === null ? 'No more pages' : 'Older'}
+                {load.page.next_cursor === null ? t('audit.noMorePages') : t('audit.older')}
               </Button>
             </div>
           </nav>

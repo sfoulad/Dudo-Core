@@ -366,6 +366,72 @@ operations:
       missing one.
 
   # =======================================================================================
+  - id: platform.templates.count
+    title: "How many Templates exist"
+    method: GET
+    path: "/templates/count"
+    surface: platform
+    provenance: >-
+      NEW WORK, 2026-09-11. AMENDMENT TO AN ACCEPTED CONTRACT, additive under architecture.md §1.
+      Ruled in docs/decisions/0042 and held until the Template lifecycle operations were registered.
+    description: >-
+      The total number of Templates. THE NUMBER THE LIST ROUTE CANNOT STATE: a paginated list can
+      only say "at least 25" until its last page.
+    permission: core.template.list
+    scope: platform
+    request: "No body, no query parameters, no path parameters."
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateCountOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, unavailable]
+    maxRowWrites: 4
+    audit: required
+    theCOUNTISUNFILTEREDANDTAKESNOSTATUSPARAMETER: >-
+      *** IT COUNTS BOTH STATUSES AND DOES NOT ACCEPT `templateStatusFilter`. *** The list route
+      gained that filter because a picker must not offer a retired Template beside an active one;
+      A TOTAL IS A DIFFERENT QUESTION. A number that changed with a filter would be a different
+      number under the same name, and an operator asking "how many Templates are there" is asking
+      about the table.
+      IF A FILTERED COUNT IS EVER WANTED IT IS A SEPARATE OPERATION WITH A SEPARATE NAME, not a
+      parameter on this one — stated as the reason rather than as a prohibition, so whoever wants
+      one is not left reading this as a refusal of the requirement.
+    whyITNEEDSNOPERMISSIONOFITSOWN_ANDTHEADOPTIONCOUNTDID: >-
+      *** READ THIS BEFORE CONCLUDING THE TWO RULINGS DISAGREE — THEY ARE THE SAME TEST WITH
+      DIFFERENT POPULATIONS. ***
+      security.md §2a: A COUNT IS SAFE EXACTLY WHEN ITS CONSUMER ALREADY HOLDS ENUMERATION OVER THE
+      COUNTED POPULATION, AND DANGEROUS EXACTLY WHEN IT DOES NOT.
+      THIS COUNT COUNTS TEMPLATES, and a `core.template.list` holder enumerates Templates. It reaches
+      nothing past that right: walking the pages yields the same number, more slowly and at an audit
+      row per page.
+      `organizations_using` COUNTS ORGANIZATIONS, and `core.template.list` grants NOTHING over the
+      Organization population — so that count reaches PAST its consumer's enumeration right, which is
+      why template-lifecycle-v1 gives it a `sensitive` permission of its own,
+      `core.template-adoption.read`, rather than leaving it in this family.
+      *** AND THE FAMILY IS WHY THAT SEPARATION MATTERS RATHER THAN BEING PEDANTRY. *** Permissions
+      are granted BY FAMILY: anyone composing a role that "can read Templates" reaches for
+      `core.template.*`, and a census permission filed there would arrive with the set silently,
+      looking like a fourth member of something the grantor had already decided about. THIS count
+      belongs in the family; THAT one does not.
+    theSHAPEISSCALAR: >-
+      A SINGLE `total` AND NOTHING ELSE — no breakdown, no grouping, no count-by-status map. Each
+      transposes into a MAPPING and the mapping is what docs/decisions/0028 Decision 1 refuses.
+      `additionalProperties: false` on the response is the enforcement; this sentence is why.
+    theRATELIMITPOSITION: >-
+      The route declares `rate_limited` and the platform class's limits apply. A RATE LIMIT IS NOT A
+      SUBSTITUTE FOR THE PERMISSION ON ANY COUNT ROUTE: the vector is LONGITUDINAL, NOT BURST, and a
+      limit bounding requests per minute bounds a scrape rather than sampling over months. Stated
+      here as well as on platform.organizations.count because the substitution is proposed per route,
+      not per platform.
+      NOTE THAT THIS ROUTE'S OWN CENSUS RISK IS LOW: the Template population is platform
+      configuration bounded by operator effort, not a customer base. The paragraph is here so the
+      REASONING is beside every count rather than only beside the one that needed it.
+    notes: >-
+      maxRowWrites IS 2 ON A READ — platform-operator-v1 P4 requires every platform route to write an
+      audit record. Same reasoning as platform.templates.list records.
+      NO not_found, EVER. Zero Templates returns 200 with `total: 0`; an empty catalogue is not a
+      missing one, and today it is the ordinary state.
+      IT MUST BE A COUNT AND NEVER A FETCH-AND-LENGTH.
+
+  # =======================================================================================
   - id: platform.templates.read
     title: "Read a Template"
     method: GET

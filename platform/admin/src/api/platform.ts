@@ -282,9 +282,15 @@ export type KnownTemplateStatus = 'active' | 'retired';
  * behalf. `isKnownTemplateStatus` still narrows, and the neutral branch in
  * `StatusBadge` is still reachable.
  *
- * **The field is still set by no route in version 1**, so every Template is
- * `active`. That is a fact about Core, not about the type, and it is why the
- * screen says so on its face.
+ * ⚠ **THIS SAID "the field is still set by no route in version 1, so every
+ * Template is `active`."** `template-lifecycle-v1` publishes
+ * `platform.templates.retire` and `platform.templates.restore`, **both of which
+ * set it.** The sentence was true when written and expired when the routes
+ * landed, with nothing to make it go red.
+ *
+ * **What the `extensible` arm is for does not change**, and that is the part
+ * worth keeping: the tolerant branch exists because a THIRD status may arrive
+ * without a version bump — not because the field was inert.
  *
  * `level_labels` is required and complete on the way OUT and a partial subset
  * on the way IN — the contract distinguishes them and so do the two generated
@@ -300,10 +306,47 @@ export type {
   ListTemplatesOutput,
   CreateTemplateInput,
 } from '@dudo/contracts/core/platform/template-v1';
+
+/**
+ * ===========================================================================
+ * THE LIFECYCLE SHAPES — `template-lifecycle-v1`, consumed not re-declared
+ * ===========================================================================
+ *
+ * **THE TRANSITION IS THE ROUTE, AND THERE IS NO `status` FIELD IN ANY REQUEST
+ * SHAPE HERE.** `UpdateTemplateInput` carries a name and labels; retire and
+ * restore carry NOTHING and are distinguished by their paths. The contract
+ * gives three reasons and the third is the one that decides it:
+ *
+ *   1. a `status` in a PATCH body would let `core.template.update` perform
+ *      `core.template.retire`'s act — **the permission split undone by a field**;
+ *   2. the route names the intent, so an audit trail shows ACTS rather than
+ *      field writes;
+ *   3. **it transmits no lifecycle vocabulary at all.** A status a client SENDS
+ *      is a request enum and must be `closed` (`0041` amendment 1), while the
+ *      same words read on the way back are `extensible` — one value set, two
+ *      policies. **A transition named by a route needs no vocabulary.**
+ *
+ * So this client must never grow a `setTemplateStatus(id, status)`. It would be
+ * correct-looking, would type-check, and would be the exact collapse the
+ * contract spent thirty lines refusing.
+ */
+export type {
+  UpdateTemplateInput,
+  TemplateUsageOutput,
+  SetOrganizationTemplateInput,
+  OrganizationTemplateOutput,
+} from '@dudo/contracts/core/platform/template-lifecycle-v1';
+import type {
+  UpdateTemplateInput,
+  TemplateUsageOutput,
+  SetOrganizationTemplateInput,
+  OrganizationTemplateOutput,
+} from '@dudo/contracts/core/platform/template-lifecycle-v1';
 import type {
   TemplateOutput as Template,
   ListTemplatesOutput,
   CreateTemplateInput,
+  TemplateCountOutput,
 } from '@dudo/contracts/core/platform/template-v1';
 
 export function isKnownTemplateStatus(status: string): status is KnownTemplateStatus {
@@ -326,25 +369,70 @@ export function isKnownTemplateStatus(status: string): status is KnownTemplateSt
  * another only by a trailing space is also two Templates an operator cannot tell
  * apart in a list.
  */
-export function templateNameRefusal(value: string): string | null {
-  if (value.length === 0) return 'Give the business type a name.';
+/**
+ * ===========================================================================
+ * ⚠ THE FOUR REFUSALS RETURNED ENGLISH PROSE UNTIL 2026-09-11
+ * ===========================================================================
+ *
+ * These are **field errors** — the sentence an operator reads the moment they
+ * mistype a name — and this is a `.ts` module, so the copy-coverage pin has
+ * never counted one of them. Same blindness that hid sixteen in `api/errors.ts`
+ * and eleven in `api/audit-window.ts`.
+ *
+ * They now return a **key plus the numbers the sentence names**, for the reason
+ * those two modules do: `api/**` must not import `lib/i18n`, and a form's
+ * submit handler has no component to borrow a locale from.
+ *
+ * **THE NUMBERS RIDE ALONG RATHER THAN BEING SPELLED.** `MAX_TEMPLATE_NAME_LENGTH`
+ * and the typed length are code; a numeral typed into two dictionaries is a
+ * second copy of a constant in the files least likely to be re-derived when it
+ * moves (`§12`). The caller fills `{max}` and `{length}` with `fill`.
+ */
+export interface Refusal {
+  readonly key: PlatformMessageKey;
+  /** Numbers the sentence names. Filled by the caller, through `Intl`. */
+  readonly values?: Readonly<Record<string, number>>;
+}
+
+/**
+ * The message keys this module names.
+ *
+ * Declared here as a narrow union rather than imported, and asserted a subset of
+ * `MessageKey` at compile time in `lib/i18n.tsx` — see `audit-window.ts`'s
+ * `WindowMessageKey` for the full reasoning. A key invented here does not build.
+ */
+export type PlatformMessageKey =
+  | 'refusal.templateName.empty'
+  | 'refusal.templateName.padded'
+  | 'refusal.templateName.tooLong'
+  | 'refusal.templateLabel.padded'
+  | 'refusal.templateLabel.tooLong'
+  | 'refusal.displayName.empty'
+  | 'refusal.displayName.padded'
+  | 'refusal.displayName.tooLong'
+  | 'refusal.registration.empty'
+  | 'refusal.registration.tooLong'
+  | 'refusal.registration.pattern';
+
+export function templateNameRefusal(value: string): Refusal | null {
+  if (value.length === 0) return { key: 'refusal.templateName.empty' };
   if (value.trim() !== value) {
-    return 'Remove the spaces from the start or end of the name — Dudo refuses them rather than trimming them.';
+    return { key: 'refusal.templateName.padded' };
   }
   if (value.length > MAX_TEMPLATE_NAME_LENGTH) {
-    return `A name cannot be longer than ${String(MAX_TEMPLATE_NAME_LENGTH)} characters.`;
+    return { key: 'refusal.templateName.tooLong', values: { max: MAX_TEMPLATE_NAME_LENGTH } };
   }
   return null;
 }
 
 /** An empty label is valid input here: it means "leave the default". */
-export function templateLabelRefusal(value: string): string | null {
+export function templateLabelRefusal(value: string): Refusal | null {
   if (value.length === 0) return null;
   if (value.trim() !== value) {
-    return 'Remove the spaces from the start or end of the label.';
+    return { key: 'refusal.templateLabel.padded' };
   }
   if (value.length > MAX_TEMPLATE_LABEL_LENGTH) {
-    return `A label cannot be longer than ${String(MAX_TEMPLATE_LABEL_LENGTH)} characters.`;
+    return { key: 'refusal.templateLabel.tooLong', values: { max: MAX_TEMPLATE_LABEL_LENGTH } };
   }
   return null;
 }
@@ -414,6 +502,37 @@ export function parseWhoami(payload: unknown): WhoamiOutput {
     platform_role: requireString(body, 'platform_role', 'The whoami response'),
     permissions: Object.freeze([...(permissions as string[])]),
   };
+}
+
+/**
+ * A scalar total, checked rather than cast.
+ *
+ * ===========================================================================
+ * ONE PARSER FOR BOTH COUNTS, AND THE SHARED SHAPE IS THE SECURITY PROPERTY
+ * ===========================================================================
+ *
+ * `organizationCountOutput` and `templateCountOutput` are the same object —
+ * `{ total: number }` — and that sameness is deliberate: `security.md` §2a
+ * constrains an aggregate to **a scalar and nothing else.** No per-status
+ * breakdown, no grouping, no map, **because any of those transposes into the
+ * mapping `0028` Decision 1 refuses.**
+ *
+ * **So a parser that accepted an extra key would be the first step in undoing
+ * that**, and this one reads exactly one field. A future response growing a
+ * `by_status` is a contract change that must be argued for, not a shape this
+ * client silently starts carrying.
+ *
+ * **NEGATIVE AND FRACTIONAL ARE REFUSED.** A count is a cardinality; `-1` as a
+ * sentinel for *unknown* is the shape that makes *"at least N"* come back as a
+ * number an operator reads as a total.
+ */
+export function parseCount(payload: unknown, what: string): { readonly total: number } {
+  const body = requireObject(payload, what);
+  const total = body.total;
+  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) {
+    throw new ShapeError(`${what} field "total" was not a non-negative integer.`);
+  }
+  return { total };
 }
 
 export function parseListOrganizations(payload: unknown): ListOrganizationsOutput {
@@ -683,6 +802,14 @@ export type {
 } from '@dudo/contracts/core/platform/platform-operators-v1';
 /* Only `ListOperatorsOutput` is named locally — by `parseListOperators` below. */
 import type { ListOperatorsOutput } from '@dudo/contracts/core/platform/platform-operators-v1';
+/*
+ * `0037` requirement 2 — consume the generated type rather than re-declaring
+ * it. `OrganizationSummary` and `ListOrganizationsOutput` above are still local
+ * for their own recorded reasons; this one is new, has no local twin, and there
+ * is no reason to create one.
+ */
+import type { OrganizationCountOutput } from '@dudo/contracts/core/platform/platform-operator-v1';
+export type { OrganizationCountOutput, TemplateCountOutput };
 
 /**
  * NOTE WHAT IS ABSENT AND MUST STAY ABSENT: no identifier, no email, no display
@@ -930,25 +1057,36 @@ const DISPLAY_NAME_PATTERN = /^[^\s].*[^\s]$|^[^\s]$/s;
  * about data, so refusing locally discloses nothing — the same line the window
  * pre-check and the member-lookup identifier check sit on.
  */
-export function displayNameRefusal(value: string): string | null {
-  if (value === '') return 'A name cannot be empty.';
+export function displayNameRefusal(value: string): Refusal | null {
+  if (value === '') return { key: 'refusal.displayName.empty' };
   if (!DISPLAY_NAME_PATTERN.test(value)) {
-    return 'A name cannot start or end with a space. Type it without the padding rather than relying on Dudo to trim it.';
+    return { key: 'refusal.displayName.padded' };
   }
   if (value.length > MAX_DISPLAY_NAME_LENGTH) {
-    return `A name can be at most ${String(MAX_DISPLAY_NAME_LENGTH)} characters. This one is ${String(value.length)}.`;
+    /*
+     * BOTH NUMBERS TRAVEL. The sentence says what the limit is AND what the
+     * operator typed — *"at most 120 characters. This one is 138."* — because
+     * "too long" without the excess leaves them counting by hand.
+     */
+    return {
+      key: 'refusal.displayName.tooLong',
+      values: { max: MAX_DISPLAY_NAME_LENGTH, length: value.length },
+    };
   }
   return null;
 }
 
-/** Local shape refusal for a registration number. Returns a sentence, or `null`. */
-export function registrationNumberRefusal(value: string): string | null {
-  if (value === '') return 'Type the number, or choose one of the other two states.';
+/** Local shape refusal for a registration number. Returns a key, or `null`. */
+export function registrationNumberRefusal(value: string): Refusal | null {
+  if (value === '') return { key: 'refusal.registration.empty' };
   if (value.length > MAX_REGISTRATION_NUMBER_LENGTH) {
-    return `A registration number can be at most ${String(MAX_REGISTRATION_NUMBER_LENGTH)} characters. This one is ${String(value.length)}.`;
+    return {
+      key: 'refusal.registration.tooLong',
+      values: { max: MAX_REGISTRATION_NUMBER_LENGTH, length: value.length },
+    };
   }
   if (!REGISTRATION_NUMBER_PATTERN.test(value)) {
-    return 'Use letters, digits, spaces and hyphens only, and do not start or end with a space or a hyphen. Dudo records the number as the registry issues it and checks nothing else about its shape.';
+    return { key: 'refusal.registration.pattern' };
   }
   return null;
 }
@@ -1318,7 +1456,32 @@ export function isKnownOnboardingWarning(value: string): value is OnboardingWarn
  * chose. That is the failure mode worth designing for: the field starting to
  * matter without anyone revisiting this line.
  */
-export const DISCARDED_WORKSPACE_NAME_PLACEHOLDER = 'Unnamed (naming arrives with organization structure)';
+/*
+ * ⚠ THIS SAID "Unnamed (naming arrives with organization structure)" AND THE
+ * SCHEDULE PROMISE WAS THE PROBLEM.
+ *
+ * **The value is not operator copy** — Core validates and discards it, and no
+ * screen ever renders it — which is why it was left alone through the whole
+ * translation pass. **What changed the answer is this constant's OWN comment**,
+ * a few lines up: it exists in this self-describing form precisely because
+ * somebody contemplated it **reaching storage** if the organization-structure
+ * slice adds the column while this line is still here.
+ *
+ * **`§12` is explicit that a conditional expires the day its condition turns
+ * true — and this one expires into a CUSTOMER'S RECORD**, where nothing sweeps
+ * and nobody is assigned to look. *"Naming arrives with organization
+ * structure"* sitting in a tenant's data is a promise about our roadmap
+ * rendered on their screen.
+ *
+ * **The replacement says what the value IS and where it came from**, and stays
+ * true whether workspace naming ships next month or never. It still reads as
+ * an obvious placeholder rather than a name someone chose, which was the whole
+ * point of the original.
+ *
+ * Still satisfies `workspaceName`: 1–120 characters, no leading or trailing
+ * whitespace.
+ */
+export const DISCARDED_WORKSPACE_NAME_PLACEHOLDER = 'Unnamed (placeholder sent by the platform console)';
 
 export function parseOnboardOrganization(payload: unknown): OnboardOrganizationOutput {
   const what = 'The onboarding response';
@@ -1376,6 +1539,129 @@ export function parseListTemplates(payload: unknown): ListTemplatesOutput {
   return {
     data: Object.freeze(rows.map((row, index) => parseTemplate(row, `Template row ${String(index)}`))),
     next_cursor: requireNullableString(body, 'next_cursor', 'The Template list response'),
+  };
+}
+
+/**
+ * The Template plus how many Organizations currently adopt it.
+ *
+ * **`organizations_using` IS THE READ THAT MAKES A RETIRE DECISION SAFE**, so
+ * the count is validated as a non-negative integer rather than carried through
+ * as whatever arrived. A `"3"` rendered into *"3 Organizations adopt this"*
+ * would look right; a `null` rendered the same way would not, and both are
+ * refused here rather than reaching the sentence an operator acts on.
+ *
+ * The same shape comes back from `retire` and `restore`, which is why this
+ * parser is shared: the transition returns the state it produced.
+ */
+export function parseTemplateUsage(
+  payload: unknown,
+  what = 'The Template usage response',
+): TemplateUsageOutput {
+  const body = requireObject(payload, what);
+  const count = body.organizations_using;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+    throw new ShapeError(`${what} field "organizations_using" was not a non-negative integer.`);
+  }
+  return {
+    template: parseTemplate(body.template, `${what} field "template"`),
+    organizations_using: count,
+  };
+}
+
+/**
+ * ===========================================================================
+ * THE RETIRE / RESTORE RESPONSE, ACROSS A CONTRACT CHANGE THAT IS IN FLIGHT
+ * ===========================================================================
+ *
+ * **SR-14: `organizations_using` is coming OUT of the `update`, `retire` and
+ * `restore` responses**, because it was a census reachable through
+ * `core.template.update` and `core.template.retire` — neither of which is the
+ * permission created to gate one. The contract is amended; **Core has not
+ * implemented it yet and is held until this lands.**
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠ IT IS NOT A FIELD REMOVAL. THE RESPONSE UNWRAPS, AND THAT IS THE WHOLE
+ * DIFFICULTY.
+ * ---------------------------------------------------------------------------
+ *
+ * ```
+ * today   { template: { template_id, name, … }, organizations_using: 3 }
+ * after   { template_id, name, … }
+ * ```
+ *
+ * **A parser that merely made the count OPTIONAL would still fail**, because it
+ * would go on looking for `body.template` — which does not exist in the new
+ * shape. The brief was *"stop requiring the field"*; the measurement says the
+ * nesting changes, and only reading the amended contract showed that.
+ *
+ * So this accepts BOTH, deliberately and temporarily:
+ *
+ *   - a `template` key holding an object  ->  the wrapper, parse what is inside
+ *   - anything else                       ->  the bare Template
+ *
+ * **THE COUNT IS NEVER READ, IN EITHER FORM.** Core still sends it today, and
+ * this client still must not surface a census obtained through a write
+ * permission — **tolerating a field is not the same as consuming it**, and the
+ * security property holds throughout the window rather than only at the end of
+ * it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHEN THIS SHIM COMES OUT — an owner and an event, not a date
+ * ---------------------------------------------------------------------------
+ *
+ * **`web-agent` deletes the wrapper branch once `core-agent` confirms both
+ * routes return the bare Template**, at which point `parseTemplate` is called
+ * directly and this function disappears. The Team Lead holds that sequence.
+ *
+ * **It must not be left in place as harmless.** A parser that accepts two
+ * shapes forever is a parser that cannot tell a correct response from a stale
+ * deployment — `workflow.md` §12's *conditional nobody is assigned to collect*,
+ * which is why the owner and the trigger are named here rather than implied.
+ *
+ * ---------------------------------------------------------------------------
+ * ✅ THE TRIGGER FIRED AND THE SHIM IS GONE — 2026-09-11
+ * ---------------------------------------------------------------------------
+ *
+ * `core-agent` confirmed the new shape **by reading response keys off real
+ * URLs** rather than by reading its own diff:
+ *
+ *     update · retire · restore   [template_id, name, level_labels, status, created_at]
+ *     usage                       [template, organizations_using]   <- unchanged
+ *
+ * **So `retire` and `restore` call `parseTemplate` directly** and the
+ * two-shape function is deleted rather than left standing. It existed for about
+ * an hour, which is what a transition shim should look like.
+ *
+ * **Core went further than the contract required, and it matters here:** the
+ * handlers no longer hold the port whose only use was computing the census —
+ * *"a handler that CAN compute the census and merely does not is one edit from
+ * disclosing it again."* **So the count is now unreachable from these routes
+ * by construction, and re-disclosing it is a deliberate change to the
+ * composition where a reviewer sees it.**
+ *
+ * The paragraphs above are kept unedited because the sequence is the record:
+ * a brief that said *"stop requiring the field"*, an amendment that actually
+ * **unwrapped the response**, and a client that only found the difference by
+ * opening the contract.
+ */
+
+/**
+ * One Organization's adopted Template, after setting or clearing it.
+ *
+ * **`template` IS NULLABLE AND NULL IS A REAL ANSWER** — clearing is an
+ * operation rather than an omission, so a null here means *this Organization
+ * now adopts none*, not *the server did not say*. `requireObject` on a null
+ * would refuse the successful outcome of a legitimate act.
+ */
+export function parseOrganizationTemplate(payload: unknown): OrganizationTemplateOutput {
+  const what = 'The Organization template response';
+  const body = requireObject(payload, what);
+  return {
+    organization_id: requireString(body, 'organization_id', what),
+    template:
+      body.template === null ? null : parseTemplate(body.template, `${what} field "template"`),
+    updated_at: requireString(body, 'updated_at', what),
   };
 }
 
@@ -1734,8 +2020,97 @@ export interface PlatformClient {
     pageSize?: number;
     cursor?: string | null;
   }): Promise<ListTemplatesOutput>;
+
+  /**
+   * ===========================================================================
+   * THE TOTALS THE LIST ROUTES CANNOT STATE
+   * ===========================================================================
+   *
+   * **A paginated list can only say *"at least 25"* until its last page**, so
+   * an operational summary opened cold has no honest total. `0042` exists for
+   * exactly that sentence, and until now these two routes were **built,
+   * registered, verified from real URLs, emitted into `@dudo/contracts` — and
+   * consumed by nothing.**
+   *
+   * **NEITHER TAKES A FILTER, AND THAT IS THE SECURITY SHAPE RATHER THAN AN
+   * ECONOMY.** `security.md` §2a constrains an aggregate to a scalar total —
+   * no grouping, no `by_status` map — because any breakdown transposes into a
+   * mapping, and the mapping is the object `0028` refuses.
+   *
+   * **NEITHER NEEDS A NEW PERMISSION**, and the test is the one that decides
+   * the whole class: *a count is safe exactly when its consumer already holds
+   * enumeration over the counted population.* `core.organization.list` holders
+   * enumerate Organizations deliberately; walking the pages yields the same
+   * number. **Contrast `templateUsage` directly above, which DOES carry its own
+   * permission** — its consumer is a Template reader, who holds no such right.
+   *
+   * **Each is an audited call costing control-plane row-writes**, so they are
+   * read once when a summary opens and never polled.
+   */
+  countOrganizations(): Promise<OrganizationCountOutput>;
+  countTemplates(): Promise<TemplateCountOutput>;
+
   readTemplate(templateId: string): Promise<Template>;
   createTemplate(input: CreateTemplateInput): Promise<Template>;
+
+  /* ---- template-lifecycle-v1 ----------------------------------------- */
+
+  /**
+   * How many Organizations adopt this Template. **The read performed BEFORE
+   * retiring, so the decision is not made blind.**
+   *
+   * ITS OWN PERMISSION, `core.template-adoption.read`, and that is a decision
+   * rather than an oversight — the contract's first draft reused
+   * `core.template.read` and **security review overturned it.** The count
+   * crosses into the Organization population, which a Template reader has no
+   * right to enumerate (`security.md` §2a: *a count is safe exactly when its
+   * consumer already holds enumeration over the counted population*).
+   *
+   * **So an operator may hold Template read and be refused this**, and the
+   * screen must render that as a missing section with a reason rather than as
+   * a zero. A zero is a fact about the platform; a refusal is a fact about the
+   * caller, and showing the second as the first would tell an operator no
+   * Organization adopts a Template that half the platform is using.
+   */
+  templateUsage(templateId: string): Promise<TemplateUsageOutput>;
+  /** Name and labels. **Never status** — see `UpdateTemplateInput`. */
+  updateTemplate(templateId: string, input: UpdateTemplateInput): Promise<Template>;
+  /**
+   * Withdraw a Template from NEW adoption. **Existing adopters keep it and keep
+   * rendering its labels** — this is not a delete and does not orphan anything.
+   *
+   * NO BODY. The transition is the route.
+   *
+   * **RETURNS THE TEMPLATE, NOT A USAGE COUNT — SR-14.** It used to return the
+   * census so the outcome could state what it affected, and that made an
+   * adoption count reachable through `core.template.retire`, which is not the
+   * permission that gates one. **The figure the operator needs is read BEFORE
+   * the act, from `platform.templates.usage`, which is where the decision is
+   * made anyway.**
+   */
+  retireTemplate(templateId: string): Promise<Template>;
+  /**
+   * The inverse, and **a SEPARATE ROUTE rather than the other half of a toggle**
+   * — *"a toggle's audit record cannot say which direction it went without
+   * reading the previous state."*
+   *
+   * It shares `core.template.retire`'s permission BY DECISION
+   * (`theRetirementRuling`), not by copy-paste: restore exists because without
+   * it *"a mistaken retirement spends the Template's unique name permanently."*
+   * Whoever may retire must be able to undo it.
+   *
+   * **Returns the Template, for the same reason retire does — SR-14.**
+   */
+  restoreTemplate(templateId: string): Promise<Template>;
+  /**
+   * Set or CLEAR an Organization's Template. **Clearing is a real operation,
+   * not an empty update** — `{ template_id: null }` is sent deliberately.
+   */
+  setOrganizationTemplate(
+    organizationId: string,
+    input: SetOrganizationTemplateInput,
+  ): Promise<OrganizationTemplateOutput>;
+
   onboardOrganization(input: OnboardOrganizationInput): Promise<OnboardOrganizationOutput>;
   readOrganization(organizationId: string): Promise<OrganizationDetail>;
   /**
@@ -1962,8 +2337,13 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
        *
        * The route declares `fields: ['name']` and `objectFields: ['level_labels']`
        * and Core refuses any undeclared field, so there is no `template_id` and
-       * no `status` here — the operator chooses neither, and no route sets
-       * `status` in version 1.
+       * no `status` here — the operator chooses neither ON CREATE.
+       *
+       * ⚠ This used to add "and no route sets `status` in version 1", which is
+       * now false: `retire` and `restore` both set it. **The reason this
+       * request omits it is unchanged and is the narrower one** — the route
+       * declares two fields and Core refuses a third. Status is changed by its
+       * own routes, not by widening this one.
        *
        * A LABEL THE OPERATOR LEFT BLANK IS OMITTED, NOT SENT AS `''`. Core
        * refuses a zero-length label with `out_of_range`, so sending an empty
@@ -1981,6 +2361,115 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
         return parseTemplate(
           await platformRequest(TEMPLATES_PATH, { method: 'POST', body }, options.fetchImpl),
           'The created Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async templateUsage(templateId) {
+      try {
+        return parseTemplateUsage(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}/usage`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async updateTemplate(templateId, input) {
+      /*
+       * A PARTIAL PATCH, AND AN OMITTED FIELD MEANS "LEAVE IT". Sending
+       * `name: undefined` would serialise to nothing, but sending `name: ''`
+       * would be a request to set an empty name, which Core refuses — so a
+       * field the operator did not edit is not in the body at all.
+       *
+       * `level_labels` is a WHOLE-BLOCK replacement when present, matching the
+       * generated `LevelLabels` shape. A blank label inside it is omitted for
+       * the same reason it is on create: omission selects the default, `''`
+       * is `out_of_range`.
+       */
+      const body: Record<string, unknown> = {};
+      if (input.name !== undefined) body.name = input.name;
+      if (input.level_labels !== undefined) {
+        const labels: Record<string, string> = {};
+        for (const [level, value] of Object.entries(input.level_labels)) {
+          if (typeof value === 'string' && value !== '') labels[level] = value;
+        }
+        if (Object.keys(labels).length > 0) body.level_labels = labels;
+      }
+      try {
+        return parseTemplate(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}`,
+            { method: 'PATCH', body },
+            options.fetchImpl,
+          ),
+          'The updated Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    /*
+     * RETIRE AND RESTORE SEND NO BODY, AND THAT IS THE CONTRACT RATHER THAN AN
+     * ECONOMY. "There is no `status` field in any request shape in this
+     * contract" — the path names the transition, so the audit record says
+     * "retired" instead of "updated status to retired", and no lifecycle
+     * vocabulary crosses the wire in the request direction at all.
+     *
+     * They are DELIBERATELY two methods for two routes. One `setStatus` taking
+     * a direction would type-check, read as tidier, and re-merge the two audit
+     * entries the split exists to keep apart.
+     */
+    async retireTemplate(templateId) {
+      try {
+        return parseTemplate(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}/retire`,
+            { method: 'POST' },
+            options.fetchImpl,
+          ),
+          'The retired Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async restoreTemplate(templateId) {
+      try {
+        return parseTemplate(
+          await platformRequest(
+            `${TEMPLATES_PATH}/${encodeURIComponent(templateId)}/restore`,
+            { method: 'POST' },
+            options.fetchImpl,
+          ),
+          'The restored Template',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async setOrganizationTemplate(organizationId, input) {
+      /*
+       * `template_id` IS ALWAYS SENT, INCLUDING WHEN IT IS NULL. Clearing is an
+       * operation; omitting the field would be a request that changes nothing
+       * and would read to Core as an empty patch rather than as "adopt none".
+       */
+      try {
+        return parseOrganizationTemplate(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/${encodeURIComponent(organizationId)}/template`,
+            { method: 'PATCH', body: { template_id: input.template_id } },
+            options.fetchImpl,
+          ),
         );
       } catch (thrown) {
         throw asApiError(thrown);
@@ -2175,8 +2664,22 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
       if (input.vat_registration !== undefined) body.vat_registration = input.vat_registration;
 
       if (Object.keys(body).length === 0) {
+        /*
+         * ⚠ THE ONLY `invalid_argument` THIS CLIENT BUILDS, AND IT CARRIES ITS
+         * OWN MESSAGE KEY.
+         *
+         * `errorBodyKey` returns `null` for `invalid_argument` on the grounds
+         * that **Core knows which field and this console does not** — true of
+         * every other instance and false of this one, which never reached Core.
+         * Without the key, the screen would fall through to `message` and
+         * render an English sentence written here.
+         *
+         * `message` is kept for `Error.message`, which is what a stack trace
+         * shows.
+         */
         throw new ApiError({
           code: 'invalid_argument',
+          messageKey: 'error.body.nothingChanged',
           message:
             'Nothing was changed, so nothing was sent. Editing a field and saving it unchanged ' +
             'would still spend five of this business’s daily writes.',
@@ -2349,6 +2852,39 @@ export function createPlatformClient(options: { fetchImpl?: typeof fetch } = {})
             { method: 'GET' },
             options.fetchImpl,
           ),
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    /*
+     * THE TWO COUNTS. **No query string of any kind** — not even an empty
+     * `pageQuery` — because these routes declare *"no body, no query
+     * parameters, no path parameters"*, and the platform class refuses an
+     * undeclared field BEFORE AUTHENTICATION. Sending `?` would fail every
+     * call on a route whose whole purpose is a summary opening cleanly.
+     */
+    async countOrganizations() {
+      try {
+        return parseCount(
+          await platformRequest(
+            `${ORGANIZATIONS_PATH}/count`,
+            { method: 'GET' },
+            options.fetchImpl,
+          ),
+          'The Organization count response',
+        );
+      } catch (thrown) {
+        throw asApiError(thrown);
+      }
+    },
+
+    async countTemplates() {
+      try {
+        return parseCount(
+          await platformRequest(`${TEMPLATES_PATH}/count`, { method: 'GET' }, options.fetchImpl),
+          'The business type count response',
         );
       } catch (thrown) {
         throw asApiError(thrown);

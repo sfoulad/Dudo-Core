@@ -441,6 +441,30 @@ operations:
     maxRowWrites: 7
     audit: required
     confirmation: not-required
+    theFIGURESUMSTWOLEDGERSANDTHESCALARCANNOTSAYSO: >-
+      *** THIS FIGURE SPANS TWO SEPARATE BUDGETS THAT REFUSE INDEPENDENTLY, AND THE FIELD HAS NO WAY
+      TO EXPRESS THAT. *** Added 2026-09-11. A class of two — the other is
+      `platform.organizations.set-template` in template-lifecycle-v1, which carries the same note.
+        PART lands against the OPERATOR's control-plane budget — `PER_PRINCIPAL_DAILY_ROW_WRITES`.
+          The P4 audit record plus the `organization` row update.
+        PART lands against the NAMED ORGANIZATION's own allocation — the docs/decisions/0028
+          `audit_event` write, additionally sub-capped by `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`,
+          the ceiling keyed to the VICTIM rather than to the caller.
+      *** SO THE SCALAR IS UNUSABLE FOR EITHER QUESTION IT LOOKS LIKE IT ANSWERS: *** checked against
+      the control-plane allowance it overstates, checked against a customer's allocation it
+      overstates, and nothing in the number says which half is which. A security review derived a
+      free-tier threshold from a declared figure on 2026-09-11 and was wrong by a factor of two.
+      *** THE NUMBER 7 IS ALSO STALE, AND IT IS DELIBERATELY NOT CORRECTED HERE. *** It was right
+      when written, with the P4 audit record at 2; `0016_platform_operator_action_indexes.sql` took
+      that constant to 4 and nothing moved the contract figures.
+      IT IS NOT SWEPT BECAUSE NOTHING CAN VERIFY THE RESULT. `scripts/check-row-writes.mjs` is keyed
+      on the declared `requestClass:`, THIS OPERATION DECLARES NONE (docs/decisions/0039 phase 1), and
+      a hand-corrected figure no check can hold is the transcribed fact this whole sweep is about,
+      one iteration later. THE TRIGGER IS THIS CONTRACT DECLARING ITS CLASS — at which point the
+      check holds the route and the figure is corrected against a measurement, as
+      set-template's was.
+      READ `PLATFORM_OPERATOR_ACTION_ROW_WRITES` IN platform/core/identity/control-plane-admission.ts
+      RATHER THAN THIS FIGURE. workflow.md §11a: name the authority, never the value.
 
     theNEWPERMISSION:
       ruling: >-

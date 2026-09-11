@@ -232,3 +232,38 @@ of two is not evidence about a third.
   *shape* rather than a *role*, where the canonical definition is `account-identifier-v1`'s
   `accountIdentifier`. **Recorded as unrelated to this reservation** and left for someone to decide
   on its own terms.
+
+## ⭑ THE GAP PHASE 2 CANNOT CLOSE: NOTHING RECORDS WHICH SPELLING ARRIVED
+
+Added 2026-09-11, from `qa-agent`, and **preserved here because the paragraph that contained it is
+about to be deleted.** It was found inside `member-resolve-rename.ts`'s phase-1 assertions, which are
+entirely retired now that phase 3 has landed — so the observation would have died with the suite that
+carried it.
+
+> **Nothing downstream records WHICH spelling arrived — not the action log, not the response, not a
+> counter. So the question *"is any client still sending the old name?"* HAS NO ANSWER IN THIS
+> SYSTEM.**
+
+**This is not a test and it is not a defect in the rename.** It is a property of the platform, and it
+bears directly on the decision this file records.
+
+**Why it matters to the three-phase shape.** Phase 2 is *"both spellings accepted, the old one
+deprecated"*, and **the entire purpose of that window is to wait until no client sends the old name.**
+This decision has no instrument for the thing it is waiting on. **Phase 3 was therefore taken on a
+judgement about who the clients are — correct here, because we own both of them and could read their
+source — and that argument does not survive a third-party client, an Apple build in the field, or a
+cached bundle.**
+
+**It is moot for `identifier`: the alias is gone and both clients are ours.** It is recorded because
+**the next two-phase rename meets it again**, and will meet it in a world where reading every client's
+source is not available.
+
+**What would close it, stated as the reason rather than as a verdict** (`workflow.md` §12 — a
+conditional that names a remedy becomes a wrong instruction the day its condition turns true): the
+platform would need to record, per request, which of the accepted spellings was used — the action log
+being the natural home, since it already exists and is already written on these routes. **Whether
+that is worth its write cost is a decision nobody has made, and this paragraph does not make it.**
+
+**Do not read this as an argument that phase 3 was premature.** It was not: the alias was verified
+absent from both clients' source, which is a stronger check than a counter would have been. **The gap
+is that the stronger check does not generalise, and the weaker one does not exist.**

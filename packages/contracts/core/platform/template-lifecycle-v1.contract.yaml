@@ -141,8 +141,15 @@ theReachRuling:
       impossible as soon as one Organization adopts, and it would push operators toward retire-and-
       recreate, which is worse: it strands the adopters AND consumes the unique name.
     makeTheREACHVISIBLE: >-
-      ADOPTED. Every write in this contract returns `organizations_using`, so the operator sees how
-      many Organizations the change reached, in the response to the act itself.
+      ADOPTED, AND NARROWED ON 2026-09-11 (SR-14). ~~Every write in this contract returns
+      `organizations_using`~~ — THE WRITES NO LONGER RETURN IT. `platform.templates.usage` carries
+      the whole of this ruling: the operator reads the reach BEFORE acting, under
+      core.template-adoption.read, which is the permission built for that disclosure.
+      THE PRE-ACT READ WAS ALWAYS THE SAFETY ARGUMENT AND THE POST-ACT COUNT WAS ALWAYS A
+      CONVENIENCE. Returning it from three routes under three permissions made the gate obtainable
+      through two permissions that are not it — see theWRITEPATHDISCLOSURE_WITHDRAWN_SR14_20260911.
+      Nothing about the reach being VISIBLE changed; what changed is that it is visible in exactly
+      one place, gated by exactly one permission.
   theLIMITTHATWASFOUNDANDTHENCLOSED: >-
     *** THE FIRST DRAFT SHIPPED THE COUNT ONLY IN THE RESPONSE TO A WRITE, SO IT WAS VISIBLE AFTER
     THE ACT AND NOT BEFORE IT. THE TEAM LEAD REFUSED THAT AND WAS RIGHT TO. ***
@@ -159,25 +166,41 @@ theReachRuling:
     THE SCOPE LESSON, RECORDED BECAUSE IT WAS MINE: the operation was left out to hold the surface to
     the four that were asked for. That was the right instinct about scope and the wrong answer about
     safety — the scope was the Team Lead's to set, not mine to protect on their behalf.
-  theWRITEPATHDISCLOSURE_ACCEPTED: >-
-    *** update, retire AND restore RETURN `organizations_using` UNDER THEIR OWN PERMISSIONS, AND THAT
-    IS AN ACCEPTED DISCLOSURE RATHER THAN AN UNEXAMINED CONSEQUENCE. *** Team Lead ruling, 2026-09-10.
-    A holder of core.template.update who lacks core.organization.list DOES learn the count. It is not
-    gated by core.template-adoption.read and it must not become so.
-    WHY IT IS ACCEPTED ON THE MERITS: the caller already holds a MUTATING permission over the
-    Template, and the reach of a mutation is the thing they are entitled to see. THIS IS
-    theReachRuling WORKING AS DESIGNED — an operator changing what forty Organizations render must be
-    told it is forty. Stripping the count to close the disclosure would REOPEN TL-1, which is closed
-    for a stronger reason than this one is open.
-    WHY IT IS SAID HERE RATHER THAN LEFT IMPLICIT: this contract argued the disclosure question at
-    length for the READ route and nowhere for the three WRITE routes, which reads as the question
-    having been asked once. An unexamined consequence and a considered one are indistinguishable to
-    the next reader, and the whole of SR-4 is that shape one field over.
-    WHAT THE ASYMMETRY ACTUALLY IS, STATED SO IT IS NOT READ AS AN INCONSISTENCY: the census vector
-    is ENUMERATION PLUS SUMMATION — list every Template, read every count. THE WRITE ROUTES DO NOT
-    OFFER IT: you cannot sum across Templates by mutating them, because each call changes the record
-    and writes an audited trail of having done so. THE READ ROUTE IS THE ONLY CHEAP, REPEATABLE,
-    SIDE-EFFECT-FREE WAY TO POLL, WHICH IS WHY IT IS THE ONE THAT NEEDED A PERMISSION.
+  theWRITEPATHDISCLOSURE_WITHDRAWN_SR14_20260911: >-
+    *** WITHDRAWN. update, retire AND restore NO LONGER RETURN `organizations_using`; they return
+    `templateOutput`. *** Team Lead ruling of 2026-09-10 REVERSED on 2026-09-11 after security
+    review, by the party that made it. The withdrawn text is quoted below rather than deleted,
+    because both of its arguments failed and the WAY they failed is the reusable part.
+    THE DEFECT: the count was returned by three handlers under THREE PERMISSIONS —
+    core.template-adoption.read, core.template.update and core.template.retire — so *** THE
+    PERMISSION CREATED TO GATE THE COUNT WAS OBTAINABLE THROUGH TWO PERMISSIONS THAT ARE NOT IT. ***
+    By security.md §2a's own test, neither an update holder nor a retire holder enumerates
+    Organizations, so the count in those responses reaches PAST its consumer's enumeration right and
+    owes a gate. That is the identical reasoning that created the permission, applied to the routes
+    the same ruling exempted.
+    ARGUMENT 1, WITHDRAWN: "the caller already holds a MUTATING permission over the Template, and the
+    reach of a mutation is the thing they are entitled to see." *** IT IS A CLAIM ABOUT A MUTATION
+    AND A NO-OP RENAME IS NOT ONE. *** `updateTemplateInput` refuses only when BOTH fields are
+    absent, and renaming a Template to its own current name is a REQUIRED 200 case — this contract
+    says so, and the store's collision test excludes the row being updated precisely to make it work.
+    So `{"name": "<the name it already has>"}` is a well-formed, contract-mandated request that
+    changes nothing and returns the count, indefinitely, landing in the trail as an ordinary edit.
+    THE SELF-EXCLUSION IS CORRECT AND MUST NOT BE TOUCHED — it is not the defect.
+    ARGUMENT 2, WITHDRAWN AND IT WAS NEVER TRUE: "stripping the count would REOPEN TL-1." TL-1 is
+    "an operator cannot see the count BEFORE acting", and it was closed by the EXISTENCE of
+    platform.templates.usage. Gating a WRITE response does not touch that route. A citation that
+    does not hold, sitting in an acceptance comment, is the form that stops the next reader checking
+    (architecture.md §3c).
+    *** THREE INDIVIDUALLY-CORRECT DECISIONS COMPOSED INTO AN ORACLE, AND THAT IS THE SHAPE TO
+    CARRY: *** the parse accepting a single field, the statement excluding the row being updated, and
+    the handler returning reach. Each is right. The composition is not. architecture.md §1a in code
+    rather than across two contracts — and nothing that reads one decision at a time can see it.
+    AND IT WAS RECORDED AT ONE OF TWO SITES. This section argued the disclosure for update at length;
+    `setTemplateStatus` returned the identical count under core.template.retire WITH NO NOTE AT ALL.
+    One argument, two disclosures, one record — and the unrecorded route is the more consequential
+    one, because retirement is the act an operator performs on a Template others have adopted.
+    WHAT SURVIVES: theReachRuling's PRE-ACT read carries the whole safety argument. The post-act
+    count was a convenience, and it cost the control built for it.
   whatVISIBLEDOESNOTMEAN: >-
     A COUNT IS NOT CONSENT AND MUST NOT BE READ AS ONE. Nothing in this contract asks an adopting
     Organization whether its labels may change, and NOTHING TELLS IT THAT THEY DID.
@@ -302,11 +325,15 @@ permissionsProposed:
         DISCLOSES HAS STOPPED SORTING ANYTHING.
         See the route's theDISCLOSURE_ANDITISACENSUSRATHERTHANABOUND for why it is a census rather
         than a bound, and theRATELIMITPOSITION for why a rate limit is not a substitute.
-      whatITDOESNOTGATE: >-
-        IT DOES NOT GATE THE COUNT ON THE WRITE ROUTES. update, retire and restore return
-        organizations_using under their own permissions, DELIBERATELY — see
-        theWRITEPATHDISCLOSURE_ACCEPTED. A caller mutating a Template is entitled to see how far the
-        change reached, and gating that would reopen TL-1.
+      whatITGATES_CORRECTED_SR14_20260911: >-
+        *** IT GATES EVERY DISCLOSURE OF THE COUNT, WITHOUT EXCEPTION. *** This key previously read
+        "IT DOES NOT GATE THE COUNT ON THE WRITE ROUTES… gating that would reopen TL-1", and both
+        halves were wrong: update, retire and restore no longer return the count, and gating a write
+        response never touched TL-1, which is closed by platform.templates.usage EXISTING.
+        THE SENTENCE WAS SELF-DEFEATING WHERE IT STOOD. A permission whose entire justification is
+        that counting adopters is a decision separate from reading a Template, carrying a clause
+        exempting two other permissions from it, IS THE SPLIT UNDONE IN THE PARAGRAPH THAT MAKES IT.
+        See theWRITEPATHDISCLOSURE_WITHDRAWN_SR14_20260911.
     - id: core.template.update
       group: platform
       sensitivity: sensitive
@@ -440,7 +467,7 @@ operations:
     response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, unavailable]
-    maxRowWrites: 2
+    maxRowWrites: 4
     audit: required
     whyITHASITSOWNPERMISSION_ANDTHEFIRSTDRAFTGOTTHISWRONG: >-
       *** THIS ROUTE ORIGINALLY REUSED core.template.read AND ARGUED THAT A NEW PERMISSION "would be
@@ -506,7 +533,7 @@ operations:
         permission-catalog.yaml as history with both arguments; it is not in force and its keywords
         are not keywords of that file.
     notes: >-
-      maxRowWrites IS 2 ON A READ, and that is not an error: platform-operator-v1 P4 requires every
+      maxRowWrites IS 4 ON A READ, and that is not an error: platform-operator-v1 P4 requires every
       platform route to write an audit record, so a "read" route in this class always writes. Same
       reasoning template-v1's list operation records.
       not_found IS AN HONEST not_found, for template-v1 -> platform.templates.read's reason.
@@ -524,15 +551,21 @@ operations:
     permission: core.template.update
     scope: platform
     request: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/updateTemplateInput" }
-    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, conflict, failed_precondition, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 4
+    maxRowWrites: 6
     audit: required
     writes: >-
       ONE ROW UPDATED IN `template` (1 row + the uniqueness index on the normalised name = 2) PLUS
-      the platform-operator audit record. Charged 4 conservatively, per 0014 §A.12 and matching
-      create — over-reserving delays a write, under-reserving is a platform outage.
+      the platform-operator audit record, WHICH IS `PLATFORM_OPERATOR_ACTION_ROW_WRITES` AND IS 4
+      TODAY — see platform-operator-v1 -> P4 -> theROWWRITEFIGURES_SR22_20260911, and read the
+      constant rather than this sentence for free-tier arithmetic.
+      *** CHARGED 6, CORRECTED FROM 4 ON 2026-09-11. *** The 4 was 2 + 2 against an audit record that
+      cost 2 when this was written; `0016_platform_operator_action_indexes.sql` took it to 4 and
+      moved the constant, and nothing moved the contract figures. Over-reserving delays a write;
+      under-reserving is a platform outage (0014 §A.12), so the direction this was wrong in is the
+      one that matters.
     conflict:
       whenItIsReturned: "The new name collides with another Template's, compared after NFKC normalisation and ASCII-only case folding."
       theSELFCOMPARISONISEXCLUDED: >-
@@ -564,12 +597,12 @@ operations:
     permission: core.template.retire
     scope: platform
     request: "Path parameter `template_id` only. NO BODY."
-    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 3
+    maxRowWrites: 5
     audit: required
-    writes: "ONE ROW UPDATED IN `template` (1 row, no index touched — status is not indexed) PLUS the platform-operator audit record. Charged 3."
+    writes: "ONE ROW UPDATED IN `template` (1 row, no index touched — status is not indexed) PLUS the platform-operator audit record, which is `PLATFORM_OPERATOR_ACTION_ROW_WRITES` and is 4 today. CHARGED 5, CORRECTED FROM 3 ON 2026-09-11 — the 3 was 1 + 2 against an audit record that has since cost 4. Read the constant, not this figure (platform-operator-v1 -> P4 -> theROWWRITEFIGURES_SR22_20260911)."
     whyAROUTERATHERTHANAPATCHOFStatus:
       ruling: "THE TRANSITION IS THE ROUTE. There is no `status` field in any request shape in this contract."
       why: >-
@@ -602,12 +635,12 @@ operations:
     permission: core.template.retire
     scope: platform
     request: "Path parameter `template_id` only. NO BODY."
-    response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/templateUsageOutput" }
+    response: { schemaRef: "urn:dudo:schema:template:1#/$defs/templateOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 3
+    maxRowWrites: 5
     audit: required
-    writes: "As retire. ONE ROW UPDATED PLUS the audit record. Charged 3."
+    writes: "As retire. ONE ROW UPDATED PLUS the audit record. CHARGED 5, CORRECTED FROM 3 ON 2026-09-11 for the reason retire records."
     notes: >-
       IT SHARES A PERMISSION WITH RETIRE AND HAS ITS OWN ROUTE AND ITS OWN AUDIT ENTRY. Sharing the
       permission is theRetirementRuling's decision; sharing a ROUTE would have meant a toggle, and a
@@ -632,7 +665,40 @@ operations:
     response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/organizationTemplateOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 8
+    maxRowWrites: 10
+    theFIGURESUMSTWOLEDGERSANDTHESCALARCANNOTSAYSO: >-
+      *** 10 IS 5 + 5 ACROSS TWO SEPARATE BUDGETS THAT REFUSE INDEPENDENTLY, AND THE FIELD HAS NO WAY
+      TO EXPRESS THAT. READ THIS BEFORE USING THE NUMBER FOR ANYTHING. ***
+        5  against the OPERATOR's control-plane budget — `PER_PRINCIPAL_DAILY_ROW_WRITES` (600).
+           Observed as two reservations, [4, 1]: the P4 audit record, then the `organization` row.
+        5  against the NAMED ORGANIZATION's own allocation — the docs/decisions/0028 `audit_event`
+           write, additionally sub-capped by `PLATFORM_ORIGINATED_DAILY_ROW_WRITES` (1000), which is
+           the ceiling keyed to the VICTIM rather than to the caller. See theBUDGETMECHANISM_SR4.
+      *** SO THE FIGURE IS NOT WRONG — IT IS UNUSABLE FOR EITHER QUESTION IT LOOKS LIKE IT ANSWERS. ***
+      A reader checking 10 against the control-plane allowance gets a number twice the truth; a reader
+      checking it against a customer's allocation gets the same. THE HARM IS NOT HYPOTHETICAL: a
+      security review derived a free-tier exhaustion threshold from a declared figure on 2026-09-11
+      and was wrong by a factor of two. That one was merely STALE. This one is STRUCTURALLY AMBIGUOUS
+      and will mislead a reader who checks it against the correct constant.
+      A CLASS OF TWO, NOT AN ODDITY OF THIS ROUTE: `platform.organizations.identity.update` sums the
+      same two ledgers and carries the same note.
+      THE FIELD IS NOT BEING RESTRUCTURED HERE. `maxRowWrites` is declared on every route in the
+      corpus, so a second field is a decision about the whole corpus and belongs in its own change —
+      the same call made on the class-level rule rather than restating it nine times. What must be
+      recoverable from THIS route is which ledger each half lands in and that they refuse
+      independently, and that is what the paragraph above is.
+      *** AND scripts/check-row-writes.mjs CANNOT DETECT THIS, BY CONSTRUCTION. *** Nothing
+      distinguishes "10 = 5 + 5 across two ledgers" from "10 on one" in a scalar, and a check that
+      guessed would be inventing the fact it should be reading. The declaration comes first and the
+      mechanism after — the ordering docs/decisions/0039 established for `requestClass`.
+    theFIGUREWASOBSERVEDRATHERTHANCALCULATED: >-
+      CORRECTED 8 → 10 ON 2026-09-11 FROM A MEASUREMENT, not from arithmetic: `core-agent` wrapped
+      the shipped `ControlPlaneWriteAdmission` and recorded what one real PATCH actually reserved.
+      The derivation from the three constants agrees, and THE PROBE IMPORTS THE CONSTANTS RATHER THAN
+      TRANSCRIBING THEM, so the number cannot rot the way the one it replaces did.
+      *** THE 8 WAS ARITHMETICALLY CORRECT WHEN WRITTEN *** — 1 + 2 + 5, with the audit record at 2
+      before `0016_platform_operator_action_indexes.sql` took it to 4. It is the same defect as every
+      other figure in this sweep: the constant moved and the contracts did not.
     audit: required
     writes: >-
       ONE ROW UPDATED IN THE CONTROL-PLANE `organization` TABLE, PLUS the platform-operator audit
@@ -737,6 +803,39 @@ operations:
         AN ORGANIZATION ALREADY HOLDING A RETIRED TEMPLATE IS NOT FORCED OFF IT, and clearing to
         null is always permitted regardless of the current Template's status. The precondition is
         about what may be ADOPTED, never about what is held.
+      aSUSPENDEDORGANIZATIONMAYBERETEMPLATED_RULED_SR20_20260911: >-
+        *** RULED: PERMITTED. A SUSPENDED ORGANIZATION MAY BE RE-TEMPLATED, DELIBERATELY. ***
+        THE FINDING WAS NOT THE BEHAVIOUR, IT WAS THAT NOBODY HAD ASKED. This block reasoned
+        carefully about exactly one precondition — the Template's status — and was silent about the
+        ORGANIZATION's, which `0002_organization.sql` constrains to ('active','suspended'). Silence
+        made the behaviour a DEFAULT rather than a DECISION, and a default is what a future reader
+        changes without knowing a question was ever open.
+        *** WHY PERMITTED, AND THE ARGUMENT IS ABOUT WHAT REFUSING WOULD FORCE: *** to correct a
+        Template on a suspended Organization an operator would first have to REACTIVATE it. That is
+        a LARGER act performed for a SMALLER reason — reactivation restores a customer's access to
+        their own product — so refusing here would push operators into escalation-by-workflow, doing
+        the more dangerous thing to accomplish the less dangerous one. Suspension is reversible and
+        is not deletion; correcting configuration BEFORE restoring access is the safer order and the
+        one an operator should be able to take.
+        WHAT PERMITTING COSTS, STATED RATHER THAN DISCOVERED: five row-writes land in a suspended
+        customer's own allocation (the docs/decisions/0028 audit record). That is not a leak of
+        budget from an active customer — a suspended Organization is spending none of its allocation
+        — and the record is exactly what 0028 exists for. A CUSTOMER IS ARGUABLY OWED THE TRAIL MORE
+        WHILE SUSPENDED THAN WHILE ACTIVE, because that is when things are done to them rather than
+        by them. They still cannot read it; `core.audit.read` has no route (`PA-3`).
+        AND THE CHANGE IS INVISIBLE UNTIL REACTIVATION. No principal can enter a suspended
+        Organization, so the new labels render to nobody until access returns. It is staged
+        configuration, which is the whole point of allowing it.
+        CLIENT OBLIGATION, BINDING ON BOTH CLIENTS: the screen offering this action MUST show the
+        Organization's status. The response shape carries no status and is not gaining one — it is
+        available from organization-detail-v1 — but an operator re-templating an Organization
+        without knowing it is suspended is making a decision on a fact they were not shown.
+        THE TRIGGER THAT REOPENS THIS: a status that is NOT reversible. `organizationStatus` is
+        ('active','suspended') today and both directions are ordinary operator acts. If a terminal
+        state ever ships — pending-deletion, closed — THIS RULING DOES NOT EXTEND TO IT, and the
+        argument above collapses: nothing is being staged for a return that will not happen. Stated
+        as the condition rather than as a verdict, so it is not read as blanket permission the day a
+        third status appears.
     theSCHEMACANNOTENFORCETHIS: >-
       *** STATED SEPARATELY BECAUSE IT IS THE CLASS OF RULE THIS REPOSITORY KEEPS GETTING WRONG. ***
       JSON Schema cannot see the referenced Template's status — it is a value in another table — so
@@ -909,7 +1008,7 @@ testRequirements:
     - "set-template on Organization A writes the 0028 audit record into A's database and into no other. ASSERT IT AT THE STORE, NOT THROUGH A TENANT-FACING READ — there is no route that returns this record to a tenant (`core.audit.read` has none; `PA-3`), so a test phrased as 'Organization B's audit feed shows nothing' would be reading a feed that does not exist and would pass by construction on both Organizations."
     - "NO PLATFORM PRINCIPAL RESOLVES A TENANT STORE HANDLE ON THIS PATH. Assert it at the port, not by observing that no business data came back — an absence of leaked data is what a correct implementation and a broken assertion both look like."
   audit:
-    - "All five routes write a platform-operator audit record, INCLUDING the read — platform-operator-v1 P4, and it is why maxRowWrites is 2 on a route that changes nothing."
+    - "All five routes write a platform-operator audit record, INCLUDING the read — platform-operator-v1 P4, and it is why a route that changes nothing still declares a non-zero maxRowWrites. ASSERT THE FIGURE AGAINST `PLATFORM_OPERATOR_ACTION_ROW_WRITES`, NEVER AGAINST A LITERAL: this case said '2' until 2026-09-11 and the constant had been 4 since migration 0016."
     - "A REFUSED OPERATION WRITES THE REFUSAL, NOT THE ACT. A failed_precondition retire produces an audit entry recording a REFUSED attempt and must NOT produce one recording a retirement. Stated as its own case because the two are one row apart and a suite that only counts audit rows passes on either."
     - "The retire and restore entries are distinguishable in the trail without reading the previous state. This is why they are two routes rather than a toggle."
   theBoundary:

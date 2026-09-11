@@ -261,6 +261,16 @@ const OPERATION_CONTRACTS: readonly string[] = Object.freeze([
   'credential-reset-v1.contract.yaml',
   // ADDED 2026-09-07 with `platform.organizations.identity.update`.
   'organization-identity-v1.contract.yaml',
+  // ADDED 2026-09-11 with the five Template lifecycle operations. The closed list went red on all
+  // five at once, naming them — which is the list working exactly as its header describes: the
+  // routes reached the table before this case knew which contract governed them.
+  //
+  // *** IT CONTRACTS ONE OPERATION IN A DIFFERENT NAMESPACE, AND THAT IS THE INTERESTING PART. ***
+  // `platform.organizations.set-template` is a `platform.organizations.*` route living in a
+  // TEMPLATE contract, because the operation is "adopt this Template" rather than "edit this
+  // Organization". **A closed list keyed on the route's namespace prefix would have looked for it
+  // in `organization-detail-v1` and reported it uncontracted forever.**
+  'template-lifecycle-v1.contract.yaml',
 ]);
 
 /**

@@ -18,8 +18,14 @@ import { internal, unavailable } from '../../../kernel/errors.ts';
 import type { D1Database } from '../../../storage/adapters/d1/d1-store.ts';
 import type { ControlPlaneWriteReservation } from '../../../identity/control-plane-admission.ts';
 import { consumeControlPlaneWriteReservation } from '../../../identity/control-plane-admission.ts';
-import type { NewTemplate, TemplateStore } from '../../template-store.ts';
-import type { TemplateRecord, TemplateStatus } from '../../templates.ts';
+import type {
+  NewTemplate,
+  TemplateStatusOutcome,
+  TemplateStore,
+  TemplateUpdateOutcome,
+} from '../../template-store.ts';
+import type { TemplateLabels, TemplateRecord, TemplateStatus } from '../../templates.ts';
+import { TEMPLATE_STATUSES } from '../../templates.ts';
 
 type SqlRow = Record<string, unknown>;
 
@@ -32,7 +38,9 @@ function text(row: SqlRow, column: string): string | null {
   return asText === '' ? null : asText;
 }
 
-const STATUSES: readonly TemplateStatus[] = ['active', 'retired'];
+// ONE DEFINITION, IMPORTED. This file held its own copy until 2026-09-11, and a third was about to
+// be written for the list filter — `workflow.md` §12's duplicated constraint, on two strings.
+const STATUSES: readonly TemplateStatus[] = TEMPLATE_STATUSES;
 
 function toRecord(row: SqlRow): TemplateRecord | null {
   const templateId = text(row, 'template_id');
@@ -122,23 +130,38 @@ export function createD1TemplateStore(database: D1Database): TemplateStore {
     async list(
       limit: number,
       afterTemplateId: string | null,
+      status: TemplateStatus | null,
     ): Promise<Result<readonly TemplateRecord[]>> {
       if (!Number.isInteger(limit) || limit < 1) {
         return err(internal());
       }
       // Keyset scan on the primary key. The limit is inlined as a validated integer, exactly as
       // `sql-compiler.ts` and `listOrganizations` do, so it cannot carry caller-controlled text.
+      //
+      // *** THE STATUS IS A BOUND PARAMETER AND IS NEVER INLINED, unlike the limit. *** The limit is
+      // an integer this method has just validated; the status arrives from a query string. It is
+      // checked against the closed enum above this port as well, so this is the second layer rather
+      // than the only one — and the two clauses are composed rather than concatenated as text so a
+      // caller cannot reach the SQL from either direction.
+      const clauses: string[] = [];
+      const parameters: string[] = [];
+      if (afterTemplateId !== null) {
+        clauses.push('template_id > ?');
+        parameters.push(afterTemplateId);
+      }
+      if (status !== null) {
+        clauses.push('status = ?');
+        parameters.push(status);
+      }
+      const where = clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')} `;
       const sql =
-        afterTemplateId === null
-          ? 'SELECT template_id, name, label_organization, label_workspace, label_branch, ' +
-            `status, created_at FROM template ORDER BY template_id ASC LIMIT ${String(limit)}`
-          : 'SELECT template_id, name, label_organization, label_workspace, label_branch, ' +
-            'status, created_at FROM template WHERE template_id > ? ' +
-            `ORDER BY template_id ASC LIMIT ${String(limit)}`;
+        'SELECT template_id, name, label_organization, label_workspace, label_branch, ' +
+        `status, created_at FROM template ${where}` +
+        `ORDER BY template_id ASC LIMIT ${String(limit)}`;
       try {
         const outcome = await database
           .prepare(sql)
-          .bind(...(afterTemplateId === null ? [] : [afterTemplateId]))
+          .bind(...parameters)
           .all<SqlRow>();
         const templates: TemplateRecord[] = [];
         for (const row of outcome.results) {
@@ -149,6 +172,149 @@ export function createD1TemplateStore(database: D1Database): TemplateStore {
           templates.push(record);
         }
         return ok(templates);
+      } catch {
+        return err(unavailable());
+      }
+    },
+
+    async update(
+      templateId: string,
+      next: {
+        readonly name: string;
+        readonly normalizedName: string;
+        readonly labels: TemplateLabels;
+      },
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<TemplateUpdateOutcome>> {
+      // NO ADMISSION, NO WRITE — `0014` §A.11.
+      consumeControlPlaneWriteReservation(reservation, 1);
+      try {
+        // =====================================================================================
+        // BOTH PRECONDITIONS ARE RE-ASKED IN THE STATEMENT THAT WRITES. `architecture.md` §3a.
+        // =====================================================================================
+        //
+        // The caller has already read this row — it needs the stored labels as the merge base —
+        // and **that read is stale by the time this runs.** A concurrent retire, or a concurrent
+        // create taking the name, both land in the window. The in-statement guard has no window.
+        //
+        // `template_id <> ?` IS THE SELF-COMPARISON EXCLUSION and the contract names the trap:
+        // *"the obvious implementation — 'does any row have this normalised name' — returns the
+        // row itself and refuses every edit that keeps the name."*
+        //
+        // `RETURNING` rather than rows-affected, for `create`'s reason: Core's
+        // `D1PreparedStatement` exposes only `bind` and `all`, and widening a Cloudflare-shaped
+        // type to carry a row count would be a permanent cost against `architecture.md` §6.
+        const written = await database
+          .prepare(
+            'UPDATE template SET name = ?, normalized_name = ?, label_organization = ?, ' +
+              'label_workspace = ?, label_branch = ? ' +
+              "WHERE template_id = ? AND status = 'active' " +
+              'AND NOT EXISTS (SELECT 1 FROM template other WHERE other.normalized_name = ? ' +
+              'AND other.template_id <> ?) ' +
+              'RETURNING template_id',
+          )
+          .bind(
+            next.name,
+            next.normalizedName,
+            next.labels.organization,
+            next.labels.workspace,
+            next.labels.branch,
+            templateId,
+            next.normalizedName,
+            templateId,
+          )
+          .all<{ template_id: string }>();
+        if (written.results.length === 1) {
+          return ok('updated');
+        }
+
+        // =====================================================================================
+        // ZERO ROWS MEANS ONE OF FOUR THINGS AND THE STATEMENT CANNOT SAY WHICH.
+        // =====================================================================================
+        //
+        // *** THIS SECOND READ RUNS ONLY ON THE REFUSAL PATH. *** The success path is one
+        // statement and keeps the no-window property; classification costs a read exactly when
+        // the answer is already "no write happened", which is the cheap half to spend.
+        //
+        // A classifying read is NOT a read-then-write — nothing is written after it. It reports
+        // why a write that already did not happen did not happen.
+        const why = await database
+          .prepare(
+            'SELECT status, (SELECT COUNT(*) FROM template other ' +
+              'WHERE other.normalized_name = ? AND other.template_id <> ?) AS taken ' +
+              'FROM template WHERE template_id = ? LIMIT 1',
+          )
+          .bind(next.normalizedName, templateId, templateId)
+          .all<SqlRow>();
+        if (why.results.length === 0) {
+          return ok('not_found');
+        }
+        const row = why.results[0];
+        if (text(row, 'status') === 'retired') {
+          return ok('retired');
+        }
+        const taken = row['taken'];
+        if (typeof taken === 'number' ? taken > 0 : Number(taken) > 0) {
+          return ok('name_taken');
+        }
+        // THE GUARD REFUSED AND NOTHING IS WRONG NOW, WHICH ONLY A CONCURRENT WRITE EXPLAINS.
+        // Reported as itself rather than as a collision — see the port for why a false "collision"
+        // is worse than an honest "retry".
+        return ok('raced');
+      } catch {
+        return err(unavailable());
+      }
+    },
+
+    async setStatus(
+      templateId: string,
+      transition: { readonly from: TemplateStatus; readonly to: TemplateStatus },
+      reservation: ControlPlaneWriteReservation,
+    ): Promise<Result<TemplateStatusOutcome>> {
+      consumeControlPlaneWriteReservation(reservation, 1);
+      try {
+        // `AND status = ?` IS THE `failed_precondition` GUARD AND IT IS IN THE WRITE. A retire that
+        // checked the current state with a prior read would succeed twice under concurrency and
+        // write two audit records for one transition.
+        const written = await database
+          .prepare(
+            'UPDATE template SET status = ? WHERE template_id = ? AND status = ? ' +
+              'RETURNING template_id',
+          )
+          .bind(transition.to, templateId, transition.from)
+          .all<{ template_id: string }>();
+        if (written.results.length === 1) {
+          return ok('updated');
+        }
+        // Zero rows is either "no such Template" or "not in the expected state". One point lookup
+        // on the primary key separates them, on the refusal path only.
+        const existing = await database
+          .prepare('SELECT template_id FROM template WHERE template_id = ? LIMIT 1')
+          .bind(templateId)
+          .all<SqlRow>();
+        return ok(existing.results.length === 0 ? 'not_found' : 'already_in_state');
+      } catch {
+        return err(unavailable());
+      }
+    },
+
+    async count(): Promise<Result<number>> {
+      // `COUNT(*)`, NEVER A FETCH-AND-LENGTH — the same number on the wire and a different number
+      // against `d1-rows-read`. NO `WHERE`: this counts the table, both statuses, and the port says
+      // why a filter would make it a different question under the same name.
+      try {
+        const outcome = await database
+          .prepare('SELECT COUNT(*) AS total FROM template')
+          .all<SqlRow>();
+        // ONE ROW ALWAYS, INCLUDING ON AN EMPTY TABLE. An empty result set means the statement did
+        // not run as written, which is `internal()` rather than a silent zero: **"nothing was found"
+        // and "nothing was examined" must not render the same way** (`workflow.md` §11a).
+        if (outcome.results.length !== 1) {
+          return err(internal());
+        }
+        const raw = outcome.results[0]['total'];
+        const total = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isInteger(total) && total >= 0 ? ok(total) : err(internal());
       } catch {
         return err(unavailable());
       }

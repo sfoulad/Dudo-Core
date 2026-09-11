@@ -52,6 +52,7 @@ import {
   redirect,
 } from '@tanstack/react-router';
 import { RootLayout } from '@/routes/root-layout';
+import { Dashboard } from '@/screens/Dashboard';
 import { Organizations } from '@/screens/Organizations';
 import { OrganizationDetail } from '@/screens/OrganizationDetail';
 import { OrganizationAudit } from '@/screens/OrganizationAudit';
@@ -89,15 +90,17 @@ import { ROUTES, HOME_ROUTE } from '@/lib/routes';
 const rootRoute = createRootRoute({ component: RootLayout });
 
 /**
- * `/` is not a section. The Organization list is the console's home, which is
- * what `HOME_ROUTE` meant in the router this replaced.
+ * `/` IS A SECTION NOW. It was a redirect to the Organization list, because
+ * there was nothing at the root worth showing; it renders the platform summary.
+ *
+ * **The redirect is gone rather than pointed elsewhere.** A `/` that redirects
+ * to `/` is a loop, and the wildcard below still sends genuinely unmatched
+ * addresses to `HOME_ROUTE`, which is now this route.
  */
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/',
-  beforeLoad: () => {
-    throw redirect({ to: HOME_ROUTE });
-  },
+  path: ROUTES.dashboard,
+  component: Dashboard,
 });
 
 const organizationsRoute = createRoute({

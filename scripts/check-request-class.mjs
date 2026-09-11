@@ -501,6 +501,17 @@ if (undeclared.length > 0) {
   console.log('  then, because a required field nothing validates spreads an unenforceable');
   console.log('  declaration with the appearance of enforcement. THIS FILE IS THAT VALIDATION.');
   console.log('');
+  console.log('  *** AND SINCE 2026-09-11 THIS LIST IS NO LONGER ONLY A DOCUMENTATION DEBT. ***');
+  console.log('  `check:row-writes` is keyed on the declared class, so every route above is');
+  console.log('  INVISIBLE TO IT — reported there as UNCLASSIFIED rather than compliant. The');
+  console.log('  backlog now bounds the population of a second check, and the NEXT check keyed on');
+  console.log('  this field inherits the same hole without anyone deciding it should.');
+  console.log('');
+  console.log('  This sentence exists because the fact changed and nothing here would have said so:');
+  console.log('  the list above reads as WHAT THE SWEEP OWES, which was the whole truth until a');
+  console.log('  second consumer existed. A count that acquires a new consumer acquires a new');
+  console.log('  meaning, and nothing goes red when the old framing outlives it (workflow.md §12).');
+  console.log('');
 }
 
 if (uncontracted.length > 0) {
