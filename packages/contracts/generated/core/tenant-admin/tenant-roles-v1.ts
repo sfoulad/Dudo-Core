@@ -22,14 +22,14 @@
  */
 
 import type { ErrorEnvelope } from '../../common/error-envelope.ts';
-import type { MemberSeat, MembershipRole, PrincipalId } from './tenant-members-v1.ts';
+import type { MemberSeat, MembershipRole, PrincipalId, RoleId } from './tenant-members-v1.ts';
 import type { Cursor, NextCursor, PageSize } from '../../common/pagination.ts';
+export type { RoleId };
 
 export type ErrorResponse = ErrorEnvelope;
 
 export type PermissionId = string;
 
-export type RoleId = RoleId;
 
 export type RoleName = string;
 

@@ -19,7 +19,7 @@ export type OrganizationId = string;
 
 export type PrincipalId = string;
 
-export type MembershipRole = 'owner' | 'member' | (string & {});
+export type MembershipRole = 'owner' | 'admin' | 'business-admin' | 'member' | (string & {});
 
 export type OrganizationDetailOutput = {
   readonly organization_id: OrganizationId;
