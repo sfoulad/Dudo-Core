@@ -366,7 +366,23 @@ operations:
     response: { schemaRef: "urn:dudo:schema:organization-onboarding:1#/$defs/onboardOrganizationOutput" }
     successStatus: 201
     errors: [invalid_argument, unauthenticated, forbidden, not_found, conflict, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 12
+    maxRowWrites: 13
+    theCONTROLPLANETOTALGAINEDONE_20260913: >-
+      CORRECTED 12 -> 13, from `core-agent`. `0017` INDEXES A COLUMN THIS ONBOARDING WRITES, so the
+      row it inserts now maintains an index entry it did not when this figure was set.
+      *** IT IS THE SAME CLASS AS THE `0016` SWEEP AND NOT A NEW ONE: A MIGRATION ADDED AN INDEX AND
+      THE CONTRACT FIGURES WERE NOT MOVED WITH IT. *** `0016` moved the audit constant and every
+      route's figure was two low; `0017` moves nothing named, because THIS cost is the route's OWN
+      write rather than the shared audit record — so there is no constant to read and nothing to
+      point at.
+      *** THAT IS WHY `scripts/check-row-writes.mjs` CANNOT CATCH THIS ONE, AND ITS OWN HEADER
+      ALREADY SAYS SO. *** It holds a LOWER BOUND against `PLATFORM_OPERATOR_ACTION_ROW_WRITES` —
+      the shared half. A route's own writes are not derivable from any constant, so a figure that is
+      correct about the audit record and wrong about the row passes. THE MECHANISM COVERS THE HALF
+      THAT IS SHARED AND NOTHING COVERS THE HALF THAT IS PER-ROUTE.
+      THE TRIGGER, ASSIGNED RATHER THAN LEFT IMPLICIT: any migration adding an index to a table a
+      platform route writes owes a sweep of that route's figure, in the same change. `0016` set the
+      precedent by moving its constant and saying so; `0017` had no constant to move.
     audit: required
     theCONFIRMATIONOBLIGATION:
       finding: >-

@@ -253,11 +253,47 @@ permissions:
     phase: 1
   - id: core.user.invite
     group: identity
-    description: "Invite a person into the tenant."
+    description: >-
+      Invite a person into the tenant — CREATE an invitation, and resend or revoke one.
+      RESEND AND REVOKE ARE FOLDED IN DELIBERATELY, and the argument is that they add no authority:
+      both act on an invitation this holder could have created, neither reaches a person the holder
+      could not have invited, and revoke is reversible by inviting again. Splitting them would be a
+      split with no decision in it (§3.2 read in the direction it is usually read backwards).
+      *** IT DOES NOT GRANT ENUMERATION. *** Creating an invitation and seeing who has been invited
+      are different disclosures over different populations — see core.invitation.list.
     sensitivity: sensitive
     scopes: [organization, business, branch]
     status: proposed
     phase: 1
+  # =========================================================================================
+  # MILESTONE 2 — INVITATION ENUMERATION. REGISTERED 2026-09-13, HELD BY NO ROLE.
+  # =========================================================================================
+  # Registration is not a grant; see the block on core.organization.transfer-ownership for the
+  # basis on which these were relayed. security-agent reviews before integration.
+  - id: core.invitation.list
+    group: identity
+    description: >-
+      Enumerate the tenant's PENDING invitations, and read one. Required by the milestone's own
+      feature set rather than added for convenience: RESEND AND REVOKE MUST NAME A SPECIFIC
+      INVITATION, and without enumeration there is no way to name their target — withholding the
+      list would leave two required operations unable to identify what they act on.
+      *** IT IS A NEW FAMILY AND NOT core.user.*, AND THE POPULATION IS WHY. *** core.user.list
+      enumerates MEMBERS. This enumerates PEOPLE WHO HAVE BEEN ASKED AND HAVE NOT ANSWERED —
+      a different set, and one whose email addresses belong to NON-MEMBERS.
+      PERMISSIONS ARE GRANTED BY FAMILY, so a role that may list staff must not acquire the
+      pending-invitee list by looking like a fourth member of core.user.*. That is the reasoning
+      that kept adoption counts out of core.template.*, and the population here is more sensitive
+      than that one was.
+      *** IT EXISTS BECAUSE security.md §2a WAS RUN AND THE COUNT FAILED IT. *** A pending-invitation
+      COUNT reaches past its consumer's enumeration right: core.user.invite is a CREATE permission
+      and grants no enumeration, and core.user.list enumerates a different population. So the count
+      and the list travel together under this permission, or neither exists.
+      SENSITIVE, AND THE RUNG IS ABOUT WHOSE DATA IT IS: it discloses personal data belonging to
+      someone who has not joined the tenant and may never join it.
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
   - id: core.user.update
     group: identity
     description: "Modify a user profile."
@@ -309,6 +345,79 @@ permissions:
     scopes: [organization]
     status: proposed
     phase: 1
+  # =========================================================================================
+  # MILESTONE 2 — THREE ORGANIZATION PERMISSIONS. REGISTERED 2026-09-13, HELD BY NO ROLE.
+  # =========================================================================================
+  # PROPOSED BY architecture-agent FOR docs/decisions/0043 AND APPROVED FOR REGISTRATION BY THE
+  # TEAM LEAD. *** REGISTRATION IS NOT A GRANT AND NONE OF THESE APPEARS IN ANY ROLE'S PERMISSION
+  # LIST. *** They are catalogued so contracts can name them (0007 rule 4: a permission does not
+  # exist until it is here); the role that holds each is part of 0043's role model, which is NOT
+  # YET RECORDED. security-agent reviews before integration, and all three go to the user by name.
+  #
+  # THE BASIS ON WHICH THESE WERE RELAYED RATHER THAN ASKED ABOUT, recorded because security.md §8
+  # says only the user approves a permission: the user scoped the CAPABILITIES by name in the
+  # Milestone 2 brief — "ownership transfer with strong confirmation" and "data retention, archive
+  # and deletion-request controls". A PERMISSION THAT GATES A CAPABILITY THE USER REQUIRED IS THE
+  # LEAST-PRIVILEGE IMPLEMENTATION OF WHAT THEY ASKED FOR, NOT A NEW GRANT OF REACH. The line that
+  # would send this back to them is a permission widening access BEYOND what was scoped; none of
+  # these does.
+  - id: core.organization.transfer-ownership
+    group: organization
+    description: >-
+      Transfer ownership of the Organization to another member — one atomic demote-and-promote.
+      *** CRITICAL, AND THE RUNG IS NOT ARGUABLE. *** Every other critical act in this product is
+      recoverable by somebody still holding authority. THIS ONE HANDS THE AUTHORITY AWAY: the
+      actor cannot undo it afterwards, because the new owner can simply refuse to transfer back.
+      Nothing else in Dudo changes who may delete a tenant.
+      THE "STRONG CONFIRMATION" THE MILESTONE BRIEF ASKS FOR IS SATISFIED BY THE RUNG RATHER THAN
+      BY A BESPOKE GATE. docs/decisions/0007 D15 makes every `critical` permission carry the
+      confirmation automatically, with no code change and no chance of omission — so hand-building
+      a second gate here would be inventing one the ladder already provides.
+      OWNERSHIP IS SINGULAR PER ORGANIZATION and that is what makes this a TRANSFER rather than a
+      grant. Without singular ownership the operation is "add a second owner" and the confirmation
+      is theatre. The invariant is a partial unique index enforced in the same statement that
+      writes, never a check above the call (architecture.md §3a).
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.organization.request-deletion
+    group: organization
+    description: >-
+      REQUEST deletion of the Organization, starting the retention window. It is not the deletion.
+      *** SEPARATE FROM core.organization.delete ON THREE AXES, AND A SINGLE PERMISSION ANSWERS
+      NONE OF THEM: *** a different ACTOR (the customer asks; the platform executes), a different
+      REVERSIBILITY (a request is cancellable, an execution is not), and a different position
+      relative to the RETENTION WINDOW (before it runs against after). Collapsing them would put
+      the destructive permission in the hands of whoever may ask.
+      CRITICAL because it starts an irreversible clock against a customer's entire business data.
+    sensitivity: critical
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.organization.cancel-deletion-request
+    group: organization
+    description: >-
+      Cancel a pending deletion request, stopping the clock. THE RECOVERY HALF, AND IT IS A
+      SEPARATE PERMISSION SO IT CAN BE HELD WITHOUT THE DAMAGING ONE.
+      *** THE POINT IS AN ON-CALL RESPONDER WHO CAN STOP A MISTAKEN OR HOSTILE DELETION OF AN
+      ENTIRE ORGANIZATION WITHOUT BEING ABLE TO START ONE. *** That is
+      core.principal.revoke-platform-scope's break-glass argument — "the person reachable at 3am
+      can cut off a compromised operator without themselves being able to create one" — applied to
+      the most consequential object in the product.
+      *** AND IT IS THE ARGUMENT template-lifecycle-v1 GOT WRONG, TRANSPOSED RATHER THAN REPEATED.
+      *** There, retire and restore were MERGED into one permission on the reasoning that a
+      separate restore could only ever be held alongside retire. The asymmetry that made merging
+      tolerable for a Template is exactly what makes splitting mandatory here: the damaging half
+      destroys a customer's business data and the recovery half is pure safety. A merge would
+      foreclose the low-privilege recovery role on the one operation where it matters most.
+      SENSITIVE RATHER THAN CRITICAL: it destroys nothing, changes no authority, and moves the
+      Organization from a pending-deletion state back to the state it was already in. docs/
+      decisions/0026 grades what the OPERATION does.
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
   - id: core.business.read
     group: organization
     description: "View a Business/Workspace."

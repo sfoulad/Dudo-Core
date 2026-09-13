@@ -415,28 +415,47 @@ export function buildNoTenantReachSuite(make: MakePlatformWorld = createPlatform
 
     console.log(`        delegation surface: ${delegations.length} import(s) out of the class into directory/`);
 
-    // *** EXACTLY THESE, AND `type-only` IS THE HALF THAT MATTERS. *** A `import type` carries no
+    // ===================================================================================
+    // *** THIS WAS AN EXACT TWO-ENTRY PIN UNTIL 2026-09-13. IT IS NOW A UNIVERSAL, AND THE
+    // *** CHANGE WAS MADE BEFORE MILESTONE 2 RATHER THAN IN RESPONSE TO ITS FIRST RED. ***
+    // ===================================================================================
+    //
+    // The pin read `composition.ts: type-only · platform-route-handlers.ts: type-only` and was
+    // correct. **Milestone 2 builds tenant administration, so the platform class will legitimately
+    // delegate more — and a pin that goes red on correct work teaches people to move the number
+    // without reading it.** That is the failure this repository names for hand-maintained counts,
+    // and the right moment to fix it is before the first legitimate growth rather than after.
+    //
+    // **THE NUMBER WAS NEVER THE SECURITY PROPERTY. `type-only` IS.** An `import type` carries no
     // runtime value across the boundary — the service arrives through `createPlatformComposition`,
     // where the runtime case above walks what a handler actually receives. **A VALUE import would
-    // mean the class had acquired a live handle at module scope, which is the exact shape case (2)
+    // mean the class had acquired a live handle at MODULE SCOPE, which is the exact shape case (2)
     // exists to refuse and which it would not see, because it inspects the context and not the
-    // module.**
+    // module.** That must hold at two delegations and at twenty.
+    //
+    // So: a UNIVERSAL over every delegation, which survives growth; the population PRINTED so
+    // growth is visible to a reader; and a floor at the bottom, which is the only direction that
+    // is still a defect.
+    const valueImports = delegations.filter((entry) => entry.endsWith('VALUE'));
     assertEqual(
-      `${ISOLATION} the class delegates out of itself in exactly the two known places, both type-only`,
-      delegations.sort().join(' · '),
-      'platform/core/platform/composition.ts: type-only · platform/core/platform/platform-route-handlers.ts: type-only',
-    );
+      `${ISOLATION} every delegation out of the class is TYPE-ONLY — no live handle at module scope`,
+      valueImports.join(' · '),
+      '',
+      );
 
-    // AND THE MIRROR, because an empty list would satisfy the equality above only by accident of
-    // the expected string — but a reader meeting a green here should know the surface is non-empty
-    // and deliberate rather than absent. `0024`'s mutual exclusion is a property of there BEING a
-    // separate port, not of there being no path at all.
+    // ---- THE FLOOR, AND IT IS THE HALF A UNIVERSAL LOSES. `every X is type-only` is satisfied
+    // perfectly by an empty list — the vacuity this file argues about everywhere else. **Zero
+    // delegations would mean the tenant-side audit write had moved onto this class's own port**,
+    // which is `0024` failing quietly while looking like the guarantee strengthened.
+    //
+    // *** IT IS A FLOOR AND NOT A PIN, DELIBERATELY: `> 0` GROWS AND DOES NOT SHRINK. *** The
+    // surface may widen as tenant administration lands; it may not collapse to nothing.
     assertTrue(
-      'and that surface is NOT empty — the separation is two ports, not the absence of a path',
-      delegations.length === 2,
-      `the class delegates ${delegations.length} times. Zero would mean the tenant-side audit write ` +
-        'has moved onto this class\'s own port, which is 0024 failing quietly rather than the ' +
-        `guarantee strengthening: ${JSON.stringify(delegations)}`,
+      `${ISOLATION} and the surface is NOT EMPTY (${delegations.length}) — the separation is two ports, not the absence of a path`,
+      delegations.length > 0,
+      'the platform class delegates nowhere. 0024 is a property of there BEING a separate port for ' +
+        'the tenant-side write, so zero means that write has moved onto this class\'s own port — ' +
+        'the guarantee failing quietly rather than strengthening',
     );
   });
 

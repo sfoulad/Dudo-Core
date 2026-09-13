@@ -60,6 +60,7 @@ import { toRfc3339Utc } from '../kernel/clock.ts';
 import type { IdGenerator } from '../kernel/ids.ts';
 import type { ControlPlaneWriteAdmission } from '../identity/control-plane-admission.ts';
 import {
+  ORGANIZATION_TEMPLATE_UPDATE_ROW_WRITES,
   ORGANIZATION_UPDATE_ROW_WRITES,
   PLATFORM_OPERATOR_ROW_WRITES,
   TEMPLATE_ROW_WRITES,
@@ -2369,10 +2370,16 @@ function setOrganizationTemplate(dependencies: {
     }
 
     // ---- 3. RESERVE, before either write.
+    //
+    // *** `ORGANIZATION_TEMPLATE_UPDATE_ROW_WRITES`, NOT `ORGANIZATION_UPDATE_ROW_WRITES`, SINCE
+    // `0017`. *** This route writes `template_id`, which is the column `organization_by_template`
+    // indexes, so it costs the row AND the index entry. The identity update writes thirteen columns
+    // and none of them is indexed, so it still costs one. **The two constants were one until that
+    // migration made their derivations differ.**
     const nowMs = dependencies.clock.nowMs();
     const admitted = await dependencies.admission.reserve({
       principalId: context.authority.principalId,
-      estimatedRowWrites: ORGANIZATION_UPDATE_ROW_WRITES,
+      estimatedRowWrites: ORGANIZATION_TEMPLATE_UPDATE_ROW_WRITES,
       nowMs,
     });
     if (!admitted.ok) {

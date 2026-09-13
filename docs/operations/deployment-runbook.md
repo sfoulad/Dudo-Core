@@ -471,6 +471,49 @@ a single machine.
 
 ## 9. Rollback
 
+## D1 BACKUP BEFORE A MIGRATION — the procedure, and the verification step that nearly reported a false failure
+
+Added 2026-09-13, verified against the live control plane before Milestone 2's index migration.
+
+**Taking the backup is one command and it works:**
+
+```
+npx wrangler d1 export dudo-control-plane --remote --output=<path>.sql
+```
+
+It builds the export server-side, prints a **one-hour signed R2 link**, and downloads the SQL. **No
+paid service is involved** — this is D1's own export path.
+
+### ⚠ A DOWNLOADED FILE IS NOT A VERIFIED BACKUP, AND THE OBVIOUS VERIFICATION FAILS MISLEADINGLY
+
+**Restoring the export into a scratch SQLite reported `no such table: main.template` — and the backup
+was fine.**
+
+**The export opens with `PRAGMA defer_foreign_keys=TRUE`, and a plain `exec()` of the whole file does
+not honour it**: rows for `organization` are inserted before `CREATE TABLE template` appears, and the
+foreign key is checked immediately rather than at commit. **The restore tool enforces a constraint
+the export expects to be deferred.**
+
+> **The check was wrong and the subject was right** — `workflow.md` §11a's three causes of *"this
+> cannot succeed"*, and this was the third: **the input was impossible for a reason nobody had
+> stated.** Read WHY before concluding which.
+
+**So the verification is:**
+
+```
+PRAGMA foreign_keys=OFF;          <- REQUIRED, or a valid backup reports a missing table
+<replay the export>
+PRAGMA foreign_key_check;          <- must return zero rows AFTER the restore
+count tables, indexes and rows and compare against an expectation stated BEFORE the run
+```
+
+**Measured 2026-09-13 on `dudo-control-plane`: 11 tables, 4 indexes, 122 rows, 0 foreign-key
+violations.** Row counts by table are the useful artifact — **a restore that produces the schema and
+no rows looks identical to a successful one in every check that stops at "it parsed".**
+
+**And name the expected tables before running it.** The floor rule applies: a restore returning
+*some* tables looks like success, and only a stated expectation makes ten-instead-of-eleven visible.
+
 ## ⚠ THERE ARE TWO WORKERS SHARING ONE `main`, AND "THE ROLLBACK VERSION" IS AMBIGUOUS WITHOUT NAMING ONE
 
 Added 2026-09-11, before a deploy rather than during one. **This runbook was 491 lines and mentioned

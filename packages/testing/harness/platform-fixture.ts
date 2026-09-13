@@ -518,6 +518,21 @@ export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
   // the query plans of exactly these feeds, so a fixture without the indexes would keep reporting
   // the SCAN after it had been fixed.
   '0016_platform_operator_action_indexes.sql',
+  // ADDED 2026-09-13, AND THE FIXTURE-DRIFT CASE IS WHAT ASKED FOR IT rather than anyone
+  // remembering. `0017` landed on disk and `the platform fixture omits nothing` went red naming
+  // it — which is the whole reason that case compares the applied set against the directory
+  // instead of asserting a count.
+  //
+  // **It is the index on `organization.template_id`.** `0013` left it out in terms — *"the only
+  // query that would want one is 'list every Organization using Template X', which is a route
+  // that does not exist… add it with the route that needs it"* — and
+  // `countOrganizationsUsingTemplate` is that route.
+  //
+  // *** APPLIED HERE RATHER THAN OMITTED, FOR THE SAME REASON AS `0016` ONE LINE UP: *** the
+  // capacity model measures query plans, so a fixture without the index would go on reporting the
+  // full scan after it had been fixed. **A fixture that lags a schema change reports the old
+  // world with complete confidence.**
+  '0017_organization_template_index.sql',
 ]);
 
 export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';

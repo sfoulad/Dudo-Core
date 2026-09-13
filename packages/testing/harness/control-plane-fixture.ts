@@ -120,6 +120,17 @@ export const APPLIED_MIGRATIONS: readonly string[] = [
   '0014_platform_operator_action_organization.sql',
   '0015_organization_identity.sql',
   '0016_platform_operator_action_indexes.sql',
+  // ADDED 2026-09-13 — the index on `organization.template_id`, and it is the SECOND list that
+  // needed it. `platform-fixture.ts`'s `PLATFORM_MIGRATIONS` was updated first, on its own drift
+  // case going red; **this one stayed short and a DIFFERENT check in a DIFFERENT suite caught it**
+  // — `applied + deliberately omitted covers every control-plane migration on disk`.
+  //
+  // *** TWO LISTS, TWO CHECKS, AND THAT IS THE POINT RATHER THAN DUPLICATION. *** Fixing the first
+  // did not fix the second and nothing linked them: `workflow.md` §12's *budget for MORE homes than
+  // you find*, at the smallest possible scale. **The reason it cost one red instead of a silent
+  // divergence is that each list has its own check comparing it against the DIRECTORY** — neither
+  // asserts a count, so neither could be satisfied by the other's repair.
+  '0017_organization_template_index.sql',
 ];
 
 export function readMigration(fileName: string): string {

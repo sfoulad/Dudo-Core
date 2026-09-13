@@ -58,9 +58,18 @@ import { hasStatement } from './statements.ts';
  * Every permission `packages/contracts/registries/permission-catalog.yaml` marks
  * `sensitivity: critical`, transcribed at 2026-09-05.
  *
- * SIXTEEN. Most of them gate operations that do not exist yet, and they are listed anyway — the
- * point of deriving the requirement from the permission is that the gate is already standing when
- * the operation arrives, rather than being something its author must remember to add.
+ * EIGHTEEN as of 2026-09-12. Most of them gate operations that do not exist yet, and they are
+ * listed anyway — the point of deriving the requirement from the permission is that the gate is
+ * already standing when the operation arrives, rather than being something its author must remember
+ * to add.
+ *
+ * *** DO NOT TRUST THAT NUMBER; IT IS HAND-MAINTAINED PROSE AND IT HAS BEEN WRONG TWICE. *** It read
+ * "SIXTEEN" while the catalogue held eighteen, and "fifteen" before that. **The authority is
+ * `permission-catalog.yaml`, and the thing that keeps this list equal to it is `qa-agent`'s
+ * assertion — every permission the catalogue calls critical appears here, AND NOTHING ELSE DOES.**
+ * Both directions matter: the second catches a permission Core treats as critical that the
+ * catalogue does not. **Prefer running that check to believing this sentence** (`workflow.md`
+ * §11a — a count that only appears in prose is a count nobody has to move).
  *
  * TWO OF THEM ARE REACHABLE TODAY: `customers.customer.delete` and `core.credential.reset`.
  *
@@ -80,6 +89,33 @@ const CRITICAL_PERMISSIONS: readonly string[] = Object.freeze([
   'core.marketplace.moderate',
   'core.mcp.configure-external',
   'core.organization.delete',
+  // ===========================================================================================
+  // ADDED 2026-09-12. THE CATALOGUE HAS CALLED BOTH `critical` AND CORE HAD NEVER HEARD OF EITHER —
+  // `grep -a` across `platform/core/**` returned ZERO mentions of either string.
+  // ===========================================================================================
+  //
+  // **NOTHING WAS EXPOSED, AND THAT IS A PROPERTY OF THE CALENDAR RATHER THAN OF THE CODE.** No
+  // route declares either, so neither is reachable — the same transitional shape as Milestone 1's
+  // four Template permissions, with the catalogue landing ahead of Core.
+  //
+  // *** THE WINDOW IS WHY THIS IS A FINDING AND NOT NOISE. *** `requiresConfirmation` is the ONE
+  // question both gates ask — `pipeline.ts` for Actions and `isConfirmationGated` for platform
+  // routes. **A route for either landing before this list did would have shipped UNGATED**: an
+  // ownership transfer or a deletion request performable with a stolen session and no
+  // re-authentication, looking correct at every call site.
+  //
+  // **AND THESE TWO ARE MILESTONE 2's SUBJECT**, which is what made the window narrow and real
+  // rather than theoretical — the tenant administration surface is being contracted now, and
+  // ownership transfer and deletion requests are named in it as the two acts where getting it
+  // wrong is unrecoverable.
+  //
+  // THIS IS THE THIRD TIME THIS LIST HAS BEEN SHORT, AND THE FIRST TIME SOMETHING CAUGHT IT BEFORE
+  // A ROUTE EXISTED. `core.principal.revoke-platform-scope` was found below by reasoning, after its
+  // route was already next; these were found by `qa-agent`'s assertion comparing the catalogue
+  // against this file. **The obligation this file's own header named in 2026-09-05 — *"a named
+  // obligation with no owner and no test is a comment"* — is now a test, and it worked.**
+  'core.organization.request-deletion',
+  'core.organization.transfer-ownership',
   'core.principal.grant-platform-scope',
   // ===========================================================================================
   // ADDED 2026-09-05. IT WAS MISSING, AND ITS ABSENCE FAILED **OPEN**.

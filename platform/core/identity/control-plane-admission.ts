@@ -133,7 +133,27 @@ export const SESSION_ROW_WRITES = 3;
  * than a number it chose.
  */
 export const PRINCIPAL_ROW_WRITES = 2;
-export const ORGANIZATION_ROW_WRITES = 2;
+
+/**
+ * `organization` (`0002`): 1 table row + 1 implicit primary-key index + **1 entry in
+ * `organization_by_template`**.
+ *
+ * *** IT WENT 2 → 3 ON 2026-09-12 WITH `0017_organization_template_index.sql`, IN THE SAME CHANGE
+ * AS THE MIGRATION *** — which is what the instruction on every constant in this file requires and
+ * what `0016` is the worked example of. The migration states the arithmetic; this line is the half
+ * that would otherwise be an obligation nobody collects.
+ *
+ * **THE INDEX ENTRY IS WRITTEN EVEN WHEN NO TEMPLATE IS ADOPTED.** SQLite indexes NULLs, and
+ * onboarding's INSERT carries `template_id` in its column list whatever its value
+ * (`d1-control-plane-store.ts`), so every Organization pays this — including one created with no
+ * Template at all.
+ *
+ * `ONBOARDING_CONTROL_PLANE_ROW_WRITES` MOVES ON ITS OWN, 10 → 11, because it is a SUM of these
+ * constants rather than a literal. That was `onboarding-service.ts`'s stated reason for summing —
+ * *"a schema change that alters any one row's cost changes this number without anyone remembering
+ * to"* — and this is the first time it has been called upon.
+ */
+export const ORGANIZATION_ROW_WRITES = 3;
 
 /**
  * *** UPDATING AN `organization` ROW COSTS ONE, NOT TWO, AND THE DIFFERENCE IS THE PRIMARY KEY. ***
@@ -149,18 +169,51 @@ export const ORGANIZATION_ROW_WRITES = 2;
  * does too** — the same instruction `PLATFORM_OPERATOR_ACTION_ROW_WRITES` carries, which `0016` is
  * the worked example of honouring.
  *
- * *** IT COVERS EVERY SINGLE-ROW `organization` UPDATE THAT TOUCHES NO INDEX, AND SINCE 2026-09-11
- * THAT IS TWO ROUTES: `platform.organizations.identity.update` AND
- * `platform.organizations.set-template`. *** The second writes one column where the first writes
- * thirteen, and the cost is identical because the cost is the ROW rather than the columns.
+ * *** IT COVERS A SINGLE-ROW `organization` UPDATE THAT TOUCHES NO INDEX. SINCE 2026-09-12 THAT IS
+ * ONE ROUTE: `platform.organizations.identity.update`. ***
  *
- * **A SECOND CONSTANT WITH THE SAME DERIVATION WAS THE OBVIOUS MOVE AND IS REFUSED**, because two
- * numbers derived from one table are two numbers that must be moved together and one that will not
- * be — `workflow.md` §12's duplicated constraint, on a value whose whole purpose is to track a
- * schema. `0013_organization_template.sql` adds `template_id` with **no index**, deliberately, so
- * set-template maintains nothing either. **One constant, one place to move when that changes.**
+ * ===========================================================================================
+ * *** IT WAS SHARED WITH `set-template` UNTIL `0017`, AND THE REFUSAL TO SPLIT IT WAS CORRECT ON A
+ * PREMISE THAT MIGRATION REMOVED. ***
+ * ===========================================================================================
+ *
+ * The comment here read: *"A SECOND CONSTANT WITH THE SAME DERIVATION WAS THE OBVIOUS MOVE AND IS
+ * REFUSED, because two numbers derived from one table are two numbers that must be moved together
+ * and one that will not be… `0013` adds `template_id` with no index, so set-template maintains
+ * nothing either."*
+ *
+ * **Every clause of that was true, and `0017_organization_template_index.sql` falsifies the one it
+ * rested on.** With `organization_by_template` in place the two derivations are no longer the same:
+ *
+ *   identity.update   writes THIRTEEN columns, none of them indexed        ->  1
+ *   set-template      writes ONE column, and it IS the indexed one         ->  2
+ *
+ * **So the split is not a reversal of that judgement — it is the condition the judgement named,
+ * arriving.** Recorded rather than quietly re-decided, because *"same derivation"* is the test, and
+ * a reader who meets only the split would reasonably re-merge them.
+ *
+ * IF A SECOND INDEX EVER LANDS ON `organization`, BOTH NUMBERS MOVE AND SO DOES
+ * `ORGANIZATION_ROW_WRITES` — three constants over one table, and a reader standing at any one of
+ * them cannot see the other two.
  */
 export const ORGANIZATION_UPDATE_ROW_WRITES = 1;
+
+/**
+ * *** SETTING AN ORGANIZATION'S TEMPLATE COSTS TWO: THE ROW AND THE INDEX ENTRY. ***
+ * `platform.organizations.set-template` · `0017_organization_template_index.sql`.
+ *
+ * `UPDATE organization SET template_id = ?` writes the column `organization_by_template` is built
+ * on, so the index entry is rewritten with it. **That is the entire difference from
+ * `ORGANIZATION_UPDATE_ROW_WRITES`, and it is why the two are no longer one constant** — see that
+ * constant for the premise `0017` removed.
+ *
+ * IT IS THE CONTROL-PLANE HALF ONLY. This route also spends `RESOLVE_TENANT_ROW_WRITES` in the
+ * NAMED ORGANIZATION'S OWN DATABASE, under `reserveWrites(…, 'platform')` — a different ledger,
+ * bounded by `PLATFORM_ORIGINATED_DAILY_ROW_WRITES`, which is the ceiling keyed to the victim
+ * rather than to the operator. **A reader summing this constant with the audit record has the
+ * operator's cost and not the route's.**
+ */
+export const ORGANIZATION_TEMPLATE_UPDATE_ROW_WRITES = 2;
 
 /**
  * `organization_membership` (`0003`): 1 table row + 1 implicit primary-key index.
