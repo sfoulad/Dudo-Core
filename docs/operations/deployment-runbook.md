@@ -54,6 +54,73 @@ refuses loudly rather than binding the wrong database.
 `0006` §0.3 requires two: the control plane decides tenancy, so it cannot live inside a
 database that tenancy scopes.
 
+## 2a. ⚠ EXECUTE THE WHOLE SET BEFORE THE LIST GOES TO THE USER — IT IS NOT OPTIONAL
+
+**Added 2026-09-13, because it caught a migration that DID NOT APPLY, on the day it was about to be
+put in front of the user for approval.**
+
+**Apply every migration, in filename order, to a throwaway in-memory database, before anyone
+approves anything.** `node:sqlite` is the same engine family the QA fixtures use and it costs
+seconds.
+
+```
+23 control-plane + 4 tenant, in order, into a throwaway database
+  -> the first seventeen applied
+  -> 0018 FAILED:
+     error in trigger platform_operator_excludes_membership_on_insert:
+       no such table: main.organization_membership
+```
+
+### WHAT IT FOUND, AND THE SHAPE IS WHY READING DID NOT
+
+`0018` widens a `CHECK`, and **SQLite cannot `ALTER` a `CHECK`** — so it is the twelve-step table
+rebuild: create, copy, **drop**, rename. `0010` installs **FOUR** triggers:
+
+```
+TWO  ON organization_membership                      -> dropped by the DROP TABLE.  FOUND.
+TWO  ON platform_operator, reading organization_membership in WHEN EXISTS
+                                                     -> NOT dropped.  MISSED.
+```
+
+**The two survivors are not dropped, so when the rename lands SQLite re-validates the schema, finds
+live triggers referencing a table that no longer exists, and refuses.**
+
+> **`architecture.md` §3b, self-inflicted, and `core-agent`'s own diagnosis is the thing to keep:**
+> **"A confident paragraph about triggers is what stopped me looking for the other kind of
+> trigger."** It wrote a detailed, correct section about the two it had found — *and read past it
+> four times.* **The more precisely a dismissal is worded, the less likely anyone is to re-derive
+> it, including its author.**
+
+**AND THE TEAM LEAD AMPLIFIED THE HALF-RIGHT VERSION.** That trigger finding had already been
+relayed as *"the one I would put in front of the user first"* — **correct about the hazard, wrong
+about its extent, and repeating it added confidence without adding a check.** A half-right finding
+travelling upward is harder to catch than a wrong one, because the half that is right survives
+every review.
+
+**Nothing static would have found it.** Not a read of `0018`, not a read of `0010`, not a diff —
+**the failure is a property of the SCHEMA STATE at step 18, which exists only once seventeen files
+have run.**
+
+### WHAT EXECUTING THE SET PROVES, AND WHAT IT DOES NOT
+
+**PROVES:** every file parses and applies in order; every named object exists afterwards; and —
+because the prober can then run statements — **behavioural properties can be checked rather than
+argued.** The 2026-09-13 run added 12, none blind, including **both directions of the single-owner
+ordering** (demote-then-promote succeeds; promote-before-demote is refused by the index) and the
+confirmation that **the partial unique index is BLIND TO ZERO**, documented rather than hoped.
+
+**DOES NOT PROVE ANYTHING ABOUT D1.** `d1_database_query` is withheld, so D1's PRAGMA handling and
+batch atomicity stay unmeasured. **§3's *"the ✅ is the tool's claim — query the database"* applies
+in full and is not softened by a green local run.**
+
+### AND THE USER HEARS ONE THING FROM THIS THAT NO FILE SAYS
+
+**For the duration of `0018`, the mutual exclusion has NO database-level enforcement in either
+direction** — all four triggers are dropped at step 0 and recreated at the end. **Acceptable on
+`0025`'s own terms** — *"the write check is hygiene; THE AUTHORIZATION CHECK IS THE CONTROL"*, and
+both authority resolvers are untouched by a migration — **but it is not nothing, and it means: do
+not apply it while anything is writing.**
+
 ## 3. Apply migrations — local first, always
 
 ```
