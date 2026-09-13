@@ -522,6 +522,55 @@ today that knowing a rule conferred no protection against the case.
 so adding the column costs an edit. **After it is applied it costs a second migration** — which is
 the whole reason the migration list goes to the user as one reviewed set rather than one at a time.
 
+## 7c. ENUM POLICY ON THE ROLE VOCABULARY — RULED `closed`, AND TODAY IS THE EVIDENCE
+
+**After `0043` §3a's widening landed, `membershipRole` held the same four values in two contracts
+with DIFFERENT policies** — `extensible` in `organization-detail-v1`, `closed` in
+`tenant-members-v1`. `0041` amendment 1's check flags exactly that: identical value sets, divergent
+policy.
+
+**The case for `extensible` is real and it is empirical:** it is why today's 2 → 4 widening was
+**not** a breaking change on a live consumer. `platform/admin` already had the unknown arm, so the
+new values flowed into it and nothing failed to compile. **That is the mechanism working as
+designed, and it is the argument I expected to accept.**
+
+> **⚠ AND THE SAME EVENT IS WHY IT IS REFUSED. THE UNKNOWN ARM IS WHERE THE EIGHT UNTRANSLATED
+> STRINGS LIVE.**
+>
+> `platform/admin`'s unknown branch renders the raw value plus a `<span className="sr-only">` note
+> **in English, on an Arabic console** — eight of them, and **the only people who ever meet them are
+> blind Arabic-speaking operators.** The arm was correct, unreachable, and untranslated; **`0018`
+> makes it reachable.**
+>
+> **`extensible` did not make the widening SAFE. It made it SILENT** — it converted a compile error
+> that would have named every consumer into a runtime path nobody re-examined for two role values.
+
+**RULED: `membershipRole` is `closed` in both contracts.**
+
+- **The `CHECK` is the authority and it admits exactly four.** A fifth value cannot be stored, so an
+  unknown arm on a *response* guards against something the database cannot produce.
+- **A fifth seed role is a DECISION** — a migration plus a contract change — **which is precisely
+  what `closed` exists to force.** `0041`'s whole argument.
+- **And `0041` amendment 1 settles the request position independently:** roles are assigned, so
+  `membershipRole` appears in a request shape, and **a request enum is always `closed`** — a server
+  accepting a role it does not understand has no correct behaviour.
+
+**`organizationStatus` in `platform-operator-v1` is `extensible` over a `CHECK` admitting exactly
+two values. RULED `closed`**, same reasoning: the unknown arm can never be reached by anything the
+database can hold, **which is amendment 3's hazard with nothing on the other side of the trade.**
+
+> **THIS IS A BREAKING CHANGE TO AN ACCEPTED CONTRACT AND IS RECORDED AS ONE** (`architecture.md`
+> §1). Narrowing `extensible` → `closed` **removes the unknown arm**, so a consumer that added one
+> because the policy told it to loses the branch — **and the compiler names it, which is the loud
+> direction.** `web-agent` is told before the build goes red, not by it.
+
+**And `architecture-agent`'s observation about the OTHER pair is the one to keep**, because it stops
+the wrong repair: `membershipStatus` and `organizationStatus` are grouped **only because their value
+sets are identical**, and they name **two different objects** — a membership's status and an
+Organization's. **The sameness is the coincidence.** *"Make them agree"* is the wrong instruction;
+**"decide each against its own `CHECK`"** is the right one. Both answers happen to be `closed`, and
+arriving there by the right route is what makes the next pair decidable.
+
 ## 8. Team Lead rulings recorded here rather than left in a dispatch
 
 1. **§2c closes the draft's one open dependency** by `0044` §3d, cross-referenced in both
