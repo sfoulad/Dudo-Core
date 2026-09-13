@@ -105,8 +105,37 @@ export type DataTableFeatures = typeof dataTableFeatures;
 export type DataTableColumn<TData extends RowData> = ColumnDef<DataTableFeatures, TData, unknown>;
 
 export interface DataTableProps<TData extends RowData> {
-  columns: DataTableColumn<TData>[];
-  rows: TData[];
+  columns: readonly DataTableColumn<TData>[];
+  /**
+   * ⚠ `readonly`, AND THE REASON IS A CONTRACT PROPERTY RATHER THAN A STYLE PREFERENCE.
+   *
+   * `0037`'s generated response types are `readonly` throughout, because a wire response is
+   * something a client RECEIVES and not something it owns. This prop took `TData[]`, so every
+   * consumer of a generated type had exactly two options and both were wrong:
+   *
+   *   copy the array   an allocation per render, to satisfy a signature rather than a need
+   *   cast it          AN ASSERTION THAT THE ARRAY IS MUTABLE — which is precisely the claim
+   *                    the contract has just withdrawn
+   *
+   * `web-agent` hit this consuming `customer-directory-v1` and TOOK THE COPY, which was the
+   * honest choice: *"a cast would assert the array is mutable, and that is exactly the claim the
+   * contract has withdrawn."* It then reported the cost rather than absorbing it. **This widening
+   * removes the copy for every consumer, not only that one.**
+   *
+   * WIDENING A PARAMETER BREAKS NO CALLER. A mutable array is assignable to a readonly one, so
+   * every existing call site compiles unchanged; only the component's own ability to mutate is
+   * removed, and it never did. TanStack Table accepts a readonly `data`.
+   *
+   * `columns` is widened in the same change for the same reason and to avoid the asymmetry
+   * looking deliberate — one readonly prop beside one mutable one reads as a decision.
+   *
+   * THE FALSIFIER, because `readonly` is weaker than it looks: TypeScript IGNORES `readonly` in
+   * assignability between OBJECT types, so this guards the ARRAY and not the records in it.
+   * `web-agent` measured that in the same pass — a function claiming to accept a readonly record
+   * and storing it in a mutable array compiled silently. The element type must carry its own
+   * `readonly` fields, which the generated types do.
+   */
+  rows: readonly TData[];
   /**
    * A stable identity per row. Required rather than defaulted to the array
    * index, because an index-keyed row re-uses the previous record's DOM when a
