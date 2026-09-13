@@ -474,6 +474,54 @@ noticed.**
   from a recorded debt into a live one** — role assignment is precisely the privilege change `0007`
   rule 9 requires audited. **It is closed inside this milestone, not carried past it.**
 
+## 7a. ⚠ §7's FIRST BULLET WAS FALSE WITHIN HOURS — and the general shape is the finding
+
+**§7 says the `branch` and `invitation` tables do not exist. `0021_invitation.sql`,
+`0022_tenant_role.sql` and `0023_organization_deletion_request.sql` are all on disk**, written the
+same afternoon this record was accepted, **and four Milestone 2 contracts repeat the claim as a
+dependency.** A contract asserting a table does not exist **instructs** — `workflow.md` §12's most
+dangerous residue class, arriving inside the milestone that created it.
+
+> **AN ACCEPTED RECORD'S MEASUREMENTS ARE EVIDENCE ABOUT THE MOMENT IT WAS WRITTEN, and in a tree
+> several agents write concurrently that moment is short.** This is the third instance in one day —
+> the same class as `0043` §6c's row 1 and the enum widening that half-landed across two schemas.
+>
+> **The remedy is not to measure more carefully. It is to write the dependency as a CONDITION rather
+> than as a FACT** — *"this route requires an `invitation` table; the migration is the user's"* stays
+> true whether or not the file exists, where *"the table does not exist"* is false the moment
+> somebody writes it and instructs the next reader wrongly.
+
+### 7b. THE FIVE DIVERGENCES — PRECEDENCE RULED PER ROW
+
+`architecture-agent` compared its contracts against the migrations' column declarations, **found
+five disagreements, edited none of them, and referred precedence here.** That was right: contract-
+first makes the contract normative, Core built in parallel, and **in two places Core built better.**
+A unilateral rewrite in either direction is the wrong move when both sides are defensible.
+
+| # | Subject | RULING | Who changes |
+|---|---|---|---|
+| 1 | invitation close/resend — contract `resent_at`; Core `closed_at` + `closed_by_principal_id` | **CORE WINS.** Dropping *who* closed an invitation loses an accountability fact on a membership-changing act, which `security.md` §6 requires audited. Resend and close are different events and the shape needs both | contract |
+| 2 | invitation carries custom roles — contract `custom_role_ids` (≤20); Core `role` only | **CONTRACT WINS.** `0022` creates the custom-role tables, so an invitation that can carry only a seed role makes §5.6's visibility promise hollow **at the moment membership begins** — the one moment a grant is chosen | **`0021_invitation.sql`** |
+| 3 | role lifecycle — contract deletes, refused while held; Core `status IN ('active','retired')` | **CORE WINS, and it is stronger than a refusal.** Retire-not-delete is `0031`'s Template precedent applied correctly: a refusal is a rule someone can be talked out of, a lifecycle state is a fact the data carries | contract |
+| 4 | role name — contract `name`; Core `display_name` | **ALIGN ON `name`, both sides.** A wire/column split with no reason behind it is exactly what `0034` cost a day over. `organization.display_name` is a different table with its own justification and does not transfer | Core |
+| 5 | per-permission scope — contract omits it; Core `role_permission.scope NOT NULL` | **CORE WINS** | contract |
+
+**Row 5 is the one worth reading twice, and `architecture-agent` diagnosed it against itself.** It
+omitted the field arguing from **§1b — a ROLE's `scope:` has no consumer.** True, and about a
+different axis:
+
+> **Core's column is a PER-PERMISSION scope — D6's intersection — which has a real consumer.**
+> A correct ruling applied to the wrong field, leaving a `NOT NULL` column the request shape supplies
+> nothing for.
+
+**That is `architecture.md` §3c's reasoning-from-a-record's-topic-rather-than-its-clauses, in the
+tree of the agent that added that section a week earlier.** Recorded because it is the second time
+today that knowing a rule conferred no protection against the case.
+
+**ROW 2 IS A MIGRATION AMENDMENT AND IT IS FREE RIGHT NOW.** `0021` is written and **not applied**,
+so adding the column costs an edit. **After it is applied it costs a second migration** — which is
+the whole reason the migration list goes to the user as one reviewed set rather than one at a time.
+
 ## 8. Team Lead rulings recorded here rather than left in a dispatch
 
 1. **§2c closes the draft's one open dependency** by `0044` §3d, cross-referenced in both
