@@ -115,7 +115,7 @@ import {
   type OrganizationDetail as Detail,
   type Template,
   type PlatformClient,
-  type ResolveMemberOutput,
+  type ResolveMember,
 } from '@/api/platform';
 import { toApiError, type ApiError } from '@/api/errors';
 
@@ -256,7 +256,7 @@ type Lookup =
    */
   | {
       readonly kind: 'found';
-      readonly member: ResolveMemberOutput;
+      readonly member: ResolveMember;
       readonly submittedIdentifier: string;
     }
   | { readonly kind: 'refused' }
@@ -1175,13 +1175,23 @@ function LookupResult({ lookup, platform }: { lookup: Lookup; platform: Platform
             </dt>
             <dd className="text-ink">
               {lookup.member.role}
+              {/*
+                ⚠ THE UNKNOWN ARM IS CORRECT AND IS ABOUT TO BE REACHED.
+                `membershipRole` is `extensible` (`0041`), and `0043` §3 widens
+                it from two values to four — `admin` and `business-admin` will
+                flow here the moment migration `0018` is applied. **Rendering
+                the raw value and naming it as unrecognised is the right
+                behaviour; do not simplify this branch away.**
+
+                Its sentence was hardcoded ENGLISH inside `sr-only` until
+                2026-09-13, so the only readers who ever met it were blind
+                Arabic-speaking operators. See `lib/i18n.tsx`'s `unknown.*`.
+              */}
               {!isKnownMembershipRole(lookup.member.role) ? (
-                <span className="sr-only"> (an unrecognised role)</span>
+                <span className="sr-only"> {t('unknown.role')}</span>
               ) : null}
               {lookup.member.role === 'owner' ? (
-                <span className="ms-2 text-ink-muted">
-                  — resetting this credential takes over an owner.
-                </span>
+                <span className="ms-2 text-ink-muted">{t('detail.lookup.ownerWarning')}</span>
               ) : null}
             </dd>
           </div>
@@ -1254,6 +1264,7 @@ function LookupResult({ lookup, platform }: { lookup: Lookup; platform: Platform
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const t = useT();
   const known = isKnownStatus(status);
   return (
     <span
@@ -1265,7 +1276,7 @@ function StatusBadge({ status }: { status: string }) {
       )}
     >
       {status}
-      {!known ? <span className="sr-only"> (an unrecognised status)</span> : null}
+      {!known ? <span className="sr-only"> {t('unknown.status')}</span> : null}
     </span>
   );
 }

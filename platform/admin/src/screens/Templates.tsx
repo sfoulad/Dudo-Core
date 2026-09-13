@@ -1158,6 +1158,7 @@ function EditTemplate({
  * showing the real value is recoverable, quietly showing the wrong one is not.
  */
 function StatusBadge({ status }: { status: string }) {
+  const t = useT();
   const known = isKnownTemplateStatus(status);
   return (
     <span
@@ -1169,7 +1170,7 @@ function StatusBadge({ status }: { status: string }) {
       )}
     >
       {status}
-      {!known ? <span className="sr-only"> (an unrecognised status)</span> : null}
+      {!known ? <span className="sr-only"> {t('unknown.status')}</span> : null}
     </span>
   );
 }

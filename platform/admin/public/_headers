@@ -1,0 +1,73 @@
+# Response headers for admin.dudo.work — the platform-operator console.
+#
+# Specified by `security-agent`, ruled by the Team Lead. Identical to
+# `platform/web/public/_headers` except for the two differences below, and that
+# file carries the full reasoning for every directive they share. **Read it
+# rather than re-deriving this one.**
+#
+# ⚠ THIS DIRECTORY DID NOT EXIST. `platform/admin` had no `public/` at all, so
+# there was nowhere for a static asset override to live and no header set was
+# ever applied to the console that performs platform mutations.
+#
+# =============================================================================
+# DIFFERENCE 1 — `script-src 'self'`, WITH NO HASH
+# =============================================================================
+#
+# **Verified rather than assumed: `platform/admin/index.html` carries exactly
+# one `<script>`, and it is `type="module" src="/src/main.tsx"`.** There is no
+# inline script, so there is nothing to hash and no second copy of anything.
+#
+# **That asymmetry is real and worth knowing:** `platform/web` needs a hash
+# because it carries a pre-paint locale script, added so a returning Arabic
+# reader does not see a left-to-right render flip. This console has the same
+# language switch and the same hazard — **so if a pre-paint script is ever added
+# here, this line must gain a hash and the assertion that keeps it honest.**
+# Nothing will remind whoever adds it; CSP will simply block the script and the
+# flash will come back looking like a styling problem.
+#
+# =============================================================================
+# DIFFERENCE 2 — `X-Robots-Tag: noindex, nofollow`
+# =============================================================================
+#
+# A platform-operator console has no reason to be in an index. It is not a
+# security control — `security.md` §2, and a crawler directive is a request
+# rather than an enforcement — it removes an unnecessary disclosure of the
+# surface's existence and shape.
+#
+# =============================================================================
+# NOT VALIDATED AT DEPLOY TIME, EXACTLY AS FOR web
+# =============================================================================
+#
+# `parseHeaders` runs in the Pages dev server and never in the deploy path. A
+# typo uploads clean and the header is silently absent. `wrangler dev` parses
+# this locally; only the deployed response settles it.
+
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; worker-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'self'; form-action 'self'; base-uri 'none'; object-src 'none'
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), midi=(), display-capture=(), screen-wake-lock=(), idle-detection=(), browsing-topics=()
+  Strict-Transport-Security: max-age=86400
+  X-Robots-Tag: noindex, nofollow
+
+# =============================================================================
+# ⚠ `frame-ancestors 'self'` RATHER THAN `'none'` — AND THIS CONSOLE IS THE ONE
+# THE DIRECTIVE IS ACTUALLY PROTECTING
+# =============================================================================
+#
+# `SameSite=Lax` already defeats a cross-SITE frame. **It does not defeat
+# `app.dudo.work` framing `admin.dudo.work`**, because `frame-ancestors` is
+# ORIGIN-scoped where SameSite is SITE-scoped, and `0022`'s topology puts both
+# consoles on one site. That is the path this closes, against platform
+# mutations that complete on a single click with no confirmation.
+#
+# `'none'` would be stricter and would also block SAME-ORIGIN framing, which is
+# the responsive-layout instrument in `docs/operations/browser-verification.md`
+# §2 — the only one this team has, since `resize_window` reports success and
+# changes nothing.
+#
+# **THE FALSIFIER: the day this origin serves HTML anyone outside the team can
+# influence, `'self'` stops being equivalent to `'none'`.**

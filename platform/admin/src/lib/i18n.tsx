@@ -827,6 +827,18 @@ export const en = {
   'detail.lookup.found': 'That person is a member of this Organization.',
   'detail.lookup.principalId': 'Principal id',
   'detail.lookup.role': 'Role',
+  /*
+   * ⚠ VISIBLE ENGLISH PROSE, NOT `sr-only` — the ninth of the nine, and the one
+   * an Arabic-reading operator could actually SEE. It was a bare JSX text node
+   * beginning with an em dash, which is why the prose pin walked past it.
+   *
+   * It is the warning shown when the resolved member is an `owner`, beside the
+   * control that resets their credential. **The sentence is doing real work:
+   * resetting an owner's credential is a takeover of the Organization's most
+   * privileged account**, and it was being said in a language the reader may
+   * not have.
+   */
+  'detail.lookup.ownerWarning': '— resetting this credential takes over an owner.',
   'detail.lookup.forbidden.title': 'You may not use this lookup',
   'detail.lookup.forbidden.body':
     'Core refused the call itself, which is not the same as finding nothing. This lookup requires the credential-reset permission — without it, resolving people is closed to you. Nothing was looked up. Raise it with the Team Lead rather than retrying.',
@@ -1194,6 +1206,34 @@ export const en = {
     'which is newer than this build. Nothing is shown for it rather than a guess. Report it.',
   'identity.notVerified': 'Not verified',
   'identity.unrecognisedStored': 'The stored state is one this console does not recognise.',
+
+  /* -------------------------------------------------------------------------
+     The extensible-enum arm, announced to a screen reader
+
+     ⚠ THESE THREE WERE HARDCODED ENGLISH IN NINE PLACES AND SHIPPED THAT WAY.
+     Every one sat in a `<span className="sr-only">` beside a raw value, so
+     **the only people who ever met them were blind Arabic-speaking operators**
+     — announced aloud, shown to nobody, and invisible to every render, every
+     screenshot and every reviewer.
+
+     The prose pin could not see them either: it demanded a LETTER as the first
+     character and each of these opens with `(`. See `verify-platform.mjs` for
+     the pattern repair and for the mirror-image miss that found it.
+
+     **THE ARM ITSELF IS CORRECT AND MUST NOT BE SIMPLIFIED AWAY.** `0041`
+     declares these enums `extensible`, so a value this build has never heard of
+     is expected rather than exceptional — and `0043` widening `membershipRole`
+     from two values to four is what makes the role arm reachable in production.
+     The right behaviour and the defect were the same line of code.
+
+     They are parenthesised because they follow the raw value: a reader hears
+     *"suspended (an unrecognised status)"*. The leading space is supplied at
+     the call site, not stored here — a translator should not be maintaining
+     whitespace.
+     ------------------------------------------------------------------------- */
+  'unknown.role': '(an unrecognised role)',
+  'unknown.status': '(an unrecognised status)',
+  'unknown.outcome': '(an unrecognised outcome)',
   'identity.overwriteWarnBefore': 'Nothing is preselected below. Choosing any option here',
   'identity.overwrites': 'overwrites',
   'identity.overwriteWarnAfter': 'whatever is stored — leave it alone unless you mean to.',
@@ -1916,6 +1956,8 @@ export const ar: Record<MessageKey, string> = {
   'detail.lookup.found': 'هذا الشخص عضو في هذه المنشأة.',
   'detail.lookup.principalId': 'معرّف المبدأ',
   'detail.lookup.role': 'الدور',
+  'detail.lookup.ownerWarning':
+    '— إعادة تعيين بيانات الاعتماد هذه تعني الاستيلاء على حساب مالك.',
   'detail.lookup.forbidden.title': 'لا يجوز لك استخدام هذا البحث',
   'detail.lookup.forbidden.body':
     'رفضت النواة الطلب نفسه، وهذا يختلف عن ألّا يُعثر على شيء. فهذا البحث يتطلّب صلاحيّة إعادة تعيين بيانات الدخول — ومن دونها يكون تحديد الأشخاص مغلقًا أمامك. ولم يُبحث عن شيء. اعرض الأمر على قائد الفريق بدل إعادة المحاولة.',
@@ -2106,6 +2148,10 @@ export const ar: Record<MessageKey, string> = {
   'identity.unknownStateAfter': 'وهي أحدث من هذه النسخة. لا يُعرض شيء بدلًا من التخمين. أبلغ عن ذلك.',
   'identity.notVerified': 'غير مُتحقَّق منه',
   'identity.unrecognisedStored': 'الحالة المخزَّنة لا يتعرّف عليها هذا النظام.',
+
+  'unknown.role': '(دور لا يتعرّف عليه هذا النظام)',
+  'unknown.status': '(حالة لا يتعرّف عليها هذا النظام)',
+  'unknown.outcome': '(نتيجة لا يتعرّف عليها هذا النظام)',
   'identity.overwriteWarnBefore': 'لا شيء محدَّد مسبقًا أدناه. اختيار أي خيار هنا',
   'identity.overwrites': 'يستبدل',
   'identity.overwriteWarnAfter': 'ما هو مخزَّن — فاتركه ما لم تقصد ذلك.',

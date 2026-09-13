@@ -1173,9 +1173,33 @@ const RESOLVE_BODY = { principal_id: 'pr_synthetic_0000000001', role: 'owner' };
 const resolved = parseResolveMember(RESOLVE_BODY);
 check('principal_id', resolved.principal_id, 'pr_synthetic_0000000001');
 check('role', resolved.role, 'owner');
+/*
+ * ⚠ THIS CHECK WENT RED ON `0043` §3 AND IT WAS RIGHT TO — but its negative
+ * case had picked a value that BECAME REAL.
+ *
+ * It read `isKnownMembershipRole('admin') === false`, using `admin` as the
+ * invented role. **`0043` §3 makes `admin` one of the four seed roles**, so the
+ * assertion inverted — and it named the exact value that moved, which is the
+ * check doing its job.
+ *
+ * **The repair is not just adding the two new values.** A negative case must
+ * use a value that cannot legitimately become real: `admin` was a
+ * plausible-sounding fake and a plausible-sounding fake is one decision away
+ * from being a seed role. Same class as a control naming a contract file that
+ * got created an hour later. **`qa-agent`, 2026-09-13: a control whose input
+ * the corpus can change has two possible causes for failing.**
+ *
+ * The four are `authorization/roles.ts`'s and the `CHECK` that `0018` widens.
+ */
 checkTrue('owner is a known role', isKnownMembershipRole('owner'));
 checkTrue('member is a known role', isKnownMembershipRole('member'));
-check('an invented role is NOT claimed as known', isKnownMembershipRole('admin'), false);
+checkTrue('admin is a known role, as of 0043 §3', isKnownMembershipRole('admin'));
+checkTrue('business-admin is a known role, as of 0043 §3', isKnownMembershipRole('business-admin'));
+check(
+  'a role no decision could ever introduce is NOT claimed as known',
+  isKnownMembershipRole('not-a-role-any-adr-will-ever-add'),
+  false,
+);
 
 {
   const { impl, calls } = stubFetch(jsonResponse(RESOLVE_BODY));
@@ -3932,7 +3956,46 @@ checkTrue('the main region is addressable by the skip link', /id="main"/.test(sh
    * alternative — a floor high enough to hide four false positives — is what
    * hid thirty-two real ones.
    */
-  const PROSE = /[>}]\s*([A-Za-z][A-Za-z\s,.'’—–\-]{2,}?)\s*[<{]/gu;
+  /*
+   * ===========================================================================
+   * ⚠ AND A FOURTH CORRECTION: THE PATTERN DEMANDED A LETTER AS THE FIRST
+   * CHARACTER, SO EVERY SENTENCE OPENING WITH PUNCTUATION WAS INVISIBLE
+   * ===========================================================================
+   *
+   * It was `[>}]\s*([A-Za-z]…`. **Nine operator-facing strings begin with `(`
+   * or an em dash**, and the pattern skipped whitespace and then demanded a
+   * letter — so it walked past every one and **reported prose at zero for
+   * days**, a figure quoted in reports including the Team Lead's.
+   *
+   * **Eight of the nine are `sr-only`.** They are announced by a screen reader
+   * and shown to nobody, so **the only people who ever met them are blind
+   * Arabic-speaking operators** — the population least able to report it, and
+   * the one no screenshot can show. No render found them; a render cannot.
+   *
+   * **THE MIRROR, SAME AFTERNOON, TWO AGENTS, OPPOSITE ENDS OF THE STRING:**
+   * the Team Lead's Latin-run scan missed `optional` because the SEPARATOR was
+   * an em dash outside `\x20-\x7E`; this missed these because the OPENING
+   * character is a parenthesis. **One instance reads as carelessness. Two on
+   * one afternoon is the default failure mode of writing a pattern at all.**
+   *
+   * ---------------------------------------------------------------------------
+   * THE NAIVE WIDENING WAS REFUSED, AND MEASURED BEFORE BEING REFUSED
+   * ---------------------------------------------------------------------------
+   *
+   * Admitting `()` into the BODY as well as the front finds 21 nodes with 13
+   * false positives — `setPhase(`, `platformClient.requestConfirmation(`, and
+   * every dictionary string around a `{placeholder}`. **A check that goes red
+   * on correct code is switched off within a week** (`§11a`), which would have
+   * cost more than the hole.
+   *
+   * So: **one optional opening mark, one optional closing paren, and no paren
+   * anywhere in the body.** Measured over this pin's own population — which
+   * excludes the dictionary, where English is correct by definition:
+   *
+   *   old pattern    0 text nodes
+   *   this pattern   9 text nodes, ZERO false positives
+   */
+  const PROSE = /[>}]\s*([(«“'—–·]?\s*[A-Za-z][A-Za-z\s,.'’—–\-]*?\)?)\s*[<{]/gu;
   const KEYWORDS =
     /^(interface|function|const|let|type|export|import|return|if|for|while|class|enum|declare|async|await|new|throw|catch|switch|case|default|void|readonly|else|true|false|null|undefined|string|number|boolean|Promise|ReactNode|ReactElement|Record|Readonly|Partial|Array|Set|Map|try|Dudo|UTC|permission)\b/u;
 
@@ -4181,6 +4244,27 @@ checkTrue('the main region is addressable by the skip link', /id="main"/.test(sh
    * reads as settled; a pin of 1 keeps it in the count, states why, and **goes
    * red the day a SECOND untranslatable string appears** — which is the event
    * worth catching, because the second one probably can be translated.
+   */
+  /*
+   * ⚠ THE PIN IS STILL 1 AND IT DID NOT MEAN THE SAME THING BEFORE 2026-09-13.
+   *
+   * The number is unchanged and **the measurement behind it is not**. Recorded
+   * as three states rather than one, because "1 then, 1 now" reads as nothing
+   * having happened:
+   *
+   *   1     blind pattern, dirty tree     the false green, quoted in reports
+   *   10    fixed pattern, dirty tree     the broken state, captured whole
+   *   1     fixed pattern, clean tree     this
+   *
+   * **The middle row is the only evidence the check works**, and it existed for
+   * about twenty minutes. `§11a`: run a widened check against the broken state
+   * first, because the real one contains what you did not predict — here, a
+   * NINTH string nobody had counted, and the only VISIBLE one of the nine.
+   *
+   * **THE PIN WAS NOT MOVED TO MATCH A MEASUREMENT.** It was 1, it is 1, and
+   * the nine were fixed rather than absorbed. A pin edited to match what a
+   * corrected instrument found is the pessimistic-stale-number shape, and it
+   * would have converted a defect into a baseline.
    */
   check('untranslated human-read attributes, against the pin', untranslatedAttrs, 2);
   check('untranslated prose nodes, against the pin', untranslatedProse, 1);

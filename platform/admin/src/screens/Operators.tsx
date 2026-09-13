@@ -521,6 +521,7 @@ function RevokeOperator({
 }
 
 function RoleBadge({ role }: { role: string }) {
+  const t = useT();
   const known = isKnownPlatformRole(role);
   return (
     <span
@@ -532,7 +533,7 @@ function RoleBadge({ role }: { role: string }) {
       )}
     >
       {role}
-      {!known ? <span className="sr-only"> (an unrecognised role)</span> : null}
+      {!known ? <span className="sr-only"> {t('unknown.role')}</span> : null}
     </span>
   );
 }

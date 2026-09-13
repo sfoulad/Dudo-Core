@@ -873,7 +873,18 @@ export function parseListOperators(payload: unknown): ListOperatorsOutput {
  * has already fired. **A third role is the expected outcome, not a hypothetical**
  * — so this list must be widened by hand, deliberately, when one lands.
  */
-export type KnownMembershipRole = 'owner' | 'member';
+/**
+ * ⚠ WIDENED FROM `'owner' | 'member'` ON 2026-09-13, AND IT WAS STALE THE
+ * MOMENT `0043` §3 LANDED.
+ *
+ * The seed set is now **four** — `owner · admin · business-admin · member` —
+ * matching `authorization/roles.ts` and the `CHECK` that `0018` widens. While
+ * this said two, **`admin` and `business-admin` would have rendered as *"an
+ * unrecognised role"*: recognised seed roles, announced to a screen reader as
+ * unknown.** A defect the type system could not see, because this union is the
+ * client's own opinion rather than anything the contract hands it.
+ */
+export type KnownMembershipRole = 'owner' | 'admin' | 'business-admin' | 'member';
 
 export interface EmbeddedTemplate {
   readonly template_id: string;
@@ -1202,15 +1213,34 @@ export function parseOrganizationIdentity(payload: unknown, what: string): Organ
  * ---------------------------------------------------------------------------
  *
  * It comes from this same contract and would have been the obvious thing to
- * take in the same change. **`membershipRole` carries NO `enumPolicy`** — this
- * schema declares exactly one, on `status` — so the generator emits a **bare
- * closed union `'owner' | 'member'`**, while `parseResolveMember` reads the
- * field with `requireString` and the screen renders an unrecognised role
- * neutrally.
+ * take in the same change.
  *
- * **Adopting it would make that tolerant branch dead code by the type system's
- * reckoning while the runtime can still produce the case** — `0041`'s exact
- * collision, on a field the sweep has not reached. Reported, not worked around.
+ * ⚠ **THIS FIELD'S POLICY HAS BEEN THREE THINGS IN ONE DAY, AND THIS FILE HAS
+ * ASSERTED ALL THREE. The history is kept because the LAST correction was
+ * wrong within the hour and that is the useful part.**
+ *
+ * ```
+ * said here, until 2026-09-13   "carries NO enumPolicy"    -> bare closed union
+ * said 46 lines below           "declared extensible"      -> | (string & {})
+ * the contract, as of now       enumPolicy: "closed"       -> bare four-value union
+ * ```
+ *
+ * **The first two contradicted each other for weeks in one file** — invisible
+ * while they had different neighbours (`workflow.md` §2b). Striking the first
+ * and keeping the second looked like the repair, **and `0043` §3a narrowed the
+ * field from `extensible` to `closed` the same afternoon, which made the
+ * survivor false too.**
+ *
+ * **The narrowing cites this console's own defect as the argument that decided
+ * it:** `extensible`'s unknown arm is where eight untranslated `sr-only`
+ * strings lived, and the contract records that **`extensible` did not make the
+ * 2→4 widening SAFE, it made it SILENT** — turning a compile error that would
+ * have named every consumer into a runtime path nobody re-examined.
+ *
+ * **So the type is now closed and `requireString` no longer satisfies it.** See
+ * `ResolveMember` below for why this client keeps the wire value as `string`
+ * for now, what that costs against `0037`, and why the choice is the Team
+ * Lead's rather than this file's.
  *
  * ---------------------------------------------------------------------------
  * ⚠ AND THE SWAP WAS ATTEMPTED AND REVERTED. THE BLOCKER IS NOT `status`.
@@ -1256,15 +1286,36 @@ export interface OrganizationDetail {
  * returned because an operator about to reset a credential should know whether
  * they are taking over an `owner` or a `member`.
  *
- * **`parseResolveMember` is untouched**, and its `requireString` is now
- * CORRECT rather than merely tolerant: `0041` forbids an `extensible` enum's
- * parser from rejecting an unlisted value.
+ * ⚠ **THE `extensible` JUSTIFICATION FOR `requireString` IS GONE.** It read:
+ * *"`0041` forbids an `extensible` enum's parser from rejecting an unlisted
+ * value."* True until `0043` §3a narrowed the field to `closed` on 2026-09-13,
+ * **and it was the premise this parser's tolerance rested on.**
+ *
+ * `workflow.md` §12: *check whether an argument was resting on what you
+ * withdrew.* **The conclusion still holds and the reason is different** — the
+ * parser stays tolerant now because a database ahead of a deployment can still
+ * produce a fifth value and blanking the lookup screen over one field is worse
+ * than rendering it. **Re-derived rather than left propped up.**
+ */
+/*
+ * THE GENERATED TYPE IS STILL RE-EXPORTED AND IS NO LONGER IMPORTED HERE.
+ *
+ * Nothing in this module consumes it any more — `ResolveMember` above carries
+ * the wire value as `string` pending the Team Lead's ruling — and the compiler
+ * said so (`TS6133`) rather than leaving a dead import.
+ *
+ * **The re-export stays deliberately.** It is the contract's own type, reachable
+ * from this module by name, and it is what a consumer should adopt the moment
+ * the closed union is the right shape here. Removing it would leave nothing in
+ * the client pointing at the generated type at all, which is the `§12` residue
+ * this whole cascade has been about.
  */
 export type { ResolveMemberOutput } from '@dudo/contracts/core/platform/organization-detail-v1';
-import type { ResolveMemberOutput } from '@dudo/contracts/core/platform/organization-detail-v1';
 
 export function isKnownMembershipRole(role: string): role is KnownMembershipRole {
-  return role === 'owner' || role === 'member';
+  return (
+    role === 'owner' || role === 'admin' || role === 'business-admin' || role === 'member'
+  );
 }
 
 export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
@@ -1323,7 +1374,46 @@ export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
   };
 }
 
-export function parseResolveMember(payload: unknown): ResolveMemberOutput {
+/**
+ * What this client parses a member resolve into.
+ *
+ * ===========================================================================
+ * ⚠ `role` IS `string` HERE AND `MembershipRole` IN THE GENERATED TYPE. THAT
+ * DIVERGENCE IS DELIBERATE, TEMPORARY, AND REPORTED RATHER THAN CHOSEN.
+ * ===========================================================================
+ *
+ * `membershipRole` was narrowed from `extensible` to **`closed`** on
+ * 2026-09-13 (`0043` §3a/§7c), so the generated type is now a bare four-value
+ * union with **no `(string & {})` arm** — and `requireString` returning
+ * `string` stopped compiling against it. **That break is the intended one**;
+ * the contract's own `$comment` says so and says a consumer losing its arm is
+ * why the change is a Team Lead review rather than an edit.
+ *
+ * **THE SAME `$comment` ALSO KEEPS THE FAIL-SAFE, AND THE TWO SENTENCES ARE IN
+ * TENSION:**
+ *
+ *   *"A value outside these four cannot be stored, so a client meeting one is
+ *    a defect rather than a case to render."*
+ *   *"…it is not a promise that clients never see a value they do not know."*
+ *
+ * **Both cannot decide this parser.** Adopting the closed type makes the
+ * tolerant branch dead code by the type system's reckoning while a database
+ * ahead of a deployment can still produce the case — `0041`'s exact collision.
+ * Rejecting the whole response over one field would blank the lookup screen on
+ * a misdeployment, which is worse than rendering the raw value.
+ *
+ * **So this preserves TODAY'S BEHAVIOUR EXACTLY and decides nothing.** The
+ * wire value is kept verbatim, `isKnownMembershipRole` narrows it, and the
+ * unknown arm still renders. **The Team Lead is asked which way it should go**
+ * — and the `0037` cost of not consuming the generated type here is stated
+ * rather than hidden.
+ */
+export interface ResolveMember {
+  readonly principal_id: string;
+  readonly role: string;
+}
+
+export function parseResolveMember(payload: unknown): ResolveMember {
   const what = 'The member resolve response';
   const body = requireObject(payload, what);
   /*
@@ -2129,7 +2219,7 @@ export interface PlatformClient {
     organizationId: string,
     input: UpdateOrganizationIdentityInput,
   ): Promise<OrganizationIdentity>;
-  resolveMember(organizationId: string, identifier: string): Promise<ResolveMemberOutput>;
+  resolveMember(organizationId: string, identifier: string): Promise<ResolveMember>;
   /** The oversight view. No principal-level target, and no filter for one. */
   listPlatformAudit(options?: {
     pageSize?: number;

@@ -129,7 +129,7 @@ export function AuditRecordList<T extends AuditRecordCommon>({
               <dd className="text-ink-muted">
                 {record.actor_platform_role}
                 {!isKnownPlatformRole(record.actor_platform_role) ? (
-                  <span className="sr-only"> (an unrecognised role)</span>
+                  <span className="sr-only"> {t('unknown.role')}</span>
                 ) : null}
                 {/*
                   "AT THE TIME" IS LOAD-BEARING — the role is what the actor
@@ -184,6 +184,7 @@ export function AuditRecordList<T extends AuditRecordCommon>({
  * empty feed as "nobody tried".
  */
 function OutcomeBadge({ outcome }: { outcome: string }) {
+  const t = useT();
   const known = isKnownAuditOutcome(outcome);
   return (
     <span
@@ -195,7 +196,7 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
       )}
     >
       {outcome}
-      {!known ? <span className="sr-only"> (an unrecognised outcome)</span> : null}
+      {!known ? <span className="sr-only"> {t('unknown.outcome')}</span> : null}
     </span>
   );
 }
