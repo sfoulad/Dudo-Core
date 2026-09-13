@@ -338,20 +338,97 @@ different products and this was the fork worth getting right:
 > responses are static assets, which is the case it covers** — so widening `run_worker_first`, which
 > `0016` §5 prohibits, is **not** required.
 
-**Status: the mechanism is settled; the header VALUES are not.** `security-agent` owes the per-host
-set, and the one question that is not boilerplate is **CSP against `0015` §D's client-side key
-derivation** — the sign-in page derives the credential in the browser, so the plaintext exists in
-that page's JavaScript context and a CSP is the only script-injection containment at the point where
-it lives. **The clickjacking half interacts with `0026`/`0027`: a confirmation dialog that can be
-framed and overlaid is a confirmation that can be harvested, and neither record states that it
-assumed the page could not be framed.**
+### 7a-i. ⚠ THE RISK COLLAPSES ONTO ONE ORIGIN PAIR — and both of the Team Lead's framings were wrong
+
+**`security-agent` reviewed this and refused both arguments it was handed. Both refusals were right,
+and the replacements are better.**
+
+**CSP is NOT "containment at the point where the plaintext credential lives".** That overstates it:
+**CSP cannot contain a script that is already executing** — an attacker with execution reads the
+password field directly — and **no directive stops exfiltration by navigation**; `navigate-to` was
+removed from the spec and no browser ships it. **A precisely-worded claim that stops the next reader
+checking** (`architecture.md` §3b).
+
+**What `0015` §D actually changed is IRREVERSIBILITY.** An XSS on the login page used to yield a
+revocable session; it now yields the **password** — and `0027`'s own ceiling is *"exactly as strong
+as the password and no stronger"*, so a stolen password **defeats the confirmation mechanism
+outright on every critical operation, indistinguishably from the operator in the audit trail.**
+
+**The load-bearing argument is `0027`'s own admitted gap, CF-2:** *Core cannot verify the client
+displayed what it was given.* An attacker rewriting the statement text node gets an operator to
+approve something else **with their own correctly-derived password** — and **unlike the credential
+case, that attack requires running IN THE PAGE, which is exactly what `script-src 'self'` prevents.**
+
+**And the confirmation gate is NOT clickjackable.** It requires a typed email, a typed password and
+600,000 PBKDF2 iterations; **an overlaid frame yields a click on Approve with two empty required
+inputs.** Asked whether `0026`/`0027` rested on an unwritten no-framing premise, the review checked,
+found they did not, **and declined to manufacture one.**
+
+**THE REAL SURFACE IS THE SEVEN ONE-PRESS PLATFORM MUTATIONS** — create/update/retire/restore
+Template, set-organization-template, merge-identity, onboard-organization — which complete on a
+single click with no confirmation.
+
+```
+framing page      3P storage     session hint   whoami probe?   Lax cookie   clickjackable?
+evil.com          PARTITIONED    unreadable     NO — never asks  moot        NO, twice over
+app.dudo.work     first-party    present        YES              SENT        YES, all seven
+```
+
+> **CROSS-SITE FRAMING IS DEAD FOR TWO INDEPENDENT REASONS, and the second is verifiable in our own
+> source rather than derived from a specification:** `use-session.ts:92` gates the `whoami` probe on
+> a per-tab hint, so **a console with no hint never makes one authenticated request.** Third-party
+> storage partitioning makes that hint unreadable in a cross-site frame.
+>
+> **SAME-SITE FRAMING IS UNTOUCHED BY BOTH.** `app.dudo.work` framing `admin.dudo.work` is
+> first-party storage, the hint is present, the probe fires, and the cookie is same-site.
+>
+> **So the entire risk collapses onto ONE ORIGIN PAIR, and `frame-ancestors 'self'` closes exactly
+> that — because it is ORIGIN-scoped where both other mechanisms are SITE-scoped.** The header's
+> justification is narrower and better evidenced than *"framing is bad"*.
+
+#### ⚠ AND THE OBVIOUS TEST OF THIS IS VACUOUS — DO NOT RUN IT
+
+**The natural next step is: sign in, frame it cross-site, look at it. IT PROVES NOTHING, AND IT FAILS
+IN THE REASSURING DIRECTION.**
+
+**Because the console never asks, a framed cross-site console shows a sign-in form WHETHER OR NOT the
+cookie would have been sent.** Both hypotheses render identically. *"We framed it and got a sign-in
+page, so `SameSite=Lax` protects us"* is a **confident wrong conclusion** — and it is the optimistic
+rot direction, the one `workflow.md` §11a says nobody ever catches, because acting on it always looks
+safe.
+
+**This was found by asking whether the test was worth PROPOSING, before anyone ran it** — and the
+Team Lead had already attempted the adjacent cookie-probe version and failed to complete it, with
+"sign in and look" as the obvious next move. **The review's refusal to offer a better version is the
+right call: there is none that avoids an operator typing a password, and an unobserved fact that is
+labelled unobserved beats an instrument that returns green for the wrong reason.**
+
+**Marked, so this is never quoted as one thing:**
+
+| | |
+|---|---|
+| **SOURCE-VERIFIED** | no hint → no probe → sign-in screen, zero authenticated requests (`use-session.ts:92`, `:104`) |
+| **BROWSER BEHAVIOUR, NOT MEASURED HERE** | third-party `sessionStorage` partitioning; SameSite's site-for-cookies computation |
+
+### 7a-ii. Severity, timing, and where the files go
 
 **Severity, stated honestly rather than dramatically: no real customer Organization exists** — this
-is the test environment (`0035`) — **so the population at risk is us.** It is not a reason to defer
-it past the milestone; it is a reason not to call it an incident.
+is the test environment (`0035`), the newest `organization` row is `2026-09-04`, and no operator
+session exists on the deployed console. **The population at risk is us.** That is a reason not to
+call it an incident. **It is not a reason to defer it past the milestone.**
+
+> **THE EVENT THAT CHANGES IT IS THE FIRST LIVE OPERATOR SIGN-IN** — the first time a real password
+> is derived in that page. **The headers should land in the SAME deploy, not in one after it.** That
+> deploy needs the user's explicit approval regardless (`security.md` §7), so this adds a file to an
+> approval that must be sought anyway rather than creating a new one.
 
 **The `_headers` files land in `platform/web/public/` and `platform/admin/public/` — `web-agent`'s
 trees.** `platform/admin` has no `public/` directory today and needs one.
+
+**The nonce is not an option and that is worth recording as a closed door:** it must be generated per
+response and injected into both header and tag, **which requires the document to pass through the
+Worker** — and `run_worker_first` does not carry `/`. **The mechanism that would normally be right is
+unavailable for the same reason the headers were missing in the first place.**
 
 ## 8. Verify before telling anyone it works
 
