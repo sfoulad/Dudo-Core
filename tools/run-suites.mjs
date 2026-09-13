@@ -46,6 +46,35 @@ const SUITES = [
   'packages/testing/run-customer-directory.ts',
   'packages/testing/run-az2-login.ts',
   'packages/testing/run-type-negative.ts',
+  // ===========================================================================================
+  // ADDED 2026-09-13, Milestone 2. `qa-agent` BUILT BOTH AND DECLINED TO WIRE EITHER.
+  // ===========================================================================================
+  //
+  // This file is the Team Lead's (`architecture.md` §2: QA proposes root test configuration
+  // rather than making it), and both entry points were handed over exiting 0 — the condition
+  // this repository sets for itself before a suite joins the gate.
+  //
+  // `run-tenant-admin.ts` covers `0044` §3b.2 and §3c's registration refusals and `0043` §3d's
+  // owner-immunity. ITS VALUE IS PARTLY IN A RUN THAT NO LONGER EXISTS: it was executed against
+  // the UNBUILT state first — registrar absent, `MembershipRole = owner|member`, no audit charge
+  // required — and that output is captured in the suite's own header. `core-agent` closed all of
+  // it within twenty minutes. Without the earlier run the green would read as *the check never
+  // reached*; with it, the green reads as *the refusal arrived*. `§11a`'s free failing input,
+  // taken while it was still there.
+  //
+  // `run-counts-equality.ts` IS THE USER'S RULING MADE MECHANICAL — *never maintain duplicated
+  // counts in prose; derive them from the catalogue and enforce equality through QA.* It derives
+  // four catalogues from the tree and asserts two of them by SET EQUALITY rather than by count,
+  // which is the stronger half: a set comparison catches the missing row AND the spurious one,
+  // and `§2b` records that a missing line matches no pattern.
+  //
+  // It found two things on its first real-corpus run that nobody predicted: an anchor that
+  // matched NOTHING because paragraph-joining had moved the row (caught only by its empty-region
+  // floor — without that, a clean pass over text it never read), and the `2026` in a date being
+  // read as a figure. Both are permanent constructed cases now, alongside two mutants against the
+  // live tree — because the free failing input was ALREADY GONE by the time it was built.
+  'packages/testing/run-tenant-admin.ts',
+  'packages/testing/run-counts-equality.ts',
 ];
 
 /** `not run` is a state, so a missing entry point is reported rather than silently skipped. */

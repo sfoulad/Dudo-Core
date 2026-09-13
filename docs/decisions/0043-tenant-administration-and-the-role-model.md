@@ -257,6 +257,60 @@ it belongs in the usage contract.**
    `organization_membership` rows, so no store handle resolves for them (`0044` §3a).
 4. **Every destructive or sensitive action declares `confirmation`, `audit: required`, and its
    `sensitivity`** — and the sensitivity is read off the permission catalogue, not chosen per route.
+
+   > **⚠ AMENDED 2026-09-13, THE SAME DAY, AND THIS CLAUSE WAS THE THING THAT WAS WRONG.**
+   > `qa-agent` derived per-operation rather than by pattern — **21 operations, 21 sensitivities,
+   > 21 audits, marginals agreeing exactly** — and pairing them found two operations declaring
+   > `sensitivity: sensitive` with `audit: false`:
+   >
+   > ```
+   > tenant.invitations.get             sensitive   audit=false
+   > tenant.invitations.pending-count   sensitive   audit=false
+   > tenant.invitations.list            sensitive   audit=required   <- the contrast
+   > ```
+   >
+   > **Written unconditionally, this clause makes those two a defect. `0044` §3c licenses them:**
+   > *"sensitive reads are audited individually, per route."* **Two accepted records in tension,
+   > and the contracts resolved it in one direction without saying they were resolving it.**
+   >
+   > **RULED: the clause is unconditional for WRITES and per-route for READS.** A destructive or
+   > state-changing action always declares all three. A *sensitive read* follows `0044` §3c and
+   > declares its audit decision with the argument at the site. **`0043` was the over-broad
+   > record and `0044` was the precise one; this clause is corrected rather than the contracts.**
+
+   ### 5.4a. `tenant.invitations.pending-count` — RULED, because it is the one §4 singled out
+
+   **`qa-agent` raised this rather than asserting it, correctly, and it is a real question.**
+   `security.md` §2a says of exactly this shape: *"the permission is the control **and the audit
+   trail is the detection**"*, naming the vector as longitudinal — *"one call a day for a year is
+   rate-limited by nothing and yields a growth curve."* **With `audit: false`, the detection half
+   is absent for the one aggregate §4 flagged as needing extra care.**
+
+   **RULED: `audit: false` is correct here, and the reason is that §2a's detection argument is
+   scoped to an actor OUTSIDE the counted population's tenant.**
+
+   > **§2a's own test decides it: a count is safe exactly when its consumer already holds
+   > enumeration over the counted population.** §4 requires `core.user.invite ∧
+   > `core.invitation.list` on this route — **so the conjunction PUTS the count inside its
+   > consumer's enumeration right**, which is §2a's safe column, alongside
+   > `platform.organizations.count`. It discloses nothing obtainable more slowly by listing.
+
+   **And the growth-curve vector does not transfer.** It describes a **platform operator**
+   assembling a picture of a tenant's business one number at a time across the tenant boundary.
+   **Here the actor is a member of the Organization counting their own tenant's pending
+   invitations. No boundary is crossed, so there is no reconnaissance to detect** — which is
+   precisely the asymmetry `0044` §3c states rather than inherits.
+
+   **The cost of ruling the other way is not zero and it lands on the customer:** this class has
+   **no equivalent of P4's accidental read bound** (`0044` §3c), so an audited read is a write
+   against the tenant's own allowance. **Buying no detection with the scarcer resource is the
+   trade `0044` §3c refuses.**
+
+   **What this does NOT license, and it is the half a later reader will get wrong:** the ruling
+   turns on **the conjunction being enforced**. If `core.invitation.list` is ever dropped from
+   that route, the count reaches past its consumer's enumeration right again, **§2a's safe column
+   no longer contains it, and the audit becomes required.** The obligation is assigned rather
+   than left implicit: **whoever changes that route's permission conjunction re-runs §2a on it.**
 5. **Free-tier impact on every contract.** The three unbounded read shapes are **invitations,
    sessions and usage**; each declares a page cap or names the bounding index, and none may return
    an unbounded list. **An absent bound is a registration failure, never a fallback** (`0044` §3c).

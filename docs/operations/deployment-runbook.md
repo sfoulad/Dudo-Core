@@ -221,8 +221,12 @@ for the check.
 
 ```
 VITE_DUDO_TRANSPORT=http npm --prefix <absolute repo path>/platform/web run build
-npm --prefix <absolute repo path> run check:deployable-build      # <- REQUIRED, exit 0 or stop
+npm --prefix <absolute repo path> run check:deployable-build            # was it CONFIGURED?
+npm --prefix <absolute repo path>/platform/web run verify:no-fixtures   # did the DATA leave?
 ```
+
+**Both are required and both must exit 0.** They start from different places and catch
+different things — see the correction below.
 
 **`platform/web/src/api/config.ts` resolves an unset `VITE_DUDO_TRANSPORT` to `fixture`, and
 that default is correct** — *"a build that was never configured must not"* silently talk to a
@@ -241,12 +245,32 @@ That console has no fixture transport: *"it talks to Core or it shows an error."
 admin deploy said nothing whatever about this hazard**, and the one surface Milestone 2 ships
 is the one that carries it.
 
-**Do not try to detect this by looking for fixture strings — measured, it does not work.** The
-fixture module is statically imported and is not tree-shaken, so the synthetic customer
-directory ships in **both** builds and every marker matches in both; the real build is 314
-bytes **larger**. The only discriminator in the artifact is one key in Vite's inlined
-`import.meta.env` object, which is what `check:deployable-build` reads — **and it fails as NOT
-RUN rather than as a pass if it cannot parse the bundle.**
+**Do not try to detect this by looking for fixture strings — measured, it did not work.** Both
+builds matched every marker and the real build was 314 bytes **larger**, so the only
+discriminator in the artifact is one key in Vite's inlined `import.meta.env` object. That is
+what `check:deployable-build` reads, **and it fails as NOT RUN rather than as a pass if it
+cannot parse the bundle.**
+
+> **⚠ AND THE REASON THE TWO BUILDS MATCHED WAS ITSELF A DEFECT — found by `web-agent` the same
+> afternoon and fixed structurally.** The `http` bundle was shipping **3 fixture Businesses and
+> 35 fixture customer records**. Root cause: the `Transport` interface was declared *inside*
+> `fixture-transport.ts`, so six modules imported the shape from the fake — **type-only, free at
+> runtime, and it made the fixture read as an ordinary dependency** until three value imports had
+> accumulated unremarked. The interface now has its own module, and a Vite `resolveId` hook drops
+> the fixture modules from the **module graph** when the transport is `http`. Re-measured:
+> **585,861 bytes, zero fixture data.**
+>
+> **RUN BOTH CHECKS BEFORE A DEPLOY. Neither subsumes the other**, and `§11a`'s test names a
+> concrete input for each:
+>
+> ```
+> check:deployable-build   starts from THE ENV OBJECT      — was the build CONFIGURED?
+> verify:no-fixtures       starts from THE BUNDLE CONTENT  — did the fixture data LEAVE?
+>
+> red / green   an unconfigured build whose data matches no content predicate
+> green / red   a NEW fixture module the resolveId hook does not name, in a configured build
+>               — exactly the defect web-agent found, which this step passed straight over
+> ```
 
 Produces `platform/web/dist`, which `wrangler.jsonc` serves as static assets. Asset requests
 are free and unlimited and do not invoke the Worker — the property `0016` chose the whole

@@ -38,24 +38,56 @@
  * ⚠ THE OBVIOUS CHECK DOES NOT WORK, AND IT WAS MEASURED RATHER THAN REASONED
  * ===========================================================================================
  *
- * The natural implementation is to grep the bundle for fixture markers. IT PASSES ON BOTH
- * BUILDS. Measured, same tree, same minute:
+ * The natural implementation is to grep the bundle for fixture markers. IT PASSED ON BOTH
+ * BUILDS. Measured 2026-09-13, same tree, same minute:
  *
  *       marker              fixture build   http build
  *       "Shanghai 200040"         1              1
  *       "Fixture build"           1              1
- *       "fixture"                 1              1
- *       "synthetic"               1              1
- *       bundle bytes         605,103        605,417   <- the REAL build is LARGER
- *
- * The fixture module is statically imported, so it is bundled either way and Vite does not
- * tree-shake it. THE SYNTHETIC CUSTOMER DIRECTORY SHIPS TO THE BROWSER IN BOTH BUILDS. It is
- * unreachable at runtime in the `http` build — the transport is never constructed — but it is
- * present, and a marker check therefore cannot tell the two apart.
+ *       bundle bytes         605,103        605,417   <- the REAL build was LARGER
  *
  * That is `workflow.md` §11a's rule paying for itself: THE BROKEN STATE WAS ON DISK, it was
  * run against first, and it falsified the check before the check was written. A marker check
  * shipped on reasoning alone would have gone green on a fixture build forever.
+ *
+ * ⚠ THE TABLE ABOVE IS HISTORY AS OF THE SAME AFTERNOON, AND THE CORRECTION MATTERS MORE THAN
+ * THE ORIGINAL. `web-agent` measured the http bundle and found it shipping **3 fixture
+ * Businesses and 35 fixture customer records** — the reason the numbers above are equal — then
+ * fixed it STRUCTURALLY within the hour. Re-measured after:
+ *
+ *       marker              http build (after)
+ *       "Shanghai 200040"          0
+ *       "biz_marina_ops"           0
+ *       "cus_"                     0
+ *       "Fixture build"            1      <- the BADGE LABEL, in the message dictionary
+ *       bundle bytes         585,861      <- 19.5 kB smaller
+ *
+ * ITS ROOT CAUSE IS THE PART WORTH KEEPING: `Transport` and `DudoAction` — the INTERFACE — were
+ * declared inside `fixture-transport.ts`, so six modules imported the shape from the fake,
+ * including the http transport written to replace it. Type-only, free at runtime, **and they
+ * made the fixture look like an ordinary dependency**, after which three value imports
+ * accumulated unremarked. The interface moved to its own module and a Vite `resolveId` hook now
+ * excludes the fixture modules AT RESOLUTION when the transport is `http` — not a flag, not
+ * tree-shaking: they are not in the module graph.
+ *
+ * SO WHY DOES THIS CHECK STILL EXIST, AND WHY IS IT NOT NOW REDUNDANT WITH
+ * `verify:no-fixtures`? `workflow.md` §11a: before deleting a check as duplicate, compare what
+ * each one STARTS FROM — and name an input each would go red on that the other passes.
+ *
+ *   this check starts from   THE ENV OBJECT — was the build CONFIGURED?
+ *   verify:no-fixtures       THE BUNDLE CONTENT — did the fixture data actually LEAVE?
+ *
+ *   red here, green there    an unconfigured build whose fixture data happens to carry none of
+ *                            the content predicates — the configuration is the defect, and no
+ *                            content check is looking for a cause
+ *   green here, red there    a NEW fixture module the resolveId hook does not name, in a
+ *                            correctly configured build — which is EXACTLY the defect
+ *                            web-agent found, and this check passed straight over it
+ *
+ * **Both were needed and the second one proved it by catching something this one could not.**
+ * Note the direction: a marker check would have been useless in the morning and is meaningful
+ * now, *because somebody made the bundle honest.* The content predicate did not get better —
+ * its subject did.
  *
  * ===========================================================================================
  * THE ACTUAL DISCRIMINATOR — ONE KEY IN VITE'S INLINED ENV OBJECT
