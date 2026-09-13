@@ -571,6 +571,75 @@ Organization's. **The sameness is the coincidence.** *"Make them agree"* is the 
 **"decide each against its own `CHECK`"** is the right one. Both answers happen to be `closed`, and
 arriving there by the right route is what makes the next pair decidable.
 
+## 7d. WHERE A MEMBER'S DISPLAY NAME LIVES — `organization_membership`, and the boundary decides it
+
+**`memberSeat.display_name` is null on every response and the control plane has nowhere to store
+one:** `principal` is exactly `(principal_id, principal_type, status, created_at)`, and
+`principal_credential` holds an HMAC whose plaintext is *"never stored and never logged"* — **so a
+name is absent and an email is mathematically unrecoverable.** The contract already settled the
+rendering (a null renders the `principal_id` **verbatim**, never a placeholder), **and its own honest
+consequence is the reason this needed deciding:**
+
+> **"A members directory in which every row reads `k7Qx2mZp…` is not a usable members directory."**
+
+**`architecture-agent` proposed against the axis I set — platform identity or tenant identity — and
+then sharpened it into something that is not a preference at all:**
+
+| | Cross-tenant write | Platform-operator visible | Admin can fix a typo | Migration |
+|---|---|---|---|---|
+| **A** `principal.display_name` | **the subject's own act propagates to every Organization** | **YES — a new disclosure** | no | 1 `ADD COLUMN` |
+| **B** `organization_membership.display_name` | **none — structurally impossible** | no | yes | 1 `ADD COLUMN` |
+| **C** both, with precedence | inherits A's | inherits A's | yes | 2 columns + a rule |
+
+> **THE COST DOES NOT SEPARATE A AND B — both are one nullable `ADD COLUMN`. THE TENANT BOUNDARY
+> DOES.** `principal` spans Organizations; `organization_membership` is keyed
+> `(principal_id, organization_id)` and is tenant-scoped by its own primary key. **If a name lives on
+> `principal` and a tenant may write it, an administrator of Organization A changes what Organization
+> B sees — a write across the tenant boundary, through a settings screen, with no route between the
+> two anywhere in the design. That is not a naming inconsistency; it is `security.md` §1.**
+
+**And the second consequence, which nobody had named:** `principal` is **control plane**. A display
+name there is **personal data a platform operator can read** — today they cannot, because the member
+resolve returns an opaque identifier — **so option A creates a new disclosure of personal data to
+platform operators and owes its own `security.md` §2a analysis before it is a field.** Under B that
+question never arises: the name is tenant data and `0024` already keeps operators out of it.
+
+**RULED: B. `organization_membership.display_name`, nullable, no default.**
+
+**The objection to B is that a person then has no single name. THE REFRAME ANSWERS IT AND IS THE
+PART TO KEEP:** it is only strange if the field is a person's *name*. **It is not — it is what THIS
+ORGANIZATION CALLS THIS MEMBER**, which is exactly what `business.display_name` and
+`organization.display_name` already are: a tenant's label for a thing in its own directory. **A
+contractor who is "Sam" in one Organization and "S. Foulad, external" in another is not two names for
+a person; it is two directories, each correct.** `0006` says a tenant's view of anything is that
+tenant's — **this is that rule, not an exception to it.**
+
+**C is the compromise that will be proposed and it is the worst of the three**: it inherits A's
+cross-tenant channel *and* A's operator disclosure, **and adds a precedence rule that is a third
+decision producing two answers to "what is this person called."**
+
+**What B costs, in full, so this is not read as free:**
+
+- **No new permission.** `core.user.update` is catalogued — *"Modify a user profile"*, `write`,
+  `[organization, business, own]` — which already covers both an administrator and the member.
+- **No contract change.** `memberDisplayName` is already `["string","null"]` with the null rendering
+  already normative on both clients. **B is the option the contract already describes.**
+- **No backfill.** Nullable, no default; existing rows stay null and render as the identifier, which
+  is what they do today.
+- **`0015` §D is untouched.** A display name is a **different field** from the login identifier. **The
+  identifier staying unrecoverable is a property preserved here, not an obstacle routed around**, and
+  nothing in B stores an email.
+
+**THE MIGRATION IS THE USER'S** (`security.md` §7) and joins the approval list. **`core-agent` writes
+it; `architecture-agent` proposed and did not author, correctly — a proposal in its own tree would
+have been `architecture.md` §2a's mistake.**
+
+**One consequence to carry into the port:** `core-agent` made `display_name` **absent** from
+`TenantMemberSeat` rather than present-and-always-null, because *a field no store can fill reads as
+"sometimes populated" to the next author.* **When this lands, the field arrives — and the null
+rendering rule must arrive with it**, or the first screen to show a name will show a blank for
+everyone who has not set one.
+
 ## 8. Team Lead rulings recorded here rather than left in a dispatch
 
 1. **§2c closes the draft's one open dependency** by `0044` §3d, cross-referenced in both

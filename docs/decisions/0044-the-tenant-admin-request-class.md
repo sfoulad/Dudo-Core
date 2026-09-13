@@ -171,6 +171,53 @@ nothing — constraint 1 permits any subset, so a tenant admin holding both may 
 one.** The conjunction moves the test from *"every role holding A happens to hold B"* to **`A ∧ B`
 decided on every call, which no custom role can decompose.** Recorded in `security.md` §2a-0.
 
+## 3e. ⚠ CREATING THIS CLASS CREATED A THIRD CHALLENGE ROUTE — BY THE EXISTING RULE, NOT BY AMENDMENT
+
+**Added 2026-09-13. `architecture-agent` reported the tenant-admin challenge route as needing an
+amendment to `confirmation-v1` — an accepted contract — and correctly refused to invent a shape for
+it. It does not need one, and the reason matters more than the conclusion.**
+
+**`confirmation-v1`'s `theTWOCHALLENGEROUTES.ruling`, verbatim:**
+
+> *"THE MECHANISM IS ONE. THE CHALLENGE ROUTE IS **ONE PER EXISTING CLASS THAT CONTAINS A CRITICAL
+> OPERATION**, BECAUSE THE CONTEXT DIFFERS EVEN THOUGH THE LOGIC DOES NOT. **Two today: one Action,
+> one platform route.** Both call the same Core confirmation service, which is where every rule in
+> this contract is enforced."*
+
+> **THE RULE IS THE FIRST SENTENCE. "TWO TODAY" IS A MEASUREMENT INSIDE IT** — true when written,
+> and it reads as the rule because it is the concrete half. **`0044` created a fifth class, and this
+> record's own §3b.5 puts `critical` operations in it** (`core.organization.transfer-ownership`,
+> `core.organization.request-deletion`). **So the contract's own rule generates a third challenge
+> route with no amendment at all.**
+
+**This is the count-in-prose defect one more time, and in the most consequential place yet:** a
+number stated beside a rule, accurate on the day, **read by two later parties as the rule itself** —
+first as *"there are two"*, then as *"a third needs an amendment."* **The rule never said two.**
+
+### WHAT IS ACTUALLY OUTSTANDING — and it is TWO routes, not one
+
+```
+platform class      BUILT
+Action class        NOT BUILT   — 0038's F-1, ruled a BUILD ITEM: "one route over a service
+                                  that already exists, specified in full by an accepted
+                                  contract. It is bounded and it needs no new decision."
+tenant-admin class  NOT BUILT   — this record, by the same rule, on the same terms
+```
+
+**Neither is a design question and neither needs a decision record.** `0038` settled the framing for
+the first and it transfers to the second without modification: **the mechanism is one, the service
+exists, and `confirmation-service.ts`'s own header says it was built for more than one caller.**
+
+**`core-agent`'s `assertGatedRoutesCanObtainAConfirmation` is what keeps this honest** — a `critical`
+tenant-admin route registered before the challenge route exists **fails the build naming the missing
+work**, rather than shipping an operation that authorizes, gates, and can never be satisfied. **That
+assertion stays exactly as it is.**
+
+**And `0038`'s own diagnosis of how F-1 survived applies to this one in advance:** a normative clause
+of an accepted contract was set aside by *a comment in an implementation file* — *"accurate about its
+own reasoning and silent about the contract it contradicted."* **The deferral's stated condition —
+*"until a critical Action exists"* — has fired twice over now.**
+
 ## 4. What this does not decide
 
 - **The route table, the registry file and the dispatcher branch** — Core's, sequenced after this.
