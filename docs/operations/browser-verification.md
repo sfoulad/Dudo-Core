@@ -126,7 +126,38 @@ which was visible in the screenshot on the same screen.** The separator is an **
 the check is the thing to doubt first**, because the rendering is the artifact and the check is only
 an opinion about it.
 
-## 4. The loop
+## 4. ⚠ WHAT A LIVE CHECK STRUCTURALLY CANNOT COVER — and this is not a tooling gap
+
+**Recorded 2026-09-13, before it could arrive as a surprise at the end of a milestone.**
+
+**The agent driving the browser may never type a password, an API key or a token into any field.**
+That is an absolute constraint on the operator, not a limitation of the instrument, and **no amount
+of better tooling changes it.**
+
+**The consequence is precise and it must not be rounded up:**
+
+| Verifiable live, unauthenticated | Verifiable ONLY in the suite, never in production |
+|---|---|
+| the route serves and the shell renders | any authenticated screen's content |
+| **unauthenticated access is REFUSED** — the single most valuable live check there is | members, invitations, roles, businesses, audit as an authenticated member sees them |
+| the forbidden / expired / not-found states, if reachable without a session | **tenant A against tenant B**, which needs two authenticated principals |
+| i18n, RTL, breakpoints, focus, keyboard, deep links | anything behind a permission decision |
+
+> **So "live-verified" and "verified" are different claims about a tenant-administration surface, and
+> a milestone report must say which one it is offering.** What a live pass establishes is that the
+> surface is reachable, renders, and **refuses correctly**; what it cannot establish is that it
+> *serves* correctly, because serving requires a session this operator must not create.
+
+**The authenticated half is `qa-agent`'s and lands in `packages/testing/**`, against the suite —
+which is the right home anyway**, since a behavioural tenant-isolation case needs two principals
+constructed on purpose and production is exactly where you must not construct them
+(`security.md` §6: synthetic data everywhere, regardless of what the environment is called).
+
+**This is `workflow.md` §10's "gaps stated rather than rounded up" decided in advance instead of
+discovered at hand-over** — and it is why *"ready for your testing"* is the honest phrase: **the
+authenticated pass is the user's, and it always was.**
+
+## 5. The loop
 
 **Build a surface, say it is up, it gets rendered at desktop and iPad, in English and Arabic, and
 the defects come back.** Required coverage per the user's instruction: **English and Arabic/RTL ·

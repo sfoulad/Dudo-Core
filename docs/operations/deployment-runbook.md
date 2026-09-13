@@ -213,24 +213,70 @@ non-negotiable. The script says so on every run rather than letting four greens 
 Run the seed tool a second time with a different email. Keep both credentials; you need them both
 for the check.
 
-## 6. Build the web client
+## 6. Build the web client — ⚠ THE COMMAND THIS STEP USED TO GIVE SHIPS A FIXTURE BUILD
+
+> **⚠ CORRECTED 2026-09-13. This step read `cd platform/web && npm install && npm run build`
+> and that produces a FIXTURE BUILD.** Not a broken one — a convincing one. **Followed
+> literally, this runbook put a fake API on `app.dudo.work`.**
 
 ```
-cd platform/web && npm install && npm run build
+VITE_DUDO_TRANSPORT=http npm --prefix <absolute repo path>/platform/web run build
+npm --prefix <absolute repo path> run check:deployable-build      # <- REQUIRED, exit 0 or stop
 ```
 
-Produces `platform/web/dist`, which `wrangler.jsonc` serves as static assets. Asset
-requests are free and unlimited and do not invoke the Worker — the property `0016` chose
-the whole stack for.
+**`platform/web/src/api/config.ts` resolves an unset `VITE_DUDO_TRANSPORT` to `fixture`, and
+that default is correct** — *"a build that was never configured must not"* silently talk to a
+real server. **Failing safe at build time means failing wrong at deploy time**, and nothing in
+this repository sets the variable: measured with a positive control, it appears only in
+`platform/web`'s source, its README, and build output. **No deploy script, no wrangler config,
+no CI, no `.env`.**
 
-## 7. Deploy to staging — needs explicit user approval, and staging only
+**What a fixture build does when served, which is why no probe in §8 would catch it:** it
+renders the real interface, it performs the **real** password derivation, and it makes **no
+network calls at all.** `§8`'s probes ask whether the surface answers — **it answers
+beautifully.**
+
+**`platform/admin` IS NOT AFFECTED, and that asymmetry is why this survived Milestone 1.**
+That console has no fixture transport: *"it talks to Core or it shows an error."* **A clean
+admin deploy said nothing whatever about this hazard**, and the one surface Milestone 2 ships
+is the one that carries it.
+
+**Do not try to detect this by looking for fixture strings — measured, it does not work.** The
+fixture module is statically imported and is not tree-shaken, so the synthetic customer
+directory ships in **both** builds and every marker matches in both; the real build is 314
+bytes **larger**. The only discriminator in the artifact is one key in Vite's inlined
+`import.meta.env` object, which is what `check:deployable-build` reads — **and it fails as NOT
+RUN rather than as a pass if it cannot parse the bundle.**
+
+Produces `platform/web/dist`, which `wrangler.jsonc` serves as static assets. Asset requests
+are free and unlimited and do not invoke the Worker — the property `0016` chose the whole
+stack for.
+
+## 7. Deploy — needs explicit user approval, every time
+
+> **⚠ CORRECTED 2026-09-13. This step said `npm run deploy:staging`. THAT SCRIPT WAS REMOVED
+> ON 2026-09-08** — it pointed `--env staging` at a target neither wrangler config defines, and
+> `package.json` records the removal and the reason at length. **The runbook instructing it was
+> never swept**, so the deployment procedure named a command that does not exist, at the deploy
+> step, for five days.
+>
+> **`workflow.md` §12 exactly, and in the worst possible file**: the removal was recorded
+> where the script had been, and nothing sent anyone to the document that *instructs* it. The
+> sweep is citation-driven and **a runbook does not cite `package.json`.**
 
 ```
-npm run deploy:staging
+npx wrangler deploy --config wrangler.jsonc          # dudo-core   — app + api
+npx wrangler deploy --config wrangler.admin.jsonc    # dudo-admin  — admin console
 ```
 
-**Staging is not production** (`workflow.md` §11). There is deliberately no bare `deploy`
-script: a one-word affordance is wrong for an action that needs a decision.
+**`--config` is not optional.** Two Workers share one `main`; omitting it deploys the wrong
+surface, and rollback is per-Worker — see the section below on why *"the rollback version"* is
+ambiguous until you name a Worker.
+
+**There is deliberately no bare `deploy` script**: a one-word affordance is wrong for an action
+that needs a decision. **`app.dudo.work`, `api.dudo.work` and `admin.dudo.work` ARE the test
+environment** (`0035`), named honestly — there is no separate staging, and `workflow.md` §11's
+clause expires on the first real customer Organization rather than on a date.
 
 ## 8. Verify before telling anyone it works
 
