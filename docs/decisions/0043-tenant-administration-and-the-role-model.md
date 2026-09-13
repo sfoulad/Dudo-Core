@@ -49,7 +49,51 @@ sense if ownership is singular and precious.** Both requirements point at the sa
 
 ### 1b. `scope:` on a role and `scopes:` on a permission are different axes, and nothing has ever consumed the first
 
-A permission's `scopes:` is **the width a grant may be held at**, and `holdsAtOrAbove` reads it. A
+> **⚠ THE NEXT SENTENCE IS FALSE AND IT IS THE MOST CONSEQUENTIAL ERROR IN THIS RECORD. CORRECTED
+> 2026-09-13, measured by `core-agent` against the function.**
+>
+> ```
+> holdsAtOrAbove(grants, permissionId, actionScope)
+>   -> implies(grant.scope, actionScope)      the GRANT's scope against the ACTION's scope
+>                                             BOTH RUNTIME VALUES
+> ```
+>
+> **The catalogue's declared `scopes:` list is not an input. And Core never reads the catalogue at
+> all** — no `readFileSync`, no import, no parse; its only two references are prose inside comments.
+>
+> **SO THE DISTINCTION THIS SECTION DRAWS IS ITSELF WRONG.** It says one field means something and
+> one means nothing. **Neither is executed.** A role's `scope:` has no consumer, **and a permission's
+> `scopes:` has no consumer either** — both are design rules applied **by hand, twice**: once
+> composing the catalogue's role blocks, once composing `roles.ts`. **Neither hand is checked.**
+>
+> **WHY THIS SENTENCE WAS COSTLY RATHER THAN MERELY WRONG.** `architecture-agent` repaired an
+> escalation path by declaring a new permission `scopes: [organization]` only, arguing the
+> intersection rule would then make it unholdable by a business-scope role — **and cited this
+> section's framing.** Measured:
+>
+> ```
+> business-admin holding core.membership.set-role, evaluated at organization scope  ->  ALLOWED
+> every business-admin grant is issued at organization by organizationGrant()
+> ```
+>
+> **The repair rests entirely on the permission not being written into `business-admin`'s list — a
+> transcription discipline, which is exactly what the declaration was meant to escape.** The declared
+> scope is **as widenable as the placement.**
+>
+> **`architecture.md` §3c's family, in a decision record rather than a comment: a claim so specific
+> that nobody re-derives it.** *"`holdsAtOrAbove` reads it"* names a function — **and naming a
+> function is what made it credible.** The repair is still worth keeping: it converts an invisible
+> coupling into a reviewable line. **But that is discipline, not mechanism**, and this sentence is
+> why two agents believed otherwise.
+>
+> **What would make a declaration bite is recorded rather than chosen here:** either Core's role
+> mapping issues each grant at the permission's declared scope rather than always at `organization`
+> — which the paragraph below warns against, since the authorized business set is the real narrowing
+> — **or the constraint is enforced where the grant is WRITTEN, which is where D16 constraint 1 also
+> belongs. They may be one mechanism.** The tenant half of `registry-coherence.ts` is the cheap
+> interim and is commissioned.
+
+~~A permission's `scopes:` is **the width a grant may be held at**, and `holdsAtOrAbove` reads it.~~ A
 role entry's `scope:` has **no consumer anywhere** — `roles.ts` grants every tenant permission at
 `organization` scope regardless, and narrows by the authorized business set computed per request
 (`0020`).
