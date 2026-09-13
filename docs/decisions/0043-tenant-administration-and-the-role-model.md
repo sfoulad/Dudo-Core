@@ -408,7 +408,7 @@ list against the enumeration, not by recalling what is missing:**
 
 | Brief area | Catalogued | Gap |
 |---|---|---|
-| invitations — **resend, revoke, expire** | `core.user.invite`, `core.invitation.list` | **no revoke, no resend** |
+| invitations — **resend, revoke, expire** | `core.user.invite`, `core.invitation.list` | ~~**no revoke, no resend**~~ **WRONG — see below** |
 | member **restoration** | `core.user.deactivate` | **no reactivate/restore** |
 | businesses and branches | `core.business.create/read/update`, `core.branch.create/read/update` | **no delete or archive on either** |
 
@@ -416,6 +416,47 @@ list against the enumeration, not by recalling what is missing:**
 that the capability is expressed by an existing permission.** *"It is covered by update"* is a
 legitimate answer and must be written down as one, **because an unstated absence is the gap the next
 author closes by inventing a permission.**
+
+> **⚠ ROW 1 WAS WRONG, AND HOW IT WAS WRONG IS WORTH MORE THAN THE ROW.** `core.user.invite`'s own
+> catalogue entry already rules resend and revoke:
+>
+> > *"CREATE an invitation, and resend or revoke one. **RESEND AND REVOKE ARE FOLDED IN
+> > DELIBERATELY**… both act on an invitation this holder could have created."*
+>
+> **This table was DERIVED — from the file, from a full enumeration of every permission id, at the
+> moment of writing. It was not recalled.** And it was derived **over identifiers**, so a capability
+> folded into an existing entry's `description` had no id to appear as.
+>
+> **THE ENUMERATION WAS RIGHT AND THE CONCLUSION WAS NOT.** An id-level sweep answers *which
+> permission names exist*; it cannot answer *which capabilities are gated*. **Deriving rather than
+> recalling is no protection against the wrong granularity** — recorded in `workflow.md` §11a,
+> because *"I derived it"* has been treated in this repository as settling the question.
+>
+> **A catalogue gap analysis reads descriptions, not only ids.** And note what caught it: writing
+> the ruling required opening the entry to cite it (`architecture.md` §3c).
+
+### 6d. THE RULINGS, DELIVERED — and `expire` turned out not to be an operation
+
+**`architecture-agent` closed §6c. Recorded here so the gap list does not read as open:**
+
+| Capability | Ruling |
+|---|---|
+| invitation **revoke**, **resend** | **No new permission.** `core.user.invite`, per its own entry — refined so the folded-in argument holds *within a scope and fails across scopes*, so all three evaluate at `organization` |
+| invitation **expire** | **Not an operation.** Automatic expiry is a property of the record and nothing gates time passing; forced early expiry **is revoke**, and a second route is two words for one act |
+| member **restore** | **`core.user.reactivate`** — new, `sensitive`, `[organization, business]` |
+| member **removal** | **`core.user.remove`** — new, `sensitive`, `[organization]` |
+| business / branch withdrawal | **`core.business.archive`, `core.branch.archive`** — new, `sensitive`, each gating archive **and** restore. **`delete` deliberately NOT declared for either** |
+
+**All four new entries are `status: proposed`, held by no role, and go to the user by name.**
+
+**`archive` rather than `delete`, and the reasoning is the part to keep.** *"Covered by
+`core.business.update`"* would have been a legitimate answer if it were true, and it is not:
+**withdrawing a Business withdraws an authorization scope** (`0020`), so gating it on `update`
+**widens a write permission into a scope-removal permission by adoption.** `delete` is left
+undeclared **so that nobody can hold it** — a Business id is a required foreign key on customer rows
+and on every future App's, and deletion needs a cascade decision nobody has made. **An undeclared
+permission is unholdable; that is the mechanism, and the absence is recorded rather than left to be
+noticed.**
 
 ---
 
