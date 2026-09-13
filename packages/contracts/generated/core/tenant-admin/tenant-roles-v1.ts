@@ -30,6 +30,15 @@ export type ErrorResponse = ErrorEnvelope;
 
 export type PermissionId = string;
 
+export type RoleScope = 'organization' | 'business' | 'branch' | 'team' | 'own' | 'resource';
+
+export type RolePermissionGrant = {
+  readonly permission_id: PermissionId;
+  readonly scope: RoleScope;
+};
+
+export type RoleStatus = 'active' | 'retired';
+
 
 export type RoleName = string;
 
@@ -39,7 +48,8 @@ export type RoleSummary = {
   readonly role_id: RoleId;
   readonly name: RoleName;
   readonly kind: RoleKind;
-  readonly permissions: ReadonlyArray<PermissionId>;
+  readonly status: RoleStatus;
+  readonly permissions: ReadonlyArray<RolePermissionGrant>;
   readonly member_count: number;
 };
 
@@ -47,7 +57,8 @@ export type RoleDetail = {
   readonly role_id: RoleId;
   readonly name: RoleName;
   readonly kind: RoleKind;
-  readonly permissions: ReadonlyArray<PermissionId>;
+  readonly status: RoleStatus;
+  readonly permissions: ReadonlyArray<RolePermissionGrant>;
   readonly member_count: number;
   readonly created_by: PrincipalId | null;
   readonly created_at: string | null;
@@ -78,7 +89,7 @@ export type GetRoleOutput = RoleDetail;
 
 export type CreateRoleInput = {
   readonly name: RoleName;
-  readonly permissions: ReadonlyArray<PermissionId>;
+  readonly permissions: ReadonlyArray<RolePermissionGrant>;
 };
 
 export type CreateRoleOutput = RoleDetail;
@@ -86,19 +97,16 @@ export type CreateRoleOutput = RoleDetail;
 export type UpdateRoleInput = {
   readonly role_id: RoleId;
   readonly name?: RoleName;
-  readonly permissions?: ReadonlyArray<PermissionId>;
+  readonly permissions?: ReadonlyArray<RolePermissionGrant>;
 };
 
 export type UpdateRoleOutput = RoleDetail;
 
-export type DeleteRoleInput = {
+export type RoleLifecycleInput = {
   readonly role_id: RoleId;
 };
 
-export type DeleteRoleOutput = {
-  readonly role_id: RoleId;
-  readonly deleted_at: string;
-};
+export type RoleLifecycleOutput = RoleDetail;
 
 export type RoleAssignmentInput = {
   readonly role_id: RoleId;
@@ -120,8 +128,11 @@ export const TenantRolesCreatePermission = 'core.role.create' as const;
 export type TenantRolesUpdateError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'conflict' | 'failed_precondition' | 'rate_limited' | 'quota_exceeded' | 'internal' | 'unavailable' | 'timeout';
 export const TenantRolesUpdatePermission = 'core.role.update' as const;
 
-export type TenantRolesDeleteError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'failed_precondition' | 'rate_limited' | 'quota_exceeded' | 'internal' | 'unavailable' | 'timeout';
-export const TenantRolesDeletePermission = 'core.role.update' as const;
+export type TenantRolesRetireError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'failed_precondition' | 'rate_limited' | 'quota_exceeded' | 'internal' | 'unavailable' | 'timeout';
+export const TenantRolesRetirePermission = 'core.role.update' as const;
+
+export type TenantRolesRestoreError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'failed_precondition' | 'rate_limited' | 'quota_exceeded' | 'internal' | 'unavailable' | 'timeout';
+export const TenantRolesRestorePermission = 'core.role.update' as const;
 
 export type TenantRolesAssignError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'failed_precondition' | 'rate_limited' | 'quota_exceeded' | 'internal' | 'unavailable' | 'timeout';
 export const TenantRolesAssignPermission = 'core.role.assign' as const;

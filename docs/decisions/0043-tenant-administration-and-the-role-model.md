@@ -218,9 +218,9 @@ this milestone introduces:
 
 | Aggregate | Consumer | Enumerates the population? | Ruling |
 |---|---|---|---|
-| member count | `core.user.list` holder | **yes** | no new permission |
+| member count | `core.user.list` holder | **yes — FOR AN ORGANIZATION-SCOPE HOLDER ONLY.** ⚠ see §4a | **no new permission, WITH A SCOPE QUALIFIER** |
 | session count for a member | `core.session.list` holder | **yes** | no new permission |
-| Business count | `core.business.read` holder | **yes** | no new permission |
+| Business count | `core.business.read` holder | **read is the de-facto enumeration right — ⚠ see §4a** | no new permission |
 | pending-invitation count | `core.user.invite` holder | **no** — invite grants creation, not enumeration | **requires `core.invitation.list` as a conjunct, or the count is withheld** |
 | usage / quota figures | `core.usage.read` holder | **n/a — see below** | **not an enumeration question** |
 
@@ -229,6 +229,61 @@ grants enumeration of pending invitations, and a count of them is a count of peo
 asked to join and have not. **`core.invitation.list` is catalogued (§6) and is the conjunct** —
 which is `0044` §3d's mechanism doing exactly the work §2b assigned it, on the first aggregate that
 needed it.
+
+### 4a. ⚠ THREE OF THE FOUR ROWS ABOVE RULE ON AGGREGATES THAT DO NOT EXIST — AND ONE RULING IS UNSAFE AS WRITTEN
+
+**Added 2026-09-13 after `security-agent` re-ran §2a at the moment of granting, which `security.md`
+§2a-i requires and which is what this section is for.**
+
+**The milestone's five contracts introduce EXACTLY ONE aggregate** — `tenant.invitations.pending-count`.
+**There is no member count, no session count and no Business-count operation anywhere.** So three of
+the four rows above are **pre-authorisation**, and pre-authorisation is precisely what §2a-i's trigger
+exists to catch.
+
+> **THE MEMBER-COUNT ROW IS UNSAFE AS WRITTEN, AND SO IS THE IDENTICAL CLAIM IN
+> `tenant-members-v1`.**
+>
+> `core.user.list` declares `scopes: [organization, business, branch, team]`. **`business-admin` is a
+> BUSINESS-scope role** — its enumeration right is the users of the Businesses it administers,
+> narrowed per request by `0020`'s authorized business set. **A member count is ORGANIZATION-WIDE.**
+>
+> **So for that holder the count reaches PAST its consumer's enumeration right, which is §2a's
+> failure condition, on the very permission the table clears.**
+
+**Both artifacts checked whether the consumer holds an *enumerating permission* and stopped one step
+short. §2a asks whether the consumer enumerates THE COUNTED POPULATION** — and the permission's scope
+and the population are different questions. **`0043` §1b is itself the record that scope axes get
+conflated here.**
+
+**Nothing is exposed: no member count exists.** It is recorded at this severity because of what it
+would do to whoever adds one — **`architecture.md` §3c's reader half, in its worst form.** They would
+find two artifacts saying §2a clears it, **one of them an ACCEPTED decision record**, and they would
+be **right to stop.** An acceptance marker is the thing to review, not the thing that ends review.
+
+**THE QUALIFIER, and it belongs on any future count of an organization-wide population:**
+
+> **Safe for an ORGANIZATION-SCOPE holder. For a BUSINESS-SCOPE holder the count must be scoped to
+> the authorized business set, or withheld.**
+
+**And the Business-count row is doubtful for a different reason worth naming: THERE IS NO
+`core.business.list`.** The family is read / create / update / archive, so *"the consumer
+enumerates"* rests on **`read` being the de-facto enumeration right** — defensible, and **it is
+exactly the read-versus-list distinction the invitation row one line above gets RIGHT.** Same table,
+both readings. **Whoever builds a Business count owes that argument explicitly rather than
+inheriting this row.**
+
+**What the one aggregate that DOES exist got right, and it is the model for the rest:**
+`tenant.invitations.pending-count` declares `permissionMode: conjunction` over
+`[core.user.invite, core.invitation.list]`, **evaluated in Core on every call** — which is
+`security.md` §2a-0's requirement exactly, **a conjunction rather than an observation about
+co-holding, and it is the only form that survives D16 letting a tenant mint a role holding one
+conjunct without the other.** The shape is a scalar and nothing else — no `by_status`, no `by_role`,
+no `by_inviter` — because any of those transposes into the mapping `0028` D1 refuses.
+
+**And `tenant-members-v1` does one thing better than either artifact above**, which is why the gap
+was findable at all: **it declines to claim §2a is the reason a member count is absent.** *"The
+reason it is absent is pagination's, not §2a's… Whoever adds one owes THAT argument, not this
+one."* **A refusal to take credit from the wrong control.**
 
 **And `usage` is the case §2a does not answer**, which is worth stating rather than forcing: a quota
 figure is not a count over a population the caller might enumerate — it is a measurement of the
