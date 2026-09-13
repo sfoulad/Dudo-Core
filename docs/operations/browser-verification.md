@@ -126,6 +126,65 @@ which was visible in the screenshot on the same screen.** The separator is an **
 the check is the thing to doubt first**, because the rendering is the artifact and the check is only
 an opinion about it.
 
+## 3b. ⚠ AN OVERFLOW CHECK THAT COMPARES `scrollWidth` TO `innerWidth` CANNOT FAIL
+
+**Added 2026-09-13, and it is the most important line in this document.**
+
+**Two instruments disagreed: the iframe measured 15px of horizontal overflow at 390 on every
+settings route, in both languages, and the smoke harness reported clean with 77 passing
+assertions.** The disagreement was reported **without naming a cause**, because either side could
+have been the wrong one.
+
+**The cause was in neither place anyone would look first.**
+
+```
+requested 390, mobile: true     innerWidth 421   scrollWidth 421   -> "clean"
+requested 390, mobile: false    innerWidth 390   scrollWidth 420   -> +30px, the truth
+```
+
+> **WHEN CONTENT OVERFLOWS, THE LAYOUT VIEWPORT EXPANDS TO FIT IT.** So `innerWidth` grows with
+> `scrollWidth`, **both sides of `scrollWidth <= innerWidth + 1` move together, and the assertion
+> cannot fail at any width, in any language, ever.**
+
+**It had been green on a real defect since it was written**, across every viewport it claimed to
+cover, and the same shape was in use on a second responsive surface.
+
+**This is `workflow.md` §11a's vacuity question with the answer yes:** *would this check pass against
+an implementation that ignored its input entirely?* **Nothing about the output distinguished it from
+a working check** — it named a viewport, it produced a number, and the number was internally
+consistent.
+
+**THE THREE REPAIRS, and the second is the general one:**
+
+- **`mobile: false`** at every width-sensitive viewport, so the requested width is the width the page
+  gets. **Mobile emulation is what lets the layout viewport float.**
+- **READ THE VIEWPORT BACK FROM INSIDE THE PAGE AND ASSERT IT.** This document already says that
+  about `resize_window`, which lies loudly by returning success. **The same rule was needed here for
+  a quieter reason** — the harness did resize something, just not the thing the assertion depended
+  on.
+- **Compare against the width that was ASKED FOR, never against a value the page computes.**
+  `scrollWidth <= 390` is a claim about the viewport under test. `scrollWidth <= innerWidth` is a
+  claim about the page's agreement with itself, **and a page always agrees with itself.**
+
+**The defect it had been hiding was ordinary and the arithmetic is worth keeping**, because it is
+what a phone-width header costs:
+
+```
+wordmark 85 + transport badge 97 + language control 79 + sign-out 78 = 339
++ three 16px gaps + 32px padding                                     = 419   in a 390 viewport
+```
+
+**`flex` does not wrap by default**, so the last child hung off the inline-end edge — **the left in
+Arabic, the right in English. Same overflow, opposite edge; the direction only decides where you see
+it.** Fixed with `flex-wrap` and a narrower gap below `sm`, **not by hiding the transport badge** —
+that badge is the only thing on screen saying whether a reader is looking at real data, and a phone
+is not a less important place to know that.
+
+> **AND THE PROCESS HALF: reporting the disagreement without diagnosing it was what made this
+> findable.** *"Your check is wrong"* would have sent its author to harden a check whose logic was
+> fine. **The finding was that the check's SUBJECT was unmeasurable, and only its author could see
+> that** — from a candidate list that included *"is your 390 really 390"*.
+
 ## 4. ⚠ WHAT A LIVE CHECK STRUCTURALLY CANNOT COVER — and this is not a tooling gap
 
 **Recorded 2026-09-13, before it could arrive as a surprise at the end of a milestone.**
