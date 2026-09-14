@@ -106,10 +106,25 @@ function membershipFor(role: MembershipRole | null) {
 export function buildRoleGrantsSuite(): Suite {
   const suite = new Suite('AZ5 — role-to-permission mapping (0019)');
 
-  suite.test('the mapping is exactly two roles, and neither is a wildcard', () => {
+  suite.test('the mapping is exactly the four seed roles, and none is a wildcard', () => {
     // Sorted on both sides: the mapping is a SET, and pinning declaration order would make this
     // case fail on a reordering that changes nothing.
-    assertEqual('two roles, no more', [...MEMBERSHIP_ROLES].sort().join(','), 'member,owner');
+    //
+    // *** THE PIN MOVED 2026-09-13, FROM `member,owner` TO THE FOUR SEED ROLES. *** `0043` §3a
+    // adds `admin` and `business-admin` to `MembershipRole`, and this assertion went red on the
+    // change — WHICH IS THE PIN WORKING. A role entering the union is a security decision and
+    // must not arrive silently; `0019`'s own argument for two roles rather than one was that a
+    // single role lets the mapping degenerate into a constant.
+    //
+    // IT IS A PIN AND NOT A DERIVATION, DELIBERATELY. Writing `MEMBERSHIP_ROLES.length` on both
+    // sides would make this case agree with the union by construction and assert nothing — the
+    // fail-open shape `§11a` calls *a constraint that learns from its subject*. Whoever adds a
+    // fifth role moves this line, and moving it is the moment to ask what the role may hold.
+    assertEqual(
+      'four seed roles, no more — move this pin deliberately when 0043 §3 changes',
+      [...MEMBERSHIP_ROLES].sort().join(','),
+      'admin,business-admin,member,owner',
+    );
     assertEqual('owner grants the seven Actions', permissionsOf('owner').join(','), OWNER_EXPECTED.join(','));
     assertEqual('member grants read and list only', permissionsOf('member').join(','), MEMBER_EXPECTED.join(','));
   });
@@ -199,7 +214,18 @@ export function buildRoleGrantsSuite(): Suite {
   suite.test('an unrecognised, blank, null or undefined role grants NOTHING', () => {
     // Deny by default. Each of these is a value a membership row could hold after a hand-edit, a
     // partially-applied migration, or a future role this build does not know.
-    for (const value of ['admin', 'OWNER', 'owner ', '', 'superuser', '*', null, undefined]) {
+    // *** `'admin'` WAS IN THIS LIST UNTIL 2026-09-13 AND IS NOW A REAL ROLE (`0043` §3a). ***
+    // The case went red on a correct change, which is the pin working — but it is worth naming
+    // what the red meant, because the shape recurs: a test that uses a value as an EXAMPLE OF
+    // SOMETHING THAT DOES NOT EXIST is a test with a hidden dependency on that value never being
+    // created. `'superuser'` and `'*'` carry the same risk and are kept because both are shapes
+    // this repository has ruled against — `0024` invariant 2 forbids a platform-tier value in
+    // `MembershipRole`, and `0007` rule 3 forbids a wildcard — so neither can become real
+    // without a decision that would also send someone here.
+    //
+    // `'business-admin'` is deliberately NOT substituted in: it is the other role `0043` §3a
+    // adds, and putting it here would rebuild the same trap one migration later.
+    for (const value of ['OWNER', 'owner ', '', 'superuser', '*', 'platform-admin', null, undefined]) {
       assertEqual(
         `'${String(value)}' is not a recognised role`,
         toMembershipRole(value),
@@ -300,7 +326,7 @@ export function buildRoleGrantsSuite(): Suite {
     // pass on a TypeError from a typo in the guard, which is the exact failure this is meant to
     // distinguish from a real refusal.
 
-    const throwsIncoherent = (label: string, run: () => void): void => {
+    const throwsIncoherent = (label: string, run: () => void, expectedFragment?: string): void => {
       let thrown: unknown = null;
       try {
         run();
@@ -313,42 +339,107 @@ export function buildRoleGrantsSuite(): Suite {
         thrown instanceof RoleMappingIncoherentError,
         `threw ${thrown instanceof Error ? thrown.constructor.name : typeof thrown}`,
       );
+      // *** AND IT THROWS FOR THE REASON THE CASE INJECTED. ***
+      //
+      // Added 2026-09-13, and it is the half that was missing. Asserting the CLASS of error is
+      // not asserting WHICH error, and `0043` §3a made that gap live: every base mapping below
+      // was `{ owner, member }`, which after the union widened to four roles is an INCOMPLETE
+      // `Record<MembershipRole, …>`. The guard iterates `MEMBERSHIP_ROLES`, so it threw
+      // *"the role 'admin' maps to no permissions"* — a real `RoleMappingIncoherentError` —
+      // **before reaching the wildcard, the blank id, the wrong scope or the excluded permission
+      // any of these cases exist to test.**
+      //
+      // > **Eight negative cases would have gone on passing while testing nothing.** This is the
+      // > repository's own `expectError` discipline — *a rejection for a different reason is not
+      // > a pass* — which `throwsIncoherent` was not applying. It was found by `core-agent`
+      // > noticing the ten `as never` casts, on the one axis `0043` §3a had just widened.
+      //
+      // The casts themselves are legitimate: these inputs are DELIBERATELY type-invalid, which is
+      // the point of a negative case. What was wrong was the base they were built on.
+      if (expectedFragment !== undefined && thrown instanceof Error) {
+        assertTrue(
+          `${label}: and the message names the injected defect, not an incidental one`,
+          thrown.message.includes(expectedFragment),
+          `expected the message to mention ${JSON.stringify(expectedFragment)}, actual: ${thrown.message}`,
+        );
+      }
     };
 
     const org = (permissionId: string) => ({ permissionId, scope: 'organization' as const });
-    const owner = { grants: [org('customers.customer.read')] };
-    const member = { grants: [org('customers.customer.read')] };
+    const readOnly = { grants: [org('customers.customer.read')] };
+    /**
+     * A COMPLETE base mapping over EVERY role, so the only defect present is the injected one.
+     *
+     * It was `{ owner, member }` and that is now two roles short. Deriving the base from
+     * `MEMBERSHIP_ROLES` means the next role added to the union does not silently re-open the
+     * same hole — which is the difference between a fixture that survives `0043` §3a and one
+     * that had to be repaired by it.
+     */
+    const complete = (
+      overrides: Readonly<Record<string, { grants: readonly { permissionId: string; scope: string }[] }>> = {},
+    ): Record<string, unknown> => ({
+      ...Object.fromEntries(MEMBERSHIP_ROLES.map((role) => [role, readOnly])),
+      ...overrides,
+    });
+    const owner = readOnly;
+    const member = readOnly;
 
-    throwsIncoherent('an UNMAPPED role', () => {
-      assertRoleMappingIsCoherent({ owner, member: undefined } as never);
-    });
-    throwsIncoherent('a role mapped to an EMPTY set', () => {
-      assertRoleMappingIsCoherent({ owner, member: { grants: [] } } as never);
-    });
-    throwsIncoherent('a WILDCARD permission id', () => {
-      assertRoleMappingIsCoherent({ owner: { grants: [org('customers.*')] }, member } as never);
-    });
-    throwsIncoherent('a BLANK permission id', () => {
-      assertRoleMappingIsCoherent({ owner: { grants: [org('   ')] }, member } as never);
-    });
-    throwsIncoherent('a grant at the WRONG SCOPE', () => {
-      assertRoleMappingIsCoherent({
-        owner: { grants: [{ permissionId: 'customers.customer.read', scope: 'business' }] },
-        member,
-      } as never);
-    });
-    throwsIncoherent('granting an EXCLUDED permission (delete)', () => {
-      assertRoleMappingIsCoherent({
-        owner: { grants: [org('customers.customer.delete')] },
-        member,
-      } as never);
-    });
-    throwsIncoherent('granting an EXCLUDED permission (restore-deleted)', () => {
-      assertRoleMappingIsCoherent({
-        owner: { grants: [org('customers.customer.restore-deleted')] },
-        member,
-      } as never);
-    });
+    // EVERY BASE IS `complete(...)` — all four roles present, one defect injected — and every
+    // case names the fragment its defect must produce. Before 2026-09-13 these read
+    // `{ owner, member }` and all eight threw on the missing `admin` instead.
+    throwsIncoherent(
+      'an UNMAPPED role',
+      () => {
+        assertRoleMappingIsCoherent(complete({ member: undefined as never }) as never);
+      },
+      'member',
+    );
+    throwsIncoherent(
+      'a role mapped to an EMPTY set',
+      () => {
+        assertRoleMappingIsCoherent(complete({ member: { grants: [] } }) as never);
+      },
+      'member',
+    );
+    throwsIncoherent(
+      'a WILDCARD permission id',
+      () => {
+        assertRoleMappingIsCoherent(complete({ owner: { grants: [org('customers.*')] } }) as never);
+      },
+      'customers.*',
+    );
+    throwsIncoherent(
+      'a BLANK permission id',
+      () => {
+        assertRoleMappingIsCoherent(complete({ owner: { grants: [org('   ')] } }) as never);
+      },
+      'blank',
+    );
+    throwsIncoherent(
+      'a grant at the WRONG SCOPE',
+      () => {
+        assertRoleMappingIsCoherent(
+          complete({ owner: { grants: [{ permissionId: 'customers.customer.read', scope: 'business' }] } }) as never,
+        );
+      },
+      'scope',
+    );
+    throwsIncoherent(
+      'granting an EXCLUDED permission (delete)',
+      () => {
+        assertRoleMappingIsCoherent(complete({ owner: { grants: [org('customers.customer.delete')] } }) as never);
+      },
+      'customers.customer.delete',
+    );
+    throwsIncoherent(
+      'granting an EXCLUDED permission (restore-deleted)',
+      () => {
+        assertRoleMappingIsCoherent(
+          complete({ owner: { grants: [org('customers.customer.restore-deleted')] } }) as never,
+        );
+      },
+      'customers.customer.restore-deleted',
+    );
     // The fifth branch, reachable only because of the SECOND parameter.
     throwsIncoherent('an absent or unrecognised role GRANTING SOMETHING', () => {
       assertRoleMappingIsCoherent(undefined, {
@@ -371,11 +462,19 @@ export function buildRoleGrantsSuite(): Suite {
 
     let threwOnExplicit: unknown = null;
     try {
+      // DERIVED FROM `MEMBERSHIP_ROLES` RATHER THAN TRANSCRIBED, and the two roles this used to
+      // name are why: `0043` §3a widened the union and this call stopped compiling
+      // (`TS2345 … missing admin, "business-admin"`). The point of the case is that passing the
+      // shipped values EXPLICITLY behaves like passing nothing — the ROLE LIST is incidental to
+      // it, so holding a copy of the list here bought nothing and cost a red on a correct change.
+      //
+      // This is the opposite call from the pin above, and the difference is what each case is
+      // FOR: that one asserts WHICH roles exist and must go red when the answer changes; this one
+      // asserts the defaults and the parameters agree, and must not.
       assertRoleMappingIsCoherent(
-        {
-          owner: grantsForRole('owner'),
-          member: grantsForRole('member'),
-        },
+        Object.fromEntries(MEMBERSHIP_ROLES.map((role) => [role, grantsForRole(role)])) as Readonly<
+          Record<MembershipRole, ReturnType<typeof grantsForRole>>
+        >,
         grantsForRole(null),
       );
     } catch (cause) {
@@ -391,16 +490,62 @@ export function buildRoleGrantsSuite(): Suite {
 
     // A valid mapping that is NOT the shipped one must also pass, so the guard is checking
     // properties rather than recognising one specific object.
+    //
+    // *** IT MUST COVER EVERY ROLE IN THE UNION, AND IT DID NOT. *** This built `{ owner, member }`
+    // and went red when `0043` §3a widened `MembershipRole` — with the guard reporting *"the role
+    // 'admin' maps to no permissions"*, which reads as a Core defect and is not one. **The guard
+    // was right: a mapping omitting `admin` IS incoherent**, and the alternative this case
+    // constructs has to be a coherent mapping over the CURRENT union, not over the union of the
+    // day it was written.
+    //
+    // So the alternative is DERIVED from `MEMBERSHIP_ROLES` and made different from the shipped
+    // one by its CONTENT — every role gets a single, identical grant — rather than by its shape.
+    // A mapping that differs by omitting a role is not "a different valid mapping"; it is an
+    // invalid one, and using it as the positive control would have inverted the case's meaning.
+    // *** AND IT MUST COVER THE GRANTED UNIVERSE, NOT JUST EVERY ROLE. *** A first attempt gave
+    // each role a single `customers.customer.read` grant and was correctly rejected with
+    // *"'customers.customer.create' is in TENANT_GRANTED_PERMISSIONS and is granted to no role"* —
+    // the guard checks the universe in BOTH directions, which is the property that stops the
+    // declared set drifting away from what is actually held.
+    //
+    // So the alternative gives EVERY role the WHOLE granted universe: coherent by both of the
+    // guard's rules, and different from the shipped mapping in the one way that matters — under
+    // it, `member` holds everything `owner` does.
+    const wholeUniverse = [...new Set([...owner.grants, ...member.grants].map((grant) => grant.permissionId))]
+      .sort()
+      .map((permissionId) => ({ permissionId, scope: 'organization' as const }));
+    const oneGrantEach = Object.fromEntries(
+      MEMBERSHIP_ROLES.map((role) => [role, { grants: wholeUniverse }]),
+    );
     let threwOnValidAlternative: unknown = null;
     try {
-      assertRoleMappingIsCoherent({ owner, member } as never);
+      assertRoleMappingIsCoherent(oneGrantEach as never);
     } catch (cause) {
       threwOnValidAlternative = cause;
     }
     assertTrue(
-      'a different but coherent two-role mapping also passes',
+      'a different but coherent mapping over EVERY role also passes',
       threwOnValidAlternative === null,
       `a valid alternative mapping was rejected: ${String(threwOnValidAlternative)}`,
+    );
+    // The control for the control: `owner` and `member` are still read above, and if the
+    // alternative stopped differing from the shipped mapping this case would be asserting that
+    // the shipped mapping passes — which the case eighteen lines up already does.
+    // *** THIS CONTROL FIRED ON ITS FIRST RUN AND THE FIX IS IN THE COMPARISON, NOT THE CONTROL.
+    // *** It originally compared `oneGrantEach.owner` against `owner` and reported the two
+    // identical — correctly: `owner` already holds the whole granted universe, so "every role
+    // gets the universe" leaves the OWNER row untouched. The mapping still differs, on `member`.
+    //
+    // Comparing the WHOLE mapping is what the case is actually about, and comparing one role was
+    // a narrower question that happened to have a stable answer for the wrong reason.
+    assertTrue(
+      'and the alternative genuinely differs from the shipped mapping',
+      MEMBERSHIP_ROLES.some(
+        (role) => JSON.stringify(oneGrantEach[role]) !== JSON.stringify(grantsForRole(role)),
+      ),
+      'the "alternative" mapping is the shipped one for EVERY role, so this case duplicates the ' +
+        'explicit-values case above and proves nothing about the guard checking properties rather ' +
+        'than identity',
     );
   });
 

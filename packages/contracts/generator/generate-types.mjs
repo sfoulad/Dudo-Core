@@ -247,9 +247,9 @@ for (const code of Object.values(GENERATOR_ERROR_CODES)) {
 }
 
 /**
- * THE FOUR REQUEST CLASSES, AND THE FIELD THAT DECLARES ONE. `docs/decisions/0039`.
+ * THE REQUEST CLASSES, AND THE FIELD THAT DECLARES ONE. `docs/decisions/0039`.
  *
- * *** FOUR CLASSES, THREE BLOCK KEYS, AND `operations:` COVERS TWO OF THEM. *** That is the
+ * *** MORE CLASSES THAN BLOCK KEYS, AND `operations:` COVERS THREE OF THEM. *** That is the
  * measurement `0039` is built on and the reason a block key cannot carry the class:
  * `organization-selection-v1` uses `operations:` for SESSION-class routes, and a reader inferring
  * the class from the key gets it wrong.
@@ -257,12 +257,46 @@ for (const code of Object.values(GENERATOR_ERROR_CODES)) {
  * A FOURTH KEY NAME WAS REFUSED. It would encode the same property the same implicit way and be
  * stale the next time a class is added. **The problem is a structural key carrying a semantic
  * property**, and no number of key names fixes that.
+ *
+ * *** THE COUNT IS DELIBERATELY OUT OF THE HEADING ABOVE, AND IT USED TO BE IN IT. *** This block
+ * read "THE FOUR REQUEST CLASSES" and "FOUR CLASSES, THREE BLOCK KEYS" until `0044` added a fifth,
+ * at which point both sentences were wrong and nothing went red — the map below is the authority
+ * and a figure restated above it is a second copy that cannot see the first. The user's standing
+ * ruling of 2026-09-13 (`workflow.md` §11a) is to derive counts and never restate them in prose;
+ * the property — *there are more classes than block keys, and `operations:` is shared* — is what
+ * the paragraph was for, and it does not rot.
+ *
+ * *** THIS MAP IS ONE OF TWO COPIES AND THE OTHER IS ROOT TOOLING. *** `scripts/lib/
+ * request-class.mjs` holds the same vocabulary for `check:request-class`, and the two are separated
+ * by an ownership boundary rather than by a decision: `packages/contracts/**` may not depend on
+ * Core's layout (`architecture.md` §3), and root tooling is the Team Lead's. **A class added here
+ * and not there is refused by the checker; added there and not here it is refused by the
+ * generator.** Both refusals are loud, which is the only reason the duplication is survivable —
+ * and it is the drift surface to collapse if a shared, contract-owned vocabulary is ever agreed.
  */
 const REQUEST_CLASSES = Object.freeze({
   'pre-auth': Object.freeze({ blockKey: 'entryPoints', record: '0014 §B', evaluatesPermission: false }),
   session: Object.freeze({ blockKey: 'operations', record: '0021', evaluatesPermission: false }),
   platform: Object.freeze({ blockKey: 'operations', record: '0025 decision 3', evaluatesPermission: true }),
   action: Object.freeze({ blockKey: 'actions', record: 'ARCHITECTURE.md §3', evaluatesPermission: true }),
+  /**
+   * `0044`, ACCEPTED 2026-09-13. Tenant administration: principal-level authentication, **tenant
+   * resolved from the authenticated context**, permission evaluated, reaches control-plane ports,
+   * and **not reachable by any App** — which is the row that makes it a class rather than a
+   * widening of the Action pipeline (`security.md` §4).
+   *
+   * IT SHARES `operations:` WITH `session` AND `platform`, WHICH IS THE POINT OF `0039` RATHER THAN
+   * A PROBLEM WITH IT. Three classes now answer to one key, so the key carries even less
+   * information than when `0039` was written, and the declared field carries all of it.
+   *
+   * *** WHAT THIS GENERATOR CANNOT CHECK ABOUT IT, STATED SO NOBODY READS ACCEPTANCE HERE AS
+   * VERIFICATION: *** `0044` §3b.2 makes an organization identifier in any request position a
+   * REGISTRATION refusal, and `§3c` makes an unbounded read shape one. **Neither is enforced by
+   * this file and neither can be** — registration happens in Core, and this tool reads contracts.
+   * A contract declaring this class is checked here for its SHAPES and nowhere for its CLASS
+   * OBLIGATIONS.
+   */
+  'tenant-admin': Object.freeze({ blockKey: 'operations', record: '0044', evaluatesPermission: true }),
 });
 
 /**
@@ -697,7 +731,15 @@ export function admitContract(outline, { name }) {
     const entry = {
       code: GENERATOR_ERROR_CODES.MISSING_REQUEST_CLASS,
       contract: name,
-      message: `${operationsLackingClass} of ${operationClasses.length} published operation(s) have no \`requestClass:\` — their own or the contract's. 0039 requires it because four classes share three block keys and \`operations:\` covers two of them, so the class cannot be inferred. Phase 1: warning, and the shape vocabulary falls back to the block key.`,
+      /*
+       * THE TWO FIGURES IN THIS SENTENCE ARE DERIVED FROM `REQUEST_CLASSES`, NOT TYPED INTO IT.
+       * It read "four classes share three block keys and `operations:` covers two of them" and was
+       * false the hour `0044` added a fifth class — a hand-maintained count in a message nothing
+       * compares against the map two hundred lines above it (`workflow.md` §11a, and the user's
+       * 2026-09-13 ruling: derive counts, never restate them). The `operations:` share is computed
+       * for the same reason rather than written as "two".
+       */
+      message: `${operationsLackingClass} of ${operationClasses.length} published operation(s) have no \`requestClass:\` — their own or the contract's. 0039 requires it because ${Object.keys(REQUEST_CLASSES).length} classes share ${new Set(Object.values(REQUEST_CLASSES).map((s) => s.blockKey)).size} block keys and \`operations:\` covers ${Object.values(REQUEST_CLASSES).filter((s) => s.blockKey === 'operations').length} of them, so the class cannot be inferred. Phase 1: warning, and the shape vocabulary falls back to the block key.`,
     };
     if (REQUEST_CLASS_REQUIRED) errors.push(entry);
     else warnings.push(entry);
@@ -1880,9 +1922,109 @@ export function emitModule({ schema, contractName, sourceName, schemaIndex, oper
   };
   ctx.genericDefs = new Set(Object.keys(defs).filter((d) => hasAbstractArray(defs[d])));
 
+  /**
+   * *** DEFS WHOSE WHOLE BODY IS A CROSS-SCHEMA `$ref` TO A `$def` OF THE SAME NAME. ***
+   *
+   * These emit NO local alias and are RE-EXPORTED from the module they come from. Emitting
+   * `export type RoleId = RoleId;` is TS2456 — a type alias circularly referencing itself — and it
+   * is what this generator did until 2026-09-13.
+   *
+   * THE DEFECT WAS A COLLISION BETWEEN TWO CORRECT RULES, which is why neither looked wrong:
+   *
+   *   `renderRef`'s URN branch    registers an import and returns the imported name.  CORRECT.
+   *   the `body` map below        wraps every `$def` in `export type <Name> = <rendered>;`. CORRECT.
+   *   `localNames` at emission    drops an imported name the module declares locally, because
+   *                               importing `PrincipalId` while declaring it is TS2440.  CORRECT.
+   *
+   * **Together, on a def named `roleId` that is a `$ref` to a remote `roleId`: the import is
+   * dropped as a collision, the alias is emitted anyway, and its body is its own name.** Both
+   * halves of the failure came from rules added to fix real errors.
+   *
+   * *** IT IS SOUND-BY-ACCIDENT ON EVERY OTHER `$ref` IN THE CORPUS, AND THE PROPERTY BELONGS TO
+   * THE INPUT RATHER THAN TO THIS EMITTER *** (`workflow.md` §11a). Every other cross-schema
+   * reference here happens to point at a `$def` with a DIFFERENT name — `MemberSeat`,
+   * `MembershipRole`, `PrincipalId` — so the local name and the imported name never met. A
+   * generator handling all of those correctly looks completely sound. `architecture.md` §1a is the
+   * family: two individually-correct declarations whose UNION is unsound, and nothing that reads
+   * one declaration at a time can see it.
+   *
+   * **The repair is on the emitter and NOT on the schema, deliberately.** Restating `roleId` in
+   * `tenant-roles-v1` would silence TS2456 and re-open the duplicated-constraint defect the `$ref`
+   * exists to close — the canonical-definition pattern is the thing being protected here.
+   */
+  const selfModule = sourceName.replace(/\.schema\.json$/, '.ts');
+  /** `localDefName -> module it is re-exported from`. */
+  const reexportedDefs = new Map();
+  for (const defName of Object.keys(defs)) {
+    const node = defs[defName];
+    if (node === null || typeof node !== 'object' || typeof node.$ref !== 'string') continue;
+    /**
+     * *** ONLY WHEN THE `$ref` IS THE WHOLE BODY. A CONSTRAINING SIBLING MEANS IT IS NOT. ***
+     *
+     * In draft 2020-12 a `$ref` and its siblings are BOTH applied, so `{$ref: …, minLength: 5}` is
+     * the remote shape NARROWED — a different type from the remote one, which a re-export would
+     * silently discard. Annotations do not narrow anything and are the case this repository
+     * actually has: `tenant-roles-v1`'s `roleId` carries a `description` explaining why it is a
+     * reference at all.
+     *
+     * **This is the skip-set question turned on the repair rather than on the defect**
+     * (`workflow.md` §11a: the axis an author cannot see is what their check is PERMITTED to skip).
+     * The first draft of this detection triggered on `$ref` alone and would have dropped a
+     * narrowing sibling without a word — a fix for a loud error introducing a silent one.
+     */
+    const ANNOTATION_ONLY = new Set(['$ref', 'description', '$comment', 'title', 'deprecated']);
+    const annotationOnly = Object.keys(node).every((k) => ANNOTATION_ONLY.has(k));
+    const m = /^(urn:[^#]+)#\/\$defs\/([A-Za-z0-9_]+)$/.exec(node.$ref);
+    if (m === null) continue;
+    if (!annotationOnly) {
+      /**
+       * *** A SAME-NAME CROSS-SCHEMA `$ref` CARRYING A NARROWING SIBLING IS REFUSED, AND FINDING
+       * THIS IS WHAT THE FIXTURE FOR THE TS2456 FIX WAS FOR. ***
+       *
+       * The `continue` that used to sit here was a hole in the repair rather than a guard. It
+       * correctly declined to RE-EXPORT a narrowed shape — re-exporting discards the narrowing —
+       * and then fell through to the ordinary path, **which emits `export type X = X;` and is the
+       * exact defect the repair exists to remove.** So the annotation-only test protected one
+       * failure mode by restoring the other.
+       *
+       * REFUSING RATHER THAN EMITTING, because there is no correct output. TypeScript cannot
+       * express `maxLength`, so the narrowing is unrepresentable whatever is emitted; and the name
+       * collision makes every available spelling either circular or a lie about the constraint.
+       *
+       * THE REMEDY THE MESSAGE NAMES IS ONE THE TOOL ACCEPTS TODAY (`workflow.md` §11a — a refusal
+       * naming a remedy the tool does not accept is a dead end wearing an instruction's clothes):
+       * rename the local def. A differently-named narrowing `$ref` already emits correctly.
+       */
+      if (pascalCase(m[2]) === pascalCase(defName)) {
+        const target = ctx.schemaIndex.get(m[1]);
+        if (target !== undefined && target.modulePath !== selfModule) {
+          ctx.errors.push({
+            code: GENERATOR_ERROR_CODES.UNSUPPORTED_SCHEMA_NODE,
+            contract: ctx.contractName,
+            message: `#/$defs/${defName}: a cross-schema \`$ref\` to a \`$def\` of the SAME NAME, carrying constraining sibling keywords (${Object.keys(node).filter((k) => !ANNOTATION_ONLY.has(k)).join(', ')}). There is no correct emission: re-exporting the remote type would silently DISCARD the narrowing, and a local alias would be \`export type ${pascalCase(defName)} = ${pascalCase(defName)};\` — TS2456. RENAME THE LOCAL DEF; a differently-named narrowing \`$ref\` emits correctly today.`,
+          });
+        }
+      }
+      continue;
+    }
+    // SAME NAME IS THE WHOLE TRIGGER. A differently-named target already works and must keep
+    // working: it emits `export type X = Y;`, which is a real alias and a real part of the surface.
+    if (pascalCase(m[2]) !== pascalCase(defName)) continue;
+    const target = ctx.schemaIndex.get(m[1]);
+    // An unresolved URN is `renderRef`'s refusal to report, not ours to pre-empt; and a self-URN
+    // is a module referencing itself, where the local declaration IS the definition.
+    if (target === undefined || target.modulePath === selfModule) continue;
+    reexportedDefs.set(defName, target.modulePath);
+  }
+
   const body = Object.keys(defs).map((defName) => {
     ctx.currentDefNeedsTypeParam = false;
+    // STILL RENDERED EVEN WHEN THE ALIAS IS SKIPPED, because rendering is what REGISTERS THE
+    // IMPORT (`renderRef`'s URN branch). Skipping the render would drop the import and leave the
+    // re-export naming something that is not in scope — the dangling-import failure, reached by
+    // the repair for a different one.
     const rendered = renderType(defs[defName], ctx, `#/$defs/${defName}`);
+    if (reexportedDefs.has(defName)) return '';
     const param = ctx.currentDefNeedsTypeParam ? '<T>' : '';
     return `export type ${pascalCase(defName)}${param} = ${rendered};\n`;
   });
@@ -1956,8 +2098,18 @@ export function emitModule({ schema, contractName, sourceName, schemaIndex, oper
   // of this line used the wrong suffix, so the replace matched nothing, the comparison could
   // never be true, and a schema that `$ref`s its OWN urn would have emitted an import of itself.
   const selfModulePath = sourceName.replace(/\.schema\.json$/, '.ts');
-  /** Names this module declares itself. An import of one of them is a TS2440 redeclaration. */
-  const localNames = new Set(Object.keys(defs).map(pascalCase));
+  /**
+   * Names this module declares itself. An import of one of them is a TS2440 redeclaration.
+   *
+   * *** A RE-EXPORTED DEF IS NOT A LOCAL NAME AND MUST NOT BE FILTERED OUT OF THE IMPORTS. ***
+   * That filter exists because importing `PrincipalId` while declaring it does not compile — but a
+   * def in `reexportedDefs` declares NOTHING, so treating it as local drops the very import the
+   * re-export names. **That is the second half of the TS2456 defect**: the import was filtered away
+   * here and the alias was emitted anyway, so the alias had nothing to refer to but itself.
+   */
+  const localNames = new Set(
+    Object.keys(defs).filter((d) => !reexportedDefs.has(d)).map(pascalCase),
+  );
   const importLines = [...ctx.imports.values()]
     .filter(({ target }) => target.modulePath !== selfModulePath)
     .map(({ target, names }) => {
@@ -1972,6 +2124,24 @@ export function emitModule({ schema, contractName, sourceName, schemaIndex, oper
       return `import type { ${wanted.join(', ')} } from '${rel}';`;
     })
     .filter((line) => line !== null);
+
+  /**
+   * *** THE RE-EXPORT, WHICH IS WHAT KEEPS THE MODULE'S PUBLIC SURFACE UNCHANGED. ***
+   *
+   * `export type { RoleId };` re-exports an imported type binding. Without it, skipping the local
+   * alias would silently REMOVE a name from this module's exports — and a consumer importing
+   * `RoleId` from `tenant-roles-v1.ts` would break for a reason that reads as unrelated to the
+   * TS2456 repair. **A fix that trades one compile error for a different one two files away is not
+   * a fix**, and this is the axis a repair to an emitter is most likely to miss: what the emitted
+   * module STOPS offering.
+   *
+   * ONE LINE PER DEF RATHER THAN ONE GROUPED LINE, so a diff names the def that changed.
+   */
+  const reexportLines = [...reexportedDefs.keys()]
+    .map(pascalCase)
+    .sort()
+    .map((name) => `export type { ${name} };`);
+  importLines.push(...reexportLines);
 
   // ---- THE FLOOR, APPLIED TO EMISSION ITSELF.
   //

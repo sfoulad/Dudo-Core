@@ -102,11 +102,18 @@ documentsExistingImplementation: true
 # `pre-auth`: docs/decisions/0014 §B's PreAuthEntryPoint registry. No principal, no tenant, no
 # permission, no Action. A route enters that registry BY A DECISION and never by declaring itself.
 #
-# WHY THIS FIELD EXISTS RATHER THAN BEING READ OFF `entryPoints:`. Four request classes share three
-# block keys — `operations:` covers BOTH the platform class and the session class — so the class
-# cannot be inferred from the key, and `organization-selection-v1` was the contract that proved it.
-# A structural key carrying a semantic property is the defect; a fourth key name would have encoded
-# the same property the same implicit way.
+# WHY THIS FIELD EXISTS RATHER THAN BEING READ OFF `entryPoints:`. THERE ARE MORE REQUEST CLASSES
+# THAN BLOCK KEYS — `operations:` covers the platform class, the session class AND, since
+# docs/decisions/0044, the tenant-admin class — so the class cannot be inferred from the key, and
+# `organization-selection-v1` was the contract that proved it. A structural key carrying a semantic
+# property is the defect; another key name would encode the same property the same implicit way.
+#
+# THIS SENTENCE SAID "FOUR REQUEST CLASSES SHARE THREE BLOCK KEYS" AND WENT STALE ON 2026-09-13,
+# WHEN `0044` ADDED A FIFTH. The claim it was making — the key cannot carry the class — was true
+# throughout and got MORE true, which is exactly why nobody would have looked (workflow.md §12: a
+# sentence stays true in the sense everybody reads it for). The count is gone rather than corrected:
+# the authority is `REQUEST_CLASSES` in packages/contracts/generator/generate-types.mjs, and a
+# figure restated here is a second copy that cannot see the first.
 requestClass: pre-auth
 
 # ---------------------------------------------------------------------------

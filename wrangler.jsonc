@@ -43,7 +43,23 @@
   // records to every subdomain that ever exists.
   //
   //   app.dudo.work    the web application AND its API      cookie, host-only
-  //   api.dudo.work    the API only, for NON-browser clients  Authorization: Bearer
+  //   api.dudo.work    the API, INTENDED for non-browser clients   Authorization: Bearer
+  //
+  // ⚠ "THE API ONLY" WAS WRONG AND IS CORRECTED HERE, 2026-09-13. It described an INTENT as
+  // though it were a property of the deployment. Both hostnames are `custom_domain` routes on
+  // THIS ONE WORKER, and a Worker's static assets bind PER-WORKER RATHER THAN PER-HOSTNAME — so
+  //
+  //     GET https://api.dudo.work/    serves the web SPA, byte-identical to app.dudo.work
+  //
+  // Nothing enforced the word "only", and nothing can while these are two routes on one Worker:
+  // splitting them would mean a second Worker with its own assets, which buys nothing and costs
+  // an 0008 allowance. THE SPLIT IS ABOUT WHICH CREDENTIAL A CLIENT CARRIES, NOT ABOUT WHICH
+  // BYTES A HOSTNAME SERVES, and the paragraph below says so correctly — this line did not.
+  //
+  // Found by `security-agent` while establishing that platform/web/dist/_headers governs
+  // api.dudo.work too (correct, and desirable). Recorded rather than quietly reworded because a
+  // config comment asserting a restriction the config does not implement is `architecture.md`
+  // §3c's family: a reader checks the comment and has no reason to open the route table.
   //
   // admin.dudo.work IS NOT SERVED BY THIS WORKER. It belongs to `dudo-admin`
   // (wrangler.admin.jsonc), because Cloudflare allows only ONE collection of static assets per

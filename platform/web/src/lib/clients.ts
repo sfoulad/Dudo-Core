@@ -48,7 +48,8 @@
  */
 
 import { createCustomerDirectoryClient, type CustomerDirectoryClient } from '@/api/client';
-import { createFixtureTransport, type Transport } from '@/api/fixture-transport';
+import type { Transport } from '@/api/transport';
+import { createFixtureTransport } from '@/api/fixture-transport';
 import { createHttpTransport } from '@/api/http-transport';
 import { signalPreconditionFailed, signalUnauthenticated } from '@/api/session-signal';
 import { createAuthClient, type AuthClient } from '@/api/auth';

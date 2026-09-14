@@ -54,6 +54,163 @@ refuses loudly rather than binding the wrong database.
 `0006` §0.3 requires two: the control plane decides tenancy, so it cannot live inside a
 database that tenancy scopes.
 
+## 2a. ⚠ EXECUTE THE WHOLE SET BEFORE THE LIST GOES TO THE USER — IT IS NOT OPTIONAL
+
+**Added 2026-09-13, because it caught a migration that DID NOT APPLY, on the day it was about to be
+put in front of the user for approval.**
+
+**Apply every migration, in filename order, to a throwaway in-memory database, before anyone
+approves anything.** `node:sqlite` is the same engine family the QA fixtures use and it costs
+seconds.
+
+```
+23 control-plane + 4 tenant, in order, into a throwaway database
+  -> the first seventeen applied
+  -> 0018 FAILED:
+     error in trigger platform_operator_excludes_membership_on_insert:
+       no such table: main.organization_membership
+```
+
+### WHAT IT FOUND, AND THE SHAPE IS WHY READING DID NOT
+
+`0018` widens a `CHECK`, and **SQLite cannot `ALTER` a `CHECK`** — so it is the twelve-step table
+rebuild: create, copy, **drop**, rename. `0010` installs **FOUR** triggers:
+
+```
+TWO  ON organization_membership                      -> dropped by the DROP TABLE.  FOUND.
+TWO  ON platform_operator, reading organization_membership in WHEN EXISTS
+                                                     -> NOT dropped.  MISSED.
+```
+
+**The two survivors are not dropped, so when the rename lands SQLite re-validates the schema, finds
+live triggers referencing a table that no longer exists, and refuses.**
+
+> **`architecture.md` §3b, self-inflicted, and `core-agent`'s own diagnosis is the thing to keep:**
+> **"A confident paragraph about triggers is what stopped me looking for the other kind of
+> trigger."** It wrote a detailed, correct section about the two it had found — *and read past it
+> four times.* **The more precisely a dismissal is worded, the less likely anyone is to re-derive
+> it, including its author.**
+
+**AND THE TEAM LEAD AMPLIFIED THE HALF-RIGHT VERSION.** That trigger finding had already been
+relayed as *"the one I would put in front of the user first"* — **correct about the hazard, wrong
+about its extent, and repeating it added confidence without adding a check.** A half-right finding
+travelling upward is harder to catch than a wrong one, because the half that is right survives
+every review.
+
+**Nothing static would have found it.** Not a read of `0018`, not a read of `0010`, not a diff —
+**the failure is a property of the SCHEMA STATE at step 18, which exists only once seventeen files
+have run.**
+
+### WHAT EXECUTING THE SET PROVES, AND WHAT IT DOES NOT
+
+**PROVES:** every file parses and applies in order; every named object exists afterwards; and —
+because the prober can then run statements — **behavioural properties can be checked rather than
+argued.** The 2026-09-13 run added 12, none blind, including **both directions of the single-owner
+ordering** (demote-then-promote succeeds; promote-before-demote is refused by the index) and the
+confirmation that **the partial unique index is BLIND TO ZERO**, documented rather than hoped.
+
+**DOES NOT PROVE ANYTHING ABOUT D1.** `d1_database_query` is withheld, so D1's PRAGMA handling and
+batch atomicity stay unmeasured. **§3's *"the ✅ is the tool's claim — query the database"* applies
+in full and is not softened by a green local run.**
+
+### ⚠ THE SET IS NOT IDEMPOTENT. RUNNING IT TWICE FAILS AT `0007`. MEASURED 2026-09-13.
+
+**Found by `core-agent` re-running the set after the recency index landed; verified independently by
+the Team Lead before it went in this file.**
+
+```
+pass 1   23 control-plane migrations applied clean
+pass 2   FAILS AT 0007_membership_role.sql  ->  duplicate column name: role
+```
+
+**`0007` uses `ALTER TABLE … ADD COLUMN`, which has no `IF NOT EXISTS` form in SQLite.** Everything
+before it is `CREATE TABLE IF NOT EXISTS` and re-runs harmlessly — **so a second pass gets six
+migrations in before it stops**, and the operator meets a failure in the middle of a set they were
+told was one action.
+
+> **`wrangler d1 migrations apply` TRACKS WHAT IT HAS APPLIED and will not re-run them, so the normal
+> path is unaffected.** The hazard is **a hand-run** — pasting the set into a console, re-running
+> after a partial failure, or "just making sure" — **which is exactly what someone does when a
+> migration step has already gone wrong once.**
+
+**AND NOTE WHERE THAT PUTS YOU: the moment you are most likely to re-run by hand is immediately after
+a failure**, and that is the moment the set is guaranteed to fail again for a *different and
+misleading* reason. **`duplicate column name: role` tells you nothing about the problem you were
+actually chasing.**
+
+**This is pre-existing and is not a defect introduced by Milestone 2** — `0021` is idempotent and says
+so on its own face; **the SET is not, and no individual file claims otherwise.** Recorded because
+`§2a` requires executing the whole set before the list reaches the user, **and executing it twice is
+the obvious next thing to try.**
+
+**If a migration run fails partway: do not re-run the set. Read `d1_migrations` to find what
+applied, and resume from there.**
+
+### ⚠ AND A FRESH-DATABASE RUN IS NOT THE PRODUCTION SHAPE — `0019` CAN FAIL ON DATA THAT IS ALREADY THERE
+
+**Added 2026-09-13 by the Team Lead, and it is a DIFFERENT risk from the ordering cases above.**
+
+**Those 12 statements test what the index refuses at WRITE time** — promote-before-demote is refused,
+demote-then-promote succeeds. **All correct, all about a running system.** They are executed against
+a database the migration set has just built, **which is exactly the shape production is not in.**
+
+**The live control plane holds `0001`–`0017` AND ROWS.** So the honest test applies `0001`–`0017`,
+**populates it**, and then applies `0018`–`0023`. Measured that way, on three populations:
+
+```
+A  one owner per organization     OK        rows 2 -> 2 | triggers 8 -> 8 | none lost
+B  an organization with TWO       REFUSED   UNIQUE constraint failed: organization_membership.organization_id
+   owner rows already present               *** THIS IS A MIGRATION FAILURE, NOT A WRITE REFUSAL ***
+C  an organization with NO owner  OK        rows 1 -> 1 | triggers 8 -> 8 | none lost
+```
+
+**Row A is the good news and it is worth stating: `0018` rebuilds the table WITH DATA IN IT and loses
+nothing** — every row copied, **all eight triggers present afterwards.** The dangling-trigger defect
+that produced §2a in the first place is fixed **and is now verified by execution against a populated
+database rather than by reading the file.**
+
+> **ROW B IS THE ONE THAT MATTERS. `CREATE UNIQUE INDEX … WHERE role = 'owner'` IS EVALUATED AGAINST
+> THE ROWS THAT ALREADY EXIST.** If any live Organization holds two `owner` rows, **the index cannot
+> be created and `0019` fails.** No amount of testing the *running* behaviour reaches this, because
+> the offending rows predate the constraint.
+
+**AND THE FAILURE IS NOT CLEAN, WHICH IS THE OPERATIONAL HALF.** `wrangler d1 migrations apply` walks
+the files in order. **`0018` has already committed by the time `0019` runs** — the table is rebuilt,
+the old one dropped. **A failure at `0019` leaves the database HALF-MIGRATED**, with no automatic
+unwind, in the middle of a set the operator was told was one action.
+
+#### THE PRE-FLIGHT CHECK, AND IT IS ONE QUERY
+
+**Before `0018`–`0023` are applied to any real database, run this and read it:**
+
+```sql
+SELECT organization_id, COUNT(*) AS owners
+  FROM organization_membership
+ WHERE role = 'owner'
+ GROUP BY organization_id
+HAVING COUNT(*) > 1;
+```
+
+**Any row returned means the migration set WILL fail at `0019`, and the data must be corrected first
+— which is a production-data change and therefore the user's, every time** (`security.md` §7).
+**An empty result is the go condition.**
+
+**Do not reason from onboarding.** *"Onboarding creates exactly one owner, so this cannot happen"* is
+the shape `§11a` calls a claim about the tree that nobody ran — and the three live Organizations
+predate `0019`, so **nothing has ever enforced the property they are about to be measured against.**
+
+**Row C is already recorded above as the index being blind to zero.** It is unchanged by this and it
+is a data question rather than a migration one: **`0019` will apply cleanly to an ownerless
+Organization and leave it ownerless.**
+
+### AND THE USER HEARS ONE THING FROM THIS THAT NO FILE SAYS
+
+**For the duration of `0018`, the mutual exclusion has NO database-level enforcement in either
+direction** — all four triggers are dropped at step 0 and recreated at the end. **Acceptable on
+`0025`'s own terms** — *"the write check is hygiene; THE AUTHORIZATION CHECK IS THE CONTROL"*, and
+both authority resolvers are untouched by a migration — **but it is not nothing, and it means: do
+not apply it while anything is writing.**
+
 ## 3. Apply migrations — local first, always
 
 ```
@@ -213,24 +370,222 @@ non-negotiable. The script says so on every run rather than letting four greens 
 Run the seed tool a second time with a different email. Keep both credentials; you need them both
 for the check.
 
-## 6. Build the web client
+## 6. Build the web client — ⚠ THE COMMAND THIS STEP USED TO GIVE SHIPS A FIXTURE BUILD
+
+> **⚠ CORRECTED 2026-09-13. This step read `cd platform/web && npm install && npm run build`
+> and that produces a FIXTURE BUILD.** Not a broken one — a convincing one. **Followed
+> literally, this runbook put a fake API on `app.dudo.work`.**
 
 ```
-cd platform/web && npm install && npm run build
+VITE_DUDO_TRANSPORT=http npm --prefix <absolute repo path>/platform/web run build
+npm --prefix <absolute repo path> run check:deployable-build            # was it CONFIGURED?
+npm --prefix <absolute repo path>/platform/web run verify:no-fixtures   # did the DATA leave?
 ```
 
-Produces `platform/web/dist`, which `wrangler.jsonc` serves as static assets. Asset
-requests are free and unlimited and do not invoke the Worker — the property `0016` chose
-the whole stack for.
+**Both are required and both must exit 0.** They start from different places and catch
+different things — see the correction below.
 
-## 7. Deploy to staging — needs explicit user approval, and staging only
+**`platform/web/src/api/config.ts` resolves an unset `VITE_DUDO_TRANSPORT` to `fixture`, and
+that default is correct** — *"a build that was never configured must not"* silently talk to a
+real server. **Failing safe at build time means failing wrong at deploy time**, and nothing in
+this repository sets the variable: measured with a positive control, it appears only in
+`platform/web`'s source, its README, and build output. **No deploy script, no wrangler config,
+no CI, no `.env`.**
+
+**What a fixture build does when served, which is why no probe in §8 would catch it:** it
+renders the real interface, it performs the **real** password derivation, and it makes **no
+network calls at all.** `§8`'s probes ask whether the surface answers — **it answers
+beautifully.**
+
+**`platform/admin` IS NOT AFFECTED, and that asymmetry is why this survived Milestone 1.**
+That console has no fixture transport: *"it talks to Core or it shows an error."* **A clean
+admin deploy said nothing whatever about this hazard**, and the one surface Milestone 2 ships
+is the one that carries it.
+
+**Do not try to detect this by looking for fixture strings — measured, it did not work.** Both
+builds matched every marker and the real build was 314 bytes **larger**, so the only
+discriminator in the artifact is one key in Vite's inlined `import.meta.env` object. That is
+what `check:deployable-build` reads, **and it fails as NOT RUN rather than as a pass if it
+cannot parse the bundle.**
+
+> **⚠ AND THE REASON THE TWO BUILDS MATCHED WAS ITSELF A DEFECT — found by `web-agent` the same
+> afternoon and fixed structurally.** The `http` bundle was shipping **3 fixture Businesses and
+> 35 fixture customer records**. Root cause: the `Transport` interface was declared *inside*
+> `fixture-transport.ts`, so six modules imported the shape from the fake — **type-only, free at
+> runtime, and it made the fixture read as an ordinary dependency** until three value imports had
+> accumulated unremarked. The interface now has its own module, and a Vite `resolveId` hook drops
+> the fixture modules from the **module graph** when the transport is `http`. Re-measured:
+> **585,861 bytes, zero fixture data.**
+>
+> **RUN BOTH CHECKS BEFORE A DEPLOY. Neither subsumes the other**, and `§11a`'s test names a
+> concrete input for each:
+>
+> ```
+> check:deployable-build   starts from THE ENV OBJECT      — was the build CONFIGURED?
+> verify:no-fixtures       starts from THE BUNDLE CONTENT  — did the fixture data LEAVE?
+>
+> red / green   an unconfigured build whose data matches no content predicate
+> green / red   a NEW fixture module the resolveId hook does not name, in a configured build
+>               — exactly the defect web-agent found, which this step passed straight over
+> ```
+
+Produces `platform/web/dist`, which `wrangler.jsonc` serves as static assets. Asset requests
+are free and unlimited and do not invoke the Worker — the property `0016` chose the whole
+stack for.
+
+## 7. Deploy — needs explicit user approval, every time
+
+> **⚠ CORRECTED 2026-09-13. This step said `npm run deploy:staging`. THAT SCRIPT WAS REMOVED
+> ON 2026-09-08** — it pointed `--env staging` at a target neither wrangler config defines, and
+> `package.json` records the removal and the reason at length. **The runbook instructing it was
+> never swept**, so the deployment procedure named a command that does not exist, at the deploy
+> step, for five days.
+>
+> **`workflow.md` §12 exactly, and in the worst possible file**: the removal was recorded
+> where the script had been, and nothing sent anyone to the document that *instructs* it. The
+> sweep is citation-driven and **a runbook does not cite `package.json`.**
 
 ```
-npm run deploy:staging
+npx wrangler deploy --config wrangler.jsonc          # dudo-core   — app + api
+npx wrangler deploy --config wrangler.admin.jsonc    # dudo-admin  — admin console
 ```
 
-**Staging is not production** (`workflow.md` §11). There is deliberately no bare `deploy`
-script: a one-word affordance is wrong for an action that needs a decision.
+**`--config` is not optional.** Two Workers share one `main`; omitting it deploys the wrong
+surface, and rollback is per-Worker — see the section below on why *"the rollback version"* is
+ambiguous until you name a Worker.
+
+**There is deliberately no bare `deploy` script**: a one-word affordance is wrong for an action
+that needs a decision. **`app.dudo.work`, `api.dudo.work` and `admin.dudo.work` ARE the test
+environment** (`0035`), named honestly — there is no separate staging, and `workflow.md` §11's
+clause expires on the first real customer Organization rather than on a date.
+
+## 7a. ⚠ OPEN — NEITHER HOST SENDS ANY SECURITY RESPONSE HEADER
+
+**Found 2026-09-13 while establishing the browser-render loop. Live on both deployed hosts.**
+
+```
+curl -sS -D - -o /dev/null https://admin.dudo.work/   ->  the COMPLETE header set:
+  HTTP/2 200 · date · content-type · cf-cache-status · cache-control
+  nel · report-to · server: cloudflare · cf-ray · alt-svc
+
+ABSENT on admin.dudo.work AND app.dudo.work:
+  X-Frame-Options · Content-Security-Policy · Strict-Transport-Security
+  X-Content-Type-Options · Referrer-Policy · Permissions-Policy · Cross-Origin-Opener-Policy
+```
+
+**Verified with a positive control** — the same pattern matched `content-type` and `server`, so the
+instrument works and the absence is real. **Corroborated in a browser: a same-origin iframe of
+`https://admin.dudo.work/` loaded and rendered the full sign-in page. The console frames.**
+
+**WHY NO CODE PATH SETS THEM, and it is the same shape as the fixture-build defect above:**
+`run_worker_first` is `["/api/*", "/auth/*", "/health"]` in both configs and the SPA is served by
+Cloudflare **Static Assets**, so **the HTML document response never enters the Worker.** There is no
+line of our code in its path — which is why no review of the Worker was ever going to find it.
+
+**THE DELIVERY MECHANISM IS VERIFIED RATHER THAN ASSUMED**, because Static Assets and Pages are
+different products and this was the fork worth getting right:
+
+> **Workers Static Assets DOES honour a `_headers` file** — *"The default response headers served on
+> static asset responses can be overridden, removed, or added to, by creating a plain text file
+> called `_headers`."* It goes in the assets directory (so, in `public/`, which Vite copies into
+> `dist/`). **Limits: 100 rules, 2,000 characters per line.**
+>
+> **And it applies to exactly the responses that are the problem:** *"Custom headers defined in the
+> `_headers` file are **not** applied to responses generated by your Worker code."* **Our document
+> responses are static assets, which is the case it covers** — so widening `run_worker_first`, which
+> `0016` §5 prohibits, is **not** required.
+
+### 7a-i. ⚠ THE RISK COLLAPSES ONTO ONE ORIGIN PAIR — and both of the Team Lead's framings were wrong
+
+**`security-agent` reviewed this and refused both arguments it was handed. Both refusals were right,
+and the replacements are better.**
+
+**CSP is NOT "containment at the point where the plaintext credential lives".** That overstates it:
+**CSP cannot contain a script that is already executing** — an attacker with execution reads the
+password field directly — and **no directive stops exfiltration by navigation**; `navigate-to` was
+removed from the spec and no browser ships it. **A precisely-worded claim that stops the next reader
+checking** (`architecture.md` §3b).
+
+**What `0015` §D actually changed is IRREVERSIBILITY.** An XSS on the login page used to yield a
+revocable session; it now yields the **password** — and `0027`'s own ceiling is *"exactly as strong
+as the password and no stronger"*, so a stolen password **defeats the confirmation mechanism
+outright on every critical operation, indistinguishably from the operator in the audit trail.**
+
+**The load-bearing argument is `0027`'s own admitted gap, CF-2:** *Core cannot verify the client
+displayed what it was given.* An attacker rewriting the statement text node gets an operator to
+approve something else **with their own correctly-derived password** — and **unlike the credential
+case, that attack requires running IN THE PAGE, which is exactly what `script-src 'self'` prevents.**
+
+**And the confirmation gate is NOT clickjackable.** It requires a typed email, a typed password and
+600,000 PBKDF2 iterations; **an overlaid frame yields a click on Approve with two empty required
+inputs.** Asked whether `0026`/`0027` rested on an unwritten no-framing premise, the review checked,
+found they did not, **and declined to manufacture one.**
+
+**THE REAL SURFACE IS THE SEVEN ONE-PRESS PLATFORM MUTATIONS** — create/update/retire/restore
+Template, set-organization-template, merge-identity, onboard-organization — which complete on a
+single click with no confirmation.
+
+```
+framing page      3P storage     session hint   whoami probe?   Lax cookie   clickjackable?
+evil.com          PARTITIONED    unreadable     NO — never asks  moot        NO, twice over
+app.dudo.work     first-party    present        YES              SENT        YES, all seven
+```
+
+> **CROSS-SITE FRAMING IS DEAD FOR TWO INDEPENDENT REASONS, and the second is verifiable in our own
+> source rather than derived from a specification:** `use-session.ts:92` gates the `whoami` probe on
+> a per-tab hint, so **a console with no hint never makes one authenticated request.** Third-party
+> storage partitioning makes that hint unreadable in a cross-site frame.
+>
+> **SAME-SITE FRAMING IS UNTOUCHED BY BOTH.** `app.dudo.work` framing `admin.dudo.work` is
+> first-party storage, the hint is present, the probe fires, and the cookie is same-site.
+>
+> **So the entire risk collapses onto ONE ORIGIN PAIR, and `frame-ancestors 'self'` closes exactly
+> that — because it is ORIGIN-scoped where both other mechanisms are SITE-scoped.** The header's
+> justification is narrower and better evidenced than *"framing is bad"*.
+
+#### ⚠ AND THE OBVIOUS TEST OF THIS IS VACUOUS — DO NOT RUN IT
+
+**The natural next step is: sign in, frame it cross-site, look at it. IT PROVES NOTHING, AND IT FAILS
+IN THE REASSURING DIRECTION.**
+
+**Because the console never asks, a framed cross-site console shows a sign-in form WHETHER OR NOT the
+cookie would have been sent.** Both hypotheses render identically. *"We framed it and got a sign-in
+page, so `SameSite=Lax` protects us"* is a **confident wrong conclusion** — and it is the optimistic
+rot direction, the one `workflow.md` §11a says nobody ever catches, because acting on it always looks
+safe.
+
+**This was found by asking whether the test was worth PROPOSING, before anyone ran it** — and the
+Team Lead had already attempted the adjacent cookie-probe version and failed to complete it, with
+"sign in and look" as the obvious next move. **The review's refusal to offer a better version is the
+right call: there is none that avoids an operator typing a password, and an unobserved fact that is
+labelled unobserved beats an instrument that returns green for the wrong reason.**
+
+**Marked, so this is never quoted as one thing:**
+
+| | |
+|---|---|
+| **SOURCE-VERIFIED** | no hint → no probe → sign-in screen, zero authenticated requests (`use-session.ts:92`, `:104`) |
+| **BROWSER BEHAVIOUR, NOT MEASURED HERE** | third-party `sessionStorage` partitioning; SameSite's site-for-cookies computation |
+
+### 7a-ii. Severity, timing, and where the files go
+
+**Severity, stated honestly rather than dramatically: no real customer Organization exists** — this
+is the test environment (`0035`), the newest `organization` row is `2026-09-04`, and no operator
+session exists on the deployed console. **The population at risk is us.** That is a reason not to
+call it an incident. **It is not a reason to defer it past the milestone.**
+
+> **THE EVENT THAT CHANGES IT IS THE FIRST LIVE OPERATOR SIGN-IN** — the first time a real password
+> is derived in that page. **The headers should land in the SAME deploy, not in one after it.** That
+> deploy needs the user's explicit approval regardless (`security.md` §7), so this adds a file to an
+> approval that must be sought anyway rather than creating a new one.
+
+**The `_headers` files land in `platform/web/public/` and `platform/admin/public/` — `web-agent`'s
+trees.** `platform/admin` has no `public/` directory today and needs one.
+
+**The nonce is not an option and that is worth recording as a closed door:** it must be generated per
+response and injected into both header and tag, **which requires the document to pass through the
+Worker** — and `run_worker_first` does not carry `/`. **The mechanism that would normally be right is
+unavailable for the same reason the headers were missing in the first place.**
 
 ## 8. Verify before telling anyone it works
 
@@ -471,6 +826,49 @@ a single machine.
 
 ## 9. Rollback
 
+## D1 BACKUP BEFORE A MIGRATION — the procedure, and the verification step that nearly reported a false failure
+
+Added 2026-09-13, verified against the live control plane before Milestone 2's index migration.
+
+**Taking the backup is one command and it works:**
+
+```
+npx wrangler d1 export dudo-control-plane --remote --output=<path>.sql
+```
+
+It builds the export server-side, prints a **one-hour signed R2 link**, and downloads the SQL. **No
+paid service is involved** — this is D1's own export path.
+
+### ⚠ A DOWNLOADED FILE IS NOT A VERIFIED BACKUP, AND THE OBVIOUS VERIFICATION FAILS MISLEADINGLY
+
+**Restoring the export into a scratch SQLite reported `no such table: main.template` — and the backup
+was fine.**
+
+**The export opens with `PRAGMA defer_foreign_keys=TRUE`, and a plain `exec()` of the whole file does
+not honour it**: rows for `organization` are inserted before `CREATE TABLE template` appears, and the
+foreign key is checked immediately rather than at commit. **The restore tool enforces a constraint
+the export expects to be deferred.**
+
+> **The check was wrong and the subject was right** — `workflow.md` §11a's three causes of *"this
+> cannot succeed"*, and this was the third: **the input was impossible for a reason nobody had
+> stated.** Read WHY before concluding which.
+
+**So the verification is:**
+
+```
+PRAGMA foreign_keys=OFF;          <- REQUIRED, or a valid backup reports a missing table
+<replay the export>
+PRAGMA foreign_key_check;          <- must return zero rows AFTER the restore
+count tables, indexes and rows and compare against an expectation stated BEFORE the run
+```
+
+**Measured 2026-09-13 on `dudo-control-plane`: 11 tables, 4 indexes, 122 rows, 0 foreign-key
+violations.** Row counts by table are the useful artifact — **a restore that produces the schema and
+no rows looks identical to a successful one in every check that stops at "it parsed".**
+
+**And name the expected tables before running it.** The floor rule applies: a restore returning
+*some* tables looks like success, and only a stated expectation makes ten-instead-of-eleven visible.
+
 ## ⚠ THERE ARE TWO WORKERS SHARING ONE `main`, AND "THE ROLLBACK VERSION" IS AMBIGUOUS WITHOUT NAMING ONE
 
 Added 2026-09-11, before a deploy rather than during one. **This runbook was 491 lines and mentioned
@@ -483,6 +881,45 @@ wrangler.admin.jsonc   name: dudo-admin   routes: admin.dudo.work               
 
 **Both Workers are built from the same `worker.ts`. They are deployed separately and versioned
 separately.**
+
+> ### ⭑ AND THE SAME TABLE CARRIES A PROPERTY CODE NOW DEPENDS ON: THE CLIENT AND THE API DEPLOY ATOMICALLY
+>
+> **Recorded 2026-09-13 because a parser was changed on the strength of it, and it was handed back to
+> this file rather than left in a comment** (`architecture.md` §2a — name the artifact, not the path:
+> a claim about the platform's deployment topology belongs in the runbook, not in a console's parser).
+>
+> ```
+> dudo-core    main: worker.ts   assets.directory: ./platform/web/dist     app.dudo.work + api.dudo.work
+> dudo-admin   main: worker.ts   assets.directory: ./platform/admin/dist   admin.dudo.work
+> ```
+>
+> **Each Worker serves its own SPA bundle AND its own API from ONE deployment.** So for either
+> surface, **a Core that emits a value and a client that has never heard of it cannot coexist as
+> deployed artifacts.**
+>
+> **WHAT THAT LICENSES, AND IT IS BEING RELIED ON:** `platform/admin`'s `requireTemplateStatus` now
+> **throws** on an unrecognised Template status rather than rendering it in a neutral badge — an
+> honest parse of a `closed` enum (`0043` §7c-i), and a downgrade from *degraded but usable* to
+> *broken screen* on a value it cannot represent. **That trade is only acceptable because of the row
+> above.**
+>
+> **THE RESIDUAL EXPOSURE IS EXACTLY ONE THING: A BROWSER TAB HOLDING AN OLD BUNDLE ACROSS A DEPLOY.**
+> Real, narrow, and self-correcting on reload.
+>
+> **⚠ AND THE PROPERTY EXPIRES ON AN EVENT NOBODY WILL ANNOUNCE.** The day either SPA is served from
+> anywhere other than the Worker that serves its API — a CDN, a separate Worker, a cached shell —
+> **the two stop deploying atomically and every hard-parse decision resting on this needs revisiting.**
+>
+> **It is NOT left as prose.** `platform/admin/scripts/verify-platform.mjs` parses
+> `wrangler.admin.jsonc` and asserts the property, with the assertion labelled so the red points at
+> `requireTemplateStatus` — the code that depends on it — and with four known-failing inputs shaped
+> like real splits: bundle to a CDN, bundle to its own Worker, an assets-only config. **`§12`'s
+> uncollected deferral, given a red state instead of a reader.**
+>
+> **`platform/web` has the identical shape and deliberately carries NO such check**, because nothing
+> there parses against a closed enum yet — *"an assertion with no dependent is a check hunting for a
+> subject"*, which is the failure that gets a check deleted as noise later. **It becomes owed the
+> moment the web client hard-parses a closed enum, and that is a trigger rather than a date.**
 
 **Consequences, none of which are obvious from either config:**
 

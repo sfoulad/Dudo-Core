@@ -28,9 +28,39 @@ export function Panel({ children, className }: { children: ReactNode; className?
   );
 }
 
+/**
+ * ⚠ THE TITLE IS A HEADING, AND IT WAS A `<p>` UNTIL 2026-09-13.
+ *
+ * Visually a heading — `text-lg font-semibold` — and semantically a paragraph. Found by
+ * `web-agent` rendering `/settings` and reading the DOM rather than a screenshot:
+ *
+ *     /customers                  ["H1: Customers"]
+ *     /settings/no-such-section   []          <- ZERO HEADINGS
+ *     /nonexistent                []          <- ZERO HEADINGS, the app's top-level 404
+ *
+ * **A screen-reader user navigating by headings landed on those two pages and found nothing.**
+ * 13 call sites, all in `platform/web`: both gates, both 404s, and the customer list's empty and
+ * error states. It was found because ONE FILE WAS INCONSISTENT WITH ITSELF — `SettingsState`
+ * renders `forbidden`, `expired` and its error dispatcher as `<h2>` and routes `not-found` and
+ * `empty` through here, so four of six state families were headed and two were not.
+ *
+ * **`h2` IS THE DEFAULT RATHER THAN A REQUIRED PROP, DELIBERATELY.** `architecture.md` §3a: prefer
+ * the mechanism to the discipline. An optional prop defaulting to `<p>` reproduces the defect for
+ * whoever forgets it, and a REQUIRED one makes thirteen callers each take a decision that is the
+ * same decision twelve times. **The default is correct wherever a page already has its own `h1`,
+ * which is every call site but one.**
+ *
+ * `headingLevel` exists for that one: a top-level 404 has no `h1` above it, so `h2` there leaves a
+ * page whose first heading is a level 2. **The override is narrow on purpose** — the union admits
+ * `h1` and `h2` and nothing else, so it cannot be used to bury a state block deeper.
+ *
+ * **THIS IS NOT A STYLE CHANGE. The rendered size is unchanged** — the class list moves with the
+ * element, so nothing about the visual result differs. Only the accessibility tree does.
+ */
 export function StateBlock({
   glyph = '·',
   title,
+  headingLevel = 'h2',
   body,
   actions,
   note,
@@ -38,11 +68,13 @@ export function StateBlock({
 }: {
   glyph?: string;
   title: string;
+  headingLevel?: 'h1' | 'h2';
   body?: ReactNode;
   actions?: ReactNode;
   note?: string | null;
   tone?: 'default' | 'error';
 }) {
+  const Heading = headingLevel;
   return (
     <div className="grid justify-items-center gap-3 px-6 py-12 text-center">
       <span
@@ -54,7 +86,7 @@ export function StateBlock({
       >
         {glyph}
       </span>
-      <p className="text-lg font-semibold text-ink">{title}</p>
+      <Heading className="text-lg font-semibold text-ink">{title}</Heading>
       {body ? <div className="max-w-[34rem] text-ink-muted">{body}</div> : null}
       {actions ? <div className="mt-2 flex flex-wrap justify-center gap-3">{actions}</div> : null}
       {note ? <p className="font-mono text-xs text-ink-faint">{note}</p> : null}

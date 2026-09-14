@@ -35,6 +35,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { configureBusinesses, configureFaults } from './api/fixture-transport';
 import { CONFIG } from './api/config';
 import { createQueryClient } from './lib/query-client';
+import { LocaleProvider } from './lib/i18n';
 import { router } from './routes/route-tree';
 import './styles/index.css';
 
@@ -109,10 +110,33 @@ if (!container) throw new Error('Root container is missing from index.html');
  */
 const queryClient = createQueryClient();
 
+/*
+ * `LocaleProvider` WRAPS THE ROUTER, NOT A SUBTREE OF IT.
+ *
+ * It writes `lang` and `dir` to `<html>`, and both are inherited: `dir` decides
+ * the inline axis for every logical property in the stylesheet, and a screen
+ * reader takes its voice from `lang`. **Scoping it to `/settings` would produce
+ * a document that is right-to-left everywhere except in dialogs, popovers and
+ * the scrollbar's own side** — the places a reader notices most, because they
+ * are resolved against the document element rather than against a wrapper.
+ *
+ * The consequence is stated rather than hidden: `lib/i18n.tsx` records that the
+ * Customer Directory screens are not in the dictionary yet, so switching to
+ * Arabic flips them into right-aligned English. **That is deliberate. A partial
+ * flip would have concealed how far the translation has actually got**, which
+ * is the same argument as refusing an English fallback for a missing key.
+ *
+ * It sits INSIDE `QueryClientProvider` and outside the router for no deeper
+ * reason than that nothing in the query layer reads a locale today. If anything
+ * ever does — a cache key varying by language would be the first — the order
+ * has to be reconsidered rather than assumed.
+ */
 createRoot(container).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <LocaleProvider>
+        <RouterProvider router={router} />
+      </LocaleProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

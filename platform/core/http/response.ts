@@ -29,6 +29,40 @@ import { HTTP_STATUS_BY_CODE } from '../kernel/errors.ts';
 export const REQUEST_ID_HEADER = 'X-Request-Id';
 export const CORRELATION_ID_HEADER = 'X-Correlation-Id';
 
+/**
+ * ===========================================================================================
+ * SECURITY HEADERS CORE SETS ON ITS OWN RESPONSES. `security-agent` finding 6, 2026-09-13.
+ * ===========================================================================================
+ *
+ * **API AND AUTH RESPONSES ARE STRUCTURALLY OUTSIDE `_headers`' REACH**, and that is the whole
+ * reason this constant exists. `attachCustomHeaders` lives in the asset worker; `run_worker_first`
+ * sends `/api/*`, `/auth/*` and `/health` to the Worker, **which never touches it.** So the
+ * `_headers` files are correct and cannot cover these responses however correct they are.
+ *
+ * *** IT IS EXPORTED AND SPREAD BY TWO CALLERS RATHER THAN WRITTEN TWICE. *** `response.ts` and
+ * `pre-auth-http.ts::baseHeaders` build byte-identical header sets by two functions, which is
+ * `workflow.md` §12's duplicated constraint — *"the rule was restated six times and agreed with
+ * the running code once."* Adding `nosniff` to one of them would have covered the API and left
+ * **the auth path**, which is the half the finding names first.
+ *
+ * *** WHAT `nosniff` DOES AND DOES NOT DO, because the severity is genuinely LOW and overstating
+ * it here is how a Low becomes a claim. *** It tells a browser not to MIME-sniff a response into
+ * a type its `content-type` did not declare. **Every response from both functions already carries
+ * an explicit `application/json; charset=utf-8`**, so the exposure this closes is near nil —
+ * `security-agent` declined to upgrade it and that assessment is not being quietly inflated by
+ * being fixed. It is here because a deferral with no owner is an obligation nobody collects, not
+ * because it was urgent.
+ *
+ * A FROZEN RECORD RATHER THAN A LOOSE STRING PAIR, so a second header is one entry rather than a
+ * third place to remember. **`Strict-Transport-Security`, `X-Frame-Options` and a CSP are NOT
+ * here**: the first belongs at the edge, and the last two govern documents rather than JSON. This
+ * set is Core's API responses and nothing wider — do not let it become the platform's security
+ * header policy, which is a different artifact with a different owner.
+ */
+export const CORE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'X-Content-Type-Options': 'nosniff',
+});
+
 function headers(requestId: string, correlationId: string): Record<string, string> {
   return {
     'content-type': 'application/json; charset=utf-8',
@@ -36,6 +70,7 @@ function headers(requestId: string, correlationId: string): Record<string, strin
     [CORRELATION_ID_HEADER]: correlationId,
     // A response carrying tenant data must not be stored by an intermediary.
     'cache-control': 'no-store',
+    ...CORE_SECURITY_HEADERS,
   };
 }
 

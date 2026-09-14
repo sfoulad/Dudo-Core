@@ -1,0 +1,117 @@
+-- Control-plane migration 0020 — the reverse index: "who belongs to this Organization".
+-- `docs/decisions/0043` · `0003_organization_membership.sql`'s own named future.
+--
+-- IT BELONGS TO `DB_CONTROL`. See 0002.
+--
+-- *** NOT APPLIED BY THE AGENT THAT WROTE IT. *** A verified D1 backup first, then the migration,
+-- then the deploy. Applying it is a production action requiring the user's explicit approval every
+-- time (`.claude/rules/security.md` §7).
+--
+-- *** MUST BE APPLIED AFTER `0018`, WHICH DROPS AND RECREATES THIS TABLE. *** A `DROP TABLE` takes
+-- this index with it and **a dropped index breaks no query**, so the wrong order leaves every
+-- member list doing a full scan of every tenant's membership rows, silently, forever.
+--
+-- ROLLBACK PATH: `DROP INDEX organization_membership_by_organization`. It restores a full table
+-- scan on every member list and nothing else — no data is lost and no row becomes unreadable, so
+-- this rollback is a cleanup rather than a decision. Unlike `0019`'s.
+-- FORWARD-ONLY and idempotent: `IF NOT EXISTS`.
+--
+-- =============================================================================================
+-- `0003`'s CONDITION, MET — this migration is that decision's own trigger firing
+-- =============================================================================================
+--
+-- `0003_organization_membership.sql` refused this index in terms, and its sentence contained the
+-- condition for adding one:
+--
+--   "THERE IS NO INDEX ON `organization_id`, and the omission is deliberate rather than accidental.
+--    'Who belongs to this Organization' is a real future query for an ADMINISTRATION SCREEN, and it
+--    is a reverse index away — an additive migration, costing one more row-write per membership
+--    change. It is not added now because nothing asks it, and because an index that exists is an
+--    index a query can be written against: today there is no way to enumerate an Organization's
+--    members that would not also require adding a port method to do it with."
+--
+-- **MILESTONE 2 IS THAT ADMINISTRATION SCREEN**, and `0043` §4 already reasons about a member count
+-- and a member list as things the milestone publishes. The paragraph above is left unedited in its
+-- own file: it was right when written, its reasoning is why the index waited, and a condition that
+-- fired as written is worth more in the record than a paragraph quietly brought up to date
+-- (`workflow.md` §12).
+--
+-- *** AND ITS OTHER CLAUSE IS STILL LIVE: AN INDEX THAT EXISTS IS AN INDEX A QUERY CAN BE WRITTEN
+-- AGAINST. *** What keeps the enumeration inside the tenant is not this index's absence and never
+-- was — it is that the port method returning members is on a tenant-admin port reached only by a
+-- member of that Organization, that no PLATFORM route may return a set of principals for an
+-- Organization (`0028` Decision 1, enforced at build time by
+-- `platform-routes.ts::assertNoMemberEnumerationRoute`), and that `CO1` forbids the inversion.
+-- **This migration makes a forbidden query faster to run and no more permitted to write.**
+--
+-- =============================================================================================
+-- THE COLUMN ORDER, AND WHY `(organization_id)` ALONE
+-- =============================================================================================
+--
+-- The primary key is `(principal_id, organization_id)`, which serves *"is this principal a member
+-- of this Organization"* by full key and *"which Organizations may this principal enter"* by
+-- prefix. **Neither reaches "who belongs to this Organization"**, because `organization_id` is the
+-- trailing column of that key and a b-tree cannot be prefix-scanned from its second column.
+--
+-- ONE COLUMN AND NOT TWO. The member list orders by a stable key and pages with a cursor, so a
+-- trailing `principal_id` would let the index serve the ORDER BY as well — **and SQLite appends the
+-- primary key to every index entry anyway**, so `(organization_id)` already carries
+-- `principal_id` as its tie-breaker and an explicit second column would duplicate it. The contrast
+-- with `0016`, whose indexes DO carry trailing columns, is that those order by a non-key column.
+--
+-- *** `status` IS DELIBERATELY NOT IN THE INDEX. *** A member list that filters to active members
+-- would seek and then check the status per row, which is one extra read per returned row and is
+-- bounded by the page cap. Adding it would cost a wider entry on every membership write, forever,
+-- to save a bounded number of reads — and `0044` §3c already requires the page cap, so the
+-- unbounded version of this query cannot exist.
+--
+-- =============================================================================================
+-- *** THE ROW-WRITE CONSTANT MOVES IN THIS SAME CHANGE — 2 -> 4 — AND IT COVERS `0019` TOO. ***
+-- =============================================================================================
+--
+-- `identity/control-plane-admission.ts` instructs every constant in it: *"WHEN A MIGRATION ADDS AN
+-- INDEX, THIS NUMBER MUST MOVE WITH IT"*, because D1 exposes no portable schema introspection
+-- through a binding and nothing can notice on our behalf. `0016` and `0017` are the worked
+-- examples of honouring it.
+--
+--   operation                                   today   after   why
+--   ------------------------------------------------------------------------------------------
+--   organization_membership INSERT (a member)     2       3     the row, its PK, and now this
+--   the same INSERT where role = 'owner'          2       4     …and `organization_single_owner`
+--   ONBOARDING_CONTROL_PLANE_ROW_WRITES          11      13     A SUM of the constants, so it
+--                                                                moves on its own — by design
+--
+-- **THE CONSTANT IS SET TO 4, WHICH OVER-CHARGES AN ORDINARY MEMBER WRITE BY ONE.** `0019`'s index
+-- is partial, so a non-owner row maintains no entry in it. A second constant conditional on the
+-- role would be exact and would be *"correct today and silently wrong the first time"* somebody
+-- reached for the wrong one — the reason `SESSION_ROW_WRITES` accepts a 2-row-write excess and
+-- `CONFIRMATION_SPEND_ROW_WRITES` accepts an over-charge of 1. `0014` §A.12 decides the direction:
+-- over-reserving delays a write, under-reserving takes the platform out.
+--
+-- **AND THE ONBOARDING SUM MOVING FROM 11 TO 13 IS THE MECHANISM WORKING RATHER THAN A COST TO
+-- WEIGH SEPARATELY.** `onboarding-service.ts` sums the constants precisely so that *"a schema
+-- change that alters any one row's cost changes this number without anyone remembering to."*
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008)
+-- =============================================================================================
+--
+-- ALLOWANCES: d1-rows-read (much better), d1-rows-written (worse by one per membership write),
+-- d1-storage (worse).
+--
+-- READS: without it, listing one Organization's members SCANS `organization_membership` — which is
+-- **every tenant's rows, not just the caller's**. That is the cost that grows with the customer
+-- base while the benefit of adding the index later does not, and it is the same argument `0017`
+-- makes: a migration against a populated table is a larger act than one against a small one.
+--
+-- WRITES: one more b-tree entry per membership insert, update of `organization_id`, or delete.
+-- Nothing in this repository writes the table today except onboarding, which writes one row per
+-- Organization.
+--
+-- STORAGE: one entry per membership row, holding `organization_id` plus the primary key SQLite
+-- appends. A few hundred rows in the closed beta; call it tens of kilobytes.
+--
+-- COST: USD 0 / BD 0 per month. No new table, no new binding, no new service.
+
+CREATE INDEX IF NOT EXISTS organization_membership_by_organization
+  ON organization_membership (organization_id);

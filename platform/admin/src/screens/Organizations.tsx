@@ -381,6 +381,7 @@ function Th({ children, className }: { children: ReactNode; className?: string }
  * the wrong one is not.
  */
 function StatusBadge({ status }: { status: string }) {
+  const t = useT();
   const known = isKnownStatus(status);
   return (
     <span
@@ -392,7 +393,7 @@ function StatusBadge({ status }: { status: string }) {
       )}
     >
       {status}
-      {!known ? <span className="sr-only"> (an unrecognised status)</span> : null}
+      {!known ? <span className="sr-only"> {t('unknown.status')}</span> : null}
     </span>
   );
 }

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-sessions:1",
+  "title": "Organization Sessions and Security Controls — contract v1",
+  "description": "Every request and response shape of the Organization SESSIONS contract, contract version 1. SHAPES ONLY; the rulings are in tenant-sessions-v1.contract.yaml and the shared class obligations in README.md.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044). No organization_id in any shape.\n\n*** TWO PROPERTIES OF `control-plane/0004_session.sql` DECIDE ALMOST EVERYTHING IN THIS FILE, AND NEITHER IS OBVIOUS FROM THE OUTSIDE: ***\n  1. `session_id` IS THE PRIMARY KEY AND IS ALSO THE UNGUESSABLE SECRET. The migration says so: 'a session identifier that could be ordered or guessed would be a session stealable without a credential.' **So it can never appear in a listing, and there is therefore no per-session handle.**\n  2. `active_organization_id` IS NULLABLE AND MAY NAME AN ORGANIZATION OTHER THAN THE CALLER'S. Publishing it, or listing sessions carrying it, is a CO1 disclosure.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "sessionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["started_at", "expires_at", "is_current"],
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. `session.created_at` — when this session was issued."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. `session.expires_at`.\n\n*** ABSOLUTE, AND NOTHING EXTENDS IT — the migration says so in terms. *** A client must not render it as an idle timeout or as 'expires after N minutes of inactivity'; the session dies at this instant whether or not it is in use. That is a product fact an operator will otherwise infer wrongly from every other product they have used."
+        },
+        "is_current": {
+          "type": "boolean",
+          "description": "Whether this is the session making the request.\n\n*** IT IS A BOOLEAN RATHER THAN AN IDENTIFIER, AND THAT IS THE WHOLE REASON IT EXISTS. *** A client needs to distinguish 'this device' from the others — to label it, and to warn before an action that would sign the caller out. The obvious way to do that is to return the session's identifier and let the client compare; **`session_id` is the credential and cannot be returned**, so the comparison is performed by the server and only its ANSWER crosses the wire.\n\nIT IS ALWAYS `false` WHEN AN ADMINISTRATOR READS ANOTHER MEMBER'S SESSIONS, by construction: the caller's session belongs to the caller. A client must not read `is_current: false` on every row as meaning the member is not signed in."
+      }
+      },
+      "description": "One session, as much of it as can be safely disclosed.\n\n*** THERE IS NO IDENTIFIER IN THIS SHAPE. *** `session_id` is the PRIMARY KEY of `session` and is also the unguessable secret that authenticates a request — `0004_session.sql` is explicit that it is generated as 128 bits of CSPRNG output precisely so it cannot be guessed. **A listing that returned it would be a page of live credentials**, readable by any administrator holding `core.session.list`, and screenshotted into a support ticket the first week. See tenant-sessions-v1.contract.yaml -> theSESSIONIDISTHECREDENTIAL.\n\n*** AND WHAT IS ABSENT BEYOND THAT IS ABSENT BECAUSE NOTHING STORES IT, NOT BECAUSE IT WAS WITHHELD: *** no IP address, no user agent, no device name, no location, no last-seen. `session` is exactly (session_id, principal_id, active_organization_id, created_at, expires_at). **A sessions screen therefore cannot answer 'which device is this' — it can answer 'how many, since when, until when'.** That is a weaker product than an operator expects and it is what the data supports; adding any of those fields is a migration AND a personal-data decision, not a field this contract may request.\n\nNO `active_organization_id`, AND ITS ABSENCE IS A SECURITY RULING RATHER THAN AN OMISSION — see the contract. Every session in a response has the same value by construction, so the field would be a constant that also happens to be a cross-tenant disclosure vector."
+    },
+
+    "listMemberSessionsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id"],
+      "properties": {
+        "principal_id": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" }
+      },
+      "description": "Whose sessions to list. A PATH parameter — GET /api/v1/organization/members/{principal_id}/sessions.\n\nA principal_id that is not a member of the authenticated Organization answers not_found, identically in all three cases.\n\n*** NO PAGING PARAMETERS, AND THAT IS NOT AN ABSENT BOUND. *** The response is capped at a fixed maximum and cannot be paged — see listMemberSessionsOutput. A cursor over a set this small, this volatile, and this security-relevant would let a caller hold a position in a list whose members are being revoked underneath them."
+    },
+
+    "listMemberSessionsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "truncated"],
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/sessionSummary" },
+          "description": "The member's sessions IN THIS ORGANIZATION, newest first by started_at, then... **there is no second sort key and there cannot be one**, because every field that would break a tie is either absent or is the identifier this shape refuses to carry. Two sessions issued in the same second are returned in an unspecified order, and a client must not depend on it. That is a real consequence of having no safe identifier, stated rather than papered over."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Whether the member has more sessions in this Organization than the cap returns.\n\n*** A BOOLEAN RATHER THAN A COUNT, AND THE DIFFERENCE IS security.md §2a. *** A count of sessions beyond the cap is an aggregate; the boolean says only 'there are more', which is what a client needs to render an honest screen. A caller wanting them all revokes all — which is the operation that exists — rather than paging a set that is changing while they read it."
+        }
+      },
+      "description": "The member's sessions, unpaged and capped.\n\n*** THE LISTING IS SCOPED TO SESSIONS ACTIVE IN THE AUTHENTICATED ORGANIZATION, AND THAT IS THE LOAD-BEARING LINE IN THIS FILE. *** A principal may belong to several Organizations. A session whose `active_organization_id` names a DIFFERENT Organization, or is NULL, IS NOT RETURNED AND IS NOT COUNTED. Returning it — or even reflecting it in `truncated` — would disclose that this person has sessions elsewhere, which is core-object-registry.yaml's CO1: a user's list of Organizations must never be visible to any of them.\n\n*** SO 'ALL SESSIONS' IN THIS CONTRACT MEANS 'ALL SESSIONS IN THIS ORGANIZATION', ALWAYS, AND BOTH CLIENTS MUST SAY SO. *** A screen labelled 'Sign out everywhere' would be a false statement to an administrator about a security action — see the contract's theSCOPEOFEVERYWHERE."
+    },
+
+    "revokeMemberSessionsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id"],
+      "properties": {
+        "principal_id": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" }
+      },
+      "description": "Whose sessions to revoke. A PATH parameter.\n\n*** THERE IS NO PER-SESSION REVOKE IN v1 AND IT IS NOT AN OVERSIGHT: THERE IS NO SAFE HANDLE TO NAME ONE WITH. *** `session_id` is the credential. Publishing it to name a revocation target would hand every administrator a live token for every session they can see, which is a strictly worse outcome than the missing feature. See the contract's thePERSESSIONREVOKEISBLOCKEDONAHANDLE — the repair is a non-secret reference column, which is a migration and therefore the user's."
+    },
+
+    "revokeMemberSessionsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revoked_count", "revoked_at"],
+      "properties": {
+        "revoked_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many sessions were ended, IN THIS ORGANIZATION.\n\nIT PASSES security.md §2a: the consumer holds `core.session.revoke`, and it counts exactly the rows that consumer just destroyed — a report on the caller's own act rather than a disclosure about a population. **A count of what you just did is not an aggregate over anything you could not otherwise see.**\n\nZERO IS A VALID AND MEANINGFUL ANSWER: the member had no active session in this Organization. It is not an error and a client must render it distinctly from a failure — 'nothing to sign out' and 'the sign-out failed' are different things and only one of them warrants a retry."
+        },
+        "revoked_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC." }
+      },
+      "description": "What the revocation did.\n\nIT DELIBERATELY DOES NOT RETURN THE REMAINING SESSIONS. After this call the member has no sessions in this Organization, so a listing would be empty by construction and returning one invites a client to treat an empty array as confirmation — which it would also be if the revocation had silently failed."
+    }
+  }
+}

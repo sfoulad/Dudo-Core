@@ -19,11 +19,11 @@ export type OrganizationId = string;
 
 export type PrincipalId = string;
 
-export type MembershipRole = 'owner' | 'member' | (string & {});
+export type MembershipRole = 'owner' | 'admin' | 'business-admin' | 'member';
 
 export type OrganizationDetailOutput = {
   readonly organization_id: OrganizationId;
-  readonly status: 'active' | 'suspended' | (string & {});
+  readonly status: 'active' | 'suspended';
   readonly created_at: string;
   readonly display_name: string | null;
   readonly commercial_registration: RegistrationRecord;

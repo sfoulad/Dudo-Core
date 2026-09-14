@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-members:1",
+  "title": "Organization Members — contract v1",
+  "description": "Every request and response shape of the Organization MEMBERS contract, contract version 1. SHAPES ONLY. A type alone is not a contract: the authorization expectation, the tenant scoping, the not-found ruling and the free-tier bounds are in tenant-members-v1.contract.yaml, and the obligations this contract shares with every other contract in this directory are in README.md. All three are normative together.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044). The tenant is resolved from the authenticated context and appears in no shape in this file. There is no organization_id property anywhere here and none may be added — 0044 §3b.2 makes a route declaring one a REGISTRATION refusal, and this file's additionalProperties: false is the weakest of the three layers rather than the control. See README.md §2.2.\n\nNOT EXECUTED. No JSON Schema implementation exists in this repository. These schemas are normative and hand-checked, and no report may describe them as validated.",
+  "$defs": {
+
+    "errorResponse": {
+      "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope",
+      "description": "The body of every failed response from every operation in this contract. The codes each operation may return are declared per operation in tenant-members-v1.contract.yaml; THIS is the shape they arrive in, and it is platform-wide rather than restated here."
+    },
+
+    "principalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "A principal — a person, and in this contract always a member or former member of the authenticated Organization. Opaque, non-sequential, unguessable: 128 bits of base64url at the generated width (platform/core/kernel/ids.ts), 22 characters, against a contract maximum of 64.\n\nPLATFORM-WIDE UNIQUE BY GENERATION, NOT BY TENANT (control-plane/0001_principal.sql). So a principal_id from another Organization is a WELL-FORMED value that this contract must refuse, and it is refused the same way a value naming nobody is refused — see tenant-members-v1.contract.yaml -> authorizationModel.theUnknownIdentifierRuling. Uniqueness prevents collision; it has never prevented reachability.\n\nA PRINCIPAL BELONGS TO MORE THAN ONE ORGANIZATION AND THIS CONTRACT MUST NEVER SAY SO. No shape here carries a membership count, an organization list, or any field from which one could be inferred. core-object-registry.yaml CO1: a user's list of Organizations must never be visible to any of them — and a MEMBER DIRECTORY is the natural place for that leak to arrive, because 'this person is also elsewhere' looks like a helpful thing for an administrator to know."
+    },
+
+    "memberDisplayName": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "description": "What this Organization calls this member, or null.\n\n*** IT IS NULL ON EVERY RESPONSE TODAY, AND THE REASON IS STRONGER THAN 'NOBODY HAS ADDED THE COLUMN'. *** control-plane/0001_principal.sql defines `principal` as exactly (principal_id, principal_type, status, created_at). There is no name. There is also no email: control-plane/0006_principal_credential.sql stores `identifier_hash`, an HMAC-SHA-256 of the normalised address, and states that 'the plaintext identifier is never stored and never logged'. So the two values a directory would naturally render — a name and an email — are one absent and one MATHEMATICALLY UNRECOVERABLE.\n\nNORMATIVE CLIENT RENDERING, BINDING ON BOTH CLIENTS: when this is null the client renders the principal_id VERBATIM. Not a blank, not a dash, not 'Unknown member', not a locale string. An opaque identifier is the honest rendering of a person whose name Dudo does not hold; a placeholder is indistinguishable from a real name and is ambiguous the moment two members are nameless. This is business-read-v1's displayNameOrNull rule applied to a person, and it exists in the contract for the same reason: it is what stops the two clients choosing two different fallbacks for a field that is null on every response.\n\nAND THE HONEST CONSEQUENCE, STATED HERE RATHER THAN DISCOVERED ON A SCREEN: a members directory in which every row reads `k7Qx2mZp...` is not a usable members directory. This contract settles the SHAPE and cannot produce the DATA. See tenant-members-v1.contract.yaml -> dependencies.thereIsNoNameAndNoRecOVERABLEIDENTIFIER.\n\nCLASSIFICATION: sensitive-personal. A person's name, held by their employer. Trimmed before storage; a value empty after trimming is not a name, which is what the \\S pattern asserts."
+    },
+
+    "membershipRole": {
+      "type": "string",
+      "enum": ["owner", "admin", "business-admin", "member"],
+      "enumPolicy": "closed",
+      "description": "The member's SEED ROLE — the tier stored on the membership row. docs/decisions/0043 §3.\n\n  owner           organization scope. EXACTLY ONE per Organization. Everything, including delete and transfer.\n  admin           organization scope. Everything owner has EXCEPT delete, transfer, and acting on the owner.\n  business-admin  business scope. Administers the Businesses it is assigned to.\n  member          business scope. An ordinary user.\n\n*** CLOSED, AND UNDER docs/decisions/0007 D16 THAT NEEDS AN ARGUMENT RATHER THAN AN ASSUMPTION. *** D16 says customers create custom roles, so a reader could reasonably expect this set to be open. It is not, because THESE FOUR ARE NOT THE ROLE MODEL — they are the seed tier stored in `organization_membership.role` behind a SQL CHECK (0043 §1, 0007_membership_role.sql). A custom role is a separate assignment and appears in `custom_role_ids`, not here. Adding a fifth value to THIS field is a migration plus a data change on live rows, which is exactly the deliberate act `closed` means (docs/decisions/0041).\n\nTWO OF THE FOUR ARE ALREADY STORED AND TWO ARE NOT. 'owner' and 'member' are live values behind the existing CHECK; 'admin' and 'business-admin' are ADDED by 0043 §3a and do not exist in any row yet. The addition is additive and fails closed on the way in: toMembershipRole returns null for an unrecognised stored string, which denies everything, so a database ahead of a deployment refuses rather than opens.\n\n*** 'business-owner' IS NOT A VALUE HERE AND THE CATALOGUE'S ROLE OF THAT NAME IS THE SAME ROLE RENAMED. *** 0043 §3a: align the UNBUILT vocabulary to the BUILT one, never the reverse. The rename cost a text edit in a proposed registry; the alternative cost a migration and an audit-history rewrite."
+    },
+
+    "membershipRoleOrNull": {
+      "oneOf": [{ "$ref": "#/$defs/membershipRole" }, { "type": "null" }],
+      "description": "The member's seed tier, or null.\n\n*** NULL IS REACHABLE AND IT IS NOT A GAP — MEASURED IN THE MIGRATION RATHER THAN ASSUMED. *** control-plane/0018_membership_role_admin.sql declares `role TEXT CHECK (role IS NULL OR role IN ('owner','admin','business-admin','member'))`. THE COLUMN IS NULLABLE AND HAS NO DEFAULT, deliberately: the migration says a default 'would grant something to every row that has not been decided about'. Every membership row written before a tier was assigned therefore carries null, and nothing backfills them.\n\nNULL MEANS NO TIER IS RECORDED, WHICH GRANTS NOTHING. docs/decisions/0043 §3a: toMembershipRole returns null for an unrecognised stored string and that denies everything, so a member with no tier can sign in and reach nothing. THAT IS A RENDERABLE PRODUCT STATE AND BOTH CLIENTS MUST RENDER IT DISTINCTLY — not as 'member', which would state a grant the member does not have, and not as blank, which reads as a loading failure.\n\n*** THIS DEFINITION EXISTS BECAUSE THE FIRST DRAFT OF memberSeat DECLARED membership_role NON-NULLABLE AND REQUIRED. *** It was corrected by opening 0018 rather than by reasoning from docs/decisions/0043 §3, which describes four roles and does not say the column admits a fifth state. A contract asserting a field is always one of four values, over a column that admits null, is a false statement about the wire that no reader of the ADR alone would catch (architecture.md §3c)."
+    },
+
+    "roleId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "A role defined by this Organization — docs/decisions/0007 D16's custom roles. Opaque, tenant-scoped, and resolvable only through tenant-roles-v1.\n\nIT IS NOT A ROLE NAME. A name is a display string the tenant may change; this is the identity the assignment is stored against. tenant-roles-v1 publishes the resolution, including the exact permission list each role holds (0043 §5.6), so a client rendering a member's roles reads names from there rather than inferring them from an id.\n\nSEED ROLES DO NOT APPEAR HERE. They are `membership_role`. A member's full authority is the union of its seed tier and its custom roles, and keeping the two fields separate is what stops a client having to know which of a mixed list is which."
+    },
+
+    "membershipStatus": {
+      "type": "string",
+      "enum": ["active", "suspended"],
+      "enumPolicy": "closed",
+      "description": "Whether this membership currently grants access. Transcribed from control-plane/0003_organization_membership.sql, whose CHECK is the same two values.\n\n  active     the member can sign in and reach this Organization.\n  suspended  the member cannot. IMMEDIATELY.\n\n*** 'suspended' IS NOT A FLAG A LATER CHECK CONSULTS — IT IS ALREADY LOAD-BEARING IN CORE. *** 0003_organization_membership.sql: a suspended membership 'is treated identically to no membership at all: the same argument-free notFound(), deliberately collapsed to one branch', and it 'collapses a live session to organization not selected on the very next request, which is what makes REVOCATION IMMEDIATE rather than effective at session expiry'. So suspension takes effect on the suspended member's next request, without any session sweep, and a contract promising immediacy here is describing behaviour that already exists rather than requesting it.\n\nTHERE IS NO 'removed' MEMBER. Removal DELETES the membership row, so a removed person has no row to carry a status and does not appear in any listing. That is deliberate and it is why removal and suspension are different operations under different permissions rather than two values of this field.\n\nCLOSED. A third state is a migration against a live CHECK plus a decision about what it means for session resolution, which is exactly the deliberate act `closed` denotes."
+    },
+
+    "memberSeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "display_name", "membership_role", "custom_role_ids", "status", "joined_at"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" },
+        "display_name": { "$ref": "#/$defs/memberDisplayName" },
+        "membership_role": { "$ref": "#/$defs/membershipRoleOrNull" },
+        "custom_role_ids": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/roleId" },
+          "description": "The custom roles assigned to this member, possibly empty. Resolve names and permission lists through tenant-roles-v1.\n\nmaxItems 20 IS A BOUND ON THE RESPONSE AND IT IS DECLARED BECAUSE THIS FIELD IS THE ONE UNBOUNDED THING IN A BOUNDED PAGE. A page of 100 seats each carrying an unbounded array is an unbounded response, which is exactly the shape README.md §2.3 refuses. If a tenant assigns more than 20 roles to one person the request fails rather than truncating — a truncated authority list is a FALSE statement about a member's access, and it is false in the reassuring direction.\n\n*** 20 IS ALSO WHAT BOUNDS THE COST OF REMOVING A MEMBER, AND THE TWO USES MUST NOT DRIFT. *** Removal deletes every role assignment along with the membership row, at ORGANIZATION_MEMBERSHIP_ROW_WRITES-scale cost apiece, so this bound is what makes tenant.members.remove's maxRowWrites a number rather than a function of N. The first draft of this field said 50 and would have made one removal cost more than a sixth of a principal's entire daily write allowance. See tenant-members-v1.contract.yaml -> theREMOVALCOSTISBOUNDEDBYTHISFIELD.\n\nSo a proposal to raise it is a COST decision as well as a product one, and it must be argued in both places."
+        },
+        "status": { "$ref": "#/$defs/membershipStatus" },
+        "joined_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. `organization_membership.created_at` — when this membership row was written, which is when the person joined THIS Organization. It is NOT when the principal was created, and the two differ for anyone who was invited later."
+        }
+      },
+      "description": "One member of the authenticated Organization.\n\n*** WHAT IS DELIBERATELY ABSENT, AS AN EXPLICIT LIST, BECAUSE A PROHIBITION THAT IS ONLY IMPLIED IS ONE SOMEBODY OPTIMISES AWAY: ***\n  1. NO email address, and no identifier of any kind. The plaintext is not stored anywhere in Dudo — 0006_principal_credential.sql keeps an HMAC. This is not a field awaiting a source; it is a field whose source was deliberately destroyed by docs/decisions/0015 §D. See tenant-members-v1.contract.yaml -> theIdentifierIsNotOnTheWire.\n  2. NO last-seen, last-login or session count. Those are `core.session.list` territory and they turn a directory into a surveillance surface by accretion. Sessions are a separate contract with a separate permission that this one does not borrow.\n  3. NO organization_id, and no count, hint or existence signal concerning any OTHER Organization this principal belongs to. CO1.\n  4. NO permission list. A member's effective permissions are the union of a seed tier and custom roles resolved through tenant-roles-v1; computing and embedding that union here would put an authorization answer in a directory row, where it would be cached, rendered and eventually trusted.\n  5. NO credential state — no 'has a password', no algorithm, no enrolment date. Every one of those is a probe against the login path wearing an administrative label.\n\nEach of 1-5 is ADDITIVE if a later decision wants it (API_STANDARD.md §6). Each also needs its own argument, and this list exists so that argument has to be made rather than assumed."
+    },
+
+    "listMembersInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      },
+      "description": "Paging only. There is no filter of any kind in v1, and the absence of a STATUS filter is a ruling rather than an omission.\n\n*** A STATUS FILTER WOULD NEED A DEFAULT, AND A DEFAULT OF 'active' HIDES THE POPULATION AN ADMINISTRATOR MOST NEEDS TO FIND. *** The Customer Directory's `statusFilter` declares default 'active' and therefore needs an explicit `all` member so the recovery queue stays reachable — 'a record scheduled for destruction that nobody can find is a record nobody will recover in time' (workflow.md §11a). The same trap is available here and the cheapest way to avoid it is to not build the filter: THIS LISTING RETURNS BOTH STATES, ALWAYS, with `status` on every row. A client that wants only active members filters a page it has already been given the whole of.\n\nAdding a filter later is additive AND it inherits the obligation above: whoever adds one owes an `all` member and owes the note that this pair becomes invisible to the duplicate-enum-policy check the moment their value sets differ by one member (workflow.md §11a).\n\nNO organization_id, NO tenant_id, NO principal_id filter. Unknown fields are REJECTED with invalid_argument rather than ignored, which is what makes those three unsettable rather than merely undocumented — and that rejection proves INPUT VALIDATION, never isolation."
+    },
+
+    "listMembersOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/memberSeat" }
+        },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      },
+      "description": "The standard collection envelope. NO TOTAL COUNT — urn:dudo:schema:pagination:1#/$defs/collectionEnvelope, and the reason there is a tenant-isolation reason rather than a performance one.\n\nmaxItems 100 IS DECLARED HERE AS WELL AS BOUNDED BY pageSize, AND THE DUPLICATION IS DELIBERATE. pageSize bounds what a caller may ASK for; this bounds what the response may CONTAIN. They are the same number today and they are not the same statement: a server bug that ignored page_size would still be refused by a hand-checking reader against this shape. docs/decisions/0044 §3c requires the bound to be declared and refuses a default as the fail-open version of one.\n\nORDER IS FIXED AND TOTAL: display_name ascending by Unicode code point with NULLS LAST, then principal_id ascending. No sort parameter exists in v1. A total order is what makes a cursor correct — ordering on a nullable, non-unique field alone silently duplicates and skips rows across pages. Because display_name is null on every row today the order degenerates to principal_id ascending, and becomes name order with no contract change the day names exist. Code-point order is not locale-correct for Arabic; that is the same root cause as customer-directory-v1's CD-6 and is recorded as TM-4 rather than solved here.\n\nAN EMPTY PAGE IS NOT REACHABLE FOR A CALLER WHO IS THEMSELVES A MEMBER, and saying so is useful: the caller's own seat is always in the listing. A response of data: [] therefore indicates a defect rather than an empty Organization, and both clients may treat it as such."
+    },
+
+    "getMemberInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" }
+      },
+      "description": "The member to read. Carried as a PATH parameter — GET /api/v1/organization/members/{principal_id}.\n\nA principal_id naming somebody who is not a member of the authenticated Organization answers not_found, IDENTICALLY whether they are a member of another Organization or of none. tenant-members-v1.contract.yaml -> authorizationModel.theUnknownIdentifierRuling."
+    },
+
+    "getMemberOutput": { "$ref": "#/$defs/memberSeat" },
+
+    "changeMemberStatusInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" }
+      },
+      "description": "The member to suspend or to reactivate. Carried as a PATH parameter on both routes; the two are separate routes under separate permissions rather than one route with a target state.\n\n*** THERE IS NO `status` FIELD IN THIS REQUEST, AND ITS ABSENCE IS THE WHOLE POINT. *** A single POST carrying status: 'active' | 'suspended' would put BOTH capabilities behind whichever permission gated the route, which is precisely the split docs/decisions/0043 and this contract make — suspend is a security response and reactivate is an ACCESS GRANT. A field cannot be gated; a route can. This is template-lifecycle-v1's reasoning that a permission cannot perform through a field what it is not granted, applied before the field exists rather than after.\n\nTHE OPERATION IS IDEMPOTENT ON THE TARGET STATE. Suspending a suspended member succeeds and writes no audit record, because nothing changed; the response carries the seat as it stands. A no-op that reports success is correct here and a no-op that writes an audit record is not — an administrator retrying a request should not manufacture a second membership-change event in the tenant's own trail."
+    },
+
+    "changeMemberStatusOutput": { "$ref": "#/$defs/memberSeat" },
+
+    "removeMemberInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" }
+      },
+      "description": "The member to remove from this Organization. Carried as a PATH parameter — DELETE /api/v1/organization/members/{principal_id}.\n\n*** REMOVAL IS FROM THIS ORGANIZATION. IT DOES NOT DELETE A PERSON. *** The `principal` row survives, every audit record naming them survives, and their membership of any OTHER Organization is untouched and unreadable from here. What is destroyed is the membership row and this Organization's role assignments to them — which is what makes removal different from suspension in the only way that matters: suspension preserves the configuration that would restore access, and removal discards it.\n\nTHE AUDIT RECORD MUST OUTLIVE THE ROW IT DESCRIBES, and the ordering is forced rather than chosen: the record is written into the Organization's own `audit_event` before the membership row is deleted. 0003_organization_membership.sql already instructs this milestone in terms — 'the slice that adds membership administration must write its audit record into the AFFECTED ORGANIZATION'S tenant-scoped audit_event table, not into the control plane'."
+    },
+
+    "removeMemberOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "removed_at"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/principalId" },
+        "removed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. When the membership row was deleted."
+        }
+      },
+      "description": "Confirmation that the membership is gone. IT DELIBERATELY DOES NOT ECHO THE SEAT, and returning the removed member's former role and status would be a small, natural, wrong thing to add: after this call the caller no longer holds a membership relationship with that person, so a response describing them is a disclosure the caller could not obtain by any other route. It carries the identifier the caller supplied and the time, and nothing else.\n\nRemoving a member who is not a member answers not_found, on the same ruling as every other identifier in this contract."
+    }
+  }
+}

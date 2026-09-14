@@ -23,6 +23,7 @@
  * fixtures, deliberately, so a demonstration always starts from a known set.
  */
 
+import type { DudoAction, Transport } from './transport';
 import { FIXTURE_BUSINESSES, FIXTURE_CUSTOMERS } from './fixtures';
 import { ApiError, type ErrorCode, type ErrorDetail } from './errors';
 import { fixtureOrganizationSelected } from './fixture-session-state';
@@ -41,7 +42,6 @@ import {
   STATUS_FILTERS,
   type CollectionEnvelope,
   type Customer,
-  type CustomerAction,
   type CustomerStatus,
   type CustomerSummary,
   type EditableField,
@@ -51,16 +51,27 @@ import {
   RESOLVE_BATCH_MAX,
   type BusinessReference,
   type BusinessSummary,
-  type CoreAction,
   type ResolveBusinessReferencesOutput,
 } from '../contracts/business-read';
 
-export type DudoAction = CustomerAction | CoreAction;
-
-export interface Transport {
-  readonly name: string;
-  invoke(action: DudoAction, input?: Record<string, unknown>): Promise<unknown>;
-}
+/**
+ * ⚠ THE INTERFACE MOVED TO `./transport.ts`, AND THIS RE-EXPORT IS TEMPORARY.
+ *
+ * It was declared here, which meant every module needing the SHAPE imported it
+ * from the FAKE — including `http-transport.ts`, the implementation written to
+ * replace this one. **That is why a production build shipped the fixtures:** a
+ * value import from this module reads as ordinary once six type imports have
+ * made the module look like a normal dependency, and three value imports
+ * accumulated.
+ *
+ * **Every importer in this package has been repointed at `./transport.ts`.**
+ * The re-export stays only so that a module outside `src/api` added later, by
+ * someone reading the old shape, does not silently fail — and
+ * `scripts/verify-bundle.mjs` asserts that nothing in `src/` imports either
+ * name from here, so the day this line has no purpose the check says so rather
+ * than the line quietly persisting.
+ */
+export type { DudoAction, Transport } from './transport';
 
 /* -------------------------------------------------------------------------
    Latency and fault injection
@@ -156,7 +167,32 @@ function invalid(message: string, details?: ErrorDetail[]): ApiError {
    The store
    ------------------------------------------------------------------------- */
 
-let store: Customer[] = FIXTURE_CUSTOMERS.map((record) => ({ ...record }));
+/**
+ * The fixture's own store record: the wire shape with `readonly` lifted.
+ *
+ * ===========================================================================
+ * ⚠ THE STORE AND THE WIRE RESPONSE WERE THE SAME TYPE, AND NOTHING STOPPED A
+ * SCREEN MUTATING WHAT IT RECEIVED
+ * ===========================================================================
+ *
+ * `Customer` is now consumed from the contract (`0037` requirement 2) and the
+ * generated shape is `readonly`. **The compiler immediately named eleven
+ * in-place assignments in this file** — which is the swap doing exactly what it
+ * is for.
+ *
+ * **None of the eleven is a defect HERE.** This module is a stand-in for a
+ * server: it owns its records and building a modified copy before storing one
+ * is what a store does. **What was wrong is that it did so through the type
+ * that describes a RESPONSE**, so the same type said "a server may edit this"
+ * and "a client receives this", and nothing distinguished them.
+ *
+ * A mutable record is assignable to a readonly one, so `invoke` still returns a
+ * valid `Customer` and no caller changes. **The direction that now does not
+ * compile is the one that matters: a SCREEN mutating a response.**
+ */
+type StoredCustomer = { -readonly [K in keyof Customer]: Customer[K] };
+
+let store: StoredCustomer[] = FIXTURE_CUSTOMERS.map((record) => ({ ...record }));
 
 export function resetStore(): void {
   store = FIXTURE_CUSTOMERS.map((record) => ({ ...record }));
@@ -451,7 +487,16 @@ function trimmedOrNull(value: unknown): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
-function replace(customerId: string, next: Customer): void {
+/**
+ * ⚠ `StoredCustomer`, NOT `Customer`, AND THE DIFFERENCE IS NOT COSMETIC.
+ *
+ * **TypeScript ignores `readonly` in assignability between object types**, so
+ * this compiled happily as `Customer` while writing that value into a mutable
+ * `StoredCustomer[]` — the one place the types had started to lie after the
+ * `0037` swap. Every caller already passes a `StoredCustomer`; the signature
+ * now says so.
+ */
+function replace(customerId: string, next: StoredCustomer): void {
   const index = store.findIndex((record) => record.customer_id === customerId);
   store[index] = next;
 }
@@ -469,7 +514,7 @@ function transition(
     // which did not happen is worse than one that is awkward to retry against.
     throw error('failed_precondition', refusal);
   }
-  const next: Customer = {
+  const next: StoredCustomer = {
     ...record,
     status: to,
     deletion_scheduled_at: null,
@@ -644,7 +689,7 @@ const ACTIONS: Record<DudoAction, (input: Record<string, unknown>) => unknown> =
     validateWritable(input, true);
 
     const timestamp = now();
-    const record: Customer = {
+    const record: StoredCustomer = {
       customer_id: `cus_${token(8)}`,
       business_id: businessId,
       display_name: String(input.display_name).trim().replace(/\s+/g, ' '),
@@ -692,7 +737,7 @@ const ACTIONS: Record<DudoAction, (input: Record<string, unknown>) => unknown> =
 
     // The three-way distinction is normative: absent means unchanged, a value
     // means set, and null means cleared.
-    const next: Customer = { ...record };
+    const next: StoredCustomer = { ...record };
     for (const field of EDITABLE_FIELDS) {
       if (!(field in input)) continue;
       const value = input[field];
@@ -745,7 +790,7 @@ const ACTIONS: Record<DudoAction, (input: Record<string, unknown>) => unknown> =
     if (record.status === 'pending_deletion') {
       throw error('failed_precondition', 'A customer under a deletion order cannot be moved.');
     }
-    const next: Customer = {
+    const next: StoredCustomer = {
       ...record,
       business_id: input.business_id as string,
       updated_at: now(),
@@ -761,7 +806,7 @@ const ACTIONS: Record<DudoAction, (input: Record<string, unknown>) => unknown> =
   // a compile error rather than a runtime surprise.
 };
 
-function assignNullable(record: Customer, field: EditableField, value: string | null): void {
+function assignNullable(record: StoredCustomer, field: EditableField, value: string | null): void {
   switch (field) {
     case 'email':
     case 'phone':

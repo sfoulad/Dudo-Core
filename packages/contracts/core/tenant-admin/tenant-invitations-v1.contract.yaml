@@ -1,0 +1,758 @@
+---
+# Organization Invitations — tenant-admin contract, version 1
+#
+# Shapes: tenant-invitations-v1.schema.json. Shared class obligations: README.md in this directory,
+# stated once rather than four times (README.md §0). Read it first.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the class · 0043 (Accepted) — §4's conjunction and
+#              §5's obligations · 0007 (Accepted) — the permission model and D16 · 0015 §D
+#              (Accepted) — why an identifier is not stored · 0024, 0006
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT.
+#
+# THIS CONTRACT REQUIRES AN `invitation` TABLE, AND THE MIGRATION THAT CREATES ONE IS THE USER'S TO
+# APPROVE, EVERY TIME (security.md §7). *** WRITTEN AS A CONDITION RATHER THAN AS A FACT, per
+# 0043 §7a. *** This line read "THE `invitation` TABLE DOES NOT EXIST" and was false within hours:
+# `0021_invitation.sql` exists, written and not applied. A dependency stated as a fact instructs the
+# next reader wrongly the moment somebody writes the file; stated as a condition it stays true on
+# both sides of that event, and it still says who must approve.
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+
+# `tenant-admin` — docs/decisions/0044. See tenant-members-v1.contract.yaml's requestClass block for
+# the two tool vocabularies that read this value and the one that does not yet accept it.
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# THE REFUSAL THIS CONTRACT IS MOST DEFINED BY. READ BEFORE THE OPERATIONS.
+# ---------------------------------------------------------------------------
+theAcceptanceRefusal:
+  ruling: >-
+    *** INVITATION ACCEPTANCE IS NOT IN THIS CONTRACT, IS NOT IN THIS CLASS, AND CANNOT BE PUT IN
+    EITHER. *** This contract publishes the ADMINISTRATOR'S half — create, list, read, resend,
+    revoke, count. The invitee's half needs a route this class structurally cannot serve.
+  why: >-
+    docs/decisions/0044 §3: the tenant-admin class resolves the tenant FROM THE AUTHENTICATED
+    CONTEXT. AN INVITEE HAS NO MEMBERSHIP, SO NOTHING RESOLVES FOR THEM — the same property that
+    makes the class unreachable by a platform operator (0044 §3a) makes it unreachable by the
+    person the invitation is for. It is not a gap in this contract; it is the class working exactly
+    as specified, refusing a caller who is not yet a member.
+  andItIsNotTheACTIONCLASSEITHER: >-
+    An Action requires a tenant too, and it reaches no control-plane port — `organization_membership`
+    is where acceptance writes. So acceptance is in NEITHER of the two tenant-facing classes.
+  whereItProbablyBELONGS_ASARECOMMENDATIONANDNOTARULING: >-
+    The PRE-AUTHENTICATION class (0014 §B) or the session class (0021), because an invitee arriving
+    from an email link may have no Dudo account at all and will need one created — which is
+    onboarding-shaped rather than administration-shaped, and touches the credential path.
+    *** THAT IS A DECISION, NOT A ROUTING CHOICE, AND architecture-agent DOES NOT MAKE IT. *** 0014
+    §B is explicit that a route enters the PreAuthEntryPoint registry "BY A DECISION, NEVER BY
+    DECLARING ITSELF", and 0021 says widening the session class "is a decision, not a refactor".
+    Both doors are closed to a contract that wants to walk through one.
+  whatFOLLOWS_STATEDSOTHEABSENCEISNOTREADASANOMISSION: >-
+    UNTIL THAT DECISION IS RECORDED, AN INVITATION CANNOT BE ACCEPTED AND THIS WHOLE CONTRACT
+    PRODUCES NOTHING BUT PENDING ROWS. An administrator can invite, list, resend and revoke, and
+    nobody can join. That is the honest statement of what building this delivers, and it must not
+    be reported as "invitations work".
+  theCONTRACTOWED: >-
+    A separate contract for the invitee's half, carrying: the acceptance token's shape and lifetime,
+    whether acceptance creates a principal or attaches to an existing one, the credential
+    enrolment path for a brand-new person, and what an already-signed-in principal sees when they
+    follow a link addressed to a different identifier. NONE OF THOSE IS DESIGNED HERE, and each is
+    a question this contract would answer wrongly by guessing.
+
+theTokenIsNotOnThisSurface:
+  ruling: >-
+    NO OPERATION IN THIS CONTRACT RETURNS AN ACCEPTANCE TOKEN, AND `invitation_id` IS NOT ONE.
+    An administrator can create, resend and revoke an invitation and can never read the credential
+    that accepts it.
+  why: >-
+    The token is a BEARER CREDENTIAL delivered to one inbox. `invitation_id` is an administrative
+    handle that appears in listings, in URLs, and in the browser history of everyone who
+    administers the Organization. IF THEY WERE THE SAME VALUE, ANY ADMINISTRATOR WHO CAN LIST
+    INVITATIONS COULD ACCEPT ANY OF THEM AS THE INVITEE — and a screenshot of the invitations screen
+    would be a page of live credentials.
+  andRESENDDOESNOTDISCLOSEITEITHER: >-
+    Resend re-delivers to the ADDRESS ON THE RECORD. It does not return the token, does not accept a
+    different address, and does not let the caller choose a destination — a resend that took an
+    address would be an invitation create wearing a cheaper permission, and it would let anyone
+    holding resend redirect a pending invitation to themselves.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2. Every invitation belongs to exactly one Organization."
+  model: "docs/decisions/0006 — one shared D1 database behind mandatory resolver indirection. A query that loses its tenant predicate returns another Organization's invitation, which is another company's hiring."
+  rules:
+    - "Tenant identity is derived from the authenticated server-side context on every call, never from the request."
+    - >-
+      NO organization_id IN ANY SHAPE, IN ANY POSITION. 0044 §3b.2 refuses such a route at
+      REGISTRATION.
+    - >-
+      THE `invitation` TABLE MUST BE TENANT-KEYED AND ITS UNIQUENESS CONSTRAINT MUST BE COMPOSITE.
+      "One pending invitation per address" is a per-ORGANIZATION rule, and a unique index on the
+      address alone would make an invitation in one Organization refuse an invitation in another —
+      a cross-tenant collision that presents as a bug report about a competitor's customer.
+      Stated here because it is the specific mistake this contract's own conflict rule invites.
+    - >-
+      A LISTING'S CURSOR IS TENANT-BOUND AND IS A POSITION, NEVER A SCOPE
+      (urn:dudo:schema:pagination:1#/$defs/cursor).
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate the principal. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context. No membership, no tenant, no route."
+    - >-
+      3. Authorize the declared permission — ALL CONJUNCTS where more than one is declared — without
+      reference to any record. Failure -> forbidden.
+    - "4. Validate the input schema. Unknown fields rejected. Failure -> invalid_argument."
+    - "5. Resolve the invitation WITHIN the authenticated Organization. Absent -> not_found."
+    - "6. Check status is `pending`. Anything else -> failed_precondition."
+    - "7. Write the audit record into this Organization's own audit_event, then mutate."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found — on every operation taking an invitation_id."
+    ruling: >-
+      An invitation_id not belonging to the authenticated Organization answers not_found,
+      identically whether it belongs to another Organization or to nothing.
+    andTHEADDRESSSIDEHASITSOWNORACLE_ANSWEREDSEPARATELY: >-
+      *** THE IDENTIFIER RULING IS ABOUT invitation_id. THE MORE INTERESTING DISCLOSURE IS ON
+      create, AND IT IS NOT CLOSED BY THAT RULING. *** Refusing `conflict` when an address is
+      already a member tells the caller that a given email address belongs to a member of THIS
+      Organization — which is correct and harmless, because the caller may list the members.
+      IT MUST NOT TELL THEM ANYTHING ABOUT ANY OTHER ORGANIZATION. An address that is a member
+      somewhere else, or a Dudo principal with no membership here, is INVITABLE and the request
+      SUCCEEDS. So `conflict` is scoped to this Organization's own membership and its own pending
+      invitations, and a cross-tenant existence probe over email addresses is refused by the
+      response being identical to inviting a stranger.
+      THAT IS THE PROPERTY MOST LIKELY TO BE BROKEN BY A HELPFUL ERROR MESSAGE — "this person
+      already has a Dudo account" reads as a courtesy and is a platform-wide address oracle,
+      reachable by anyone who may invite.
+
+  theRESENDANDREVOKERULING_0043_6c:
+    theGapAsRecorded: >-
+      docs/decisions/0043 §6c lists "invitations — resend, revoke, expire" with the gap "no revoke,
+      no resend", derived by comparing the milestone brief against the 79-id enumeration, and
+      assigns architecture-agent either a proposal or an explicit ruling that an existing permission
+      expresses it.
+    ruling: >-
+      *** NO NEW PERMISSION. RESEND AND REVOKE ARE core.user.invite, AND THE CATALOGUE ALREADY SAYS
+      SO IN THE ENTRY ITSELF. *** Its description reads: "Invite a person into the tenant — CREATE
+      an invitation, and resend or revoke one. RESEND AND REVOKE ARE FOLDED IN DELIBERATELY… both
+      act on an invitation this holder could have created, neither reaches a person the holder could
+      not have invited, and revoke is reversible by inviting again."
+    andWHYTHEGAPWASRECORDEDANYWAY_WHICHISWORTHMORETHANTHERULING: >-
+      *** THE §6c DERIVATION WAS OVER PERMISSION **IDS**, AND A CAPABILITY FOLDED INTO AN EXISTING
+      ENTRY'S **DESCRIPTION** IS INVISIBLE TO AN ID-LEVEL ENUMERATION. *** The enumeration was
+      correct — there is no `core.invitation.revoke` id — and the conclusion "no revoke" was wrong,
+      because the capability is not missing, it is inside another entry's prose.
+      That is workflow.md §11a's population defect in a new place: the population was ids, the
+      question was capabilities, and the two are not the same set. A CATALOGUE GAP ANALYSIS MUST
+      READ THE DESCRIPTIONS, NOT ONLY THE IDS — and the only reason this was caught is that the
+      ruling required opening the entry to cite it.
+    whatTHISCONTRACTADDSTOTHATRULING: >-
+      ONE REFINEMENT THE CATALOGUE ENTRY DOES NOT STATE, AND IT MATTERS AT SCOPE. core.user.invite
+      is declared scopes [organization, business, branch]. The folded-in argument is "both act on an
+      invitation this holder COULD HAVE created" — which is true at one scope and false across
+      scopes: a branch-scope holder resending an organization-scope invitation is acting on
+      something they could not have created.
+      SO BOTH OPERATIONS DECLARE scope `organization` IN THIS CONTRACT, and this contract's
+      invitations are organization-scoped. A business- or branch-scoped invitation surface is a
+      different operation whose row set is that Business's own invitations, and it must re-run this
+      argument rather than inherit it.
+    theEXPIRERULING: >-
+      *** THERE IS NO EXPIRE OPERATION AND NO PERMISSION GATES ONE. *** The brief names "expire"
+      alongside resend and revoke, and it is two different things wearing one word.
+      AUTOMATIC EXPIRY is a property of the record: `expires_at` is always present, never null, and
+      an invitation past it is `expired` and unacceptable. Nothing needs to be granted for time to
+      pass.
+      FORCED EARLY EXPIRY IS REVOKE. An administrator ending a pending invitation immediately is
+      exactly revoke, and adding a second route for it would be two words for one act — the
+      reasoning core.template.retire used in refusing to be called `archive`, and the reason
+      `expired` and `revoked` are different STATUS values rather than different OPERATIONS: they
+      differ in who ended it, which is worth recording, not in what the administrator did.
+
+  # -------------------------------------------------------------------------
+  # THE CONJUNCTION — 0043 §4, and the first live consumer of 0044 §3d.
+  # -------------------------------------------------------------------------
+  thePendingCountConjunction:
+    declaredAsFields: "permission: [core.user.invite, core.invitation.list] with permissionMode: conjunction."
+    theFinding: >-
+      docs/decisions/0043 §4 ran security.md §2a over every aggregate this milestone introduces.
+      Four passed. THE PENDING-INVITATION COUNT FAILED: its natural consumer holds core.user.invite,
+      which is a CREATE permission and grants no enumeration whatever, and core.user.list enumerates
+      MEMBERS — a different population. So the count reaches PAST its consumer's enumeration right,
+      which is §2a's definition of a new disclosure.
+    whatTheCountDiscloses: "How many people have been asked to join this Organization and have not answered. Polled over time it is a hiring-rate signal about the tenant, and it is exactly the longitudinal shape core.template-adoption.read records as unreachable by any rate limit."
+    whyACONJUNCTIONRATHERTHANANEWPERMISSION: >-
+      0044 §3d's instrument, applied: WOULD A GRANTOR EVER WANT THIS COUNT WITHOUT THE ABILITY TO
+      LIST INVITATIONS? No — a holder of core.invitation.list can already enumerate the pending set
+      and count it themselves, so the count discloses nothing new to them, and to anyone else it
+      discloses something they may not have. A third permission would be a synonym for the pair.
+    whyNOTMERELYANOTEONTHEROLES: >-
+      *** BECAUSE UNDER docs/decisions/0007 D16 THERE IS NOTHING STABLE TO OBSERVE. *** security.md
+      §2a-0: constraint 1 permits ANY SUBSET, so a tenant admin holding both may mint a role holding
+      only core.user.invite. Every answer of the form "safe, because every role holding A also holds
+      B" is an observation about today's roles THAT THE CUSTOMER CAN FALSIFY without touching code.
+      The conjunction is decided in Core on every call and no custom role can decompose it.
+    andNEVERADISJUNCTION: >-
+      `permissionMode: disjunction` is not a value, is not reserved, and must not be added. A ∧ B is
+      strictly more restrictive than either conjunct and cannot widen reach; A ∨ B IS A WIDENING
+      WEARING THE SAME SYNTAX, and it arrives as convenience the first time a route is awkward to
+      grant. 0044 §3d requires it refused at the type level rather than in a comment.
+    theREACHABILITYASSERTIONGOESONEARITYUP: >-
+      0044 §3d: "a route whose conjunction no role can satisfy is refused to every caller alive, and
+      a conjunction makes that defect easier to create by accident." THE TENANT-ADMIN REGISTRY'S
+      reachability assertion must therefore check that some role satisfies EVERY CONJUNCT
+      SIMULTANEOUSLY, not that each conjunct is individually reachable. Those are different
+      properties and the second is trivially satisfied by two roles that no principal holds together.
+      *** IT IS ALSO UNSATISFIABLE TODAY AND THAT IS NOT A DEFECT IN THIS CONTRACT. ***
+      core.invitation.list is `status: proposed` and held by NO role, so no role satisfies the
+      conjunction and this operation is refused to every caller alive until the user grants it.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.user.invite: >-
+        sensitive, scopes [organization, business, branch], phase 1. Gates create, resend and
+        revoke — folded in by the catalogue entry itself, cited above rather than re-argued.
+      core.invitation.list: >-
+        sensitive, scopes [organization], phase 2, registered 2026-09-13 and HELD BY NO ROLE. Gates
+        the listing and the single read, and is the load-bearing conjunct of the count.
+        ITS SEPARATION FROM core.user.* IS THE POINT OF ITS EXISTENCE and the catalogue argues it:
+        permissions are granted BY FAMILY, so a role that may list staff must not acquire the
+        pending-invitee list by looking like a fourth member of core.user.*.
+    proposedByThisContract: "NONE. This contract requests no new permission and no catalogue edit."
+    permissionsDeliberatelyNotDeclared:
+      - "core.invitation.revoke and core.invitation.resend — ruled above: the capability is core.user.invite's, by the catalogue's own text."
+      - "core.invitation.expire — ruled above: forced early expiry IS revoke."
+      - "core.invitation.export — no export operation exists. Declaring the permission before the operation is how one arrives without a decision (§3.2)."
+
+  scopeRuling:
+    everyOperation: organization
+    reasoning: >-
+      Invitations here are to the ORGANIZATION — the invitee becomes a member of it, not of a
+      Business. core.user.invite is declared at three scopes and this contract evaluates it at the
+      widest, which LOCKS OUT business- and branch-scope inviters deliberately.
+      THAT IS A REAL PRODUCT COST AND IT IS NOT HIDDEN: a business-admin cannot invite anyone through
+      this contract. The alternative — evaluating at `business` — would let a business-scope
+      principal create an ORGANIZATION membership, which is a scope escalation performed by an
+      invitation. A business-scoped invitation surface is TI-2 and is a different operation.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.invitations.list
+    title: "List invitations"
+    method: GET
+    path: "/organization/invitations"
+    request: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/listInvitationsInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/listInvitationsOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.invitation.list
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 5
+    freeTierImpact:
+      pageCap: 100
+      boundingIndex: "invitation, keyed (organization_id, created_at DESC, invitation_id). THIS NAMES THE INDEX THE LISTING REQUIRES; whether `0021_invitation.sql` declares it must be read from that file rather than from here (0043 §7a — a condition, not a fact). An index this operation needs and the migration lacks is a full scan of every invitation on the platform, filtered."
+      whyABOUNDISREQUIREDHERE: "0044 §3c names invitations as one of the three shapes where a page cap is easy to forget, 'because none of them feels like a list'. It is a list."
+    theONEAUDITEDREADINTHISDIRECTORY: >-
+      *** audit: required ON A READ, WHICH IS AN EXCEPTION TO THIS CLASS'S OWN RULE AND NEEDS THE
+      ARGUMENT RATHER THAN THE FLAG. *** 0044 §3c: reads are NOT universally audited here, because
+      the actor is a member reading their own data and a write per page view costs the tenant's own
+      allowance for no detection value — with "sensitive reads audited individually, per route".
+      THIS IS ONE OF THOSE. It enumerates PLAINTEXT EMAIL ADDRESSES OF PEOPLE WHO ARE NOT MEMBERS
+      and have not agreed to anything. It is the only route in this directory that discloses
+      personal data belonging to a non-member, its permission is `sensitive` for exactly that reason,
+      and a bulk read of it is the shape of an address harvest.
+      THE COST IS STATED RATHER THAN WAVED THROUGH: five row-writes of the tenant's own budget per
+      page read. An administrator paging through invitations pays for the trail. That is the trade
+      and it is the right one HERE and would be the wrong one on the members list, which is why the
+      two differ.
+    writes: "AUDIT_EVENT_ROW_WRITES (5, platform/core/storage/write-cost.ts), against the tenant's own budget. Nothing else is written."
+    notes: >-
+      A READ THAT WRITES CAN RETURN quota_exceeded, AND THIS ONE IS NOT DECLARED WITH IT — WHICH IS A
+      QUESTION RATHER THAN AN OVERSIGHT, RECORDED AS TI-3. 0014 §A.10 says reads remain available at
+      a write ceiling; an audited read is a read that consumes write capacity, so the two rules meet
+      here and the corpus has no precedent that settles it. The platform audit feed writes on read
+      too and is the nearest case. LEFT UNDECLARED DELIBERATELY: adding an error code later is
+      additive, and removing one is breaking.
+
+  - id: tenant.invitations.get
+    title: "Read one invitation"
+    method: GET
+    path: "/organization/invitations/{invitation_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/invitationActionInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/invitationActionOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: core.invitation.list
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 5
+    writes: "AUDIT_EVENT_ROW_WRITES (5, platform/core/storage/write-cost.ts) into the tenant's own audit_event."
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: "invitation PRIMARY KEY — a point lookup. A page cap is not the instrument for a single object, and saying which one applies is what stops `null` reading as an absent bound (0044 §3c)."
+    theAUDITRULING: >-
+      *** `audit: false` UNTIL 2026-09-13. RULED `required`, AND THE ARGUMENT AGAINST THE EXEMPTION
+      WAS ALREADY IN THIS FILE — I HAD WRITTEN IT MYSELF, AS THE HOLE THE EXEMPTION NAMED. ***
+      THE OLD ARGUMENT: the listing is audited because bulk disclosure is the harvest shape; a single
+      read discloses one address the caller must already know the invitation_id of; auditing charges
+      five row-writes per detail panel.
+      THE HOLE IT NAMED, VERBATIM: *"an administrator who lists once and then reads each row
+      individually pays one audit record for the enumeration and none for the reads."*
+      *** THAT IS NOT A RESIDUAL. IT IS A COMPLETE BYPASS OF THE CONTROL THE LISTING'S AUDIT EXISTS
+      TO BE. *** One record buys an unlimited, unrecorded, per-record walk of every pending
+      non-member's plaintext address — **the exact harvest the listing's audit defends against,
+      performed one row at a time.** I recorded it as a partial control and rounded the partiality
+      down; it is the whole of it.
+      *** AND IT DID NOT REST ON `0044` §3c's CLAUSE, WHICH IS WHY IT NEEDED RE-ARGUING RATHER THAN
+      LAPSING WITH IT. *** It turned on bulk-versus-single disclosure. **The amendment did not refute
+      this argument — re-reading my own footnote did**, which is the useful half: the exemption
+      carried its own refutation and I filed it as a caveat.
+      THE RETENTION RULING SHARPENS IT: addresses are cleared when an invitation leaves `pending`, so
+      **the pending set IS the live personal data of people who have agreed to nothing**, and a
+      single read is the only way to see an address the system is otherwise on a clock to destroy.
+      COST, AND IT IS THE SAME INVERSION THE SESSION LISTING RECORDS: the charge is the meter —
+      `PER_PRINCIPAL_DAILY_ROW_WRITES / AUDIT_EVENT_ROW_WRITES` reads per administrator per day,
+      **derivation stated rather than the number**, and that bound is what the old argument was
+      implicitly relying on not existing.
+    notes: "It uses invitationActionInput, whose sole field is invitation_id. The shape is shared with resend and revoke deliberately: three operations taking exactly one identifier should not have three identical shapes that can drift."
+
+  - id: tenant.invitations.create
+    title: "Invite someone to the Organization"
+    method: POST
+    path: "/organization/invitations"
+    request: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/createInvitationInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/createInvitationOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, conflict, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.user.invite
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "The invitation row (2, on the same order as ORGANIZATION_MEMBERSHIP_ROW_WRITES: one row plus one index) plus AUDIT_EVENT_ROW_WRITES (5). *** THE FIRST TERM IS AN ESTIMATE AND MUST BE RE-DERIVED FROM `0021_invitation.sql`'s COLUMNS AND INDEXES. *** It was written when this contract believed no such migration existed; one does. An estimate that has acquired a source and not been re-derived is worse than one that never had a source, because it now looks checked."
+    theGRANTCEILING: >-
+      *** THE INVITER MAY NOT GRANT WHAT THE INVITER DOES NOT HOLD, AND THIS IS THE MOST DANGEROUS
+      LINE IN THIS CONTRACT. *** An invitation names a seed role and custom roles. Without a ceiling,
+      invitation is a privilege-escalation route that looks like onboarding: invite an account with
+      a role you may not hold, then sign in as it.
+      THE RULE IS docs/decisions/0007 D16 CONSTRAINT 1, APPLIED TO ASSIGNMENT RATHER THAN CREATION —
+      "a custom role may contain only permissions the creating principal itself holds… CREATING A
+      ROLE IS A GRANT." Inviting into a role is a grant by the same argument, and D6's scopes
+      intersection applies to it unchanged.
+      REFUSAL IS forbidden, NOT invalid_argument. The request is well-formed; the caller lacks the
+      authority. And the refusal must not say WHICH permission was missing, because that is an
+      enumeration of the caller's own ceiling delivered one probe at a time.
+    notes: >-
+      201, because a resource is created. `owner` is refused with invalid_argument — ownership is
+      transferred, never invited. An address that is already an active OR SUSPENDED member is
+      refused with conflict; the suspended case matters most, because re-inviting a suspended person
+      routes around core.user.reactivate.
+      *** NO EMAIL IS SENT BY THIS CONTRACT AND NO EMAIL CAPABILITY IS SELECTED. *** Dudo has no
+      approved outbound-mail provider and `.claude/rules/architecture.md` §6 forbids naming one.
+      Apps request CAPABILITIES, not vendors. So this operation writes a row and RETURNS; whatever
+      delivers the invitation is a Notification capability that does not exist. AN INVITATION
+      NOBODY RECEIVES IS THE STATE THIS OPERATION PRODUCES TODAY, and that is on top of
+      theAcceptanceRefusal above — two independent reasons nothing can join.
+
+  - id: tenant.invitations.resend
+    title: "Resend an invitation"
+    method: POST
+    path: "/organization/invitations/{invitation_id}/resend"
+    request: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/invitationActionInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/invitationActionOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.user.invite
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "`resent_at` updated (2) plus AUDIT_EVENT_ROW_WRITES (5)."
+    notes: >-
+      REQUIRES status `pending`; every other value is failed_precondition, including one that does
+      not exist yet — the predicate keys on the single ADMISSIBLE state so an added status is
+      refused by default rather than admitted by omission (architecture.md §3a-i).
+      IT RE-DELIVERS TO THE ADDRESS ON THE RECORD AND TAKES NO ADDRESS. A resend that accepted one
+      would let anybody holding resend redirect a pending invitation to their own inbox.
+      *** IT DOES NOT EXTEND expires_at, AND THAT IS A RULING. *** Extending on resend makes the
+      expiry unbounded by repetition: resend weekly and the invitation never dies, which defeats the
+      reason expiry is not caller-controlled. An invitation that has expired is re-CREATED, which
+      costs a conflict check and an audit record and is visible as a new invitation.
+      *** AND IT IS UNBOUNDED IN FREQUENCY, WHICH IS A DEFECT THIS CONTRACT CANNOT CLOSE: *** resend
+      is an outbound message to an address the recipient did not choose to hear from, so an
+      unbounded resend is a mail-bomb primitive gated on a permission a business-admin may hold.
+      Rate limiting is Core's and is REQUIRED here rather than recommended. TI-5.
+
+  - id: tenant.invitations.revoke
+    title: "Revoke an invitation"
+    method: POST
+    path: "/organization/invitations/{invitation_id}/revoke"
+    request: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/invitationActionInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/invitationActionOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.user.invite
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "`status` set to `revoked` (2) plus AUDIT_EVENT_ROW_WRITES (5)."
+    notes: >-
+      REQUIRES status `pending`. Revoking an accepted invitation is refused with
+      failed_precondition and is NOT a way to remove the resulting member — that is
+      tenant.members.remove, under a different permission, and collapsing the two would make invite
+      a membership-removal permission by the back door.
+      THE ROW IS NOT DELETED. `revoked` is a terminal status on a surviving row, so the record of
+      who was invited and what happened to the invitation outlives the invitation — which is what
+      makes the listing a history as well as a queue.
+      *** REVOCATION MUST INVALIDATE THE ACCEPTANCE TOKEN, AND NOTHING IN THIS CONTRACT CAN GUARANTEE
+      THAT. *** The token's storage and validation belong to the unwritten acceptance contract. If
+      acceptance validates the token WITHOUT re-reading the invitation's status, revoke is
+      cosmetic — the email still works. Stated as an obligation ON THAT CONTRACT rather than as a
+      property of this one, because a contract cannot promise behaviour it does not define. TI-1.
+
+  - id: tenant.invitations.pending-count
+    title: "How many invitations are pending"
+    method: GET
+    path: "/organization/invitations/pending-count"
+    request: "No parameters. No body, no path parameter, no query parameter."
+    response: { schemaRef: "urn:dudo:schema:tenant-invitations:1#/$defs/pendingInvitationCountOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: [core.user.invite, core.invitation.list]
+    permissionMode: conjunction
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 5
+    writes: "AUDIT_EVENT_ROW_WRITES (5) into the tenant's own audit_event."
+    theAUDITRULING: >-
+      *** `audit: false` UNTIL 2026-09-13. RULED `required` — AND THIS CONTRACT ALREADY CITED THE
+      DOCTRINE WHOSE REMEDY IS AN AUDIT TRAIL, THEN DECLINED THE AUDIT TRAIL. ***
+      `whyASCALARANDNOTHINGELSE` and `thePendingCountConjunction` both say what this count is:
+      *"Polled over time it is a hiring-rate signal about the tenant, and it is exactly the
+      longitudinal shape `core.template-adoption.read` records as unreachable by any rate limit."*
+      **`security.md` §2a's answer for that shape is one sentence: *"the permission is the control
+      and the AUDIT TRAIL IS THE DETECTION."*** This operation had the permission control — a
+      conjunction, argued at length — **and no detection at all.** An internal contradiction, in one
+      file, between a paragraph and a field.
+      *** THE ARGUMENT THAT REPLACES THE EXEMPTION IS DETECTION AND NOT BOUNDING, AND THE DISTINCTION
+      MATTERS BECAUSE THE SESSION LISTING'S IS THE OTHER WAY ROUND. *** A daily row-write ceiling
+      does NOT stop one call a day for a year — that is the whole point of the longitudinal vector.
+      **What the trail gives is that 365 count-reads are legible AS a pattern**, which §2a states in
+      terms: a dedicated count call is unambiguous about intent, so identical entries in the trail
+      are a clearer signal than bursts of paginated reads.
+      SO: the session listing is audited because the charge METERS it; this is audited because the
+      record DETECTS it. **Two routes, two reasons, and neither is `0044` §3c's clause** — which is
+      what the amended §3c requires of an exemption's replacement.
+      AND IT DOES NOT REST ON THE CLAUSE THAT WAS AMENDED: the old exemption never invoked
+      "reading their own data" either. It invoked nothing. **It was the one of the three that had no
+      argument at all**, which is why it survived longest — an unstated exemption presents as a
+      settled default rather than as a claim somebody made.
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: "invitation (organization_id, status) — a COUNT over one tenant's pending rows. It is not a collection and cannot grow a page; the index is what bounds the rows read, and it is the index the migration owes."
+      whyPageCapIsNull: "A scalar response cannot be paged. 0044 §3c requires a cap OR a named bounding index, and this is the second case — stated explicitly so `null` does not read as the omission the rule refuses."
+    theCONJUNCTION: >-
+      *** THE ONLY CONJUNCTION IN THE CORPUS, AND THE FIRST LIVE CONSUMER OF 0044 §3d. *** The caller
+      must hold BOTH, evaluated in Core on every call. Full argument:
+      authorizationModel.thePendingCountConjunction. In one line: core.user.invite grants creation
+      and NOT enumeration, so a count of pending invitations reaches past it — and under 0007 D16 a
+      tenant may mint a role holding one conjunct without the other, so nothing but an
+      authorization-time conjunction survives.
+    whyASCALARANDNOTHINGELSE: >-
+      security.md §2a: constrain the shape or it becomes the thing platform-operator-v1's
+      `theLine.out` refuses. A total and nothing else — NO by_status map, NO by_role map, NO
+      by_inviter breakdown — because any of those transposes into a mapping, and a count of pending
+      invitations grouped by inviter is a report on which administrator is hiring.
+    itIsUNREACHABLETODAY: >-
+      core.invitation.list is `status: proposed` and held by no role, so NO ROLE SATISFIES THIS
+      CONJUNCTION and this operation is forbidden to every caller alive. That is the correct
+      fail-closed state and it is exactly the condition
+      platform-routes.ts::assertEveryRoutePermissionIsReachable was written to catch at BUILD time
+      rather than at request time — the tenant-admin registry owes the same assertion, evaluated
+      per conjunct AND over the conjunction as a whole.
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+
+  thisContractRequiresAnInvitationTable: >-
+    *** STATED AS A CONDITION, NOT AS A FACT — 0043 §7a, and this entry is the worked example that
+    produced that rule. *** It read "the `invitation` table is a migration and therefore the user's…
+    an ESTIMATE against a table NOBODY HAS WRITTEN". `0021_invitation.sql` was written the same day.
+    THE CONDITION, WHICH STAYS TRUE ON BOTH SIDES OF THAT EVENT: every operation here requires an
+    `invitation` table; a migration creating or altering one is the USER'S TO APPROVE, every time
+    (security.md §7); and NOTHING MAY REPORT THE CAPABILITY AS AVAILABLE UNTIL THE MIGRATION IS
+    APPLIED AND A ROUTE IS REGISTERED. None of that is falsified by the file existing.
+    *** AND `0021` DIVERGES FROM THIS CONTRACT IN TWO PLACES, RULED BY THE TEAM LEAD IN 0043 §7b: ***
+    Core carries `closed_at` / `closed_by_principal_id` where this contract carried `resent_at` —
+    CORE WINS, because dropping who closed an invitation loses an accountability fact on a
+    membership-changing act, and resend and close are different events that must both be carried.
+    Core's invitation carries a seed `role` only — THIS CONTRACT WINS, because an invitation that
+    cannot carry a custom role makes 0043 §5.6's visibility promise hollow at the one moment a grant
+    is actually chosen. That second one is a migration amendment and is free only while `0021` is
+    unapplied.
+
+  theRECIPIENTCOLUMN:
+    ruling: >-
+      *** A PLAINTEXT ADDRESS, NULLABLE, CLEARED WHEN THE INVITATION LEAVES `pending`. *** Ruled by
+      security-agent 2026-09-13, relayed by the Team Lead.
+      *** ⚠ AND THE CLEARING IS EXACT FOR TWO OF THE THREE TERMINAL STATES AND BEST-EFFORT FOR THE
+      THIRD. THIS RULING WAS STATED FLATLY UNTIL 2026-09-13 AND THE FLAT FORM CONCEALED WHICH. ***
+      REVOKE and ACCEPT both WRITE the row, so `CHECK (status = 'pending' OR identifier IS NULL)`
+      makes clearing UNSKIPPABLE — **not a rule an implementer must remember, a constraint the write
+      cannot pass without satisfying.** That is worth claiming loudly and it is the larger part of
+      the mitigation.
+      EXPIRY IS COMPUTED. **It writes nothing, so the CHECK has nothing to fire on.** A lapsed
+      invitation still reads `status = 'pending'` in the row and its address is retained until an
+      amortised sweep materialises `expired` — **a sweep carried on a NEXT WRITE that may never
+      come.**
+      THE RESIDUAL, AS A PROPERTY RATHER THAN A DEFECT: **an Organization that stops inviting retains
+      every lapsed invitee's address indefinitely, bounded by its own historical invitation count.**
+      That is the accepted state today. **The Team Lead has reopened it and owns the reopening; this
+      contract does not carry a TODO for it and deliberately encodes no remedy** — a scheduler, a
+      clear-on-read, or accepting it are three different owners' calls, and a contract naming one
+      would turn a reopened question into an instruction.
+      *** WHY THE FLAT SENTENCE WAS THE WRONG WAY ROUND RATHER THAN MERELY IMPRECISE: the population
+      it did not cover is the LARGEST one. *** Most invitations are never acted on at all — they
+      lapse. **So the mitigation was exact for the cases somebody handles and best-effort for the
+      cases nobody handles**, and the unconditional wording is exactly what a privacy reviewer would
+      quote. `architecture.md` §3b: a claim that reads as settled, precise, and true of the wrong
+      subset.
+      AND IT WAS FOUND AS THE JOIN BETWEEN TWO RULINGS RATHER THAN AS A DEFECT IN EITHER — the
+      retention rule is correct and the computed-`expired` design is correct, **and nothing that
+      reads one of them can see the gap.** `0021_invitation.sql` deliberately left
+      the recipient column unspecified and said the shape was a contract decision with a security
+      dimension; this is that decision, and it BLOCKS `tenant.invitations.list` and `.get` until it
+      lands, because both declare `identifier` and neither has a source.
+    theCONSTRAINT: >-
+      `CHECK (status = 'pending' OR identifier IS NULL)` — **keyed on the EXCEPTION, so every status
+      including one nobody has invented must have the address cleared** (`architecture.md` §3a-i: a
+      guard that must be remembered when the enum grows is a discipline; one whose default catches
+      the new value is a mechanism).
+    theTHREEARGUMENTS_RELAYEDRATHERTHANSUMMARISED:
+      - >-
+        **EXPANDABILITY DECIDES IT ALONE.** Nullable keeps BOTH retention policies available;
+        `NOT NULL` permanently chooses *keep* and needs a migration to undo. That is `0030`'s
+        configuration-versus-schema line, and it settles the shape without needing the privacy
+        argument to win.
+      - >-
+        **CLEARING IS EFFECTIVE RATHER THAN THEATRE, AND THIS IS THE CHECK THAT WOULD HAVE MADE THE
+        RULING POINTLESS IF IT HAD GONE THE OTHER WAY.** `TenantAdminActionTarget` is a closed union
+        of IDENTIFIERS ONLY — no plaintext address anywhere in the audit trail — **so clearing
+        removes the address from the system rather than relocating it to a place nobody audits.**
+      - >-
+        **THE COST, STATED: after clearing, nothing can say who was invited on a revoked or expired
+        invitation.** That is total and it is the price of the first two.
+    whyNOTANidentifier_hash_ANDTHISISTHEPRODUCTCONSEQUENCE: >-
+      `0021` named two candidates — a raw address and an `identifier_hash` — and flagged that **Dudo
+      has no outbound-mail capability**, so a hash would make invitations copy-and-paste codes an
+      administrator delivers out of band.
+      *** THE HASH IS REFUSED, AND THE DECIDING ARGUMENT IS THAT IT DEFEATS THE PERMISSION THAT
+      EXISTS TO READ IT. *** `core.invitation.list`'s catalogue entry says what the population IS:
+      *"PEOPLE WHO HAVE BEEN ASKED AND HAVE NOT ANSWERED — a different set, and one whose email
+      addresses belong to NON-MEMBERS."* **A hash makes the listing a page of opaque digests: the
+      administrator cannot see who they invited, cannot spot a typo, and cannot answer "did we invite
+      the right person".** The permission was argued into existence around a disclosure the hash form
+      removes.
+      AND IT WOULD NOT EVEN BUY THE PRIVACY IT LOOKS LIKE: an administrator who invited somebody
+      already knows the address, so the hash protects the recipient from nobody who was not already
+      told — while the clearing rule protects them from everybody, later, permanently.
+      *** THE PRODUCT CONSEQUENCE OF THE CHOICE MADE, RECORDED SO IT IS NOT DISCOVERED: *** with no
+      mailer, a plaintext address is stored and NOTHING SENDS TO IT. The invitation is still
+      delivered out of band today. **So the near-term behaviour is identical to the hash form and the
+      difference is entirely about what the administrator can SEE** — which is the whole point of the
+      listing, and the reason this is not a close call.
+    whatSTILLNEEDSTHEUSER: >-
+      NOTHING IN THIS SHAPE. The retention policy is security-agent's and is ruled; the column is a
+      MIGRATION and is therefore the user's, every time (security.md §7) — **but that is an approval
+      of the migration, not a reopening of the shape.**
+
+  theRetentionQuestion:
+    disposition: >-
+      *** CLOSED 2026-09-13 BY security-agent. See theRECIPIENTCOLUMN above. *** The finding below is
+      kept because it is what the question looked like before it was answered, and because its
+      framing — that the exception `0015` §D was written to avoid exists here by necessity, at the
+      least favourable population — is what made the answer a policy rather than a preference.
+      *** ONE PART OF THE RULING IS INCOMPLETE AND IT IS NOT MINE TO CLOSE: `expired` IS COMPUTED,
+      SO THERE IS NO WRITE EVENT TO CLEAR ON. *** An invitation past its `expires_at` still reads
+      `status = 'pending'` in the row, the CHECK never fires, and the address is retained — for the
+      LARGEST population, since most invitations expire rather than being accepted or revoked.
+      core-agent's amortised lapse sweep materialises `expired` on the next create in that
+      Organization, which gives the CHECK a write to fire on. **The residual is an Organization that
+      stops inviting altogether: its last batch of addresses is retained indefinitely.** The Team
+      Lead has accepted and recorded that; it is named here so this contract does not read as
+      claiming a guarantee the mechanism does not deliver.
+    finding: >-
+      *** THIS CONTRACT REQUIRES DUDO TO STORE A PLAINTEXT EMAIL ADDRESS, WHICH IS THE ONE THING
+      docs/decisions/0015 §D ARRANGED FOR DUDO NEVER TO HOLD. ***
+      control-plane/0006_principal_credential.sql: `identifier_hash` is an HMAC and "the plaintext
+      identifier is never stored and never logged". AN INVITATION CANNOT OBEY THAT AND STILL BE
+      DELIVERABLE — you cannot send an email to a hash.
+    whyItIsNotSimplyAcceptable: >-
+      The addresses belong to NON-MEMBERS who have not agreed to anything, they accumulate one row
+      per invitation forever if nothing clears them, and the table is enumerable by a permission a
+      business-admin could plausibly hold. So the exception 0015 §D was written to avoid exists here
+      by necessity, at the least favourable population.
+    theQUESTION: >-
+      IS THE ADDRESS CLEARED ON ACCEPTANCE, ON REVOCATION AND ON EXPIRY, OR KEPT? Keeping it makes
+      the listing a permanent history and makes the harvest surface grow without bound. Clearing it
+      makes an accepted or revoked invitation unattributable to a person, which is a real loss to an
+      administrator asking "who did we invite last year".
+    disposition: >-
+      *** OPEN, AND OWED TO security-agent RATHER THAN DECIDED HERE. *** It is a data-retention and
+      personal-data decision about non-members, it interacts with the deletion-request controls this
+      milestone also builds, and architecture-agent does not rule on it. Recorded so the absence
+      reads as an open question rather than as a settled acceptance — which is the distinction
+      architecture.md §3b exists to protect.
+
+  thereIsNoWayToSendTheEmail: >-
+    No outbound-message capability is selected and none may be named (architecture.md §6, and Apps
+    request capabilities rather than vendors). tenant.invitations.create writes a row and returns.
+    THE INVITATION IS NOT DELIVERED BY ANYTHING.
+
+  acceptanceIsUnspecified: >-
+    theAcceptanceRefusal above. Until the invitee's contract exists and its request class is
+    DECIDED, this contract produces pending rows that nobody can act on.
+
+  noRouteInThisClassIsREGISTEREDYET: >-
+    MEASURED 2026-09-13: `platform/core/tenant-admin/` holds seven modules and NO ROUTE ID LITERAL.
+    The machinery is being built and the registry is empty — different states, and "the class does
+    not exist" would be the wrong claim. See tenant-members-v1 -> dependencies for the full
+    measurement; it is not restated here, because a fact restated in four files is the duplicated
+    constraint workflow.md §12 records.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — contract level. Per-read bounds are on each operation (0044 §3c).
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    ONE NEW TABLE — `invitation` — and one new index over (organization_id, created_at,
+    invitation_id) plus one over (organization_id, status) for the count. THE TABLE IS THE USER'S TO
+    APPROVE. It grows one row per invitation ever sent and nothing in this contract deletes a row;
+    see dependencies.theRetentionQuestion, which is the same question read from the storage side.
+  writes: >-
+    FOUR OF THE SIX OPERATIONS WRITE, AND ONE OF THE WRITERS IS A READ. tenant.invitations.list
+    costs the tenant AUDIT_EVENT_ROW_WRITES per page because it discloses non-members' addresses in
+    bulk — argued at the operation rather than assumed.
+  theCEILINGTHISCLASSDOESNOTINHERIT: >-
+    0044 §3c: this class has no equivalent of the platform class's accidental read bound, so every
+    read shape declares its own. Both reads here do.
+  whatIsNOTBOUNDED: >-
+    RESEND FREQUENCY. Nothing in this contract limits how often an invitation may be resent, and a
+    resend is an outbound message to somebody who did not ask to hear from Dudo. That is a
+    mail-bomb primitive behind a permission a business-admin may hold, and rate limiting in Core is
+    REQUIRED rather than recommended. TI-5, and it is stated here rather than left to be found.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TI-1
+    question: "Does revocation invalidate an already-delivered acceptance token?"
+    recommendation: "It must, and the guarantee belongs to the unwritten acceptance contract: acceptance re-reads the invitation's status inside the same statement that writes the membership, rather than trusting a token it validated a step earlier. Stated as an obligation on that contract, because this one cannot promise behaviour it does not define."
+    status: "OPEN — revoke is cosmetic if the answer is no."
+
+  - id: TI-2
+    question: "A Business-scoped invitation surface, so a business-admin can invite into their own Business."
+    recommendation: "A different operation whose row set is that Business's invitations, re-running the resend/revoke scope argument rather than inheriting it. Widening THIS contract to business scope is refused: it would let a business-scope principal create an ORGANIZATION membership."
+    status: open
+
+  - id: TI-3
+    question: "May an AUDITED READ return quota_exceeded? tenant.invitations.list consumes write capacity to serve a read."
+    recommendation: "0014 §A.10 says reads remain available at a write ceiling; an audited read meets that rule from the other side and the corpus has no precedent that settles it. Left UNDECLARED, because adding an error code is additive and removing one is breaking. Team Lead ruling owed before acceptance."
+    status: open
+
+  - id: TI-4
+    question: "The listing is audited and the single read is not, so enumerate-then-read-each-row pays one audit record."
+    recommendation: >-
+      *** CLOSED 2026-09-13: `audit: required` on the single read. See its theAUDITRULING. ***
+      THE ORIGINAL RECOMMENDATION OFFERED TWO OPTIONS AND MIS-DESCRIBED THE FIRST. It said *"accept
+      the partial control and say so"* — **but list-once-then-read-each is not a partial control,
+      it is a complete bypass of the one the listing's audit exists to be.** One record buys an
+      unlimited unrecorded walk of every pending non-member's address.
+      **I recorded the hazard accurately and graded it wrongly**, and the grading is what let it sit
+      open: *"a genuine partial control"* reads as a residual, and a residual is a thing you file.
+      **The accurate sentence would have been *"the control has a bypass"*, which is a thing you
+      fix.**
+      THE TRANSFERABLE HALF: an exemption that names its own hole is not thereby honest about it.
+      **The naming is necessary and the GRADING is where it goes wrong** — and the grading is chosen
+      by the same person who wants the exemption.
+    status: "CLOSED."
+
+  - id: TI-5
+    question: "Resend is unbounded in frequency and is an outbound message to a non-member."
+    recommendation: "Rate limiting in Core, per invitation and per Organization. REQUIRED, not recommended. This contract cannot express it and names it so the absence is visible."
+    status: open
+
+  - id: TI-6
+    question: "Are invitation addresses cleared on acceptance, revocation and expiry?"
+    recommendation: "YES. Ruled by security-agent 2026-09-13: a plaintext address, nullable, cleared when the invitation leaves `pending`, with `CHECK (status = 'pending' OR identifier IS NULL)` keyed on the exception. See dependencies.theRECIPIENTCOLUMN for the three arguments and the refusal of the hash form."
+    status: >-
+      CLOSED as a policy. **The `expired` half is not mechanised for an Organization that stops
+      inviting** — `expired` is computed, so there is no write for the CHECK to fire on, and the
+      amortised lapse sweep only runs on the next create. Accepted and recorded by the Team Lead;
+      named here so this contract does not read as claiming more than the mechanism delivers.
+
+  - id: TI-7
+    question: >-
+      The recipient column blocks `tenant.invitations.list` and `.get`, which both declare a required
+      `identifier` with no source — and the migration is the user's.
+    recommendation: >-
+      The shape is settled and needs nothing further from architecture-agent. **What is owed is one
+      migration approval**, and it should travel with the other Milestone 2 migrations rather than as
+      its own request: the `invitation` table already exists, so this is a column on a table nobody
+      has applied yet.
+    status: "OPEN — a user approval, not a design question."

@@ -57,6 +57,9 @@ export function AuthGate({
           error={session.probeError}
           onRetry={session.retryProbe}
           retryLabel="Try again"
+          /* THE WHOLE PAGE. The gate short-circuits, so `children` never render
+             and nothing above supplies an `h1` — see ErrorBlock's header. */
+          headingLevel="h1"
           extraActions={
             <Button variant="secondary" onClick={session.showLogin}>
               Sign in instead
@@ -70,6 +73,7 @@ export function AuthGate({
   return (
     <Panel>
       <StateBlock
+        headingLevel="h1"
         title="Checking your session"
         body="One moment — Dudo is confirming you are still signed in."
       />

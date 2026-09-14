@@ -133,6 +133,26 @@ if (broken.length > 0) {
   console.error('      five URN references from a second contract on 2026-09-10, reported as six');
   console.error('      contract deficiencies where there was one cause.');
   console.error('');
+
+  /**
+   * ⚠ THE BLAST RADIUS, PRINTED RATHER THAN INFERRED. Added 2026-09-13 at `architecture-agent`'s
+   * request, after one missing comma in one contract stopped THREE other agents' gates at step one
+   * for five minutes and none of them could tell why from the output.
+   *
+   * This check runs FIRST in `npm test`, so its exit code stops everything behind it. That is
+   * correct — a corpus that does not parse cannot be meaningfully checked further — but it means
+   * an agent whose own tree is clean sees a red gate and has to work out that the cause is one
+   * file belonging to somebody else. **The count is the sentence that saves them the search.**
+   *
+   * `workflow.md` §11a's population rule, pointed at the FAILURE branch rather than the pass:
+   * "N unparseable" is a result, and "N unparseable out of M, and the other M-N are fine" is the
+   * same result with the reader's next question already answered.
+   */
+  console.error(`      BLAST RADIUS: ${files.length - broken.length} of ${files.length} files parse.`);
+  console.error(`      ${broken.length === 1 ? 'This ONE file is' : `These ${broken.length} files are`} stopping the WHOLE gate at step one, for every agent.`);
+  console.error('      If your own tree is clean and the gate is red, this is why — the check runs');
+  console.error('      first by design, and everything behind it is NOT RUN rather than failing.');
+  console.error('');
   console.error('      AND THIS CHECK EXISTS BECAUSE THE GENERATOR CANNOT COVER IT: it opens only');
   console.error('      what an admitted contract imports, so a malformed registry schema — which no');
   console.error('      contract references — is invisible to it. Fix the file; do not widen this.');

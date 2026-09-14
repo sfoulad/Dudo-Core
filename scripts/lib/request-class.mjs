@@ -31,26 +31,53 @@
  */
 
 /**
- * THE FOUR REQUEST CLASSES. `docs/decisions/0039`.
+ * THE REQUEST CLASSES. `docs/decisions/0039`, extended by `0044`.
  *
- * `evaluatesPermission` is carried because it is WHY the declaration matters: two of the four
- * classes consult no permission at all, so a wrong declaration is a false statement about who may
- * call the route rather than a labelling slip.
+ * `evaluatesPermission` is carried because it is WHY the declaration matters: two of these classes
+ * consult no permission at all, so a wrong declaration is a false statement about who may call the
+ * route rather than a labelling slip.
  *
  * **These are NOT derived from what contracts happen to declare, and that is deliberate.**
  * `workflow.md` §11a: *derive a name that DESCRIBES the artifact, never one that CONSTRAINS it.*
- * The four classes come from decision records — `0014` §B, `0021`, `0025` D3, and the Action
- * pipeline — and a vocabulary derived from its own subject can never refuse anything the subject
- * does.
+ * They come from decision records — `0014` §B, `0021`, `0025` D3, the Action pipeline, and `0044`
+ * — and a vocabulary derived from its own subject can never refuse anything the subject does.
+ *
+ * ===========================================================================================
+ * THE FIFTH ENTRY WAS ADDED 2026-09-13, AND THE CHECK FAILING FIRST IS THE SYSTEM WORKING
+ * ===========================================================================================
+ *
+ * `0044` created `tenant-admin`. This list said four, so `check:request-class` **failed closed**
+ * on every contract declaring the new class — which is exactly what a constraining vocabulary is
+ * for, and it is the behaviour the paragraph above asks for.
+ *
+ * **What made it costly is WHERE it sat rather than THAT it fired.** `check:request-class` runs
+ * before `tools/run-suites.mjs` in the `test` chain, so a red here means the four suites are
+ * **NOT RUN** — unmeasured, not passing — and `npm test` reports a single failure that looks like
+ * a small labelling problem while saying nothing about the corpus behind it. `qa-agent` caught
+ * that the suites had not run; the exit code could not.
+ *
+ * **`architecture-agent` predicted it in the contract itself rather than working around it:**
+ *
+ *   > *"the fifth entry lands there. That is the check working, and it is reported rather than
+ *   >  worked around: architecture-agent cannot edit root tooling."*
+ *
+ * **That is the right shape and the reason this was a five-minute fix instead of an investigation**
+ * — `architecture.md` §2a-i: an agent that cannot perform a task says so, naming the boundary, in
+ * the artifact the next reader will open.
+ *
+ * **`tenant-admin` publishes under `operations:`**, which is now the block key for three of five
+ * classes — read against `0039`'s finding that a reader inferring class from key gets it wrong.
+ * The key is structural; the class is declared; they were never the same property.
  */
 export const CLASSES = Object.freeze({
   'pre-auth': Object.freeze({ blockKey: 'entryPoints', record: '0014 §B', evaluatesPermission: false }),
   session: Object.freeze({ blockKey: 'operations', record: '0021', evaluatesPermission: false }),
   platform: Object.freeze({ blockKey: 'operations', record: '0025 decision 3', evaluatesPermission: true }),
+  'tenant-admin': Object.freeze({ blockKey: 'operations', record: '0044', evaluatesPermission: true }),
   action: Object.freeze({ blockKey: 'actions', record: 'ARCHITECTURE.md §3', evaluatesPermission: true }),
 });
 
-/** The three top-level YAML keys that hold published route ids. `0039`: three keys, four classes. */
+/** The three top-level YAML keys that hold published route ids. `0039`: three keys, five classes. */
 export const PUBLISHING_BLOCKS = Object.freeze(['operations', 'entryPoints', 'actions']);
 
 /** The grammar every route id in this repository obeys. Used as a floor on the parser's output. */

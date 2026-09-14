@@ -1,11 +1,36 @@
 <!doctype html>
+<!--
+  `lang` AND `dir` ARE THE FIRST-VISIT DEFAULT, NOT THE ANSWER.
+
+  A first-time visitor has no stored preference, so English left-to-right is the
+  correct starting state. A RETURNING Arabic reader is corrected by the inline
+  script below, before first paint — see the comment there for why that script
+  exists at all rather than leaving it to React.
+-->
 <html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
-  <title>Customers · Dudo</title>
-  <meta name="description" content="Dudo — the customer directory for startups and small businesses.">
+  <!--
+    ⚠ THE TITLE WAS "Customers · Dudo" AND IT WAS WRONG TWICE.
+
+    It was ENGLISH in an Arabic session — a browser tab is a rendered string
+    that no source scan of `.tsx` files can reach, because it does not live in
+    one. **That is the population `index.html` was never in.**
+
+    And it named the WRONG SECTION on eleven `/settings` addresses, for the same
+    reason the header chip did: it was written when this application had one
+    section.
+
+    So the static value is now the BRAND ALONE, which is correct in both
+    languages and correct on every route — and `routes/root-layout.tsx` replaces
+    it with a translated, section-aware title once React has mounted. This is
+    what a reader sees for the few milliseconds before that, and what a reader
+    with JavaScript disabled keeps.
+  -->
+  <title>Dudo</title>
+  <meta name="description" content="Dudo — business management for startups and small businesses.">
   <!--
     The mark is the scarlet macaw from the Apple app icon, on its own opaque navy
     (#071342). The navy is part of the mark, not the page: a transparent bird would
@@ -16,6 +41,44 @@
   <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <!--
+    ===========================================================================
+    THE DIRECTION IS SET BEFORE FIRST PAINT, AND THE REASON IS VISIBLE
+    ===========================================================================
+
+    `LocaleProvider` writes `lang` and `dir` in an effect, which runs AFTER
+    React mounts. Without this script a returning Arabic reader gets a
+    left-to-right render on every single page load, which then flips — a
+    visible layout jump on the whole document, not a subtle one.
+
+    ⚠ **IT DUPLICATES THREE THINGS FROM `src/lib/i18n.tsx`** — the storage key,
+    the two locale codes, and the direction mapping. That is a duplicated
+    constraint with no citation between the copies, which `workflow.md` §12
+    records as the kind no sweep can find. **It is closed by a mechanism rather
+    than by care:** `scripts/verify-settings.mjs` asserts this file and
+    `i18n.tsx` carry the same key and the same codes, and goes red if either
+    side moves.
+
+    It is deliberately tiny and deliberately not a module: a module is fetched
+    and evaluated after the parser reaches it, which is the problem this exists
+    to avoid.
+  -->
+  <script>
+    (function () {
+      try {
+        var stored = window.localStorage.getItem('dudo.web.locale');
+        if (stored === 'ar' || stored === 'en') {
+          document.documentElement.setAttribute('lang', stored);
+          document.documentElement.setAttribute('dir', stored === 'ar' ? 'rtl' : 'ltr');
+        }
+      } catch (error) {
+        /* Storage can throw — Safari private mode, a disabled-cookies profile,
+           a quota. A page that fails to render because it could not read a
+           language preference would be trading everything for a nicety. */
+      }
+    })();
+  </script>
 </head>
 <body>
   <!--
@@ -24,10 +87,36 @@
     0016 carries the rule forward).
   -->
   <div id="root"></div>
+  <!--
+    ===========================================================================
+    BOTH LANGUAGES, BECAUSE WITHOUT JAVASCRIPT THERE IS NOTHING TO CHOOSE WITH
+    ===========================================================================
+
+    This was one English paragraph. **An Arabic reader with JavaScript disabled
+    got an English sentence and no way to change it** — and the language control
+    is React, so it is exactly as absent as the rest of the application.
+
+    Every other string in this product resolves to ONE language because a
+    reader has expressed a preference. **Here nothing can read that preference,
+    so the honest answer is to say it twice** rather than to pick.
+
+    Each paragraph carries its own `lang` and `dir`: a screen reader takes its
+    voice from `lang`, and the Arabic paragraph must be right-to-left inside a
+    document element that is still `ltr` at this point for a first-time visitor.
+  -->
   <noscript>
-    <div style="padding: 3rem 1.5rem; text-align: center; font-family: system-ui, sans-serif">
+    <!--
+      A CLASS, NOT A `style=""` ATTRIBUTE. `style-src` in `public/_headers`
+      governs inline style attributes through `style-src-attr`, so an attribute
+      here is dropped by the policy and this panel renders unstyled — **to
+      JS-disabled visitors only**, who are exactly the population that will
+      never report it. The rule is authored CSS in `src/styles/index.css`, not a
+      Tailwind utility, so no scanner configuration can purge it.
+    -->
+    <div class="noscript-panel">
       <h1>Dudo</h1>
-      <p>The customer directory needs JavaScript to run. Enable it and reload the page.</p>
+      <p lang="en" dir="ltr">Dudo needs JavaScript to run. Enable it and reload the page.</p>
+      <p lang="ar" dir="rtl">يحتاج تطبيق دودو إلى جافاسكربت للعمل. فعِّلها ثم أعد تحميل الصفحة.</p>
     </div>
   </noscript>
   <script type="module" src="/src/main.tsx"></script>

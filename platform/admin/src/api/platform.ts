@@ -273,14 +273,26 @@ export type KnownTemplateStatus = 'active' | 'retired';
  * because this console has always called it a Template and the screens read
  * better for it. **The shape is not restated** — only the name is local.
  *
- * `status` was `string` here, with a comment that has now been ANSWERED rather
- * than deleted: *"narrowing by cast would be this client asserting Core's
- * guarantee on Core's behalf."* **That was correct while the generated type was
- * a bare `'active' | 'retired'`.** `templateStatus` is declared `extensible`,
- * so the emitted type carries `(string & {})` — an explicit arm for a value
- * this client was never taught — and adopting it asserts nothing on Core's
- * behalf. `isKnownTemplateStatus` still narrows, and the neutral branch in
- * `StatusBadge` is still reachable.
+ * `status` was `string` here, with a comment that was ANSWERED rather than
+ * deleted: *"narrowing by cast would be this client asserting Core's guarantee
+ * on Core's behalf."*
+ *
+ * ⚠ **THAT ANSWER RESTED ON `templateStatus` BEING `extensible`, AND IT IS NOT
+ * ANY MORE.** This paragraph read *"the emitted type carries `(string & {})`…
+ * `isKnownTemplateStatus` still narrows, and the neutral branch in
+ * `StatusBadge` is still reachable."* A regeneration on 2026-09-13 closed the
+ * enum, so **the `(string & {})` arm is gone and the last clause is false.**
+ *
+ * `workflow.md` §12: *check whether an argument was resting on what you
+ * withdrew.* The conclusion — do not cast — still holds, and it holds for a
+ * STRONGER reason now: with the arm gone there is nowhere for an untaught value
+ * to live, so the parse must reject it. See `requireTemplateStatus`, which is
+ * where that reasoning and its cost are recorded.
+ *
+ * **The paragraph is corrected rather than deleted** because the withdrawn
+ * argument is the interesting half: the same sentence was true, then false,
+ * with nothing in this file moving and nothing going red until a type error
+ * eighty lines away.
  *
  * ⚠ **THIS SAID "the field is still set by no route in version 1, so every
  * Template is `active`."** `template-lifecycle-v1` publishes
@@ -474,6 +486,87 @@ function requireString(source: Record<string, unknown>, field: string, what: str
   const value = source[field];
   if (typeof value !== 'string') {
     throw new ShapeError(`${what} is missing the string field "${field}".`);
+  }
+  return value;
+}
+
+/**
+ * ===========================================================================
+ * THE ONLY FIELD HERE PARSED AGAINST A *CLOSED* ENUM — AND IT BECAME ONE
+ * WITHOUT THIS FILE MOVING
+ * ===========================================================================
+ *
+ * `templateStatus` was `extensible`, so the emitted `TemplateStatus` carried a
+ * `(string & {})` arm and `requireString` satisfied it. A regeneration on
+ * 2026-09-13 closed it — measured, `- 'active' | 'retired' | (string & {})`
+ * against `+ 'active' | 'retired'` — and the assignment stopped compiling.
+ *
+ * **`requireString` is no longer an honest parse of this field.** A closed enum
+ * is a promise that no third value arrives; a parser that hands `string` to a
+ * two-member union is asserting Core kept that promise rather than checking it,
+ * which is the cast this file has refused everywhere else.
+ *
+ * It is consistent with the thirteen other parsers rather than a new policy:
+ * a non-string `name` throws, a non-array `data` throws, and a value outside a
+ * declared enum is the same class of "the response was not what was promised".
+ *
+ * ===========================================================================
+ * ⚠ WHAT WAS GIVEN UP FOR IT, AND WHY THIS CONSOLE CAN AFFORD THE TRADE
+ * ===========================================================================
+ *
+ * **A third status now makes the whole Template response unparseable.** It used
+ * to render verbatim in a neutral badge with an `sr-only` note. That path is
+ * gone — `StatusBadge` in `Templates.tsx` had the branch and it was deleted in
+ * the same change, deliberately, because an unreachable defensive branch reads
+ * as coverage while providing none (`workflow.md` §11a: a branch nothing
+ * reaches is a branch nothing tests).
+ *
+ * **So the console went from DEGRADED-BUT-USABLE to BROKEN SCREEN on a value it
+ * cannot represent.** That is the cost of the decision, recorded as a cost and
+ * not as a defect to be fixed later.
+ *
+ * **THE REASON IT IS AFFORDABLE IS A PROPERTY OF THE DEPLOYMENT, NOT OF THE
+ * TYPES** — and it is the half that was nowhere in this repository until now.
+ * Measured in `wrangler.admin.jsonc`, not assumed:
+ *
+ *     "name":   "dudo-admin"
+ *     "main":   "worker.ts"                       <- the API
+ *     "assets": { "directory": "./platform/admin/dist" }   <- this SPA
+ *     "routes": [ admin.dudo.work ]
+ *
+ * **ONE Worker, ONE deploy, serving the bundle and the API together. A Core
+ * that emits a third status and a client that never learned one cannot coexist
+ * as deployed artifacts.** `wrangler.jsonc` is the same shape for `dudo-core`
+ * on `app.dudo.work`.
+ *
+ * So the exposure is not *"Core got ahead of the client"* — it is exactly one
+ * thing: **a browser tab holding an old bundle across a deploy.** Narrow, real,
+ * and it clears on reload.
+ *
+ * ⚠ **THIS ARGUMENT EXPIRES ON AN EVENT AND THE EVENT WILL NOT ANNOUNCE
+ * ITSELF.** The day this SPA is served from anywhere other than the Worker that
+ * serves its API — a CDN, a second Worker, a cached shell — the two stop
+ * shipping atomically and a hard parse failure stops being a tab-lifetime
+ * problem. **The trade would need re-deciding here, and a tolerant render path
+ * is what it would need.**
+ *
+ * It is stated as the REASON rather than as a verdict on purpose (`§12`): a
+ * sentence of the form *"if the deployment splits, this file is wrong"* becomes
+ * an instruction to change a correct file the day somebody reads it out of
+ * context. **`verify-platform.mjs` asserts the atomic-deploy property against
+ * `wrangler.admin.jsonc` and names this function**, so the expiry goes red
+ * instead of going unnoticed.
+ */
+function requireTemplateStatus(
+  source: Record<string, unknown>,
+  field: string,
+  what: string,
+): KnownTemplateStatus {
+  const value = requireString(source, field, what);
+  if (!isKnownTemplateStatus(value)) {
+    throw new ShapeError(
+      `${what} field "${field}" carried a status the contract does not declare.`,
+    );
   }
   return value;
 }
@@ -873,7 +966,28 @@ export function parseListOperators(payload: unknown): ListOperatorsOutput {
  * has already fired. **A third role is the expected outcome, not a hypothetical**
  * — so this list must be widened by hand, deliberately, when one lands.
  */
-export type KnownMembershipRole = 'owner' | 'member';
+/**
+ * ⚠ WIDENED FROM `'owner' | 'member'` ON 2026-09-13, AND IT WAS STALE THE
+ * MOMENT `0043` §3 LANDED.
+ *
+ * The seed set is now **four** — `owner · admin · business-admin · member` —
+ * matching `authorization/roles.ts` and the `CHECK` that `0018` widens. While
+ * this said two, **`admin` and `business-admin` would have rendered as *"an
+ * unrecognised role"*: recognised seed roles, announced to a screen reader as
+ * unknown.**
+ *
+ * ⚠ **THE COMPILER WAS SILENT AND ALWAYS WOULD HAVE BEEN. A LOCALLY-DECLARED
+ * UNION IS INVISIBLE TO EVERY CONTRACT CHECK BY CONSTRUCTION** — this is the
+ * client's own opinion about which values it recognises, not anything the
+ * contract hands it, so nothing in `0037`, `0041` or the generator can compare
+ * it against the schema. **It drifted for the same reason it could drift at
+ * all**, and the only thing that caught it was a re-emit breaking an unrelated
+ * assignment.
+ *
+ * **Widening it is not optional maintenance when the contract's enum moves.**
+ * Whoever changes the seed set changes this too, and nothing will ask.
+ */
+export type KnownMembershipRole = 'owner' | 'admin' | 'business-admin' | 'member';
 
 export interface EmbeddedTemplate {
   readonly template_id: string;
@@ -1202,15 +1316,34 @@ export function parseOrganizationIdentity(payload: unknown, what: string): Organ
  * ---------------------------------------------------------------------------
  *
  * It comes from this same contract and would have been the obvious thing to
- * take in the same change. **`membershipRole` carries NO `enumPolicy`** — this
- * schema declares exactly one, on `status` — so the generator emits a **bare
- * closed union `'owner' | 'member'`**, while `parseResolveMember` reads the
- * field with `requireString` and the screen renders an unrecognised role
- * neutrally.
+ * take in the same change.
  *
- * **Adopting it would make that tolerant branch dead code by the type system's
- * reckoning while the runtime can still produce the case** — `0041`'s exact
- * collision, on a field the sweep has not reached. Reported, not worked around.
+ * ⚠ **THIS FIELD'S POLICY HAS BEEN THREE THINGS IN ONE DAY, AND THIS FILE HAS
+ * ASSERTED ALL THREE. The history is kept because the LAST correction was
+ * wrong within the hour and that is the useful part.**
+ *
+ * ```
+ * said here, until 2026-09-13   "carries NO enumPolicy"    -> bare closed union
+ * said 46 lines below           "declared extensible"      -> | (string & {})
+ * the contract, as of now       enumPolicy: "closed"       -> bare four-value union
+ * ```
+ *
+ * **The first two contradicted each other for weeks in one file** — invisible
+ * while they had different neighbours (`workflow.md` §2b). Striking the first
+ * and keeping the second looked like the repair, **and `0043` §3a narrowed the
+ * field from `extensible` to `closed` the same afternoon, which made the
+ * survivor false too.**
+ *
+ * **The narrowing cites this console's own defect as the argument that decided
+ * it:** `extensible`'s unknown arm is where eight untranslated `sr-only`
+ * strings lived, and the contract records that **`extensible` did not make the
+ * 2→4 widening SAFE, it made it SILENT** — turning a compile error that would
+ * have named every consumer into a runtime path nobody re-examined.
+ *
+ * **So the type is now closed and `requireString` no longer satisfies it.** See
+ * `ResolveMember` below for why this client keeps the wire value as `string`
+ * for now, what that costs against `0037`, and why the choice is the Team
+ * Lead's rather than this file's.
  *
  * ---------------------------------------------------------------------------
  * ⚠ AND THE SWAP WAS ATTEMPTED AND REVERTED. THE BLOCKER IS NOT `status`.
@@ -1256,15 +1389,36 @@ export interface OrganizationDetail {
  * returned because an operator about to reset a credential should know whether
  * they are taking over an `owner` or a `member`.
  *
- * **`parseResolveMember` is untouched**, and its `requireString` is now
- * CORRECT rather than merely tolerant: `0041` forbids an `extensible` enum's
- * parser from rejecting an unlisted value.
+ * ⚠ **THE `extensible` JUSTIFICATION FOR `requireString` IS GONE.** It read:
+ * *"`0041` forbids an `extensible` enum's parser from rejecting an unlisted
+ * value."* True until `0043` §3a narrowed the field to `closed` on 2026-09-13,
+ * **and it was the premise this parser's tolerance rested on.**
+ *
+ * `workflow.md` §12: *check whether an argument was resting on what you
+ * withdrew.* **The conclusion still holds and the reason is different** — the
+ * parser stays tolerant now because a database ahead of a deployment can still
+ * produce a fifth value and blanking the lookup screen over one field is worse
+ * than rendering it. **Re-derived rather than left propped up.**
+ */
+/*
+ * THE GENERATED TYPE IS STILL RE-EXPORTED AND IS NO LONGER IMPORTED HERE.
+ *
+ * Nothing in this module consumes it any more — `ResolveMember` above carries
+ * the wire value as `string` pending the Team Lead's ruling — and the compiler
+ * said so (`TS6133`) rather than leaving a dead import.
+ *
+ * **The re-export stays deliberately.** It is the contract's own type, reachable
+ * from this module by name, and it is what a consumer should adopt the moment
+ * the closed union is the right shape here. Removing it would leave nothing in
+ * the client pointing at the generated type at all, which is the `§12` residue
+ * this whole cascade has been about.
  */
 export type { ResolveMemberOutput } from '@dudo/contracts/core/platform/organization-detail-v1';
-import type { ResolveMemberOutput } from '@dudo/contracts/core/platform/organization-detail-v1';
 
 export function isKnownMembershipRole(role: string): role is KnownMembershipRole {
-  return role === 'owner' || role === 'member';
+  return (
+    role === 'owner' || role === 'admin' || role === 'business-admin' || role === 'member'
+  );
 }
 
 export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
@@ -1323,7 +1477,68 @@ export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
   };
 }
 
-export function parseResolveMember(payload: unknown): ResolveMemberOutput {
+/**
+ * What this client parses a member resolve into.
+ *
+ * ===========================================================================
+ * ⚠ `role` IS `string` HERE AND `MembershipRole` IN THE GENERATED TYPE. THAT
+ * DIVERGENCE IS DELIBERATE, TEMPORARY, AND REPORTED RATHER THAN CHOSEN.
+ * ===========================================================================
+ *
+ * `membershipRole` was narrowed from `extensible` to **`closed`** on
+ * 2026-09-13 (`0043` §3a/§7c), so the generated type is now a bare four-value
+ * union with **no `(string & {})` arm** — and `requireString` returning
+ * `string` stopped compiling against it. **That break is the intended one**;
+ * the contract's own `$comment` says so and says a consumer losing its arm is
+ * why the change is a Team Lead review rather than an edit.
+ *
+ * **THE SAME `$comment` ALSO KEEPS THE FAIL-SAFE, AND THE TWO SENTENCES ARE IN
+ * TENSION:**
+ *
+ *   *"A value outside these four cannot be stored, so a client meeting one is
+ *    a defect rather than a case to render."*
+ *   *"…it is not a promise that clients never see a value they do not know."*
+ *
+ * ⚠ **RULED 2026-09-13: THEY ARE NOT IN CONFLICT — THEY ARE ABOUT DIFFERENT
+ * LAYERS, AND BOTH ARE TRUE.**
+ *
+ * ```
+ * "cannot be stored"        true of the CONTRACT, and of the CHECK constraint
+ * "clients may still see"   true of the WIRE, on a misdeployed pair
+ * ```
+ *
+ * **`closed` is a statement about what a CORRECTLY DEPLOYED system can
+ * produce. This parser is a BOUNDARY, and a boundary handles what arrives.**
+ * That is `CLAUDE.md`'s standing rule — *the generated type is what the
+ * contract PROMISES; the parser is what checks what ARRIVED* — and it is why
+ * all fourteen parsers survived `0037`.
+ *
+ * **THE TOLERANT BRANCH IS NOT DEAD CODE. CORE HAS THE SAME ONE, DELIBERATELY.**
+ * `authorization/roles.ts`'s `toMembershipRole` returns `null` for an
+ * unrecognised stored string and denies everything, naming both skew
+ * directions: a database ahead of the build meets a narrower union; a build
+ * ahead of the database cannot write the new value because the `CHECK` refuses
+ * it. **Core treats deployment skew as a real operational state and fails
+ * closed inside it.** This client's equivalent of failing closed is to render
+ * the raw value — blanking the lookup screen instead would be failing OPEN in
+ * the operator's face, on the exact screen they reach for when something has
+ * already gone wrong.
+ *
+ * **`0018` makes it concrete rather than theoretical:** it widens the stored
+ * `CHECK` to four values, and a migration applied before a deploy IS the
+ * database-ahead case. The branch is reachable on the day that migration is
+ * approved, in the window before this console ships.
+ *
+ * **So the type system's reckoning is about the CONTRACT; the branch is about
+ * DEPLOYMENT SKEW, which the type system cannot see and never could.** Not
+ * dead code — code the compiler has no vocabulary for.
+ */
+export interface ResolveMember {
+  readonly principal_id: string;
+  readonly role: string;
+}
+
+export function parseResolveMember(payload: unknown): ResolveMember {
   const what = 'The member resolve response';
   const body = requireObject(payload, what);
   /*
@@ -1525,7 +1740,7 @@ export function parseTemplate(payload: unknown, what = 'The Template response'):
     template_id: requireString(body, 'template_id', what),
     name: requireString(body, 'name', what),
     level_labels: Object.freeze(level_labels),
-    status: requireString(body, 'status', what),
+    status: requireTemplateStatus(body, 'status', what),
     created_at: requireString(body, 'created_at', what),
   };
 }
@@ -2129,7 +2344,7 @@ export interface PlatformClient {
     organizationId: string,
     input: UpdateOrganizationIdentityInput,
   ): Promise<OrganizationIdentity>;
-  resolveMember(organizationId: string, identifier: string): Promise<ResolveMemberOutput>;
+  resolveMember(organizationId: string, identifier: string): Promise<ResolveMember>;
   /** The oversight view. No principal-level target, and no filter for one. */
   listPlatformAudit(options?: {
     pageSize?: number;

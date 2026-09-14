@@ -397,6 +397,7 @@ function CountPanel({
 
 /** The same tolerant rendering the detail screen uses — unknown values stay neutral. */
 function StatusPill({ status }: { status: string }) {
+  const t = useT();
   const known = isKnownStatus(status);
   return (
     <span
@@ -408,7 +409,7 @@ function StatusPill({ status }: { status: string }) {
       )}
     >
       {status}
-      {!known ? <span className="sr-only"> (an unrecognised status)</span> : null}
+      {!known ? <span className="sr-only"> {t('unknown.status')}</span> : null}
     </span>
   );
 }

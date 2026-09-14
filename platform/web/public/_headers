@@ -1,0 +1,98 @@
+# Response headers for app.dudo.work — and for api.dudo.work, which is the same
+# Worker (assets bind per-Worker, and both hostnames are routes on it).
+#
+# Specified by `security-agent`, ruled by the Team Lead. Written here rather
+# than in `wrangler.jsonc` because these govern STATIC ASSET responses, which do
+# not invoke the Worker at all (`0016` §5) — a header set applied in Worker code
+# would miss every document this file exists to protect.
+#
+# =============================================================================
+# ⚠ THIS FILE IS NOT VALIDATED AT DEPLOY TIME. A TYPO UPLOADS CLEAN.
+# =============================================================================
+#
+# Measured in the pinned wrangler source: `parseHeaders` is called only by the
+# Pages dev server and never in the deploy path. **A malformed line is dropped
+# silently and individually, the deploy exits 0, and the header is simply
+# absent.** An over-long line goes the same way.
+#
+# So the only thing that settles whether these are live is the DEPLOYED
+# RESPONSE. `wrangler dev` parses this file locally and logs invalid lines —
+# that is the pre-flight; `curl -I` against the deployment is the verdict.
+#
+# =============================================================================
+# WHAT THIS ACTUALLY CLOSES, WHICH IS NOT WHAT IT LOOKS LIKE
+# =============================================================================
+#
+# `SameSite=Lax` on the session cookie already defeats a CROSS-SITE frame.
+# **It does not defeat `app.dudo.work` framing `admin.dudo.work`** —
+# `frame-ancestors` is ORIGIN-scoped and SameSite is SITE-scoped, and `0022`'s
+# topology drives a wedge between the two. That is the specific path this
+# closes, against platform mutations that complete on a single click.
+
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'sha256-LVt9WOcYh/0eAX/9RUjRVkel9YvDg5McG49pNB5Mz38='; worker-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'self'; form-action 'self'; base-uri 'none'; object-src 'none'
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), midi=(), display-capture=(), screen-wake-lock=(), idle-detection=(), browsing-topics=()
+  Strict-Transport-Security: max-age=86400
+
+# =============================================================================
+# THE `script-src` HASH — DERIVED, AND ASSERTED, BECAUSE IT IS A SECOND COPY
+# =============================================================================
+#
+# It covers the pre-paint locale script in `index.html`, which sets `lang` and
+# `dir` from storage before React mounts so a returning Arabic reader does not
+# get a left-to-right render that then flips.
+#
+# **A hash here and a script there are two copies of one fact with no citation
+# between them, and one byte of drift means CSP silently blocks the script.**
+# The failure mode is the worst kind: the page still works, the Arabic flash
+# comes back, and nothing connects the two.
+#
+# So `scripts/verify-settings.mjs` recomputes the sha256 from `index.html` and
+# asserts it equals the value above. **Derived on both sides, red the instant
+# either moves.** The value was computed at the moment of writing and must never
+# be transcribed from anywhere — including from an older copy of this comment.
+#
+# ⚠ **IT IS COMPUTED FROM SOURCE, AND THAT IS VALID ONLY BECAUSE VITE COPIES THE
+# SCRIPT VERBATIM.** Verified by diffing the source and built regions
+# byte-for-byte. **If HTML minification is ever enabled, source and `dist/`
+# diverge and the hash must move to a build-time computation from `dist/`.**
+# That is a property of today's configuration, not of Vite.
+#
+# A NONCE WOULD NORMALLY BE RIGHT HERE AND IS STRUCTURALLY UNAVAILABLE. It must
+# be generated per response and injected into both header and tag, which
+# requires the document to pass through the Worker — and `run_worker_first` does
+# not carry `/`. Widening it is what `0016` §5 prohibits, for the free-asset
+# reason. **A closed door, not an unchosen option.**
+#
+# `unsafe-inline` is refused outright: it admits exactly the attacker CSP is
+# here for. Accepting the flash instead is also refused — a security control
+# reintroducing an accessibility defect, silently.
+#
+# =============================================================================
+# ⚠ `frame-ancestors 'self'` IS DELIBERATE. `'none'` WOULD BREAK OUR OWN TOOLING
+# =============================================================================
+#
+# `'none'`, and `X-Frame-Options: DENY`, block SAME-ORIGIN framing too — and a
+# same-origin iframe is the only genuine responsive-layout instrument this team
+# has (`docs/operations/browser-verification.md` §2). It is what found the
+# wrapped-LTR alignment defect at 834px, because `resize_window` returns success
+# and changes nothing. `frame-src` is `'self'` for the same reason: a
+# DevTools-created frame's `src` is still checked against the page CSP.
+#
+# **THE FALSIFIER, so this does not rot: the day either origin serves HTML that
+# anyone outside the team can influence, `'self'` stops being equivalent to
+# `'none'` and this must be reconsidered.**
+#
+# =============================================================================
+# `Strict-Transport-Security: max-age=86400`
+# =============================================================================
+#
+# One day, deliberately short. HSTS is the one header here that is expensive to
+# retract — a browser honours the max-age it was last given, so an over-long
+# value on a test environment is a commitment nobody chose. It lengthens when
+# the deployment is settled, and never before.

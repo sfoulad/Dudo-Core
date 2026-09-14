@@ -99,7 +99,7 @@ import { ApiError, toApiError } from './errors';
 import { CONFIG } from './config';
 import { deriveLogin, type DerivationProgress } from '@dudo/client-kdf/client';
 import { setFixtureOrganizationSelected } from './fixture-session-state';
-import type { Transport } from './fixture-transport';
+import type { Transport } from './transport';
 
 /** The two fields `login.ts` declares. Undeclared fields are refused by Core. */
 export const IDENTIFIER_FIELD = 'email';

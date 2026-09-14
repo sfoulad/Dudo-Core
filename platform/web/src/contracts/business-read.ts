@@ -17,42 +17,63 @@
 
 import type { BusinessId } from './customer-directory';
 
-export type ResolutionState = 'resolved' | 'unresolved';
+/* ===========================================================================
+   THE CONTRACT SHAPES ARE CONSUMED, NOT RE-DECLARED — ADR 0037 REQUIREMENT 2
+   ===========================================================================
 
-/** One row of the authorized-business listing. Two fields, and that is the point. */
-export interface BusinessSummary {
-  business_id: BusinessId;
-  /** Present and null, never absent. Null means no name is recorded. */
-  display_name: string | null;
-}
+   ⚠ **THIS CONSOLE CONSUMED ZERO GENERATED TYPES UNTIL 2026-09-13.** Six shapes
+   below were hand-written restatements of a schema the generator had already
+   emitted — *"a hand-written type that restates a generated one is the defect
+   0037 exists to remove"*, in the generated file's own words, and this package
+   did not even declare `@dudo/contracts` as a dependency.
 
-/**
- * One entry of a resolution response.
+   **Nothing was broken and nothing went red**, which is why it survived: the
+   hand-written shapes were correct, and a correct duplicate is exactly the kind
+   `workflow.md` §12 records as unsweepable — no citation between the copies,
+   nothing that fails when they drift.
+
+   ⚠ **THE GENERATED TYPES ARE `readonly` AND THE HAND-WRITTEN ONES WERE NOT.**
+   That is not cosmetic: a response shape a client can mutate is one a screen
+   can edit in place and then re-render from, which reads as working until two
+   components share a reference. **The compiler is what will say whether
+   anything relied on the mutability** — that is the whole reason to swap rather
+   than to compare by eye.
+
+   **WHAT STAYS HAND-WRITTEN, and it is not laziness:** the transport table, the
+   base path, the batch maximum and the rendering rule below. Those are this
+   CLIENT's decisions about how to reach the contract, not shapes the contract
+   declares. The generator emits types and permission constants; it does not
+   emit a route table, and inventing one would be the client re-declaring a
+   different thing.
+
+   `BusinessId` is still this package's own, from `./customer-directory`. The
+   generated module declares an identical `BusinessId = string`; importing both
+   would put two names for one type in one file, and it resolves when
+   `customer-directory.ts` is swapped in its own change. */
+export type {
+  ResolutionState,
+  BusinessSummary,
+  BusinessReference,
+  ListAuthorizedBusinessesInput,
+  ListAuthorizedBusinessesOutput,
+  ResolveBusinessReferencesInput,
+  ResolveBusinessReferencesOutput,
+} from '@dudo/contracts/core/organization/business-read-v1';
+
+/*
+ * ⚠ `ListAuthorizedBusinessesOutput` WAS THE ONE THIS LIST MISSED, AND IT WAS
+ * MISSED BECAUSE THE SWAP WAS DRIVEN BY WHAT THE CLIENT ALREADY DECLARED.
  *
- * `business_id` is echoed so a client never has to depend on positional
- * alignment alone. When `resolution` is `unresolved`, `display_name` is always
- * null — but when it is `resolved` the name may STILL be null, so a client must
- * never infer existence from the name. That is what `resolution` is for.
+ * The six names above replaced six hand-written duplicates, so the population
+ * was *the shapes this client had a copy of* — and this one it did not. It cast
+ * the page to `CollectionEnvelope<BusinessSummary>` instead: structurally equal
+ * today, and a different claim. `workflow.md` §11a's recurring shape — **the
+ * population drawn from where the author expected the subject to live.**
+ *
+ * It is adopted here rather than in a later pass because leaving it is the
+ * exact defect the `api/client.ts` adoption was ruled on: **one client holding
+ * two vocabularies, with the newer half looking like the exception.**
  */
-export interface BusinessReference {
-  business_id: BusinessId;
-  display_name: string | null;
-  resolution: ResolutionState;
-}
-
-export interface ListAuthorizedBusinessesInput {
-  page_size?: number;
-  cursor?: string;
-}
-
-export interface ResolveBusinessReferencesInput {
-  business_ids: BusinessId[];
-}
-
-/** Not a paginated collection and it has no next_cursor: length is fixed by the request. */
-export interface ResolveBusinessReferencesOutput {
-  data: BusinessReference[];
-}
 
 /** The batch maximum. A chosen number: it matches the default page size. */
 export const RESOLVE_BATCH_MAX = 25;

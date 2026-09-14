@@ -665,12 +665,18 @@ operations:
     response: { schemaRef: "urn:dudo:schema:template-lifecycle:1#/$defs/organizationTemplateOutput" }
     successStatus: 200
     errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, unavailable]
-    maxRowWrites: 10
+    maxRowWrites: 11
     theFIGURESUMSTWOLEDGERSANDTHESCALARCANNOTSAYSO: >-
-      *** 10 IS 5 + 5 ACROSS TWO SEPARATE BUDGETS THAT REFUSE INDEPENDENTLY, AND THE FIELD HAS NO WAY
+      *** 11 IS 6 + 5 ACROSS TWO SEPARATE BUDGETS THAT REFUSE INDEPENDENTLY, AND THE FIELD HAS NO WAY
       TO EXPRESS THAT. READ THIS BEFORE USING THE NUMBER FOR ANYTHING. ***
-        5  against the OPERATOR's control-plane budget — `PER_PRINCIPAL_DAILY_ROW_WRITES` (600).
-           Observed as two reservations, [4, 1]: the P4 audit record, then the `organization` row.
+        6  against the OPERATOR's control-plane budget — `PER_PRINCIPAL_DAILY_ROW_WRITES` (600).
+           The P4 audit record (4), the `organization` row (1), and the `0017` INDEX ENTRY that row
+           maintains (1). CORRECTED 10 -> 11 ON 2026-09-13, from `core-agent`.
+           *** THE INDEX IS WHY THIS ROUTE AND `platform.organizations.identity.update` DIVERGE, AND
+           THE DIVERGENCE IS THE POINT. *** They were treated as one shape sharing one derivation —
+           both a control-plane row plus a 0028 tenant audit record. `0017` indexes the column THIS
+           route writes and not the ones that one writes, so the two derivations part company. That
+           is the condition `core-agent`'s own refusal to merge them named in advance, arriving.
         5  against the NAMED ORGANIZATION's own allocation — the docs/decisions/0028 `audit_event`
            write, additionally sub-capped by `PLATFORM_ORIGINATED_DAILY_ROW_WRITES` (1000), which is
            the ceiling keyed to the VICTIM rather than to the caller. See theBUDGETMECHANISM_SR4.

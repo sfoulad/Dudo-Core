@@ -127,11 +127,28 @@ CREATE TABLE IF NOT EXISTS template (
 
   -- 'active' | 'retired'.
   --
-  -- *** NO ROUTE SETS THIS IN VERSION 1 AND EVERY TEMPLATE IS `active` FOREVER. *** The column
-  -- exists because adding a field to a published response later is worse than declaring it now
-  -- (contract TM-2). There is no delete and no update either (TM-1): an operator who mistypes a
-  -- name cannot yet fix it. That is a stated limitation, not an oversight, and it becomes real the
-  -- first time a Template is created in error.
+  -- *** THIS COMMENT SAID "NO ROUTE SETS THIS IN VERSION 1 AND EVERY TEMPLATE IS `active`
+  -- FOREVER", AND "THERE IS NO DELETE AND NO UPDATE EITHER (TM-1)". BOTH ARE FALSE. ***
+  -- Corrected 2026-09-13; `template-lifecycle-v1` landed retire, restore and update on 2026-09-11.
+  --
+  -- **IT WAS TRUE WHEN WRITTEN AND THE REASON IT WAS WRITTEN STILL HOLDS**, so it is corrected
+  -- rather than deleted: the column exists because adding a field to a published response later is
+  -- worse than declaring it now (contract TM-2), and that argument is why `status` was here before
+  -- anything could set it.
+  --
+  -- *** IT IS THE THIRD COPY OF ONE FALSIFIED SENTENCE.*** `api/platform.ts` and `Templates.tsx`
+  -- carried paraphrases and were corrected first. **No textual sweep of either would have reached
+  -- this one** — a paraphrase in a different file, in a different language, shares no pattern with
+  -- its original (`workflow.md` §12's propagation case, and its *budget for more homes than you
+  -- find*). It was found by somebody reading this file for an unrelated reason.
+  --
+  -- WHAT IS TRUE NOW: `platform.templates.retire` and `.restore` move this column, `.update`
+  -- rewrites the labels, and **there is still no DELETE** — retirement is the reversible
+  -- alternative, which is why the enum has two values and not a tombstone.
+  --
+  -- TM-1's LIMITATION IS CLOSED. An operator who mistypes a name can now fix it. That sentence
+  -- described a real gap, the gap was closed by a contract, and **nothing sent anyone back here** —
+  -- which is the whole of `§12`.
   status          TEXT NOT NULL CHECK (status IN ('active', 'retired')),
 
   created_at      TEXT NOT NULL            -- RFC 3339, UTC
@@ -141,8 +158,29 @@ CREATE TABLE IF NOT EXISTS template (
 -- already counted in the cost above.
 CREATE UNIQUE INDEX IF NOT EXISTS template_by_normalized_name ON template (normalized_name);
 
--- NO INDEX ON `status`, and none is needed: `list` is a bounded keyset page over the primary key,
--- and there is no route that filters by status because there is no route that sets it.
+-- NO INDEX ON `status`. **THE CONCLUSION STANDS AND ITS ORIGINAL REASON DOES NOT** — re-derived
+-- 2026-09-13 rather than left propped on a dead premise (`workflow.md` §12: *check whether an
+-- argument was resting on what you withdrew; if the conclusion still holds, re-derive it and say
+-- so*).
+--
+-- **THE OLD REASON WAS DOUBLY FALSE BY THE TIME ANYONE READ IT AGAIN:** *"there is no route that
+-- filters by status because there is no route that sets it."* `platform.templates.retire` sets it,
+-- and `platform.templates.list` gained a `status` query parameter on 2026-09-11 with that very
+-- route — `template-v1`'s `listFilterAmendment`. **Both halves of one sentence, falsified by one
+-- change, and the sentence was justifying an index decision.**
+--
+-- THE REASON THAT ACTUALLY HOLDS IS ABOUT THE TABLE RATHER THAN ABOUT THE ROUTES: **`template` is
+-- a tenant-independent platform catalogue with no `tenant_id`** — it holds one row per business
+-- type for the whole platform, tens of rows rather than tens of thousands, and it does not grow
+-- with the customer base. A filtered page scans a table small enough that the index would cost a
+-- row-write on every Template write to save a scan of a handful of rows.
+--
+-- *** SO THE TRIGGER FOR ADDING ONE IS A PROPERTY OF THE TABLE, NOT OF A ROUTE. *** `0013`'s
+-- condition fired when a route appeared; **this one will not, and a future reader should not wait
+-- for it to.** Add the index if `template` ever becomes large — a per-tenant catalogue, or one row
+-- per industry sub-classification — and **raise `TEMPLATE_ROW_WRITES`, `TEMPLATE_UPDATE_ROW_WRITES`
+-- and `TEMPLATE_STATUS_ROW_WRITES` in the same change**, which those three constants already
+-- instruct.
 --
 -- NO `tenant_id`, EVER. A Template is tenant-independent platform configuration. A tenant column
 -- here would make one Organization's business type invisible to another and would turn a shared

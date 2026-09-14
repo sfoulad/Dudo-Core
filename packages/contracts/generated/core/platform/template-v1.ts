@@ -25,7 +25,7 @@ export type LevelLabels = {
   readonly branch?: LevelLabel;
 };
 
-export type TemplateStatus = 'active' | 'retired' | (string & {});
+export type TemplateStatus = 'active' | 'retired';
 
 export type TemplateStatusFilter = 'active' | 'retired';
 

@@ -76,6 +76,9 @@ import {
   isConfirmationGated,
   platformRoutes,
 } from '../../../../platform/core/platform/platform-routes.ts';
+import { MEMBERSHIP_ROLES, grantsForRole } from '../../../../platform/core/authorization/roles.ts';
+import type { Scope } from '../../../../platform/core/authorization/scope.ts';
+import { implies } from '../../../../platform/core/authorization/scope.ts';
 import { createCustomerRoutes } from '../../../../apps/customers/api/routes.ts';
 import { createStoreBusinessDirectory } from '../../../../platform/core/tenancy/business-directory.ts';
 
@@ -540,6 +543,245 @@ export function buildRegistryCoherenceSuite(): Suite {
       );
     },
   );
+
+  // ===========================================================================================
+  // THE TENANT HALF OF BOTH CHECKS. Commissioned by `0043` §1b after `security-agent` measured
+  // that the mechanism everyone believed in does not exist.
+  //
+  // `0043` §1b, corrected 2026-09-13: **`holdsAtOrAbove` compares the GRANT's scope against the
+  // ACTION's scope, both runtime values. The catalogue's declared `scopes:` is not an input, and
+  // Core never reads the catalogue at all** — its only two references are prose inside comments.
+  //
+  // > So a role's `scope:` has no consumer **and a permission's `scopes:` has no consumer
+  // > either**. Both are design rules applied BY HAND, TWICE — once composing the catalogue's
+  // > role blocks, once composing `roles.ts` — **and neither hand was checked.**
+  //
+  // `architecture-agent` repaired an escalation path by declaring a permission `scopes:
+  // [organization]` only, arguing the intersection rule made it unholdable by a business-scope
+  // role. **The intersection rule is not executed anywhere**, so the repair rests on the
+  // permission not being written into `business-admin`'s list — a transcription discipline,
+  // which is exactly what the declaration was meant to escape.
+  //
+  // These two cases are the cheap interim: they make the declaration BITE as a check, at the
+  // moment somebody writes the line. Neither depends on a route existing, which is the point —
+  // `TENANT_ADMIN_ROUTE_COUNT` is 0 and these are what should exist BEFORE the first grant lands.
+  // ===========================================================================================
+
+  suite.test(
+    'CHECK 1 — every permission a TENANT role names declares that role\'s scope',
+    () => {
+      // The platform case above, generalised to the other two scopes. Modelled on it rather than
+      // rewritten: same section reader, same `permissionScopes` map, same population floor.
+      const roleSection = sectionLines(source, 'defaultRoles');
+      const scopeOf = new Map<string, string>();
+      let current = '';
+      for (const line of roleSection) {
+        const entry = /^ {2}- id: (\S+)\s*$/.exec(line);
+        if (entry !== null) {
+          current = entry[1]!;
+          continue;
+        }
+        const scope = /^ {4}scope: (\S+)\s*$/.exec(line);
+        if (scope !== null && current !== '') scopeOf.set(current, scope[1]!);
+      }
+
+      // TENANT roles are the non-platform ones. Derived from the scope field rather than from a
+      // list of names, so a fifth tenant role is covered the day it is added — which is the whole
+      // hazard, since `0043` §3 added two to a set that had carried two for the product's life.
+      const tenantRoles = [...scopeOf.entries()].filter(([, scope]) => scope !== 'platform');
+      const scopesByPermission = permissionScopes(source);
+
+      let permissionsChecked = 0;
+      const offences: string[] = [];
+      for (const [roleId, roleScope] of tenantRoles) {
+        for (const permissionId of roleGrantsInCatalog(source, roleId)) {
+          permissionsChecked += 1;
+          const scopes = scopesByPermission.get(permissionId);
+          if (scopes === undefined) {
+            offences.push(`${roleId} names '${permissionId}', which this catalog does not declare`);
+            continue;
+          }
+          // ⚠ THE PREDICATE IS `implies`, NOT `includes`, AND THE FIRST VERSION HAD IT WRONG.
+          //
+          // It required the role's scope to appear in the permission's `scopes:` list, and went
+          // red on `member` (scope: business) naming `core.notification.read` (scopes: [own]).
+          // **That is not escalation — `own` is NARROWER than `business`.** A member reading
+          // their own notifications is the least-privileged thing in the catalogue, and my
+          // predicate called it an offence.
+          //
+          // `implies(granted, required)` is `SCOPE_RANK[granted] <= SCOPE_RANK[required]`, over
+          // `platform 0 · organization 1 · business 2 · own 5`. **The danger is a role naming a
+          // permission declared only at a WIDER scope** — `business-admin` naming
+          // `core.membership.set-role` (`[organization]`), which is `0043` §1b's worked example
+          // and the escalation the check exists for. A narrower permission is safe.
+          //
+          // Core's own `implies` is used rather than a re-ranked copy: a second ordering would be
+          // a second implementation of the thing under test, disagreeing silently.
+          //
+          // *** AND THE PLATFORM CASE ABOVE IS DELIBERATELY NOT CHANGED TO MATCH. *** It asserts
+          // membership, which is STRICTER, because `0024` forbids a platform principal holding a
+          // tenant-scoped permission at all — a narrower permission is exactly the shape it must
+          // refuse. Two rules, two reasons; generalising one over the other would have widened it.
+          if (!scopes.some((scope) => implies(roleScope as Scope, scope as Scope))) {
+            offences.push(
+              `${roleId} (scope: ${roleScope}) names '${permissionId}', declared scopes: ` +
+                `[${scopes.join(', ')}] — every one is WIDER than ${roleScope}, so the role ` +
+                'cannot hold it without escalating',
+            );
+          }
+        }
+      }
+
+      console.log(
+        `      tenant roles: ${tenantRoles.map(([id, s]) => `${id}(${s})`).join(' ')} — ` +
+          `${String(permissionsChecked)} permission reference(s) examined`,
+      );
+      assertTrue(
+        `the check examined tenant roles — found ${String(tenantRoles.length)}`,
+        tenantRoles.length >= 4,
+        'fewer than the four seed roles `0043` §3 defines were parsed. This check is examining ' +
+          'almost nothing and would report success.',
+      );
+      assertTrue(
+        `and permissions — examined ${String(permissionsChecked)}`,
+        permissionsChecked > 0,
+        'tenant roles parsed but ZERO permissions between them — the role reader has stopped ' +
+          'seeing permission lists, and every offence below is unreachable.',
+      );
+      assertEqual(
+        `${ISOLATION} every tenant role's permissions resolve and declare that role's scope`,
+        offences.join(' · '),
+        '',
+      );
+    },
+  );
+
+  suite.test('CHECK 1 KNOWN-FAILING INPUT — the escalation line, driven', () => {
+    // `0043` §1b's worked example, as a constructed input: `core.membership.set-role` is declared
+    // `scopes: [organization]`, and writing it into a `business` role must be refused.
+    //
+    // Driven on a MUTATED CATALOGUE SOURCE rather than on invented data, so the parsers under
+    // test are the ones the real case uses (`§11a`: a control built from an invented mutation
+    // tests the pattern against itself). Nothing on disk changes.
+    const scopesByPermission = permissionScopes(source);
+    const organizationOnly = [...scopesByPermission.entries()].find(
+      ([, scopes]) => scopes.length === 1 && scopes[0] === 'organization',
+    );
+    assertTrue(
+      'the catalog declares at least one organization-only permission to drive this with',
+      organizationOnly !== undefined,
+      'no permission declares exactly [organization], so this control cannot be built and CHECK 1 ' +
+        'has no demonstrated failing input.',
+    );
+    if (organizationOnly === undefined) return;
+
+    const [permissionId, scopes] = organizationOnly;
+    console.log(`      driving with '${permissionId}' — declared scopes [${scopes.join(', ')}]`);
+    const holdable = (roleScope: Scope): boolean =>
+      scopes.some((scope) => implies(roleScope, scope as Scope));
+
+    // THE ESCALATION: a business-scope role naming an organization-only permission must offend.
+    assertTrue(
+      `a business-scope role naming '${permissionId}' IS an offence`,
+      !holdable('business'),
+      `'${permissionId}' is holdable at business scope after all, so it is the wrong specimen — ` +
+        'pick a permission genuinely unreachable from business.',
+    );
+    // THE MIRROR, and without it a check that refused every reference would pass the line above.
+    assertTrue(
+      `and an organization-scope role naming '${permissionId}' is NOT an offence`,
+      holdable('organization'),
+      'the specimen is unreachable from organization too, so this control cannot distinguish a ' +
+        'precise check from one that refuses everything.',
+    );
+    // AND THE NARROWER DIRECTION, which the first version of CHECK 1 got wrong: an `own`-scoped
+    // permission must be holdable by a business role. A check without this case reads as correct
+    // and forbids the least-privileged permission in the catalogue.
+    const ownScoped = [...scopesByPermission.entries()].find(
+      ([, declared]) => declared.length === 1 && declared[0] === 'own',
+    );
+    if (ownScoped !== undefined) {
+      assertTrue(
+        `a business-scope role naming '${ownScoped[0]}' (scopes: [own]) is NOT an offence`,
+        implies('business', 'own'),
+        'an own-scoped permission was treated as escalation for a business role. `own` is ' +
+          'NARROWER than `business`; refusing it inverts the rule this check exists for.',
+      );
+    }
+  });
+
+  suite.test(
+    'CHECK 2 — Core grants a tenant role NOTHING the catalog does not name for it',
+    () => {
+      // ⚠ SUBSET, NOT EQUALITY — AND THE DIFFERENCE FROM THE PLATFORM HALF IS THE WHOLE DESIGN.
+      //
+      // The platform cases above assert EQUALITY, because `platform-permissions.ts` calls its own
+      // list the catalog's "verbatim". **The tenant side is deliberately a subset in progress**:
+      // measured 2026-09-13, the catalog names 68 permissions for `owner` and Core grants 8,
+      // because Core grants what is BUILT and the catalog states the target. All four tenant
+      // roles are `status: proposed`.
+      //
+      // > **An equality assertion here would be permanently red and would teach the team to
+      // > ignore this file** — `§11a`'s *a suite that goes red under load*. **The direction that
+      // > matters is the escalation one: Core must grant NOTHING the catalog does not authorise
+      // > for that role.** The reverse gap is the build backlog and is reported, not failed.
+      const surplus: string[] = [];
+      let granted = 0;
+      const backlog: string[] = [];
+
+      for (const role of MEMBERSHIP_ROLES) {
+        const fromCatalog = new Set(roleGrantsInCatalog(source, role));
+        const fromCore = grantsForRole(role).grants.map((grant) => grant.permissionId);
+        granted += fromCore.length;
+        for (const permissionId of fromCore) {
+          if (!fromCatalog.has(permissionId)) surplus.push(`${role} → ${permissionId}`);
+        }
+        backlog.push(`${role} ${String(fromCore.length)}/${String(fromCatalog.size)}`);
+      }
+
+      console.log(`      Core grants / catalog names, per role: ${backlog.join(' · ')}`);
+      // THE FLOOR, and it is not decorative: `grantsForRole` returning empty for every role would
+      // make `surplus` empty and this case green over nothing.
+      assertTrue(
+        `the check examined Core's grants — ${String(granted)} across ${String(MEMBERSHIP_ROLES.length)} roles`,
+        granted > 0,
+        'Core granted NOTHING to any tenant role, so a subset assertion is trivially satisfied.',
+      );
+      assertTrue(
+        'and the catalog side was read — every tenant role resolves to a non-empty list',
+        MEMBERSHIP_ROLES.every((role) => roleGrantsInCatalog(source, role).length > 0),
+        MEMBERSHIP_ROLES.filter((role) => roleGrantsInCatalog(source, role).length === 0).join(', ') +
+          ' parsed with NO catalog permissions. An empty catalog side makes every Core grant look ' +
+          'like surplus, or — if the surplus list is also empty — makes this case vacuous.',
+      );
+      assertEqual(
+        `${ISOLATION} Core grants no tenant permission the catalog does not name for that role`,
+        surplus.join(' · '),
+        '',
+      );
+    },
+  );
+
+  suite.test('CHECK 2 KNOWN-FAILING INPUT — a permission Core grants and the catalog does not', () => {
+    // The mutation is on the CATALOG side and in memory: take a permission Core really grants,
+    // remove it from that role's catalog list, and require the subset predicate to flag it.
+    const role = MEMBERSHIP_ROLES[0]!;
+    const fromCore = grantsForRole(role).grants.map((grant) => grant.permissionId);
+    assertTrue(`Core grants ${role} something to drive this with`, fromCore.length > 0, 'no grants');
+    if (fromCore.length === 0) return;
+
+    const full = new Set(roleGrantsInCatalog(source, role));
+    const control = fromCore.filter((permissionId) => !full.has(permissionId));
+    assertEqual(`control: ${role} has no surplus against the real catalog`, control.join(','), '');
+
+    const mutated = new Set([...full].filter((permissionId) => permissionId !== fromCore[0]));
+    const detected = fromCore.filter((permissionId) => !mutated.has(permissionId));
+    assertEqual(
+      `removing '${fromCore[0]!}' from the catalog makes it surplus`,
+      detected.join(','),
+      fromCore[0]!,
+    );
+  });
 
   suite.test('`marketplace-moderator` holds exactly what the catalog grants it', () => {
     const fromCatalog = roleGrantsInCatalog(source, 'marketplace-moderator');

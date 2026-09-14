@@ -827,6 +827,10 @@ async function main(): Promise<void> {
   );
 
   await stubGapChecks(baseUrl, sessionCredential, allowWrites);
+  // §9 needs no session and no writes: it reads the document every visitor gets. It runs LAST so
+  // a header failure never displaces the authentication evidence above it in the transcript, and
+  // it runs UNCONDITIONALLY because a missing security header is not contingent on a login.
+  await deployedHeaderChecks(baseUrl);
   summarise();
 }
 
@@ -1019,6 +1023,112 @@ async function stubGapChecks(
     'This script does not delete it: DeleteCustomer is granted to no role (0019) and deleting ' +
       'data is not something a verification script should do unasked. Archive or remove it ' +
       'through the interface.');
+}
+
+/**
+ * ===========================================================================================
+ * §9 — THE SECURITY HEADERS, READ OFF THE DEPLOYED RESPONSE.
+ * ===========================================================================================
+ *
+ * **`_headers` IS NOT VALIDATED AT DEPLOY TIME.** `security-agent` measured this against the
+ * pinned wrangler source: `parseHeaders` is called at exactly two sites, both inside the Pages
+ * dev server, and nothing in the deploy path calls it. wrangler's own comment says *"parsing is
+ * not required for deploy."*
+ *
+ * > **So a typo, a bad directive or an over-long line is uploaded verbatim, THE DEPLOY EXITS 0,
+ * > and the only way to learn the file did nothing is to read the deployed response.** An
+ * > over-long line is dropped INDIVIDUALLY and SILENTLY while the rest of the file still applies
+ * > — which is the worst shape available: a partially-applied policy that looks like a policy.
+ *
+ * **A silent regression is therefore the EXPECTED failure mode rather than a hypothetical**, and
+ * this is the only instrument in the repository that can see it. `headers-parity.ts` compares the
+ * two source files to each other; **neither of them proves a byte reached a browser.**
+ *
+ * WHAT THIS CANNOT DO, NAMED: it reads what the origin returned to THIS request. It says nothing
+ * about a cached edge response, nothing about a different route, and nothing about whether the
+ * CSP is *correct* — only that it is present and carries the directives the source file declares.
+ */
+async function deployedHeaderChecks(baseUrl: string): Promise<void> {
+  console.log('\n--- §9 — security headers on the deployed response -------------------------------\n');
+
+  let response: Response;
+  try {
+    response = await fetch(baseUrl + '/', { method: 'GET', redirect: 'manual' });
+  } catch (cause) {
+    record('§9.fetch', 'the deployed document responds', 'not_run',
+      `GET ${baseUrl}/ threw: ${cause instanceof Error ? cause.message : String(cause)}`,
+      'Every header assertion below is NOT RUN, not passing. The host was unreachable.');
+    return;
+  }
+
+  record('§9.fetch', 'the deployed document responds', 'passed', `HTTP ${String(response.status)}`);
+
+  // REQUIRED ON EVERY DEPLOYED SURFACE. Each names what its absence costs, because a header
+  // reported missing without a consequence is a line somebody silently accepts.
+  const REQUIRED: readonly { readonly name: string; readonly absence: string }[] = [
+    { name: 'Content-Security-Policy',
+      absence: 'no script-execution policy at all — an injected inline script runs' },
+    { name: 'X-Content-Type-Options',
+      absence: 'MIME sniffing is back; an uploaded file can be executed as script' },
+    { name: 'Referrer-Policy',
+      absence: 'full URLs leak to third parties, including anything in a path' },
+    { name: 'X-Frame-Options',
+      absence: 'the console can be framed, which is clickjacking on an operator surface' },
+    { name: 'Cross-Origin-Opener-Policy',
+      absence: 'an opener retains a window reference across the navigation' },
+    { name: 'Cross-Origin-Resource-Policy',
+      absence: 'the document is loadable cross-origin as a subresource' },
+    { name: 'Permissions-Policy', absence: 'camera, microphone and geolocation are not denied' },
+    { name: 'Strict-Transport-Security', absence: 'the first request of a session can be downgraded' },
+  ];
+
+  const present: string[] = [];
+  for (const { name, absence } of REQUIRED) {
+    const value = response.headers.get(name);
+    if (value === null) {
+      record('§9.header', `${name} is present on the deployed response`, 'failed',
+        `ABSENT. Consequence: ${absence}.`,
+        '`_headers` is NOT validated at deploy time — a malformed line is uploaded, the deploy ' +
+          'exits 0, and the header is silently dropped. Compare the deployed response against ' +
+          'platform/*/public/_headers line by line; an over-long line is dropped on its own.');
+      continue;
+    }
+    present.push(name);
+    record('§9.header', `${name} is present on the deployed response`, 'passed', value.slice(0, 120));
+  }
+
+  // THE FLOOR. Zero headers found and zero required would both render as a clean run; and a
+  // response that carried NONE of them is far likelier to be a wrong URL than a broken deploy.
+  record('§9.population', 'the response carried a non-trivial set of the required headers',
+    present.length >= REQUIRED.length - 1 ? 'passed' : 'failed',
+    `${String(present.length)} of ${String(REQUIRED.length)} present: ${present.join(', ') || 'NONE'}`,
+    present.length === 0
+      ? 'NONE of them. Before reporting a deploy defect, check the URL actually served this ' +
+        'document — a redirect or a 404 page carries no _headers rules either.'
+      : '');
+
+  // THE CSP IS THE ONE WHOSE PRESENCE PROVES LEAST. A header that exists but has lost a
+  // directive is the partially-applied case, so its directives are named rather than counted.
+  const csp = response.headers.get('Content-Security-Policy');
+  if (csp !== null) {
+    const directives = csp.split(';').map((part) => part.trim().split(/\s+/)[0]).filter((d) => d.length > 0);
+    const REQUIRED_DIRECTIVES = ['default-src', 'script-src', 'object-src', 'base-uri', 'frame-ancestors'];
+    const missing = REQUIRED_DIRECTIVES.filter((d) => !directives.includes(d));
+    record('§9.csp', 'the deployed CSP carries every directive the source file declares',
+      missing.length === 0 ? 'passed' : 'failed',
+      `${String(directives.length)} directive(s): ${directives.join(' ')}` +
+        (missing.length > 0 ? ` — MISSING ${missing.join(', ')}` : ''),
+      missing.length > 0
+        ? 'A CSP that is PRESENT and short is the partially-applied case, and it looks like a ' +
+          'policy. Compare against platform/*/public/_headers.'
+        : '');
+    // `'unsafe-inline'` in script-src silently defeats the hash it sits beside.
+    record('§9.csp', "script-src does not carry 'unsafe-inline'",
+      /script-src[^;]*'unsafe-inline'/.test(csp) ? 'failed' : 'passed',
+      /script-src[^;]*'unsafe-inline'/.test(csp) ? 'PRESENT' : 'absent, as required',
+      "`'unsafe-inline'` makes every hash beside it decorative: browsers ignore hashes when " +
+        'unsafe-inline is present in the same directive, so the policy reads stricter than it is.');
+  }
 }
 
 function summarise(): void {

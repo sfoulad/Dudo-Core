@@ -22,22 +22,39 @@ import type { ReactNode } from 'react';
 import { Button, StateBlock } from '@dudo/ui';
 import { ApiError, errorBody, errorTitle, isRetryable } from '@/api/errors';
 
+/**
+ * ⚠ `headingLevel` IS PASSED THROUGH BECAUSE THIS COMPONENT RENDERS IN TWO
+ * PLACES THAT NEED DIFFERENT ANSWERS, AND IT CANNOT TELL WHICH IT IS IN.
+ *
+ * Three of its six call sites sit INSIDE a screen that already has an `h1`
+ * (`CustomerList`, `CustomerDetail`, `CustomerForm`) — `h2` is right there.
+ * **The other three ARE the whole page**: `AuthGate`'s probe failure and both
+ * of `OrganizationGate`'s, where the gate short-circuits and the children never
+ * render, so nothing above it supplies a heading at all. `AppShell` renders no
+ * `h1` — measured, not assumed.
+ *
+ * Defaulting to `h2` keeps the common case correct with no argument, and the
+ * caller that is the page says so. A component cannot infer its own depth.
+ */
 export function ErrorBlock({
   error,
   onRetry,
   retryLabel = 'Try again',
   extraActions,
+  headingLevel = 'h2',
 }: {
   error: ApiError;
   onRetry?: () => void;
   retryLabel?: string;
   extraActions?: ReactNode;
+  headingLevel?: 'h1' | 'h2';
 }) {
   const body = errorBody(error);
   return (
     <StateBlock
       glyph="!"
       tone="error"
+      headingLevel={headingLevel}
       title={errorTitle(error)}
       body={
         <>

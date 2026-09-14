@@ -26,14 +26,16 @@
 import { useEffect } from 'react';
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { AppShell } from '@/components/AppShell';
+import { AppShell, type AppSection } from '@/components/AppShell';
 import { AuthGate } from '@/components/AuthGate';
 import { OrganizationGate } from '@/components/OrganizationGate';
 import { useSession } from '@/lib/use-session';
 import { useOrganization } from '@/lib/use-organization';
 import { authClient, organizationClient, transport } from '@/lib/clients';
+import { useT } from '@/lib/i18n';
 
 export function RootLayout() {
+  const t = useT();
   const queryClient = useQueryClient();
   const session = useSession(transport, authClient);
   const organization = useOrganization(transport, organizationClient, {
@@ -107,9 +109,39 @@ export function RootLayout() {
     window.scrollTo({ top: 0 });
   }, [pathname]);
 
+  /*
+   * WHICH PART OF THE APPLICATION THE FRAME IS WRAPPING.
+   *
+   * `=== '/settings'` OR `startsWith('/settings/')`, NEVER A BARE PREFIX TEST.
+   * `startsWith('/settings')` alone would also claim a future `/settingsguide`
+   * or `/settings-export` — a boundary bug that is invisible until such a path
+   * exists and then reports the wrong section in the header and the footer of
+   * a screen that has nothing to do with settings.
+   */
+  const section: AppSection =
+    pathname === '/settings' || pathname.startsWith('/settings/') ? 'settings' : 'customers';
+
+  /*
+   * THE BROWSER TAB IS TRANSLATED AND SECTION-AWARE, AND IT IS SET HERE BECAUSE
+   * NOTHING ELSE KNOWS BOTH FACTS.
+   *
+   * `index.html` can only carry a static string — it does not know the route
+   * and cannot read the dictionary — so it carries the brand alone and this
+   * replaces it once React has mounted.
+   *
+   * **A `<title>` is a rendered string that lives in no `.tsx` file**, which is
+   * why every prose instrument in this package was blind to the English one
+   * that shipped. It is in the dictionary now, so a missing translation is a
+   * build failure like any other.
+   */
+  useEffect(() => {
+    document.title = t(section === 'settings' ? 'app.title.settings' : 'app.title.customers');
+  }, [section, t]);
+
   return (
     <AppShell
       busy={routerPending}
+      section={section}
       signedIn={authenticated}
       signingOut={session.signingOut}
       onSignOut={session.signOut}

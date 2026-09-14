@@ -17,7 +17,7 @@ export type OrganizationId = string;
 
 export type PrincipalId = string;
 
-export type OrganizationStatus = 'active' | 'suspended' | (string & {});
+export type OrganizationStatus = 'active' | 'suspended';
 
 export type PlatformRole = 'platform-admin' | 'marketplace-moderator' | (string & {});
 

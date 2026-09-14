@@ -1,0 +1,366 @@
+-- Control-plane migration 0021 — the invitation table.
+-- Milestone 2 — Full Organization Administration. `docs/decisions/0043` §7 and §6c.
+--
+-- IT BELONGS TO `DB_CONTROL`. See 0002. It is control plane and not tenant-scoped for
+-- `0003_organization_membership.sql`'s reason: an invitation becomes a membership, membership is
+-- the thing that spans tenants and precedes tenant selection, and an invitation held in a tenant
+-- database could not be accepted by a principal who is not yet in that tenant.
+--
+-- *** NOT APPLIED BY THE AGENT THAT WROTE IT. *** A verified D1 backup first, then the migration,
+-- then the deploy. Applying it is a production action requiring the user's explicit approval,
+-- every time (`.claude/rules/security.md` §7).
+--
+-- ROLLBACK PATH: `DROP TABLE invitation`. Safe while empty. Once invitations exist, dropping it
+-- silently invalidates every outstanding one — nobody's access is REMOVED, so it fails shut rather
+-- than open, and the visible symptom is that pending invitees can no longer join.
+--
+-- *** AND SINCE 2026-09-13 THE ROLLBACK ALSO DESTROYS PERSONAL DATA. *** `identifier` holds the
+-- plaintext address of a NON-MEMBER on every pending row. Dropping the table is still the correct
+-- rollback and it is no longer only a lifecycle loss: it discards the addresses of everyone
+-- currently invited, and there is no other copy — the platform stores an HMAC everywhere else.
+-- FORWARD-ONLY and idempotent: `IF NOT EXISTS`.
+-- ORDERING: after `0002_organization.sql` and `0001_principal.sql`. No constraint against 0018-0020.
+--
+-- =============================================================================================
+-- *** AMENDED IN PLACE ON 2026-09-13 TO ADD `identifier`. THE LICENCE FOR AMENDING IS "NOT YET
+-- APPLIED", AND IT EXPIRES THE MOMENT THE USER APPROVES THE MIGRATION RUN. ***
+-- =============================================================================================
+--
+-- Production holds `0001`–`0017`. `0018`–`0023` have never been applied to any database, so there
+-- is no deployed table for this file to disagree with, and amending it leaves ONE description of
+-- one table's shape. **A `0024` patching a `0021` nobody has run would be two files describing one
+-- table, and every future reader would have to reconcile them.**
+--
+-- *** DO NOT READ THIS AS A PRECEDENT THAT MIGRATIONS MAY BE EDITED. *** The forward-only rule
+-- exists to protect APPLIED migrations, and its protection is exactly what is absent here. The day
+-- the user approves this file's run, this paragraph stops licensing anything and the next change to
+-- this table is a new migration — including a change to the column added below.
+--
+-- **THE TEST, so a later reader can check the licence rather than trust this comment: has `0021`
+-- been applied to any database anyone depends on?** If yes, amending is forbidden whatever this
+-- header says. Team Lead measured it unapplied on 2026-09-13 by executing the set against scratch
+-- databases; that is a measurement with a date on it, not a standing property.
+--
+-- =============================================================================================
+-- *** THE RECIPIENT COLUMN. THE QUESTION THIS FILE REFUSED TO SETTLE HAS BEEN SETTLED BY THE
+-- PARTIES THAT OWN IT, AND THE COLUMN IS NOW HERE. ***
+-- =============================================================================================
+--
+-- ~~THIS TABLE HAS NO COLUMN NAMING WHO THE INVITATION IS FOR, AND THAT IS THE DECISION IT IS
+-- MAKING RATHER THAN THE ONE IT IS DEFERRING.~~ **WITHDRAWN 2026-09-13.** The refusal below was
+-- right on its own terms and is kept rather than deleted, because it names why the column arrived
+-- from a contract and a security ruling instead of from a migration:
+--
+--   ~~An invitation obviously has a recipient. It is absent because what form that recipient takes
+--   is a contract decision with a security dimension, and putting a column here would settle it in
+--   a migration. The open question is sharper than it looks:~~
+--
+--     ~~A RAW ADDRESS       deliverable, and it puts personal data in the control plane — a table
+--                           that spans every tenant — in plaintext, on a database whose backups are
+--                           one artifact. `principal_credential` stores `identifier_hash`, an HMAC,
+--                           and stores NO address at all, deliberately.~~
+--     ~~AN `identifier_hash` consistent with `principal_credential`, and undeliverable: you cannot
+--                           email a hash. It works only if the invitation is a code an
+--                           administrator copies and hands over out of band.~~
+--
+-- **WHAT WAS DECIDED, AND BY WHOM.** `architecture-agent` authored the shape in
+-- `tenant-invitations-v1` (`invitationIdentifier`, `theRECIPIENTCOLUMN`,
+-- `whyNOTANidentifier_hash_ANDTHISISTHEPRODUCTCONSEQUENCE`); `security-agent` ruled the retention
+-- policy and closed `theRetentionQuestion` on 2026-09-13. **The first option won: a plaintext
+-- address, held for a bounded window.** The contract states the consequence in its own words —
+-- *"this table necessarily holds, FOR A BOUNDED WINDOW, exactly the value Dudo refuses to hold for
+-- its own members."*
+--
+-- **THE REFUSAL ABOVE WAS NOT WASTED, AND THIS IS THE PART WORTH KEEPING.** Had this file picked
+-- `identifier_hash` to unblock itself, it would have decided — in a migration, as a side effect —
+-- that invitations are copy-and-paste codes forever, because you cannot email a hash. The question
+-- reached the parties who own it precisely because the column was left out.
+--
+-- WHAT THE TABLE ALSO HOLDS is the lifecycle: who invited, when, what role is offered, what state
+-- it is in, when it expires, and who closed it.
+--
+-- =============================================================================================
+-- `invitation_id` IS AN IDENTIFIER AND IS NOT A SECRET. IT MUST NOT BECOME THE ACCEPTANCE TOKEN.
+-- =============================================================================================
+--
+-- It is 128 bits of base64url from `kernel/ids.ts`, so it is unguessable — and unguessable is not
+-- the same as secret. **It will appear in an administrator's screen, in a URL, in a log line and in
+-- a `list` response**, because the pending-invitation list is a Milestone 2 surface (`0043` §4).
+--
+-- **A DESIGN THAT LETS THE HOLDER OF THIS VALUE JOIN THE ORGANIZATION MAKES EVERY PENDING
+-- INVITATION IN THAT LIST A LIVE CREDENTIAL.** If invitations are accepted by presenting a secret,
+-- that secret is a separate value, stored as a hash, and it is NOT this column. Written here
+-- because the shortcut is one line and looks like reuse.
+--
+-- =============================================================================================
+-- *** THE SEED ROLE BELOW IS NOT THE WHOLE GRANT. THE CUSTOM ROLES AN INVITATION CARRIES LIVE IN
+-- `0022_tenant_role.sql`, IN `invitation_custom_role`. `docs/decisions/0043` §7b ROW 2. ***
+-- =============================================================================================
+--
+-- **THIS FILE ORIGINALLY GAVE AN INVITATION A SEED `role` AND NOTHING ELSE, AND THE CONTRACT IS THE
+-- AUTHORITY.** `tenant-invitations-v1` carries `custom_role_ids` (`maxItems: 20`) on both the
+-- invite input and the invitation summary, so an invitation that could offer only one of four
+-- platform-defined tiers would make `0043` §5.6's visibility promise hollow **at the one moment a
+-- grant is actually chosen.**
+--
+-- **THE JOIN TABLE IS IN `0022` RATHER THAN HERE BECAUSE IT NEEDS BOTH PARENTS** — `invitation`
+-- and `tenant_role` — and a join table belongs with whichever migration is second. That makes
+-- `0022` depend on this file as well as on `0018`; both dependencies are stated in its header.
+--
+-- **A READER SIZING AN INVITATION'S WRITE COST FROM THIS FILE ALONE WILL UNDER-RESERVE.** The
+-- figure below is the invitation row only; the full cost is `3 + 2N` for N custom roles, and the
+-- arithmetic is at the join table's own declaration. Named here because under-reserving is the
+-- dangerous direction (`0014` §A.12) and this is the file somebody will read first.
+--
+-- =============================================================================================
+-- THE ROLE OFFERED IS CONSTRAINED THE SAME WAY THE MEMBERSHIP ROLE IS — AND `owner` IS EXCLUDED
+-- =============================================================================================
+--
+-- `role` carries the same four-value CHECK as `organization_membership` after `0018`, minus
+-- `'owner'`. **Ownership is singular (`0043` §3c) and moves through exactly one operation**,
+-- `transferOwnership`, which demotes and promotes two EXISTING members atomically. An invitation
+-- offering ownership would be a second door into the one column `0019`'s unique index guards, held
+-- open for however long the invitation is valid — and it would be accepted by a principal who is
+-- not yet a member, so there would be nobody to demote.
+--
+-- THE CHECK IS SPELLED OUT RATHER THAN REFERENCED, because SQLite has no shared constraint. **So
+-- there are now two lists of role spellings in this directory and they can drift.** Named as a
+-- hazard rather than solved: `qa-agent` is owed a case asserting that every value this CHECK admits
+-- is in `MEMBERSHIP_ROLES` and that `'owner'` is not — a comparison nothing else performs.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008)
+-- =============================================================================================
+--
+-- *** RECOMPUTED FROM THE TABLE AS IT NOW STANDS, 2026-09-13, NOT ADJUSTED. *** The recipient
+-- column and the recency index both landed after the first version of this block, and one of them
+-- — the index — means this arithmetic **was short from the day the contract was written** rather
+-- than newly out of date. A figure that was always wrong is re-derived; a figure that just moved is
+-- patched. **This is the first kind**, so every line below is counted again from the DDL.
+--
+-- ALLOWANCES: d1-storage, d1-rows-read, d1-rows-written.
+--
+-- STORAGE, per invitation row:
+--   the row          four identifiers, three timestamps, two short words         ~220 bytes
+--   the recipient    up to 254 at the contract's bound, in practice 20-40        ~40 bytes
+--   PK               (organization_id, invitation_id)                            2 entries
+--   by_organization  (organization_id, status)                                   1 entry
+--   by_recency       (organization_id, created_at DESC, invitation_id)           1 entry  <- NEW
+-- **A closed beta at a few dozen invitations is still under 20 KB.** The address is the only part
+-- that shrinks back, because the CHECK above clears it on every terminal transition — so a
+-- long-lived Organization's history costs the lifecycle and the index entries, not the addresses.
+--
+-- WRITES: *** 4 FOR THE INVITATION ROW, UP FROM 3. *** The row, the primary key,
+-- `invitation_by_organization`, and `invitation_by_organization_recency`.
+-- **`INVITATION_ROW_WRITES` in `invitation-administration.ts` MOVES FROM 3 TO 4 WITH THIS INDEX** —
+-- that is `control-plane-admission.ts`'s standing instruction firing exactly as written, and the
+-- constant is the single source both the create path and this block read.
+--
+-- *** THAT IS NOT THE COST OF CREATING AN INVITATION. *** Add 2 per custom role carried
+-- (`invitation_custom_role`, `0022`, no secondary index), so the operation is **`4 + 2N`** and is
+-- **44 at the contract's cap of 20** — against `PER_PRINCIPAL_DAILY_ROW_WRITES` of 600. **The route
+-- reserves the worst case, not the typical one**, because a reservation sized to the typical case
+-- is one that fails halfway through.
+--
+-- *** AND THE SWEEP'S COST MOVES TOO, WHICH IS THE LINE MOST LIKELY TO BE MISSED. *** `sweepLapsed`
+-- writes `status` and `identifier`. `status` is in `invitation_by_organization`; **`created_at` and
+-- `invitation_id` are not touched, so `invitation_by_organization_recency` is NOT rewritten.** The
+-- sweep therefore stays at **2 per row** — the row and its `by_organization` entry — and
+-- `2 x LIMIT` is unchanged at 16. **Stated because "a third index landed" reads as "everything got
+-- more expensive", and for this statement it did not.**
+--
+-- READS: the LISTING is a seek on `invitation_by_organization_recency`, which is the bound `0044`
+-- §3c requires that route to name. The SWEEP and the pending COUNT seek
+-- `invitation_by_organization`. **Two different reads, two different indexes, named separately so a
+-- route declaring a `boundingIndex` names the one that actually serves it.**
+-- **AT THE LIMIT: invitation creation REFUSES.** It does not degrade, and it does not silently drop
+-- the audit record that accompanies it (`0044` §3c).
+-- COST: USD 0 / BD 0 per month.
+
+CREATE TABLE IF NOT EXISTS invitation (
+  organization_id        TEXT NOT NULL REFERENCES organization (organization_id),
+  invitation_id          TEXT NOT NULL,
+
+  -- The role the invitee is offered. `owner` is deliberately absent — see the header.
+  role                   TEXT NOT NULL CHECK (
+                           role IN ('admin', 'business-admin', 'member')
+                         ),
+
+  -- 'pending' | 'accepted' | 'revoked' | 'expired'.
+  --
+  -- *** 'expired' IS COMPUTED FROM `expires_at` AND IS NOT A ROW ANYBODY WRITES. ***
+  --
+  -- **THIS COMMENT SAID THE OPPOSITE — "a stored state and not a derived one" — UNTIL 2026-09-13,
+  -- and the contract is the authority.** `tenant-invitations-v1`'s `invitationStatus`: *"There is
+  -- no expire operation in this contract and no permission gates one, because forcing an invitation
+  -- to expire early is REVOKING it under a second name — two words for one act… A sweep that
+  -- materialises the value is an implementation choice; a route that lets an administrator cause it
+  -- is a duplicate operation and is refused."*
+  --
+  -- **THE OPERATIONAL RULE THE OLD COMMENT GAVE WAS ALREADY RIGHT AND IS UNCHANGED:** a read must
+  -- treat `status = 'pending' AND expires_at <= now` as expired, because an invitation that has
+  -- passed its expiry is expired whether or not anything has run to notice. **What was wrong was
+  -- the headline**, and a headline contradicting the contract is `architecture.md` §3c's defect —
+  -- the sentence a reader takes away, disagreeing with the file it claims to implement.
+  --
+  -- THE VALUE IS IN THE ENUM SO THAT A SWEEP MAY MATERIALISE IT AND SO THAT A RESPONSE CAN CARRY
+  -- IT. It also keeps a REVOKED invitation distinguishable from a LAPSED one — which an
+  -- administrator asking "why can this person not join" needs and a timestamp comparison cannot
+  -- answer. **No route in this milestone writes it.**
+  status                 TEXT NOT NULL CHECK (
+                           status IN ('pending', 'accepted', 'revoked', 'expired')
+                         ),
+
+  -- =========================================================================================
+  -- *** THE PLAINTEXT ADDRESS OF A NON-MEMBER. THE ONE PLACE IN DUDO THAT HOLDS ONE. ***
+  -- =========================================================================================
+  --
+  -- `tenant-invitations-v1`'s `invitationIdentifier`: an email address, NFKC-normalised with
+  -- ASCII-only case folding **before storage and before the already-a-member check**, because two
+  -- spellings of one address are one person. 3..254 characters at the contract's bound.
+  --
+  -- *** IT IS NOT AN `identifier_hash` AND THAT IS THE PRODUCT DECISION, NOT AN OVERSIGHT. ***
+  -- `0006_principal_credential.sql` stores an HMAC and says the plaintext identifier is never
+  -- stored and never logged. **An invitation cannot obey that rule and be deliverable.** The
+  -- contract carries the argument; this column is what it decided.
+  --
+  -- NULLABLE, AND THE ASYMMETRY IS THE WHOLE REASON (`0030` — the free tier and every other
+  -- pressure may cost CONFIGURATION, never SCHEMA). `security-agent`: *"the two options are not
+  -- symmetric. Nullable keeps both policies available; NOT NULL permanently chooses keep and needs
+  -- a migration to undo."* A later ruling that terminal invitations should retain the address is
+  -- then a change to what Core writes. The reverse would be a change to this file.
+  --
+  -- *** THE CHECK IS KEYED ON THE EXCEPTION, SO A STATUS NOBODY HAS INVENTED CLEARS BY DEFAULT. ***
+  -- `architecture.md` §3a-i. Written `status = 'pending' OR identifier IS NULL` rather than
+  -- `status IN ('accepted','revoked','expired') -> identifier IS NULL`: the second is a list that
+  -- must be remembered when the enum grows, and the first is a mechanism that refuses a fifth state
+  -- carrying an address without anyone doing anything.
+  --
+  -- **AND IT REQUIRES CLEARING ATOMICALLY RATHER THAN PERMITTING IT — WHICH IS WHY IT IS A CHECK
+  -- AND NOT A CONVENTION.** `UPDATE invitation SET status = 'revoked'` alone does not leave a
+  -- lingering address; it FAILS. The clear has to be in the same statement as the transition, so
+  -- there is no window and no ordering to get wrong (`architecture.md` §3a — the in-statement guard
+  -- is the only layer with no window).
+  --
+  -- *** WHAT THE CHECK CANNOT REACH, AND IT IS ONE OF THE FOUR STATES: `expired`. *** That value is
+  -- COMPUTED from `expires_at`, so a lapsing invitation performs **no write for the CHECK to fire
+  -- on**. A row that has passed its expiry reads as `expired` and still stores `pending`, so the
+  -- CHECK permits its address — correctly, by its own terms, and the address is still there.
+  -- **The sweep in `tenant-admin/invitation-administration.ts` is the only thing that ends that
+  -- retention, and it is amortised onto the next write in the same Organization.** An Organization
+  -- that stops inviting never runs it. See that file's `sweepLapsed`, which must clear this column
+  -- in the same UPDATE or the CHECK refuses it and invitation creation starts failing.
+  --
+  -- *** THE CONVERSE IS DELIBERATELY NOT ASSERTED, AND THE REASON IS IN THIS FILE'S OWN HEADER. ***
+  -- `CHECK ((status = 'pending') = (identifier IS NOT NULL))` would additionally forbid a pending
+  -- invitation with no address — an undeliverable row nothing would notice. It is REFUSED because
+  -- it would also forbid the out-of-band shape the withdrawn block above names as reachable today:
+  -- Dudo has no mailer, and an invitation that is a code an administrator hands over in person has
+  -- a recipient nobody typed. **A constraint that forbids the fallback is a constraint that decides
+  -- the product**, which is the mistake the original refusal existed to avoid. A pending row with a
+  -- NULL identifier is therefore representable and is a Core-side defect, not a schema-side one.
+  identifier             TEXT CHECK (status = 'pending' OR identifier IS NULL),
+
+  created_at             TEXT NOT NULL,   -- RFC 3339, UTC. The server's clock, never a request value.
+  created_by_principal_id TEXT NOT NULL REFERENCES principal (principal_id),
+
+  -- REQUIRED, WITH NO DEFAULT IN THE SCHEMA. An invitation that never expires is a standing grant
+  -- to whoever still has the message, and a DEFAULT here would be this file choosing the platform's
+  -- invitation lifetime — the same objection `composition.ts` raises to a default `adminHosts`.
+  -- The route computes it from the server's clock and a constant Core owns.
+  --
+  -- *** AND THAT CONSTANT IS NOT ONLY A UX CHOICE: THE INVITATION LIFETIME **IS** THE EXPOSURE
+  -- WINDOW FOR THE GRANT-CEILING STALENESS GAP. *** `tenant-admin/grant-ceiling.ts`.
+  --
+  -- `clearGrantCeiling` certifies that the inviter could confer the offered role **at the moment
+  -- the invitation was created**. Acceptance happens later, and **the inviter's own authority may
+  -- have been reduced in between** — demoted, suspended, removed — so a ceiling checked only at
+  -- creation grants on the strength of authority the grantor no longer has. **The length of that
+  -- window is exactly this column.**
+  --
+  -- **SO WHOEVER PICKS THE CONSTANT IS PICKING A SECURITY PARAMETER, NOT JUST A DEADLINE.** Thirty
+  -- days is a month in which a revoked administrator's outstanding invitations keep conferring what
+  -- they could confer in January.
+  --
+  -- IT IS WRITTEN HERE RATHER THAN ONLY IN A DECISION RECORD, DELIBERATELY: **a note in a decision
+  -- record is read by people looking for decisions; a note in the comment that names the future
+  -- constant is read by the person creating it, at the moment they create it.**
+  --
+  -- **THE WINDOW IS NOT CLOSED BY SHORTENING IT.** The acceptance path owes its own re-check of the
+  -- ceiling — `grant-ceiling.ts` records that as owed — and a short lifetime narrows the gap
+  -- without removing it. Do not let a chosen constant be mistaken for the fix.
+  expires_at             TEXT NOT NULL,
+
+  -- Set when the invitation leaves 'pending'. NULL while it is open.
+  --
+  -- ONE PAIR OF COLUMNS FOR ALL THREE TERMINAL STATES rather than three pairs. `status` says WHICH
+  -- transition happened and these say WHEN and BY WHOM, so the three cannot disagree — three
+  -- separate `revoked_at`/`accepted_at`/`expired_at` columns would permit a row that is both.
+  closed_at              TEXT,
+  closed_by_principal_id TEXT REFERENCES principal (principal_id),
+
+  PRIMARY KEY (organization_id, invitation_id)
+);
+
+-- =============================================================================================
+-- WHAT THIS INDEX SERVES, STATED IN FULL RATHER THAN AS WHAT IT STOPPED SERVING. 2026-09-13.
+-- =============================================================================================
+--
+-- **THE SWEEP AND THE PENDING COUNT. NOT THE LISTING.** It was created for a list that *"filters
+-- to `pending`"*; `tenant-invitations-v1` then ruled **no status filter in v1** — the listing
+-- returns every state, ordered `created_at DESC, invitation_id ASC`, and is served by
+-- `invitation_by_organization_recency` below.
+--
+-- **THE WHOLE OF WHAT IT SERVES IS WRITTEN OUT SO THIS COMMENT DOES NOT MOVE A THIRD TIME.**
+-- `architecture-agent` flagged that naming only what it lost would send the next reader back here
+-- the first time anything else needs a `status` seek:
+--
+--   `sweepLapsed`                 WHERE organization_id = ? AND status = 'pending' AND expires_at <= ?
+--   the pending COUNT operation   WHERE organization_id = ? AND status = 'pending'
+--
+-- THE LEADING COLUMN IS `organization_id`, SO IT IS ALREADY THE PRIMARY KEY'S PREFIX — which means
+-- **this index earns its place entirely on the STATUS column.** Without it, every closed invitation
+-- an Organization has ever issued is read and discarded on every sweep and every count. That set
+-- grows without bound while the pending set does not.
+--
+-- `(organization_id, status)` AND NOT `(organization_id, status, expires_at)`. The expiry
+-- comparison applies to the rows the seek already returned, bounded by the route's page cap, and a
+-- third column would widen every entry on every invitation write to save reads that are already
+-- bounded. Same reasoning as `0020`'s refusal to index `status` there, reaching the opposite
+-- conclusion because here the discarded set is unbounded and there it is not.
+CREATE INDEX IF NOT EXISTS invitation_by_organization
+  ON invitation (organization_id, status);
+
+-- =============================================================================================
+-- THE LISTING'S INDEX. ADDED 2026-09-13, BECAUSE THE CONTRACT ASKED FOR AN ORDER THIS TABLE
+-- COULD NOT SERVE AND THE ADAPTER QUIETLY SERVED A DIFFERENT ONE INSTEAD.
+-- =============================================================================================
+--
+-- `tenant-invitations-v1.schema.json`, `listInvitationsOutput`: **"ORDER IS FIXED AND TOTAL:
+-- created_at descending, then invitation_id ascending. Newest first is what an administrator wants
+-- and invitation_id is the tiebreaker that makes the cursor correct."**
+--
+-- **THE COLUMN ORDER AND DIRECTIONS MIRROR THAT SENTENCE EXACTLY**, so the listing is a seek rather
+-- than a scan-and-sort. `organization_id` leads, so it is tenant-scoped like every other index here.
+--
+-- *** HOW THIS WAS MISSED, AND IT IS WORTH THE PARAGRAPH BECAUSE NOBODY WAS WRONG AT THEIR OWN
+-- LAYER. *** `architecture-agent`, against itself: *"I declared the index in
+-- `freeTierImpact.boundingIndex` on the OPERATION and omitted it from `freeTierImpact.storage` on
+-- the CONTRACT — two fields, one fact, and THE ONE THAT FEEDS A MIGRATION'S ARITHMETIC IS THE ONE
+-- THAT WAS EMPTY."* So the contract asked for something it did not budget for, this file budgeted
+-- for what it knew about, and **the adapter did the affordable thing.**
+--
+-- **`workflow.md` §12's duplicated constraint, with an asymmetry nobody had named: THE TWO COPIES
+-- ARE NOT EQUAL.** One documents a bound and one feeds a budget. They look like different
+-- questions, they are the same index, and **only one of them is load-bearing for a migration.**
+-- This file's arithmetic was short by one index from the day the contract was written — **which is
+-- why the block above was RECOMPUTED rather than adjusted.** A number that was always wrong and a
+-- number that just changed need different treatment, and only the first tells you to go and check
+-- what else read it.
+--
+-- **NO `DESC` ON THE SECOND COLUMN, DELIBERATELY.** SQLite reads an index forwards or backwards but
+-- not in mixed directions, so `(created_at DESC, invitation_id)` is what serves
+-- `ORDER BY created_at DESC, invitation_id ASC` — writing both `DESC` would serve a different
+-- ordering than the contract states, and would look correct.
+CREATE INDEX IF NOT EXISTS invitation_by_organization_recency
+  ON invitation (organization_id, created_at DESC, invitation_id);

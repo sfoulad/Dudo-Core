@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:organization-structure:1",
+  "title": "Organization Structure — Businesses and Branches — contract v1",
+  "description": "Every request and response shape of the ORGANIZATION STRUCTURE contract, contract version 1 — creating, naming, archiving and restoring Businesses and Branches. SHAPES ONLY; the rulings are in organization-structure-v1.contract.yaml.\n\n*** THIS IS THE SLICE `business-read-v1` REFUSED TO DESIGN AND ASKED FOR BY NAME. *** That contract says: 'THIS IS NOT THE ORGANIZATION-STRUCTURE SLICE AND MUST NOT GROW INTO ONE… If a future task finds itself designing organization structure in this file, that is the signal to stop and request a separate contract, not to extend this one.' This is that contract, and it is deliberately in the same directory and the same request class.\n\n*** REQUEST CLASS: `action` — NOT `tenant-admin`, AND THAT IS A MEASURED CORRECTION TO WHERE THIS WAS EXPECTED TO LIVE. *** `business` and `branch` are TENANT-DATABASE tables (platform/core/migrations/0002 and 0004, not control-plane/), so an Action reaches them through `ActionContext.store` and the tenant-admin class is unnecessary. See the contract's whyThisIsAnActionAndNotTenantAdmin.\n\nIT DOES NOT PUBLISH A BUSINESS LISTING OR A NAME RESOLVE — `business-read-v1` owns both and this contract must not duplicate them.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "businessId": {
+      "$ref": "urn:dudo:schema:business-read:1#/$defs/businessId",
+      "description": "Referenced rather than restated. business-read-v1's own note says the definition is duplicated there against the Customer Directory's copy because no resolver existed when it was written; **one resolver exists now for generation, so a new file has no excuse to make a third copy.**"
+    },
+
+    "branchId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "A Branch/Location inside one Business. Opaque, non-sequential, unguessable — 128 bits of base64url (platform/core/kernel/ids.ts), 22 characters at the generated width against a contract maximum of 64.\n\n*** A BRANCH IS ADDRESSED BY THE PAIR (business_id, branch_id) AND NEVER BY branch_id ALONE. *** `0004_branch.sql` declares `PRIMARY KEY (tenant_id, business_id, branch_id)`, so a lookup naming only the Branch is not a slower query — it is one that has left the Business out of the key, and the Business is the authorization scope. Every operation here that names a Branch also names its Business, and that is why.\n\nBRANCH NARROWS WITHIN A TENANT AND NEVER ACROSS ONE (0004's own words). It is an authorization scope one level below Business, not a second isolation boundary."
+    },
+
+    "structureName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "description": "What the Organization calls this Business or Branch. Trimmed before storage and before ordering; a value empty after trimming is not a name, which is what the \\S pattern asserts.\n\n*** NOTHING STORES THIS TODAY, FOR EITHER OBJECT. *** `0002_business.sql` defines `business` as exactly (tenant_id, business_id) and states in terms that it declined a name; `0004_branch.sql` follows it with (tenant_id, business_id, branch_id, created_at). **So every create operation in this contract requires a column that does not exist**, which is a migration and therefore the user's. See the contract's dependencies.\n\nONE DEFINITION FOR BOTH OBJECTS, AND THE SHARING IS DELIBERATE: they are named by the same people, rendered in the same lists, and a Branch called something a Business could not be called would be a distinction with no reason behind it. 200 matches `business-read-v1`'s `businessDisplayName` so that two names rendered side by side in one interface have one bound.\n\nNOT UNIQUE, AND THAT IS A RULING RATHER THAN AN OMISSION — see the contract's theNAMESARENOTUNIQUE. Two Branches of one Business may share a name; the identifier distinguishes them and the tenant owns its own vocabulary."
+    },
+
+    "structureStatus": {
+      "type": "string",
+      "enum": ["active", "archived"],
+      "enumPolicy": "closed",
+      "description": "Whether this Business or Branch may be used.\n\n  active    usable — records may be filed into it and it appears in pickers.\n  archived  withdrawn from NEW use. EVERY EXISTING RECORD THAT REFERENCES IT IS UNTOUCHED AND STILL RESOLVES.\n\n*** `closed`, AND DECIDED AGAINST ITS OWN CONSTRAINT RATHER THAN AGAINST THE ENUMS IT RESEMBLES. *** There is no CHECK to read here — **the column does not exist yet** — so the test is what the column WILL admit, and the answer is these two: archiving is the only lifecycle this contract publishes and deletion is deliberately not declared. A third state is a migration plus a contract change, which is the deliberate act `closed` denotes (docs/decisions/0041).\n\nIT IS ALSO A REQUEST-POSITION ENUM by way of a future filter, and `0041` amendment 1 makes those always `closed`. **Stating that as a SECOND reason rather than the only one**, because no filter exists in v1 and an argument resting on a shape nobody has built would be the weaker half doing the work.\n\n*** NOTE IT IS `archived` AND NOT `retired`, AGAINST THE NEIGHBOURING VOCABULARY. *** The permission catalogue rules on exactly this: 'Customer records archive; Templates retire.' A Business holds customer records, so it archives with them. `tenant_role` retires. **Two words, two object families, one deliberate distinction** — and the value sets ['active','archived'] and ['active','retired'] differ, so the duplicate-policy check will not group them and nobody will be asked to reconcile them."
+    },
+
+    "businessRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "name", "status", "created_at"],
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "name": { "oneOf": [{ "$ref": "#/$defs/structureName" }, { "type": "null" }], "description": "Null where no name is recorded — which is every Business that existed before the name column did. business-read-v1's normative rendering binds here unchanged: **a null renders the identifier VERBATIM**, not a blank and not a placeholder." },
+        "status": { "$ref": "#/$defs/structureStatus" },
+        "created_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC. NOT STORED TODAY — `0002_business.sql` has no created_at, unlike `branch`. A migration adds it with the name." }
+      },
+      "description": "One Business, as this contract writes it.\n\n*** IT IS A DIFFERENT SHAPE FROM `business-read-v1`'s `businessSummary` AND THE TWO MUST NOT BE MERGED. *** That one is (business_id, display_name) — exactly what a picker and a row label need, and deliberately narrow. This one carries lifecycle, because an administration screen shows archived Businesses and a picker must not. **Merging them would put `status` into every Customer Directory response and make the picker's job a filter rather than a listing.**\n\nAND THE FIELD IS `name` HERE AND `display_name` THERE, WHICH IS A DRIFT SURFACE AND IS NAMED AS ONE. `business-read-v1` is ACCEPTED and its wire field is published; this contract cannot rename it and will not add a second spelling to the same shape. **They are two shapes with two field names for one column**, and whoever unifies them owes a version."
+    },
+
+    "branchRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch_id", "business_id", "name", "status", "created_at"],
+      "properties": {
+        "branch_id": { "$ref": "#/$defs/branchId" },
+        "business_id": { "$ref": "#/$defs/businessId", "description": "The Business this Branch belongs to. ALWAYS PRESENT, because a Branch identifier alone does not address a Branch." },
+        "name": { "oneOf": [{ "$ref": "#/$defs/structureName" }, { "type": "null" }] },
+        "status": { "$ref": "#/$defs/structureStatus" },
+        "created_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC. `branch.created_at` — this one DOES exist." }
+      },
+      "description": "One Branch.\n\nNO NESTED BUSINESS OBJECT, only its identifier. A Branch listing is scoped to one Business the caller already named, so embedding the Business would repeat a value the caller supplied — and it would make the Branch shape carry a lifecycle that is not its own."
+    },
+
+    "createBusinessInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": { "name": { "$ref": "#/$defs/structureName" } },
+      "description": "Create a Business in the authenticated Organization.\n\nNO business_id — the server generates it. A caller-supplied identifier would let a caller choose a value, and `0002_business.sql` is explicit that identifiers are unguessable by generation.\n\nNO status: a Business is created `active`. A create that could produce an archived object is a create and an archive in one call, gated by the create permission.\n\n*** NO PARENT AND NO HIERARCHY. *** A Business does not nest inside a Business. That is `0002`'s model — Businesses are flat within an Organization and Branches are the level below — and a `parent_business_id` here would invent an organizational shape no record supports."
+    },
+
+    "createBusinessOutput": { "$ref": "#/$defs/businessRecord" },
+
+    "updateBusinessInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "name"],
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "name": { "$ref": "#/$defs/structureName" }
+      },
+      "description": "Rename a Business. `name` is REQUIRED — the only editable field is the name, so an update with nothing to change is invalid_argument rather than a no-op that writes an audit record.\n\n*** NO `status` FIELD, AND ITS ABSENCE IS THE PERMISSION BOUNDARY. *** Archiving is `core.business.archive` and renaming is `core.business.update`. A status field here would let the update permission perform the archive — the defect template-lifecycle-v1 refused when it kept `status` out of every update shape, and the reason it is worth refusing twice is that a field cannot be gated and a route can."
+    },
+
+    "updateBusinessOutput": { "$ref": "#/$defs/businessRecord" },
+
+    "businessLifecycleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id"],
+      "properties": { "business_id": { "$ref": "#/$defs/businessId" } },
+      "description": "The Business to archive or to restore. Two routes, not one taking a target state, so the capability is gated by a route rather than by a field.\n\nArchive requires status `active`; restore requires `archived`. Every other value is failed_precondition — the predicate keys on the single ADMISSIBLE state so a third status is refused by default rather than admitted by omission (architecture.md §3a-i)."
+    },
+
+    "businessLifecycleOutput": { "$ref": "#/$defs/businessRecord" },
+
+    "createBranchInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "name"],
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "name": { "$ref": "#/$defs/structureName" }
+      },
+      "description": "Create a Branch inside a Business.\n\n*** THE BUSINESS MUST BE `active`. *** Creating a Branch inside an archived Business is failed_precondition — archiving withdraws a container from NEW use, and a new Branch is the clearest possible new use. Without this, archive would be a label rather than a state.\n\nNO branch_id — the server generates it."
+    },
+
+    "createBranchOutput": { "$ref": "#/$defs/branchRecord" },
+
+    "updateBranchInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "branch_id", "name"],
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "branch_id": { "$ref": "#/$defs/branchId" },
+        "name": { "$ref": "#/$defs/structureName" }
+      },
+      "description": "Rename a Branch. Both identifiers are required — a Branch is addressed by the pair.\n\nNO `business_id` CHANGE. Moving a Branch between Businesses is not a rename: it changes which authorization scope the Branch sits under, and every record filed into it. That is a MOVE, it is not published here, and it would need its own permission on `customers.customer.move`'s reasoning."
+    },
+
+    "updateBranchOutput": { "$ref": "#/$defs/branchRecord" },
+
+    "branchLifecycleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id", "branch_id"],
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "branch_id": { "$ref": "#/$defs/branchId" }
+      },
+      "description": "The Branch to archive or to restore.\n\n*** RESTORING A BRANCH INSIDE AN ARCHIVED BUSINESS IS REFUSED with failed_precondition. *** Otherwise a restore reaches past its container and produces an active Branch nobody can reach, which is a state the archive was meant to prevent."
+    },
+
+    "branchLifecycleOutput": { "$ref": "#/$defs/branchRecord" },
+
+    "listBranchesInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_id"],
+      "properties": {
+        "business_id": { "$ref": "#/$defs/businessId" },
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      },
+      "description": "List the Branches of one Business. `business_id` is REQUIRED — there is no cross-Business Branch listing in v1, because the row set of one would be every Branch in the Organization and that is a wider population than a Business-scoped caller administers.\n\nNO STATUS FILTER, on tenant-members-v1's ruling: a filter needs a default, a default of `active` hides the archived set, and the escape hatch for that is an `all` member whose omission is how a recovery queue becomes invisible. Both states are returned with `status` on each row."
+    },
+
+    "listBranchesOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/branchRecord" } },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      },
+      "description": "The standard collection envelope, capped at 100. NO TOTAL COUNT — the pagination envelope forbids one.\n\nORDER IS FIXED AND TOTAL: name ascending by Unicode code point with NULLS LAST, then branch_id ascending. Because name is null on every row today the order degenerates to branch_id ascending and becomes name order, with no contract change, the day names exist — business-read-v1's construction, adopted rather than re-derived. Code-point order is not locale-correct for Arabic; same root cause as CD-6, recorded and not solved here."
+    }
+  }
+}

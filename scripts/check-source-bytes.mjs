@@ -485,7 +485,27 @@ const QUARANTINE = new Map([
       // MEASURES INDEPENDENTLY AND DOES NOT TRANSCRIBE. Two different reporters so far
       // (`web-agent`, then `core-agent`), each stopping because this file's own refusal message
       // names the Team Lead. **Keep that message pointing at a person, not at a procedure.**
-      nulOffsets: [43161, 48537, 48841],
+      // MOVED A FOURTH TIME 2026-09-13, from [43161, 48537, 48841], by exactly +43 — an import
+      // line added above the separators while `core-agent` wrote `0017`'s constant split.
+      // **Reported INDEPENDENTLY by `core-agent` and `qa-agent` within a minute of each other,
+      // with identical offsets, and neither touched the pin.** Third and fourth distinct reporters.
+      //
+      // Re-derived by the Team Lead rather than transcribed from either report:
+      //   shift +43 / +43 / +43 uniform · gaps 5376, 304 preserved · 3 NULs, all genuine 0x00
+      //   file 133,092 bytes · other control bytes: 0
+      //
+      // *** FOUR MOVES, AND THE MAINTENANCE COST IS NOW THE ARGUMENT RATHER THAN THE PIN. ***
+      // Every move has been ordinary correct work landing above the first separator, because that
+      // is where this file's code lives. The pin has caught all four and a count-only pin would
+      // have stayed green through every one — that half is settled and is not in question.
+      //
+      // What IS worth noticing: this is the second time the pin has blocked the gate for the whole
+      // team. `npm test` chains `check:source-bytes` second, so a shifted pin makes every suite
+      // NOT RUN — not failing, unmeasured — and both reporters correctly stopped rather than
+      // editing. **The instruction is working exactly as written and its cost is a full stop each
+      // time somebody edits this file.** Whoever removes these three bytes ends that; until then
+      // the stop is deliberate, because the alternative is a gate that cannot see a real regression.
+      nulOffsets: [43204, 48580, 48884],
       why:
         'Deliberate domain separators typed as raw bytes instead of String.fromCharCode(0). ' +
         'CORRECT IN MEANING, WRONG IN FORM — the value must not move. One is inside encodeAuditAnchor, ' +

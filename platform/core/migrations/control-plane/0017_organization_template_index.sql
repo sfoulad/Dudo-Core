@@ -1,0 +1,138 @@
+-- Control-plane migration 0017 — one index on `organization.template_id`.
+-- APPROVED BY THE USER, 2026-09-12. Serves `platform.templates.usage` (`template-lifecycle-v1`).
+--
+-- Read `0013_organization_template.sql` first. IT DELIBERATELY CREATED NO INDEX HERE, and this
+-- migration is that decision's own trigger firing rather than a reversal of it.
+--
+-- IT BELONGS TO `DB_CONTROL`. See 0002.
+--
+-- ROLLBACK PATH: `DROP INDEX organization_by_template`. Dropping it restores a full table scan on
+-- every `platform.templates.usage` call and nothing else — no data is lost and no row becomes
+-- unreadable, so unlike `0016` this rollback is a cleanup rather than a decision.
+-- FORWARD-ONLY and idempotent: `IF NOT EXISTS`, so a re-run is safe. Unlike `0007`.
+--
+-- *** NOT APPLIED BY THE AGENT THAT WROTE IT. *** The user's sequence is explicit and is not
+-- negotiable by convenience: A VERIFIED D1 BACKUP FIRST, THEN THIS MIGRATION, THEN THE DEPLOY.
+-- Applying it is a production action and belongs to the release, after that backup is captured
+-- AND verified (`security.md` §7).
+--
+-- =============================================================================================
+-- WHY IT EXISTS NOW AND DID NOT BEFORE — `0013`'s CONDITION, MET
+-- =============================================================================================
+--
+-- `0013` refused this index in terms, and its sentence contained the condition for adding one:
+--
+--   "NO INDEX ON `template_id`, DELIBERATELY. The only query that would want one is 'list every
+--    Organization using Template X', which is a route that does not exist and which nobody has
+--    asked for. An index costs a row-write on every Organization insert, forever, to serve a
+--    question nothing asks. ADD IT WITH THE ROUTE THAT NEEDS IT."
+--
+-- **THE ROUTE NOW EXISTS.** `platform.templates.usage` was registered 2026-09-11 and it asks
+-- exactly that question — narrowed to a COUNT rather than a list, because `0028` Decision 1 refuses
+-- to return the set of Organizations and `countOrganizationsUsingTemplate` returns a `number` so
+-- that the port cannot.
+--
+-- SO `0013` IS SUPERSEDED ON THIS ONE POINT AND CORRECT ON EVERY OTHER. Its paragraph is left
+-- unedited: it was right when written, its reasoning is why the index waited, and **a condition
+-- that fired as written is worth more in the record than a paragraph quietly brought up to date**
+-- (`workflow.md` §12 — a decision being MADE strands artifacts as surely as one being withdrawn,
+-- and the cheapest resolution is a trigger someone actually collected).
+--
+-- =============================================================================================
+-- WHAT IT REMOVES — the read
+-- =============================================================================================
+--
+-- `d1-platform-store.ts::countOrganizationsUsingTemplate` runs:
+--
+--   SELECT COUNT(*) AS adopters FROM organization WHERE template_id = ?
+--
+-- MEASURED RATHER THAN DESCRIBED — `EXPLAIN QUERY PLAN`, the same statement, on a throwaway
+-- in-memory database built from these sixteen migrations and then from all seventeen:
+--
+--   WITHOUT 0017   SCAN organization
+--   WITH 0017      SEARCH organization USING COVERING INDEX organization_by_template (template_id=?)
+--
+-- *** IT IS A **COVERING** INDEX FOR THIS QUERY, WHICH IS BETTER THAN THE SEEK THIS PARAGRAPH
+-- ORIGINALLY CLAIMED. *** The count is answered from the index alone and **the table is never
+-- touched** — there is no row to fetch, because `COUNT(*)` over an equality on the indexed column
+-- needs nothing the index does not already hold. Corrected to the measurement; the first draft
+-- said "a seek into matching entries", which understates it and was written before the plan was run.
+--
+-- The route's whole purpose is to be called BEFORE a retire, so an operator surveying a catalogue
+-- pays one scan per Template inspected without it.
+--
+-- IT IS FREE TODAY AND THAT IS NOT THE ARGUMENT. The control plane holds few Organizations, so the
+-- scan costs almost nothing now; the index is added because **the cost grows with the customer
+-- base while the benefit of adding it later does not** — and a migration against a populated table
+-- is a larger act than one against a small one.
+--
+-- ONE COLUMN, NOT TWO, AND THE CONTRAST WITH `0016` IS DELIBERATE. That migration's indexes carry
+-- trailing columns because its feeds have an ORDER BY and a keyset cursor that a single column
+-- cannot serve without a sort. **This query has no ordering, no cursor and no second predicate —
+-- it is an equality filter under an aggregate.** A trailing column here would cost storage and a
+-- wider index entry on every write to buy nothing.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a)
+-- =============================================================================================
+--
+-- ALLOWANCES: d1-rows-read (better), d1-rows-written (worse), d1-storage (worse).
+--
+-- *** WRITES: EVERY `organization` INSERT AND EVERY `set-template` UPDATE PAYS ONE MORE ROW-WRITE.
+-- THE CONSTANTS MOVE IN `identity/control-plane-admission.ts` IN THIS SAME CHANGE *** — which is
+-- what those constants' own comments instruct (*"WHEN A MIGRATION ADDS AN INDEX, THIS NUMBER MUST
+-- MOVE WITH IT"*) and what `0016` is the worked example of honouring.
+--
+--   operation                                    today   after   why
+--   -------------------------------------------------------------------------------------------
+--   organization INSERT (onboarding)               2       3     the row, its PK, and now this
+--   onboarding, control-plane total               10      11     a SUM of constants, so it moves
+--                                                                  on its own — by design
+--   set-template UPDATE                            1       2     it writes `template_id`, which
+--                                                                  IS the indexed column
+--   identity.update UPDATE                         1       1     UNCHANGED — it writes thirteen
+--                                                                  columns and none is indexed
+--
+-- *** THE LAST TWO ROWS ARE WHY A SHARED CONSTANT NO LONGER WORKS, AND THAT IS THIS MIGRATION'S
+-- LARGEST CONSEQUENCE IN CODE. *** `ORGANIZATION_UPDATE_ROW_WRITES` served both routes because
+-- their cost was identical and derived identically. **This index makes those derivations differ**,
+-- so the constant splits — and the comment refusing to split it, written 2026-09-11, refused on the
+-- ground that *"two numbers derived from one table are two numbers that must be moved together and
+-- one that will not be."* **That premise is what this migration removes.** The refusal was correct
+-- when written and is superseded here rather than overruled.
+--
+-- STORAGE: one b-tree entry per `organization` row, and **an entry exists for every row including
+-- those with a NULL `template_id`** — SQLite indexes NULLs. So the storage and the write cost are
+-- paid by Organizations that have adopted no Template at all. Named because it is the detail a
+-- reader would reasonably assume the other way.
+--
+-- READS: the count stops scanning. At the current population that saves little; at ten thousand
+-- Organizations it is the difference between one seek and ten thousand row-reads per call.
+--
+-- COST: USD 0 / BD 0 per month. No new table, no new binding, no new service.
+--
+-- =============================================================================================
+-- WHAT THIS INDEX MUST NOT BECOME
+-- =============================================================================================
+--
+-- IT EXISTS TO COUNT, NOT TO LIST. An index on `template_id` makes *"which Organizations use
+-- Template X"* cheap as well as *"how many"*, and **the cheap version of that query is the one
+-- `0028` Decision 1 refuses**: per-Organization member and adoption lists invert into a mapping,
+-- and `CO1` forbids it by name.
+--
+-- **THE PROHIBITION IS NOT ENFORCED BY THE ABSENCE OF THIS INDEX AND NEVER WAS** — a full scan
+-- would have returned the same list, more slowly. Measured, so it is not left as an assertion:
+--
+--   SELECT organization_id FROM organization WHERE template_id = ?
+--     -> SEARCH organization USING INDEX organization_by_template (template_id=?)
+--
+-- That query is now cheap. **It was always AVAILABLE.** What forbids it is
+-- `countOrganizationsUsingTemplate` returning a `number` so the port cannot carry a set, no route
+-- publishing such a list, and `assertNoMemberEnumerationRoute` failing the build if one is added.
+--
+-- **SO THIS MIGRATION MAKES A FORBIDDEN QUERY FASTER TO RUN AND NO MORE PERMITTED TO WRITE.**
+-- Stated plainly because *"remove the index"* is the control someone will reach for later, and it
+-- would cost the count its covering plan while forbidding nothing.
+
+CREATE INDEX IF NOT EXISTS organization_by_template
+  ON organization (template_id);

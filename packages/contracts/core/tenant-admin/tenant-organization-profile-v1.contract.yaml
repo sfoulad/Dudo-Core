@@ -1,0 +1,356 @@
+---
+# Organization Profile — tenant-admin contract, version 1
+#
+# Shapes: tenant-organization-profile-v1.schema.json. Shared class obligations: README.md here.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the class, and §4's statement that OI-1 is closed by
+#              a route in this class being built · 0043 (Accepted) — §5's obligations ·
+#              0031 (Accepted) — organization identity and its verification model ·
+#              0024, 0007, 0006
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED, NOT BUILT, NOT REACHABLE — the tenant-admin registry does not
+# exist (0044 §4). *** AND OI-1 IS STILL OPEN. *** 0044 §4 is explicit that it is closed by a route
+# in this class BEING BUILT, not by a record and not by a contract. Nothing here may be reported as
+# closing it.
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# WHY THIS CONTRACT EXISTS — and it is the one place in Milestone 2 where the class's whole
+# justification is visible in a single object
+# ---------------------------------------------------------------------------
+whyThisContractExists:
+  theGap: >-
+    organization-identity-v1 records OI-1 as an accepted limitation: "the customer still cannot
+    enter or correct their own name, CR or VAT number". The platform enters them ON THE CUSTOMER'S
+    BEHALF, under core.platform-organization.update.
+  theCause: >-
+    The permission catalogue names it exactly: "THE TENANT PERMISSION HAS NO ROUTE AND CANNOT BE
+    GIVEN ONE OVER THIS TABLE TODAY — `organization` is control-plane and an Action reaches no
+    control-plane port".
+  whatChanged: >-
+    *** docs/decisions/0044 CREATED THE CLASS THAT CAN. *** A tenant-admin route is authenticated at
+    principal level, resolves the tenant from the authenticated context, evaluates a permission AND
+    REACHES CONTROL-PLANE PORTS. core.organization.update has been registered since the catalogue
+    was written, `sensitive`, scopes [organization], with no route to attach to. This is the route.
+  andTHECATALOGUESENTENCEISNOWFALSE: >-
+    *** THE CLAUSE "CANNOT BE GIVEN ONE OVER THIS TABLE TODAY" WAS TRUE WHEN WRITTEN AND IS NOT
+    TRUE NOW, AND NOTHING WOULD HAVE GONE RED. *** It is workflow.md §12's exact shape — a sentence
+    about a missing capability outliving the capability arriving, quoted by everyone for the half
+    that is still true (Actions still reach no control-plane port; that part is unchanged).
+    CORRECTED IN THE CATALOGUE IN THE SAME PASS THAT AUTHORED THIS CONTRACT, rather than left for
+    the next reader — §12: retiring what the old sentence licensed is the half nobody is prompted to
+    do, because nothing breaks when it is skipped.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2. This contract reads and writes exactly one row: the authenticated Organization's."
+  model: "docs/decisions/0006. The `organization` row is control-plane, reached through the tenant-admin class's control-plane port (0044 §1)."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call."
+    - >-
+      *** THERE IS NO IDENTIFIER IN ANY SHAPE IN THIS CONTRACT AT ALL — NOT EVEN AN OPTIONAL ONE. ***
+      Not in the path, not in the query, not in the body. That is stronger than 0044 §3b.2 requires
+      and it is free here: the contract operates on exactly one row and has no way to name a second.
+      A ROUTE WITH NO IDENTIFIER CANNOT ADDRESS THE WRONG ROW. This is the one contract in the
+      directory where the tenancy guarantee is structural rather than enforced.
+    - >-
+      THE WRITE IS A POINT UPDATE ON THE PRIMARY KEY of `organization`, and the key is the
+      authenticated Organization. A statement whose WHERE clause comes from anywhere else is a
+      cross-tenant write — the most damaging single statement this milestone could contain, because
+      it would edit another company's legal identity.
+    - "No response carries an organization identifier, and there is nothing here that would need one."
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context. No membership, no tenant, no route."
+    - "3. Authorize the declared permission, record-independently. Failure -> forbidden."
+    - "4. Validate the input schema. Failure -> invalid_argument."
+    - "5. On update: clear the verification of any registration whose number changed. See theVERIFICATIONISCLEAREDBYATENANTEDIT."
+    - "6. Write the audit record into this Organization's own audit_event, then update the row."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found"
+    ruling: >-
+      DECLARED FOR UNIFORMITY AND UNREACHABLE HERE, AND SAYING WHICH IS THE POINT OF DECLARING IT.
+      Neither operation takes an identifier, so neither can meet an unknown one. The field is
+      declared because 0043 §5.1 requires it as a FIELD on every operation and because an operation
+      that silently omitted it would be indistinguishable from one that forgot.
+      *** IT BECOMES LOAD-BEARING THE MOMENT ANY IDENTIFIER IS ADDED, WHICH IS WHY IT IS NOT LEFT
+      OFF. *** A future sub-resource — a registration document, an address — arrives with the ruling
+      already made, rather than with somebody deciding it under deadline.
+
+  theVERIFICATIONISCLEAREDBYATENANTEDIT:
+    ruling: >-
+      *** WHEN A TENANT CHANGES A REGISTRATION NUMBER, ITS VERIFICATION IS SET TO null. ALWAYS,
+      UNCONDITIONALLY, AND A TENANT CAN NEVER SET ONE. *** registrationSubmission carries no
+      `verified` field at all, so the clearing is not a rule Core must remember — THERE IS NO VALUE
+      IN THE REQUEST THAT COULD PRESERVE ONE.
+    why: >-
+      A VERIFICATION IS A STATEMENT THAT SOMEBODY OTHER THAN THE CLAIMANT CHECKED THIS NUMBER
+      AGAINST THE ISSUING REGISTRY. A self-verified registration is a claim wearing a verification's
+      clothes, and in the response it would be INDISTINGUISHABLE from one an operator checked —
+      which destroys the distinction organization-identity-v1 calls "the two things this whole
+      design exists to keep apart".
+      *** AND THIS IS THE RISK THAT ARRIVES WITH CLOSING OI-1, STATED PLAINLY: *** letting a customer
+      edit their own commercial registration is letting them assert any number they like, including
+      another company's. What makes that acceptable is that the assertion is permanently marked
+      unverified until a platform operator checks it — so the capability the tenant gains is the
+      ability to CLAIM, and the ability to ATTEST stays where it was.
+    theOPERATORSIDEALREADYDOESTHIS: >-
+      organization-identity-v1's own response description says the whole block is returned so it
+      "shows the operator the consequence they are most likely not to expect — that editing a number
+      cleared its verification". ADOPTED RATHER THAN RE-DERIVED, and the tenant is MORE likely to be
+      surprised by it than an operator, not less — so both operations here return the whole block.
+    theSTATECHANGECASE: >-
+      Moving a registration from `recorded` to `not_recorded` or `not_applicable` clears the number
+      AND the verification. Moving it back is a new number with no verification. There is no path by
+      which a verification survives a state change, and no field through which one could.
+    whatTHISCONTRACTCANNOTDO: >-
+      IT CANNOT REQUEST VERIFICATION. There is no "ask the platform to verify this" operation here,
+      and inventing one would be designing a platform workflow from inside a tenant contract. A
+      tenant that has entered a number and wants it verified has no in-product route to say so.
+      RECORDED AS TP-2 rather than left as an obvious next feature somebody adds to this file.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.organization.read: >-
+        read, scopes [organization], phase 1. Gates the profile read. IT HAS NEVER HAD A ROUTE and
+        this is its first.
+      core.organization.update: >-
+        sensitive, scopes [organization], phase 1. Gates the profile update. ALSO ITS FIRST ROUTE.
+    proposedByThisContract: "NONE. This contract requests no new permission and no catalogue entry."
+    theTWOPERMISSIONSARENOTTHEPLATFORMONES_ANDTHECATALOGUEALREADYARGUEDIT: >-
+      core.platform-organization.update is a DIFFERENT permission at `platform` scope, and the
+      catalogue's own entry says why the pair exists: "Two permissions rather than one widened one,
+      for the reason AZ8 records: widening a tenant-scoped permission above the tenant boundary is
+      an escalation, not a convenience."
+      *** THIS CONTRACT IS THE OTHER HALF OF THAT PAIR FINALLY ACQUIRING A ROUTE, AND IT CHANGES
+      NOTHING ABOUT THE PLATFORM SIDE. *** organization-identity-v1's operator route stays exactly
+      as it is, including its own verification semantics. Two callers, two permissions, one row, and
+      the tenant can never do the one thing the operator can — attest.
+    whyREADANDUPDATEARESEPARATEANDNOTONE: >-
+      They already are in the catalogue, and this contract inherits rather than decides it. Worth
+      noting only because the read is `read` and the update is `sensitive`: a tenant administrator
+      who may look at the legal name is not thereby a tenant administrator who may change it, and a
+      role holding only the read is a perfectly ordinary thing to want.
+    permissionsDeliberatelyNotDeclared:
+      - >-
+        Anything for VERIFICATION. A tenant-side verification permission would be the capability
+        this contract exists to withhold, and declaring it — even ungranted — puts a name in the
+        catalogue that somebody will later grant because it exists.
+      - >-
+        Anything for STATUS or LIFECYCLE. Suspension, deletion requests and archive controls are
+        separate permissions in a separate contract. The catalogue already ruled the platform half —
+        core.platform-organization.update "DOES NOT COVER STATUS. Not suspension, not deletion, not
+        activation" — and the tenant half inherits the same discipline.
+
+  scopeRuling:
+    bothOperations: organization
+    reasoning: >-
+      Both permissions are declared at exactly one scope, [organization], so there is no judgement
+      to make: the Organization profile is an organization-scoped object and a business-scope
+      principal editing it would be editing something above the boundary it holds.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.organization.profile.get
+    title: "Read the Organization's profile"
+    method: GET
+    path: "/organization/profile"
+    request: "No parameters. No body, no path parameter, no query parameter — the Organization is the authenticated one."
+    response: { schemaRef: "urn:dudo:schema:tenant-organization-profile:1#/$defs/getProfileOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.organization.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: "organization PRIMARY KEY — ONE ROW, on the authenticated Organization's own key. This is the tightest bound any read in this milestone has: not a page, not a scan, a single point lookup that cannot return more than one object however the request is shaped."
+      whyPageCapIsNull: >-
+        There is no collection and no parameter that could produce one. 0044 §3c requires a page cap
+        OR the bounding index, and stating WHICH applies is what stops `null` reading as the absent
+        bound the rule refuses — an omission and a reasoned inapplicability look identical in a
+        field that is simply missing.
+    notes: >-
+      NO not_found. The authenticated Organization always exists — the request could not have been
+      authenticated otherwise — so there is no absent row to report. A caller with no membership
+      never reaches this operation at all.
+      NOT AUDITED. A member reading their own Organization's profile is 0044 §3c's central case, and
+      a write per settings-page view would cost the tenant's own allowance for no detection value.
+
+  - id: tenant.organization.profile.update
+    title: "Edit the Organization's profile"
+    method: PATCH
+    path: "/organization/profile"
+    request: { schemaRef: "urn:dudo:schema:tenant-organization-profile:1#/$defs/updateProfileInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-organization-profile:1#/$defs/updateProfileOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.organization.update
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 8
+    writes: >-
+      ORGANIZATION_ROW_WRITES (3, platform/core/identity/control-plane-admission.ts) against the
+      CONTROL-PLANE budget, plus AUDIT_EVENT_ROW_WRITES (5,
+      platform/core/storage/write-cost.ts) against THE TENANT'S OWN. 8 is the sum across two ledgers
+      that refuse independently, so a request can be admitted by one ceiling and refused by the
+      other — the shape template-lifecycle-v1's set-template records, and the scalar cannot express
+      it.
+      READ THE CONSTANTS, NOT THIS FIGURE. `check:row-writes` compares a declared cost against the
+      constant the dispatcher charges — AND IT DOES NOT COVER THIS CLASS. It buckets any
+      non-platform declared class as "other, P4 does not apply", so this number has no mechanical
+      guard. That is a gap in the tooling rather than in the contract, and it is reported as one.
+    theAUDITRECORDMUSTCARRYWHATCHANGED: >-
+      *** A LEGAL NAME AND A REGISTRATION NUMBER ARE THE FIELDS AN AUDIT TRAIL EXISTS FOR. *** The
+      record carries the fields that changed, their previous values and their new ones — "updated
+      the profile" is a record of nothing on a screen where a tenant can rewrite its own legal
+      identity, and the previous value is the half that makes a dispute answerable.
+      IT MUST ALSO RECORD THAT A VERIFICATION WAS CLEARED, as a distinct fact rather than as an
+      implication of the number changing. A later reader asking "when did this stop being verified"
+      should not have to infer it from an edit.
+    notes: >-
+      PATCH AND PARTIAL. An omitted property is unchanged; a property present with null clears the
+      value; `regional` is the one whole-object field. minProperties 1 refuses an empty request
+      rather than succeeding as a no-op that writes an audit record.
+      NO not_found — the row always exists. NO conflict: nothing here is unique across
+      Organizations, and display_name deliberately is not. TWO ORGANIZATIONS MAY SHARE A DISPLAY
+      NAME AND THAT IS CORRECT: enforcing uniqueness would leak the existence of another tenant's
+      name through a refusal, which is a cross-tenant disclosure through a validation error.
+      *** EDITING A REGISTRATION NUMBER CLEARS ITS VERIFICATION, AND A TENANT CAN NEVER SET ONE. ***
+      authorizationModel.theVERIFICATIONISCLEAREDBYATENANTEDIT. The whole block is returned so the
+      consequence is visible rather than discovered.
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  noRouteInThisClassIsREGISTEREDYET: >-
+    MEASURED 2026-09-13: `platform/core/tenant-admin/` holds seven modules and NO ROUTE ID LITERAL.
+    Machinery under construction, registry empty. Full measurement in tenant-members-v1 ->
+    dependencies.
+    *** UNTIL A ROUTE IN THIS CONTRACT IS REGISTERED AND SERVING, OI-1 IS OPEN. *** 0044 §4 says so
+    in terms — it closes when a route in this class IS BUILT — and this contract does not close it
+    by describing it. A report that Milestone 2 "gives customers control of their own identity" is
+    rounding a contract up to a capability.
+
+  theCOLUMNSTHATDONOTEXISTYET:
+    finding: >-
+      0015_organization_identity.sql adds `display_name` and the two registration blocks to
+      `organization`. THIS CONTRACT ALSO PUBLISHES legal_name, contact_email, contact_phone AND FIVE
+      REGIONAL FIELDS, AND NOTHING STORES ANY OF THEM.
+    consequence: >-
+      Nine of the fields in getProfileOutput have no source. They are contracted anyway, for
+      business-read-v1's reason: contracting a nullable field is free now and breaking later, and
+      NOT contracting it is what makes each client invent its own settings shape.
+      *** THE HONEST STATEMENT: A TENANT COULD READ THIS PROFILE AND FIND ALMOST ALL OF IT NULL. ***
+      display_name is null on every pre-migration row and nothing backfills it; the rest have no
+      column at all.
+    whatWouldCloseIt: >-
+      One additive migration on `organization`. IT IS THE USER'S, EVERY TIME (security.md §7), and
+      it is not designed here — a contract that specified a schema would be deciding Core's shape as
+      a side effect of publishing a settings screen.
+
+  theREGIONALSETTINGSHAVENOCONSUMER: >-
+    Nothing in Dudo reads a timezone, a week start or a currency today. Every timestamp is RFC 3339
+    UTC and every screen renders in the client's own locale. SO THIS CONTRACT LETS A TENANT SET
+    PREFERENCES THAT CHANGE NOTHING, and a client must not imply otherwise — which is the absence
+    claim workflow.md §12 warns about, in the direction that over-promises. A settings screen saying
+    "Week starts on Saturday" while every report starts on Monday is a false statement to the
+    customer, and it is the kind that survives for months because nobody checks a preference.
+    RECOMMENDATION, NOT A RULING: build the read and the write, and have the client say what is not
+    yet applied. The alternative — withholding the fields until something consumes them — means each
+    consumer arrives needing a breaking contract change.
+
+  theCONFIRMATIONCHALLENGEROUTE: >-
+    NOT NEEDED HERE. Neither operation is `critical`, so neither carries a confirmation (README.md
+    §2.4). Named because its absence blocks other contracts in this directory and a reader should
+    not carry that dependency to this file.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    NO NEW TABLE. Nine new COLUMNS on `organization` — one additive migration, the user's. No growth
+    in row count: this contract creates nothing and deletes nothing, it edits one existing row.
+  reads: "One point lookup on a primary key. The tightest-bounded read in the milestone, and its bound is declared as a field rather than implied by the shape."
+  writes: "One operation writes. 8 row-writes across two ledgers — see the operation."
+  theCEILINGTHISCLASSDOESNOTINHERIT: "0044 §3c. Both reads here declare their bound."
+  whatIsNOTBOUNDED: >-
+    NOTHING, UNUSUALLY, AND THAT IS WORTH SAYING RATHER THAN LEAVING AS A BLANK. There is no
+    collection, no unbounded array, no fan-out and no outbound message anywhere in this contract.
+    Every other contract in this directory has something in this field; this one genuinely does not,
+    and an empty section reads the same as an unconsidered one.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TP-1
+    question: >-
+      Should a tenant be able to edit its commercial registration at all, given that the value is
+      what a tax authority matches an entity against?
+    recommendation: >-
+      YES, and the control is the verification rather than the permission. OI-1 exists because the
+      current answer is no, and 0044 §2b refuses the alternative that would make it permanent. A
+      tenant-entered number is permanently `unverified` until a platform operator checks it, so the
+      capability gained is to CLAIM and the ability to ATTEST does not move. Recorded as a question
+      because it is a genuine risk and the mitigation should be reviewed rather than assumed —
+      security-agent.
+    status: "OPEN — owed to security-agent before acceptance."
+
+  - id: TP-2
+    question: "A tenant that has entered a registration number has no in-product way to ask for it to be verified."
+    recommendation: "A request-verification operation is a platform workflow — a queue an operator works — and designing one from inside a tenant contract would be inventing the operator's half. It belongs with the platform identity contract."
+    status: open
+
+  - id: TP-3
+    question: "Nothing consumes the regional settings. A tenant can set a timezone and a week start that change nothing."
+    recommendation: "Build them and have the client state what is not yet applied. Withholding them means every future consumer needs a breaking change; publishing them silently means a settings screen that lies."
+    status: open
+
+  - id: TP-4
+    question: >-
+      `language` is closed at en and ar. A member's personal language preference does not exist, so
+      the Organization default is currently the only signal — and this contract explicitly says it
+      is not a per-person setting.
+    recommendation: "The precedence rule belongs to whichever contract publishes a personal preference. Stated as absent here so that a client does not implement the Organization default as a per-person one and make the future rule a breaking change."
+    status: open

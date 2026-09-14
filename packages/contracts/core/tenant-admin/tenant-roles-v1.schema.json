@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-roles:1",
+  "title": "Organization Roles and Permission Assignment — contract v1",
+  "description": "Every request and response shape of the Organization ROLES contract, contract version 1. SHAPES ONLY — the four D16 constraints, the visibility ruling and the assignment ceiling are in tenant-roles-v1.contract.yaml, and the shared class obligations are in README.md.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044). No organization_id in any shape.\n\n*** THIS IS THE ONE PLACE IN DUDO WHERE A PERMISSION ID IS ON THE WIRE TO A CUSTOMER, AND THAT IS DELIBERATE. *** docs/decisions/0043 §5.6: a route returns, per role, the exact permission list it holds — because a role set a tenant cannot inspect is indistinguishable from an arbitrary one, and under docs/decisions/0007 D16 the tenant is AUTHORING roles against those grants. A custom-role builder that cannot name the permissions it composes is a form with opaque checkboxes.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "permissionId": {
+      "type": "string",
+      "pattern": "^(core|[a-z][a-z0-9-]{1,62}[a-z0-9])\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$",
+      "maxLength": 128,
+      "description": "A permission id as registered in packages/contracts/registries/permission-catalog.yaml. The pattern is that registry's own `naming.namePattern`, restated.\n\n*** RESTATED RATHER THAN $ref'd, AND THE DUPLICATION IS A NAMED DRIFT SURFACE. *** The catalogue is YAML and this is JSON Schema; there is no reference that crosses. If the two patterns disagree, the CATALOGUE is authoritative and this file is the defect — a permission string that does not appear in the catalogue does not exist (0007 rule 4), and a schema that accepted one this pattern allows and the catalogue does not would be publishing a permission by validation.\n\nA VALUE MATCHING THIS PATTERN IS NOT THEREBY A PERMISSION. The pattern is a grammar; membership of the catalogue is the fact. Core refuses an unregistered id with invalid_argument rather than storing it — an unregistered permission in a custom role is a string that will never authorize anything, which fails closed and is still a lie in a form the tenant is reading."
+    },
+
+    "roleScope": {
+      "type": "string",
+      "enum": ["organization", "business", "branch", "team", "own", "resource"],
+      "enumPolicy": "closed",
+      "description": "The scope a grant is held at. Transcribed from control-plane/0022_tenant_role.sql's `tenant_role_permission.scope` CHECK, which admits exactly these six.\n\n*** `platform` IS ABSENT AND IT IS THE WHOLE SECURITY PROPERTY OF THIS ENUM. *** docs/decisions/0007 D16 constraint 3: a tenant principal cannot put a platform-scope permission in a role. The migration's CHECK refuses it and this enum cannot express it, so the refusal exists at two layers and neither is a rule somebody must remember.\n\nNOTE THAT D16 CONSTRAINT 3 FOLLOWS FROM CONSTRAINTS 1 AND 2 RATHER THAN NEEDING EITHER OF THESE LAYERS — a tenant principal holds no platform permission, so cannot include one. **These are backstops for a property that is already unreachable, which is why neither is described as the enforcement** (architecture.md §3a: say which layer carries the weight).\n\nCLOSED. A seventh scope is a migration against a live CHECK plus a decision about what it means for `holdsAtOrAbove`."
+    },
+
+    "rolePermissionGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["permission_id", "scope"],
+      "properties": {
+        "permission_id": { "$ref": "#/$defs/permissionId" },
+        "scope": { "$ref": "#/$defs/roleScope" }
+      },
+      "description": "One permission, held at one scope. The unit a role grants.\n\n*** THIS SHAPE REPLACED A BARE `permissionId` ON 2026-09-13, AND THE CORRECTION IS WORTH RECORDING BECAUSE THE OMISSION WAS ARGUED RATHER THAN OVERLOOKED. *** The first version of this contract omitted scope entirely, reasoning from docs/decisions/0043 §1b that a role's `scope:` field has NO CONSUMER anywhere. **That is true and it is about a different field.** §1b is about the scope of a ROLE; `tenant_role_permission.scope` is the scope of a GRANT — D6's intersection, which `holdsAtOrAbove` reads and which decides what the grant actually reaches. A correct ruling applied to the wrong axis (architecture.md §3c — reasoning from a record's topic rather than its clauses).\n\nONE SCOPE PER PERMISSION PER ROLE. `PRIMARY KEY (organization_id, role_id, permission_id)` admits no second row for the same permission, so a role cannot hold one permission at two scopes. That is a constraint the shape inherits rather than states — an array carrying the same permission_id twice is refused by the database and must be refused at validation with invalid_argument, because a request the storage layer rejects is a request that failed after passing authorization.\n\n*** THE SCOPE IS BOUNDED BY THE PERMISSION'S OWN `scopes` LIST AND BY THE CALLER'S GRANT, AND NEITHER BOUND IS IN THIS SHAPE. *** A permission declaring `scopes: [organization]` cannot be granted at `branch`; a caller holding it at `business` cannot grant it at `organization`. Both are D6's intersection.\n\n*** ⚠ SPECIFIED AND UNENFORCED. NEITHER BOUND IS CHECKED ANYWHERE TODAY, AND THIS SENTENCE PREVIOUSLY CLAIMED BOTH WERE. *** It read: 'Both are D6's intersection, BOTH ARE CHECKED IN CORE, and both are invisible here.' **That was a claim about Core made without opening the function that would do it** — `architecture.md` §3c, in the direction where a reviewer reads *'checked in Core'* and correctly stops looking.\n\nMEASURED: `clearRoleCeiling(store, organizationId, creatorPrincipalId, permissionIds: readonly string[])` compares against `heldPermissions(): readonly string[]`. **NEITHER SIDE OF THAT COMPARISON CARRIES A SCOPE.** The ceiling that exists checks WHICH permissions; nothing checks AT WHAT WIDTH.\n\n*** WHY THE CORPUS PROPERTY THAT USED TO MAKE THIS MOOT DOES NOT HOLD FOR CUSTOM ROLES. *** `authorization/roles.ts` issues every tenant grant at `organization` scope with no exceptions, so for the four seed roles there is no width to get wrong. **`tenant_role_permission.scope` is NOT NULL and per-permission, so a custom role BREAKS THAT PROPERTY BY DESIGN** — it is the first construct in Dudo where two grants of one permission can differ in width. The gap arrives from the role table rather than from anything in the scope model.\n\nWHAT IS OWED, NAMED RATHER THAN HEDGED (`architecture.md` §3b — a precisely-worded dismissal is worse than silence): **the ceiling must compare (permission_id, scope) PAIRS against the caller's own (permission_id, scope) pairs, and `heldPermissions()` must carry the width it is held at.** Until it does, a caller holding `core.user.read` at `own` can put it in a role at `organization` and the write succeeds. **That is a privilege escalation through a field this shape requires and nothing validates**, and it is recorded as TR-6 rather than softened."
+    },
+
+    "roleStatus": {
+      "type": "string",
+      "enum": ["active", "retired"],
+      "enumPolicy": "closed",
+      "$comment": "*** `closed`, DECIDED AGAINST THIS FIELD'S OWN `CHECK` AND NOT INHERITED FROM ANYTHING IT RESEMBLES. *** `0022_tenant_role.sql:113` is `status TEXT NOT NULL CHECK (status IN ('active','retired'))` — exactly these two — so the unknown arm `extensible` emits would guard against a value no row can hold. docs/decisions/0041 amendment 3: `extensible` silently defeats every type guard written against the generated type, and here it would buy nothing in return.\n\nTHE SECOND TEST DOES NOT APPLY AND SAYING SO BEATS BORROWING IT: amendment 1 makes a REQUEST enum always `closed`, and this one appears in no request shape. `roleLifecycleInput` carries `role_id` alone; create and update carry no status; retire and restore are separate ROUTES rather than a target-state field. **The CHECK argument carries this decision by itself.**\n\n*** IT IS GROUPED WITH `template-v1`'s `templateStatus` / `templateStatusFilter` ONLY BECAUSE THE VALUE SETS COINCIDE, AND THAT PAIR'S EXEMPTION IS NOT AVAILABLE TO IT. *** Their `enumPolicyDivergence` reads *'Response versus request direction'* — an intra-file, mutually-declared pair covering the one case amendment 1 identifies. **A role's status and a Template's status are different objects in different files; the sameness of ['active','retired'] is a coincidence.** docs/decisions/0043 §7c is explicit that *'make them agree' is the wrong instruction and 'decide each against its own CHECK' is the right one* — so this def declares NO divergence marker, because it is not claiming an exemption. It is claiming the correct policy.\n\nTHE RESIDUAL DISAGREEMENT IS WITH `templateStatus` AND IT IS NOT THIS FILE'S TO SETTLE. That def is `extensible` over `0012_template.sql:135`'s `CHECK (status IN ('active','retired'))` — the same two tests §7c applied to `organizationStatus`, pointing the same way. **Narrowing it is a breaking change to an ACCEPTED contract (`architecture.md` §1) and therefore the Team Lead's**, and a one-sided marker here would suppress the finding rather than resolve it.",
+      "description": "Whether this role may be assigned. Transcribed from control-plane/0022_tenant_role.sql's CHECK.\n\n  active   assignable, and assigned holders keep it.\n  retired  withdrawn from NEW assignment. EXISTING HOLDERS KEEP IT AND KEEP ITS PERMISSIONS.\n\n*** RETIREMENT IS NOT REVOCATION AND CONFLATING THEM IS THE DANGEROUS READING. *** A retired role still authorizes everyone who holds it. Withdrawing a person's authority is tenant.roles.revoke, one member at a time, each writing its own audit record. **A client rendering `retired` as 'nobody has this any more' would state the opposite of what is true**, on the screen where a tenant is reasoning about who can do what.\n\nCLOSED, matching the CHECK."
+    },
+
+    "roleId": {
+      "$ref": "urn:dudo:schema:tenant-members:1#/$defs/roleId",
+      "description": "Referenced rather than restated, so the definition moves in one place. A CUSTOM role's identity in this Organization."
+    },
+
+    "roleName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "\\S",
+      "description": "What the tenant calls this role. Trimmed; a value empty after trimming is not a name.\n\nUNIQUE WITHIN THE ORGANIZATION, CASE-INSENSITIVELY AFTER NORMALISATION, and the uniqueness is a COMPOSITE constraint on (organization_id, normalized_name). A unique index on the name alone would make one tenant's role name refuse another tenant's — a cross-tenant collision that presents as a bug report about a stranger.\n\nIT MUST NOT COLLIDE WITH A SEED ROLE NAME. 'owner', 'admin', 'business-admin' and 'member' are refused with conflict, because a custom role called `admin` renders beside the seed `admin` in every list and the tenant then has two roles with one name and different grants. That is architecture.md §1a's finding — a name two parties use correctly and mean different things by — inside one Organization's own vocabulary."
+    },
+
+    "roleKind": {
+      "type": "string",
+      "enum": ["seed", "custom"],
+      "enumPolicy": "closed",
+      "description": "Where this role came from.\n\n  seed    one of the four the platform defines (docs/decisions/0043 §3). Not editable, not deletable, and its permission list is the platform's.\n  custom  created by this Organization under docs/decisions/0007 D16.\n\nTHE DISTINCTION IS ON THE WIRE BECAUSE THE CLIENT MUST RENDER IT. A seed role's edit control is absent for a structural reason, not a permission one — there is nothing to edit, because the platform decides its grants. A client that could not tell them apart would offer an edit form that always fails.\n\nCLOSED. A third kind — an inherited role, a template role across tenants — is exactly what D16 DEFERS, so adding a member here is the decision D16 postponed rather than a widening of a value set."
+    },
+
+    "roleSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id", "name", "kind", "status", "permissions", "member_count"],
+      "properties": {
+        "role_id": { "$ref": "#/$defs/roleId" },
+        "name": { "$ref": "#/$defs/roleName" },
+        "kind": { "$ref": "#/$defs/roleKind" },
+        "status": { "$ref": "#/$defs/roleStatus" },
+        "permissions": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/rolePermissionGrant" },
+          "description": "*** THE EXACT PERMISSION LIST THIS ROLE HOLDS, EACH WITH THE SCOPE IT IS HELD AT. COMPLETE, NEVER TRUNCATED, NEVER SUMMARISED. *** docs/decisions/0043 §5.6.\n\n*** THE SCOPE IS PART OF THE GRANT AND OMITTING IT WOULD HAVE MADE THIS LIST A FALSE ACCOUNT OF THE ROLE'S POWER. *** `core.user.read` at `own` and `core.user.read` at `organization` are the same permission id and profoundly different authority — one reads yourself, the other reads everybody. A visibility obligation satisfied by printing the id alone shows a tenant two roles that look identical and are not, which is worse than showing nothing, because it looks like disclosure.\n\nmaxItems 200 IS ABOVE THE WHOLE CATALOGUE'S CORE POPULATION AND THAT IS THE POINT: the bound must not be reachable by a legitimate role, because a TRUNCATED authority list is false in the reassuring direction. If a role ever exceeds it the request fails rather than truncating.\n\nORDERED: ascending by permission id. A stable order is what makes two renderings of one role comparable by eye, which is the whole point of publishing the list."
+        },
+        "member_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many members currently hold this role.\n\n*** IT PASSES security.md §2a AND THE TEST IS WORTH SHOWING RATHER THAN ASSERTING: *** the consumer holds core.role.read, and the counted population is this Organization's own members, which the same principal enumerates through core.user.list — a permission any holder of core.role.read in a tenant-administration context also needs to do anything with a role. THE COUNT REACHES NO FURTHER THAN ITS CONSUMER'S ENUMERATION RIGHT.\n\n*** AND THAT ARGUMENT IS WEAKER UNDER docs/decisions/0007 D16 THAN IT LOOKS, WHICH IS WHY IT IS WRITTEN OUT. *** 'also needs' is a statement about how roles are usually composed, and security.md §2a-0 says a tenant may mint a role holding core.role.read WITHOUT core.user.list. Such a holder would learn how many people hold each role while being unable to list anybody. THE DISCLOSURE IS A SCALAR OVER THE CALLER'S OWN ORGANIZATION AND IT TRANSPOSES INTO NOTHING — no identity, no mapping — so it is admitted rather than made a conjunct. RECORDED SO THE JUDGEMENT IS VISIBLE: this is the one aggregate in this directory admitted on a bounded-harm argument rather than on a clean enumeration right, and if it is ever extended to a BREAKDOWN it becomes the mapping §2a refuses and needs the conjunction."
+        }
+      },
+      "description": "One role, seed or custom, with its complete grants.\n\nNO created_by, NO created_at ON A SEED ROLE — those fields would be null for four of the rows in every response and a client would render 'created by —' beside the platform's own roles. Custom-role provenance is on roleDetail, which is where a client that needs it is already looking."
+    },
+
+    "roleDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id", "name", "kind", "status", "permissions", "member_count", "created_by", "created_at"],
+      "properties": {
+        "role_id": { "$ref": "#/$defs/roleId" },
+        "name": { "$ref": "#/$defs/roleName" },
+        "kind": { "$ref": "#/$defs/roleKind" },
+        "status": { "$ref": "#/$defs/roleStatus" },
+        "permissions": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/rolePermissionGrant" }, "description": "As roleSummary.permissions: the exact list with each grant's scope, complete, never truncated, ordered by permission id." },
+        "member_count": { "type": "integer", "minimum": 0, "description": "As roleSummary.member_count, including its security.md §2a argument." },
+        "created_by": {
+          "oneOf": [{ "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" }, { "type": "null" }],
+          "description": "The member who created this custom role, or null for a seed role. Present even if that member has since been removed — provenance outlives membership, for the reason removal preserves the audit trail."
+        },
+        "created_at": { "type": ["string", "null"], "format": "date-time", "description": "RFC 3339, UTC, or null for a seed role." }
+      },
+      "description": "One role in full: roleSummary's fields plus provenance.\n\n*** IT IS WRITTEN OUT RATHER THAN COMPOSED WITH `allOf`, AND THE FIRST DRAFT OF THIS DEFINITION WAS THE COMPOSED FORM AND WAS UNSATISFIABLE. *** `allOf: [{$ref: roleSummary}]` plus sibling `properties` produces an object NO INSTANCE CAN SATISFY: `additionalProperties: false` inside the referenced branch is evaluated against THAT branch's own `properties` only, so `created_by` and `created_at` — declared in the sibling — are additional properties there and are forbidden. Every valid instance is refused, and the route is unreachable.\n\nThat is packages/contracts/README.md's 'Authoring order in a closed object' defect arriving through composition rather than through ordering: two clauses, each correct alone, whose UNION admits nothing. NOTHING IN THIS REPOSITORY EXECUTES JSON SCHEMA, so no tool would have said a word about it at authoring time — packages/testing/suites/contracts/satisfiability.ts is the backstop and it fires after the file is already wrong.\n\nTHE COST OF WRITING IT OUT IS A DRIFT SURFACE, AND IT IS NAMED RATHER THAN HIDDEN: five properties are declared in both this definition and roleSummary, and a change to one must be made twice. The alternative is unsatisfiable, so the duplication is the lesser defect — but it is a defect, and whoever edits either definition owes the other.\n\nIT DOES NOT LIST THE MEMBERS HOLDING THE ROLE, only the count. A per-role member list is a second enumeration of the member population under core.role.read — reachable past that permission's own right, which is exactly what security.md §2a refuses. Members are listed by tenant-members-v1 under core.user.list, and a client wanting 'who holds this role' composes the two under both permissions."
+    },
+
+    "setMembershipRoleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "membership_role"],
+      "properties": {
+        "principal_id": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" },
+        "membership_role": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/membershipRole" }
+      },
+      "description": "Change a member's SEED TIER — the value on the membership row. This is the other half of 'role and permission assignment', and it is a different operation from assigning a custom role because the two are stored differently and mean different things.\n\n*** 'owner' IS REFUSED WITH invalid_argument, AND THIS IS THE SINGLE MOST IMPORTANT REFUSAL IN THE CONTRACT. *** Ownership is singular per Organization (docs/decisions/0043 §3c) and is acquired by TRANSFER — core.organization.transfer-ownership, which is `critical` and is in neither this contract nor this directory. IF THIS ROUTE COULD SET 'owner', IT WOULD BE A TRANSFER UNDER core.role.assign, WHICH IS `sensitive` — the whole strong-confirmation argument routed around by a field. It would also produce two owners, which the partial unique index refuses, so the request would fail at the database having already passed authorization.\n\nTHE CURRENT OWNER IS NOT A VALID TARGET either: demoting them is the same act from the other side. failed_precondition, on tenant-members-v1's theOWNERISNOTAVALIDTARGET, which is why that rule is stated as a property of the target rather than of one contract's operations.\n\nD16 CONSTRAINT 1 APPLIES: a caller may not set a tier whose permission set exceeds their own. An `admin` cannot promote anyone to `admin` unless `admin` holds everything `admin` holds — which it does, so in practice this refuses a business-admin promoting someone to admin. forbidden."
+    },
+
+    "setMembershipRoleOutput": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/memberSeat" },
+
+    "listRolesInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      },
+      "description": "Paging only. No filter, and no `kind` filter in particular: four seed roles plus a tenant's custom roles is a small set that a client renders whole, and a filter would let a client show a partial role list that looks complete — which on a permission-model screen is the worst kind of partial."
+    },
+
+    "listRolesOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/roleSummary" } },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      },
+      "description": "The standard collection envelope, capped at 100.\n\nORDER IS FIXED AND TOTAL: seed roles first in the fixed platform order (owner, admin, business-admin, member), then custom roles by name ascending, then role_id ascending. The seed block is first because it is the vocabulary a tenant composes against, and its order is the AUTHORITY ORDER rather than alphabetical — a permission screen that lists `admin` above `owner` misrepresents the ladder at a glance.\n\n*** A PAGE OF 100 ROLES EACH CARRYING UP TO 200 PERMISSION IDS IS A LARGE RESPONSE, AND THE PRODUCT OF TWO BOUNDS IS A BOUND NOBODY DECLARED. *** It is bounded — that is what 0044 §3c requires — and it is bounded at roughly 20,000 strings, which is not a number anyone chose. Recorded on the operation as TR-4 rather than left as the arithmetic of two independently reasonable caps."
+    },
+
+    "getRoleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id"],
+      "properties": { "role_id": { "$ref": "#/$defs/roleId" } }
+    },
+
+    "getRoleOutput": { "$ref": "#/$defs/roleDetail" },
+
+    "createRoleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "permissions"],
+      "properties": {
+        "name": { "$ref": "#/$defs/roleName" },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/rolePermissionGrant" },
+          "description": "The permissions this role grants, each with the scope it is held at.\n\nA DUPLICATE `permission_id` IS REFUSED WITH invalid_argument EVEN AT A DIFFERENT SCOPE. `uniqueItems` catches an identical pair; the same permission at two scopes is a DISTINCT pair that `uniqueItems` admits and `PRIMARY KEY (organization_id, role_id, permission_id)` refuses — so validation must check the permission ids for uniqueness independently, or the request fails at the database having already passed authorization. **A constraint enforced only by a primary key is one the caller meets as an `internal`.**\n\nminItems 1: A ROLE GRANTING NOTHING IS NOT A ROLE. It is a label somebody will assign believing it does something, and the first bug report about it will be 'this role does not work'. Refused with invalid_argument.\n\nuniqueItems: a duplicate is refused rather than deduplicated. Silently accepting one means the list a tenant reads back differs from the list they sent, on the screen where exactness is the whole product.\n\n*** EVERY ID MUST BE REGISTERED IN THE CATALOGUE AND EVERY ID MUST BE HELD BY THE CALLER. *** The first is 0007 rule 4 and fails with invalid_argument. The second is D16 constraint 1 — 'a custom role may contain only permissions the creating principal itself holds' — and fails with forbidden. They are different failures with different causes and must not be collapsed into one message."
+        }
+      },
+      "description": "Create a custom role.\n\nNO `kind` FIELD. Everything created here is `custom`; a caller-supplied kind would be a field whose only invalid value is the interesting one, and the seed roles are not creatable by anybody.\n\nNO `scope` FIELD, AND ITS ABSENCE IS docs/decisions/0043 §1b. A role entry's `scope:` has NO CONSUMER anywhere — roles.ts grants every tenant permission at organization scope regardless and narrows by the authorized business set computed per request. Publishing a field that decides nothing would invite a tenant to configure something that does not exist, and would then have to keep meaning nothing forever."
+    },
+
+    "createRoleOutput": { "$ref": "#/$defs/roleDetail" },
+
+    "updateRoleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id"],
+      "properties": {
+        "role_id": { "$ref": "#/$defs/roleId" },
+        "name": { "$ref": "#/$defs/roleName" },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/rolePermissionGrant" },
+          "description": "*** THE COMPLETE REPLACEMENT SET, NEVER A DELTA. *** Whatever is sent becomes the role's entire permission list. There is no `add` and no `remove`.\n\nA DELTA API OVER A PERMISSION SET IS A LOST-UPDATE HAZARD WITH A SECURITY CONSEQUENCE: two administrators editing concurrently each apply their own delta, and the result is a role holding the union of two intentions that neither person approved. A replacement makes the last writer's intent the whole answer and makes it visible in the audit record, which carries the set rather than a diff against a state nobody can reconstruct.\n\nOMITTING THE FIELD LEAVES THE PERMISSIONS UNCHANGED. Sending it with a value replaces them. The two are distinguishable because the property is absent rather than null, and this is the one place in this directory where absent-versus-present carries meaning — declared here because a client that sends `permissions: []` expecting 'no change' would be refused by minItems, which is the safe direction."
+        }
+      },
+      "description": "Edit a custom role's name, its permissions, or both. At least one of the two must be present — a request naming only role_id changes nothing and is refused with invalid_argument rather than succeeding as a no-op that writes an audit record.\n\nA SEED ROLE IS REFUSED with failed_precondition, not forbidden: no permission grants it, so it is a property of the target and not of the caller — the same reasoning tenant-members-v1 uses for the owner.\n\nD16 CONSTRAINT 1 APPLIES TO THE RESULTING SET, NOT TO THE DELTA. A caller may not leave a permission in place that they do not themselves hold, because 'edit' would otherwise preserve grants an editor could not have made — and preserving is the same act as granting when the alternative is removing it."
+    },
+
+    "updateRoleOutput": { "$ref": "#/$defs/roleDetail" },
+
+    "roleLifecycleInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id"],
+      "properties": { "role_id": { "$ref": "#/$defs/roleId" } },
+      "description": "The custom role to retire or to restore. A PATH parameter on both routes; two routes rather than one taking a target state, so the capability is gated by a route rather than by a field.\n\n*** THIS SHAPE REPLACED `deleteRoleInput` ON 2026-09-13, AND THE REPLACEMENT WENT AGAINST THIS CONTRACT — docs/decisions/0043 §7b row 3. *** The first version published DELETE, refused while any member held the role, and argued at length that refusing was better than cascading. **That argument was right about the hazard and wrong about the instrument**, and the Team Lead's reason is the one worth keeping:\n\n  A REFUSAL IS A RULE SOMEONE CAN BE TALKED OUT OF. A LIFECYCLE STATE IS A FACT THE DATA CARRIES.\n\ncontrol-plane/0022_tenant_role.sql carries `status IN ('active','retired')`, which is docs/decisions/0031's Template precedent applied correctly: `core.template.retire` exists because one-way removal spends a unique name permanently and turns the safe alternative into a quieter deletion. A role name is unique per Organization for the same reason and inherits the same conclusion.\n\nWHAT IS GIVEN UP, STATED RATHER THAN LOST: there is now NO WAY TO DELETE A CUSTOM ROLE. A tenant that creates a role by mistake retires it and the name stays spent. That is the trade `core.template.retire` already made and its own entry names the two triggers that would reopen it.\n\nRETIRE REQUIRES status `active`; restore requires `retired`. Every other value is failed_precondition — the predicate keys on the single ADMISSIBLE state so a third status is refused by default rather than admitted by omission (architecture.md §3a-i). A SEED ROLE IS REFUSED with failed_precondition on both."
+    },
+
+    "roleLifecycleOutput": { "$ref": "#/$defs/roleDetail" },
+
+    "roleAssignmentInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id", "principal_id"],
+      "properties": {
+        "role_id": { "$ref": "#/$defs/roleId" },
+        "principal_id": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" }
+      },
+      "description": "Grant or revoke one custom role for one member. ONE PAIR, NOT A BATCH — a batch grant is a batch of authority changes in a single audit record, and 'who was granted what, and when' stops being answerable per person.\n\nBOTH SIDES ARE RESOLVED WITHIN THE AUTHENTICATED ORGANIZATION. A role_id or principal_id belonging to another Organization answers not_found, identically to one belonging to nothing — and this operation is the one in the directory where a cross-tenant identifier would be MOST damaging if resolved, because it would attach one Organization's role to another Organization's member.\n\nA SEED ROLE IS NOT ASSIGNED HERE. The seed tier lives on the membership row and is changed by a different operation with a different argument; assigning `admin` to someone is a change of their membership_role, not the addition of a role object. Passing a seed role's identifier answers not_found, because seed roles have no role_id at all — they are an enum value, which is what makes that refusal structural rather than a check."
+    },
+
+    "roleAssignmentOutput": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/memberSeat" }
+  }
+}

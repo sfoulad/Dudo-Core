@@ -27,9 +27,39 @@ policy is a different thing and is unaffected.
 
 ## Register
 
-Current usage is **0** for every row: no Cloudflare resource has been created, and no
-workflow exists. `Last verified` is the date the *allowance* was checked against the
-official source, not the date usage was measured.
+> **⚠ THE `Current` COLUMN SAYS `0` ON EVERY ROW AND THAT IS FALSE. CORRECTED 2026-09-13.**
+>
+> The paragraph here read: *"Current usage is **0** for every row: no Cloudflare resource has been
+> created, and no workflow exists."* **It was true when written and has been false for weeks.**
+> Measured today: **three Workers are deployed and serving** (`app.dudo.work`, `api.dudo.work`,
+> `admin.dudo.work`, all answering `200`), **two D1 databases exist and the control plane holds 11
+> tables and 122 rows** — counted during the Milestone 1 backup verification.
+>
+> **READ EVERY `0` IN THE `Current` COLUMN AS *UNMEASURED*, NOT AS *ZERO*.** They are different
+> claims and only one of them is honest. **Nothing here has been measured against the account**, and
+> a `0` that is actually an absent measurement is the worst possible entry in a register whose only
+> job is to stop a surprise charge: **it is the one value that can never trigger a warning
+> threshold.**
+>
+> **Why nothing caught it.** This is the *optimistic* rot direction — it claims less consumption than
+> is real — which `workflow.md` §11a says is normally caught by *"the first person to rely on it."*
+> **Nobody has, because nothing is near a limit**, so the reassurance was never load-bearing enough
+> to fail. **It would first have been relied on at the exact moment it mattered: the release where
+> something finally approached an allowance.**
+>
+> **This row is owed a real measurement before the Milestone 2 deploy, and the tooling exists** —
+> `core-agent` holds the Cloudflare MCP bindings (`d1_databases_list`, `d1_database_get`,
+> `workers_list`, `r2_buckets_list`). **It is a dispatch, not a research task.**
+
+`Last verified` is the date the *allowance* was checked against the official source, **not** the date
+usage was measured — and the two have never yet been the same date.
+
+> **RE-VERIFICATION OWED BEFORE THE MILESTONE 2 RELEASE.** `0008` and `architecture.md` §6a require
+> the register re-verified before every release; **the allowance dates on the rows below are
+> 2026-09-01 and 2026-09-02**, which predate Milestones 0 and 1 entirely. **Two separate things are
+> owed and they must not be conflated: re-checking the ALLOWANCES against Cloudflare's published
+> limits, and measuring CURRENT USAGE against the account.** The first is a documentation check; the
+> second has never been done at all.
 
 > **The fourth column read "Expected MVP usage" until 2026-09-08.** The MVP framing was
 > withdrawn by `0030` on 2026-09-06 and the scope is now the full system, built admin-first
