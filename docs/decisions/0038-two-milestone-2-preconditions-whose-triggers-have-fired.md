@@ -14,6 +14,146 @@
 - **Blocks:** **Milestone 2 — Organization Administration** (`0035`). Neither blocks
   Milestone 0 or Milestone 1.
 
+> ## ⚠ BOTH ARE ANSWERED AS OF 2026-09-13. NEITHER IS BUILT. THOSE ARE DIFFERENT STATES, AND THIS BLOCK EXISTS SO THE HEADER'S `OPEN` IS NOT READ AS EITHER ONE.
+>
+> **The `Status` line above is left unedited.** It was accurate, the team acted on it for five days,
+> and rewriting it would hide that these were genuinely open. **This block governs.**
+>
+> ### F-2 — THE DESIGN QUESTION IS SETTLED BY `0044`, VIA A ROUTE NEITHER OF `OI-1`'s OPTIONS NAMED
+>
+> **`OI-1` named exactly two "real answers". `0044` refused both:**
+>
+> | `OI-1`'s option | `0044`'s ruling |
+> |---|---|
+> | **Move the Organization profile out of the control plane** | **REFUSED, §2b** — a SCHEMA cost paid to avoid a CONFIGURATION one, the exact inversion `0030` forbids |
+> | **Design a control-plane-write ACTION class** | **REFUSED, §2a, absolutely** — Actions are the App execution path, so a control-plane port on `ActionContext` is `security.md` §4: *"no exception for any plugin, for any reason"* |
+>
+> **`0044` took a third path neither option contemplated: A FIFTH REQUEST CLASS** — control-plane
+> reach, tenant resolved from the authenticated context, permission evaluated on every call, **and
+> NOT App-reachable.** That last property is the entire safety argument, and it is what makes the
+> class lawful where widening the Action class was not.
+>
+> > **`0044` §2c records it as a DERIVATION rather than a decision** — *"when only one option does not
+> > violate an existing rule, that is a derivation"*. **Worth carrying here, because `OI-1`'s framing
+> > made this look like a choice between two bad options and it was neither of them.**
+>
+> **WHAT REMAINS OF F-2 IS BUILD, NOT DESIGN.** `0044` §4 is explicit: *"`OI-1` is closed by a route
+> in this class being built, NOT by this record."* **Measured 2026-09-13: six tenant-admin contracts
+> declaring 26 operations, and `TENANT_ADMIN_ROUTE_COUNT` = 0.** The blocker is the eighteen-permission
+> grant, which is with the user — **a route whose permission no role holds fails
+> `assertEveryRoutePermissionIsReachable` at build time, which is the mechanism working rather than
+> an obstacle.**
+>
+> ### ⚠ F-1 IS RULED DEFERRED, 2026-09-13 — AND THE "BUILD ITEM" FRAMING BELOW IS WITHDRAWN AS TO THE ACTION-CLASS ROUTE
+>
+> **`core-agent` was sent to build it, stopped, and reported why — which is what the brief asked for
+> and is the reason this ruling exists rather than a half-built route.**
+>
+> **THE FRAMING THIS RECORD GAVE — *"one route over a service that already exists… bounded and it
+> needs no new decision"* — IS TRUE OF THE HANDLER AND FALSE OF THE PERMISSION MODEL IT NEEDS.**
+> `platform-routes.ts` records the original deferral's real cause: making `Action.permission` dynamic
+> is ***"an extension to the most load-bearing shape in the product."*** **That extension is still
+> owed, and `0038` set it aside by describing the half that was easy.**
+>
+> **AND THE TWO CHALLENGE ROUTES ARE NOT ONE PIECE OF WORK, WHICH THIS RECORD ALSO IMPLIED:**
+>
+> | | needs |
+> |---|---|
+> | **tenant-admin** | nothing new — `TenantAdminRoutePermission` **is being written now** and accommodates from-body resolution natively. **Buildable, and being built.** |
+> | **Action class** | an extension to `Action`, a shipped shape carrying eight App Actions and every third-party App to come |
+>
+> #### THE MEASUREMENT THAT DECIDES IT: THE ACTION-CLASS ROUTE HAS NO CALLER
+>
+> ```
+> tenant-scope `critical` permissions in the catalogue        14
+> of those, gating an ACTION-class operation                   1   customers.customer.delete
+> that permission in roles.ts                                  NOT_GRANTED_TO_ANY_ROLE
+> assertRoleMappingIsCoherent if any role holds it             FAILS THE BUILD
+> ```
+>
+> > **So no Action-class `critical` operation is reachable by any principal alive, by deliberate
+> > decision and with a build-failing assertion behind it.** The Action-class challenge route would
+> > serve **zero callable operations** — and buying it costs an extension to the product's most
+> > load-bearing shape.
+>
+> **RULED: F-1 STAYS DEFERRED. Not as an oversight and not as a build item — as a decision, with the
+> cost named and the population measured at zero.**
+>
+> **THE TRIGGER IS AN EVENT AND IT IS ASSIGNED** (`workflow.md` §12 — a deferral without an owner is
+> one nobody collects): **the first `critical` Action-class operation that any role can hold.** The
+> Team Lead reopens it then. ~~**`assertGatedRoutesCanObtainAConfirmation` is what makes that
+> unmissable** — such an operation fails the build naming the missing route, rather than shipping an
+> operation that authorizes, gates, and can never be satisfied.~~
+>
+> #### ⚠ THAT SAFETY NET DOES NOT EXIST. CORRECTED WITHIN THE HOUR BY `core-agent`, WHOSE ASSERTION IT IS.
+>
+> **The ruling above is unaffected — the population is still zero and the `Action` extension still
+> costs what it costs. What is wrong is the mechanism the deferral was made ON THE STRENGTH OF.**
+>
+> ```
+> assertConfirmationCoherence…            iterates the PLATFORM route table
+> assertGatedRoutesCanObtainAConfirmation iterates the TENANT-ADMIN route table
+> the Action registries                   NO registration-time coverage check AT ALL
+> the only Action-side confirmation code  action/pipeline.ts:645 — a RUNTIME gate in the request path
+> ```
+>
+> > **IT CANNOT SEE AN ACTION.** So when the trigger fires, **no build fails.** A `critical`
+> > Action-class operation with no challenge route authorizes, gates, demands a confirmation the
+> > caller cannot obtain, and **fails every call at runtime** — fail-closed, nothing exposed, **and
+> > precisely the *"authorizes, gates, and can never be satisfied"* state this deferral was taken on
+> > the understanding a build check would prevent.**
+>
+> **`workflow.md` §12: A DEFERRAL RESTING ON A CHECK THAT CANNOT SEE ITS SUBJECT IS A DEFERRAL NOBODY
+> WILL COLLECT.** The Team Lead named the assertion; `core-agent` owns it and **settled it in two
+> greps rather than arguing about it** — `§11a`'s *right hazard, wrong instrument*, **with the
+> instrument belonging to the party who could measure it.**
+>
+> #### WHAT REPLACES IT — AND IT KEYS ON THE EVENT RATHER THAN A PROXY FOR IT
+>
+> **`core-agent` offered two and the second is better, for a reason worth keeping:**
+>
+> | | |
+> |---|---|
+> | an `assertActionConfirmationCoverageIsCoherent` over the Action registries | correct, and it checks **route coverage** — a proxy for the trigger |
+> | **an assertion in `roles.ts` that NO ROLE HOLDS A `critical` PERMISSION GATING AN ACTION-CLASS OPERATION** | **this IS the trigger.** *"any role can hold it"* is the event, stated directly, **and `assertRoleMappingIsCoherent` already runs there** |
+>
+> **RULED: the second. `core-agent` builds it.** A check keyed on the event fires on the event; a
+> check keyed on a proxy fires when the proxy moves, **and the two come apart exactly when somebody
+> grants a permission without adding a route — which is the order these things actually happen in.**
+>
+> **AND THE BOUNDARY IS RECORDED AT THE ASSERTION ITSELF**, so the next reader does not inherit the
+> belief. `architecture.md` §3b-ii: **a header full of true claims reads as covering the class of
+> problem**, and that header's claims are all true of the tenant-admin table it iterates.
+>
+> **What is NOT deferred: the tenant-admin route, which is buildable now and needs no permission of
+> its own.** `0044` §3e-i, and the user confirmed it 2026-09-13.
+>
+> ---
+>
+> ### ~~F-1 — STILL A BUILD ITEM, AND NOW KNOWN TO NEED NO PERMISSION~~ *(the "build item" half is withdrawn above; the no-permission finding stands and is why the tenant-admin route proceeds)*
+>
+> **This record already ruled F-1 *"a BUILD ITEM, not a design question"*.** The question left open
+> was whether the challenge route needs a nineteenth permission — **which would have meant a
+> supplementary approval while eighteen sat undecided.**
+>
+> **It does not.** `confirmation-v1` declares, on both published challenge routes: ***"THE SAME
+> PERMISSION AS THE OPERATION NAMED IN THE REQUEST… NOT A PERMISSION OF ITS OWN."*** Reasoning at
+> `0044` §3e-i — **and it is a safety property rather than a convenience: a challenge route with its
+> own permission would be a second door to every `critical` operation, gated by something other than
+> what the operation itself requires.**
+>
+> **So F-1 is buildable now and does not wait on the grant.** `0044` §3e establishes that
+> `confirmation-v1`'s own rule generates a THIRD challenge route for the tenant-admin class, with no
+> amendment to that contract.
+>
+> ### WHY THIS BLOCK EXISTS AT ALL
+>
+> **`0043` and `0044` hold the answers and NEITHER CITES THIS RECORD.** A reader arriving at `0038`
+> finds `Status: OPEN` and two questions **whose answers live in two files published five days later
+> that do not point back.** Nothing is stale, nothing is miscited, and no sweep of what changed
+> reaches it — **`workflow.md` §12 in its quietest form.** The obligation to connect them belonged to
+> whoever accepted the later records. **That was the Team Lead, and it was not done at the time.**
+
 ---
 
 ## ⚠ CORRECTED WITHIN THE HOUR, 2026-09-08. THIS SECTION ORIGINALLY CLAIMED F-1 AND F-2 WERE THE SAME SHAPE. THEY ARE NOT.

@@ -61,13 +61,19 @@ export function OrganizationGate({
     if (error) {
       return (
         <Panel>
-          <ErrorBlock error={error} onRetry={organization.refresh} retryLabel="Try again" />
+          <ErrorBlock
+            error={error}
+            onRetry={organization.refresh}
+            retryLabel="Try again"
+            headingLevel="h1"
+          />
         </Panel>
       );
     }
     return (
       <Panel>
         <StateBlock
+          headingLevel="h1"
           title="Opening your workspace"
           body="One moment — Dudo is preparing this session."
         />
@@ -78,7 +84,12 @@ export function OrganizationGate({
   if (error) {
     return (
       <Panel>
-        <ErrorBlock error={error} onRetry={organization.refresh} retryLabel="Try again" />
+        <ErrorBlock
+            error={error}
+            onRetry={organization.refresh}
+            retryLabel="Try again"
+            headingLevel="h1"
+          />
       </Panel>
     );
   }
@@ -94,6 +105,7 @@ export function OrganizationGate({
     return (
       <Panel>
         <StateBlock
+          headingLevel="h1"
           title="You are not a member of any Organization"
           body={
             'Your sign-in worked, but this account has no active Organization membership, so ' +

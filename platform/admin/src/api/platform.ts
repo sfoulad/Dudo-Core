@@ -273,14 +273,26 @@ export type KnownTemplateStatus = 'active' | 'retired';
  * because this console has always called it a Template and the screens read
  * better for it. **The shape is not restated** — only the name is local.
  *
- * `status` was `string` here, with a comment that has now been ANSWERED rather
- * than deleted: *"narrowing by cast would be this client asserting Core's
- * guarantee on Core's behalf."* **That was correct while the generated type was
- * a bare `'active' | 'retired'`.** `templateStatus` is declared `extensible`,
- * so the emitted type carries `(string & {})` — an explicit arm for a value
- * this client was never taught — and adopting it asserts nothing on Core's
- * behalf. `isKnownTemplateStatus` still narrows, and the neutral branch in
- * `StatusBadge` is still reachable.
+ * `status` was `string` here, with a comment that was ANSWERED rather than
+ * deleted: *"narrowing by cast would be this client asserting Core's guarantee
+ * on Core's behalf."*
+ *
+ * ⚠ **THAT ANSWER RESTED ON `templateStatus` BEING `extensible`, AND IT IS NOT
+ * ANY MORE.** This paragraph read *"the emitted type carries `(string & {})`…
+ * `isKnownTemplateStatus` still narrows, and the neutral branch in
+ * `StatusBadge` is still reachable."* A regeneration on 2026-09-13 closed the
+ * enum, so **the `(string & {})` arm is gone and the last clause is false.**
+ *
+ * `workflow.md` §12: *check whether an argument was resting on what you
+ * withdrew.* The conclusion — do not cast — still holds, and it holds for a
+ * STRONGER reason now: with the arm gone there is nowhere for an untaught value
+ * to live, so the parse must reject it. See `requireTemplateStatus`, which is
+ * where that reasoning and its cost are recorded.
+ *
+ * **The paragraph is corrected rather than deleted** because the withdrawn
+ * argument is the interesting half: the same sentence was true, then false,
+ * with nothing in this file moving and nothing going red until a type error
+ * eighty lines away.
  *
  * ⚠ **THIS SAID "the field is still set by no route in version 1, so every
  * Template is `active`."** `template-lifecycle-v1` publishes
@@ -474,6 +486,87 @@ function requireString(source: Record<string, unknown>, field: string, what: str
   const value = source[field];
   if (typeof value !== 'string') {
     throw new ShapeError(`${what} is missing the string field "${field}".`);
+  }
+  return value;
+}
+
+/**
+ * ===========================================================================
+ * THE ONLY FIELD HERE PARSED AGAINST A *CLOSED* ENUM — AND IT BECAME ONE
+ * WITHOUT THIS FILE MOVING
+ * ===========================================================================
+ *
+ * `templateStatus` was `extensible`, so the emitted `TemplateStatus` carried a
+ * `(string & {})` arm and `requireString` satisfied it. A regeneration on
+ * 2026-09-13 closed it — measured, `- 'active' | 'retired' | (string & {})`
+ * against `+ 'active' | 'retired'` — and the assignment stopped compiling.
+ *
+ * **`requireString` is no longer an honest parse of this field.** A closed enum
+ * is a promise that no third value arrives; a parser that hands `string` to a
+ * two-member union is asserting Core kept that promise rather than checking it,
+ * which is the cast this file has refused everywhere else.
+ *
+ * It is consistent with the thirteen other parsers rather than a new policy:
+ * a non-string `name` throws, a non-array `data` throws, and a value outside a
+ * declared enum is the same class of "the response was not what was promised".
+ *
+ * ===========================================================================
+ * ⚠ WHAT WAS GIVEN UP FOR IT, AND WHY THIS CONSOLE CAN AFFORD THE TRADE
+ * ===========================================================================
+ *
+ * **A third status now makes the whole Template response unparseable.** It used
+ * to render verbatim in a neutral badge with an `sr-only` note. That path is
+ * gone — `StatusBadge` in `Templates.tsx` had the branch and it was deleted in
+ * the same change, deliberately, because an unreachable defensive branch reads
+ * as coverage while providing none (`workflow.md` §11a: a branch nothing
+ * reaches is a branch nothing tests).
+ *
+ * **So the console went from DEGRADED-BUT-USABLE to BROKEN SCREEN on a value it
+ * cannot represent.** That is the cost of the decision, recorded as a cost and
+ * not as a defect to be fixed later.
+ *
+ * **THE REASON IT IS AFFORDABLE IS A PROPERTY OF THE DEPLOYMENT, NOT OF THE
+ * TYPES** — and it is the half that was nowhere in this repository until now.
+ * Measured in `wrangler.admin.jsonc`, not assumed:
+ *
+ *     "name":   "dudo-admin"
+ *     "main":   "worker.ts"                       <- the API
+ *     "assets": { "directory": "./platform/admin/dist" }   <- this SPA
+ *     "routes": [ admin.dudo.work ]
+ *
+ * **ONE Worker, ONE deploy, serving the bundle and the API together. A Core
+ * that emits a third status and a client that never learned one cannot coexist
+ * as deployed artifacts.** `wrangler.jsonc` is the same shape for `dudo-core`
+ * on `app.dudo.work`.
+ *
+ * So the exposure is not *"Core got ahead of the client"* — it is exactly one
+ * thing: **a browser tab holding an old bundle across a deploy.** Narrow, real,
+ * and it clears on reload.
+ *
+ * ⚠ **THIS ARGUMENT EXPIRES ON AN EVENT AND THE EVENT WILL NOT ANNOUNCE
+ * ITSELF.** The day this SPA is served from anywhere other than the Worker that
+ * serves its API — a CDN, a second Worker, a cached shell — the two stop
+ * shipping atomically and a hard parse failure stops being a tab-lifetime
+ * problem. **The trade would need re-deciding here, and a tolerant render path
+ * is what it would need.**
+ *
+ * It is stated as the REASON rather than as a verdict on purpose (`§12`): a
+ * sentence of the form *"if the deployment splits, this file is wrong"* becomes
+ * an instruction to change a correct file the day somebody reads it out of
+ * context. **`verify-platform.mjs` asserts the atomic-deploy property against
+ * `wrangler.admin.jsonc` and names this function**, so the expiry goes red
+ * instead of going unnoticed.
+ */
+function requireTemplateStatus(
+  source: Record<string, unknown>,
+  field: string,
+  what: string,
+): KnownTemplateStatus {
+  const value = requireString(source, field, what);
+  if (!isKnownTemplateStatus(value)) {
+    throw new ShapeError(
+      `${what} field "${field}" carried a status the contract does not declare.`,
+    );
   }
   return value;
 }
@@ -881,8 +974,18 @@ export function parseListOperators(payload: unknown): ListOperatorsOutput {
  * matching `authorization/roles.ts` and the `CHECK` that `0018` widens. While
  * this said two, **`admin` and `business-admin` would have rendered as *"an
  * unrecognised role"*: recognised seed roles, announced to a screen reader as
- * unknown.** A defect the type system could not see, because this union is the
- * client's own opinion rather than anything the contract hands it.
+ * unknown.**
+ *
+ * ⚠ **THE COMPILER WAS SILENT AND ALWAYS WOULD HAVE BEEN. A LOCALLY-DECLARED
+ * UNION IS INVISIBLE TO EVERY CONTRACT CHECK BY CONSTRUCTION** — this is the
+ * client's own opinion about which values it recognises, not anything the
+ * contract hands it, so nothing in `0037`, `0041` or the generator can compare
+ * it against the schema. **It drifted for the same reason it could drift at
+ * all**, and the only thing that caught it was a re-emit breaking an unrelated
+ * assignment.
+ *
+ * **Widening it is not optional maintenance when the contract's enum moves.**
+ * Whoever changes the seed set changes this too, and nothing will ask.
  */
 export type KnownMembershipRole = 'owner' | 'admin' | 'business-admin' | 'member';
 
@@ -1396,17 +1499,39 @@ export function parseOrganizationDetail(payload: unknown): OrganizationDetail {
  *    a defect rather than a case to render."*
  *   *"…it is not a promise that clients never see a value they do not know."*
  *
- * **Both cannot decide this parser.** Adopting the closed type makes the
- * tolerant branch dead code by the type system's reckoning while a database
- * ahead of a deployment can still produce the case — `0041`'s exact collision.
- * Rejecting the whole response over one field would blank the lookup screen on
- * a misdeployment, which is worse than rendering the raw value.
+ * ⚠ **RULED 2026-09-13: THEY ARE NOT IN CONFLICT — THEY ARE ABOUT DIFFERENT
+ * LAYERS, AND BOTH ARE TRUE.**
  *
- * **So this preserves TODAY'S BEHAVIOUR EXACTLY and decides nothing.** The
- * wire value is kept verbatim, `isKnownMembershipRole` narrows it, and the
- * unknown arm still renders. **The Team Lead is asked which way it should go**
- * — and the `0037` cost of not consuming the generated type here is stated
- * rather than hidden.
+ * ```
+ * "cannot be stored"        true of the CONTRACT, and of the CHECK constraint
+ * "clients may still see"   true of the WIRE, on a misdeployed pair
+ * ```
+ *
+ * **`closed` is a statement about what a CORRECTLY DEPLOYED system can
+ * produce. This parser is a BOUNDARY, and a boundary handles what arrives.**
+ * That is `CLAUDE.md`'s standing rule — *the generated type is what the
+ * contract PROMISES; the parser is what checks what ARRIVED* — and it is why
+ * all fourteen parsers survived `0037`.
+ *
+ * **THE TOLERANT BRANCH IS NOT DEAD CODE. CORE HAS THE SAME ONE, DELIBERATELY.**
+ * `authorization/roles.ts`'s `toMembershipRole` returns `null` for an
+ * unrecognised stored string and denies everything, naming both skew
+ * directions: a database ahead of the build meets a narrower union; a build
+ * ahead of the database cannot write the new value because the `CHECK` refuses
+ * it. **Core treats deployment skew as a real operational state and fails
+ * closed inside it.** This client's equivalent of failing closed is to render
+ * the raw value — blanking the lookup screen instead would be failing OPEN in
+ * the operator's face, on the exact screen they reach for when something has
+ * already gone wrong.
+ *
+ * **`0018` makes it concrete rather than theoretical:** it widens the stored
+ * `CHECK` to four values, and a migration applied before a deploy IS the
+ * database-ahead case. The branch is reachable on the day that migration is
+ * approved, in the window before this console ships.
+ *
+ * **So the type system's reckoning is about the CONTRACT; the branch is about
+ * DEPLOYMENT SKEW, which the type system cannot see and never could.** Not
+ * dead code — code the compiler has no vocabulary for.
  */
 export interface ResolveMember {
   readonly principal_id: string;
@@ -1615,7 +1740,7 @@ export function parseTemplate(payload: unknown, what = 'The Template response'):
     template_id: requireString(body, 'template_id', what),
     name: requireString(body, 'name', what),
     level_labels: Object.freeze(level_labels),
-    status: requireString(body, 'status', what),
+    status: requireTemplateStatus(body, 'status', what),
     created_at: requireString(body, 'created_at', what),
   };
 }

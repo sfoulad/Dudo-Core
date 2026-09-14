@@ -1,0 +1,709 @@
+---
+# Organization Members — tenant-admin contract, version 1
+#
+# The machine-readable half. Shapes live in tenant-members-v1.schema.json. The obligations this
+# contract SHARES with every other contract in this directory live in README.md, once, rather than
+# being restated four times — see README.md §0 for why, and read it first.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the tenant-admin request class
+#              docs/decisions/0043 (Accepted) — the role model and §5's contract obligations
+#              docs/decisions/0024 (Accepted) — mutual exclusion of the two administrations
+#              docs/decisions/0007 (Accepted) — the permission model, and D16's custom roles
+#              docs/decisions/0006 (Accepted) — tenancy
+#              docs/architecture/standards/AUTHORIZATION_STANDARD.md, MULTITENANCY_STANDARD.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED, NOT BUILT, AND NOT REACHABLE — the tenant-admin registry, route
+# table and dispatcher branch are Core's and do not exist (0044 §4). Nothing here may be reported
+# as a capability.
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md — the class, and the six obligations every operation below declares as a field."
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. DECLARED, NEVER INFERRED FROM THE BLOCK KEY.
+# ---------------------------------------------------------------------------
+# `tenant-admin`: docs/decisions/0044's class. Principal-level authentication, TENANT RESOLVED FROM
+# THE AUTHENTICATED CONTEXT, permission evaluated on every call, reaches control-plane ports, and
+# reachable by no App.
+#
+# IT USES `operations:` — the block key the platform class and the session class already share — so
+# this contract is the third class on one key and the declaration is the only thing that says which.
+# That is 0039 working rather than 0039 being strained: the key was never able to carry the class.
+#
+# *** TWO TOOLS READ THIS VALUE AND ONLY ONE OF THEM ACCEPTS IT TODAY. ***
+#   packages/contracts/generator/generate-types.mjs   REQUEST_CLASSES — `tenant-admin` added.
+#   scripts/lib/request-class.mjs                     CLASSES — root tooling, the Team Lead's, and
+#                                                     still a frozen FOUR-class map.
+# `check:request-class` refuses an unknown class rather than ignoring it — deliberately, because an
+# ignored declaration is worse than an absent one — so THIS CONTRACT MAKES THAT CHECK EXIT 1 UNTIL
+# the fifth entry lands there. That is the check working, and it is reported rather than worked
+# around: architecture-agent cannot edit root tooling (architecture.md §2, §2a-i).
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: >-
+    MULTITENANCY_STANDARD.md §2. The Organization is the isolation boundary. Every operation below
+    reads or writes rows keyed by the authenticated Organization and by nothing else.
+  model: >-
+    docs/decisions/0006, Accepted — one shared D1 database with mandatory resolver indirection.
+    THERE IS NO INFRASTRUCTURE BOUNDARY UNDERNEATH THIS CONTRACT: a query that loses its tenant
+    predicate does not fail and does not return empty, it returns another Organization's member.
+
+  whereTheseAreServedFrom:
+    ruling: >-
+      THE CONTROL PLANE, THROUGH THE TENANT-ADMIN CLASS, AND NOT THROUGH ActionContext.
+      `organization_membership` and `principal` are control-plane tables
+      (platform/core/migrations/control-plane/0003 and 0001). An Action reaches no control-plane
+      port, which is 0044 §1's measurement and the reason this class exists at all.
+    theTenantPredicateIsNotOptionalAndIsNotHANDWRITTEN: >-
+      `organization_membership`'s primary key is (principal_id, organization_id), so EVERY read and
+      write in this contract is a composite-key operation whose second component is the
+      authenticated Organization. A statement that names only `principal_id` selects that person's
+      membership OF ANY ORGANIZATION — it is not a slower query, it is a cross-tenant one, and it is
+      one WHERE clause away at all times.
+      *** THAT IS THE SINGLE MOST LIKELY WAY TO BREAK THIS CONTRACT AND IT IS NAMED HERE SO IT IS
+      RECOGNISABLE IN REVIEW. *** It will arrive as a point lookup that looks complete, because
+      `principal_id` is unique platform-wide by generation and a developer reading the table can see
+      that one identifier names one row. Uniqueness prevents collision; it has never prevented
+      reachability.
+    theNegativeControlOwedByQA: >-
+      Mechanical, and owed by qa-agent rather than by a reviewer's good intentions: for every
+      operation below, a principal of Organization B naming a member of Organization A must receive
+      not_found — and REMOVING THE ORGANIZATION COMPONENT FROM THE KEY MUST TURN EVERY ONE OF THOSE
+      CASES RED. If only some go red, the suite is what is wrong, not the finding
+      (customer-directory-v1's whereWithTenant control, transposed to a composite key).
+
+  rules:
+    - >-
+      Tenant identity is derived from the authenticated server-side context on EVERY call. Never
+      from a body field, path segment, query string, header, cookie, cursor or ambient default.
+    - >-
+      NO SHAPE IN THIS CONTRACT CONTAINS AN ORGANIZATION IDENTIFIER, IN ANY POSITION, AND NONE MAY
+      GAIN ONE. docs/decisions/0044 §3b.2 refuses such a route AT REGISTRATION rather than at
+      authorization. The schema's additionalProperties: false is the weakest of the three layers and
+      proves input validation, never isolation.
+    - >-
+      NO RESPONSE CARRIES AN ORGANIZATION IDENTIFIER, and no response carries a signal about any
+      OTHER Organization a member belongs to — not a count, not a boolean, not a hint. CO1
+      (core-object-registry.yaml): a user's list of Organizations must never be visible to any of
+      them, and A MEMBER DIRECTORY IS THE NATURAL PLACE FOR THAT LEAK TO ARRIVE, because "this
+      person also works elsewhere" reads as a useful thing to show an administrator.
+    - >-
+      Cache keys are prefixed t:<tenant_id>:. THIS CONTRACT DEFINES NO CACHE, and the temptation is
+      worth naming: a principal_id -> display_name map is the ideal thing to cache, and one keyed by
+      principal_id alone is a cross-tenant read waiting to be written — principal_id is unique
+      platform-wide, so such a cache would be CORRECT and cross-tenant at the same time.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, at every entry point, on every call (0007 rule 1). Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate the principal. Failure -> unauthenticated."
+    - >-
+      2. Resolve the tenant from the authenticated context. A principal with no active membership
+      resolves nothing and the request ends here — which is also why NO PLATFORM OPERATOR CAN REACH
+      ANY ROUTE BELOW (0024, 0044 §3a). That is a property of the resolution, not a check.
+    - "3. Authorize the operation's declared permission, WITHOUT reference to any record. Failure -> forbidden."
+    - "4. Validate the input schema. Unknown fields rejected. Failure -> invalid_argument."
+    - >-
+      5. Resolve the named member WITHIN the authenticated Organization. Absent -> not_found, and
+      the three reasons it can be absent are not distinguished. See theUnknownIdentifierRuling.
+    - >-
+      6. Apply the target-protection rules. A refusal here is failed_precondition and never
+      forbidden — see theOWNERISNOTAVALIDTARGET.
+    - "7. Write the audit record into the AUTHENTICATED Organization's own audit_event, then mutate."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found — on every operation below that takes an identifier."
+    ruling: >-
+      A principal_id that is not an ACTIVE OR SUSPENDED MEMBER of the authenticated Organization
+      answers not_found — IDENTICALLY whether it names a member of another Organization, a
+      principal of no Organization, or nothing at all. The three are not distinguished and the
+      response is byte-identical in all three cases.
+    whyForbiddenWouldBeTheDefect: >-
+      forbidden means ONE thing on every operation here: the caller does not hold the declared
+      permission. It is decided at step 3, before any identifier is read, so it carries no
+      information about any person and a caller cannot vary a request to change it.
+      RETURNING forbidden FOR AN IDENTIFIER WOULD BUILD A CROSS-TENANT EXISTENCE ORACLE OVER PEOPLE.
+      An administrator with a list of guessed or harvested principal ids could sort them into
+      "exists somewhere in Dudo" and "does not", which is a platform-wide membership probe reached
+      through a tenant's own settings screen.
+    theOneExceptionInTHECORPUSISCITEDNOTCOPIED: >-
+      customer-directory-v1's step-5c returns forbidden for an in-tenant unauthorized Business, on a
+      DATA-CORRUPTION argument: told not_found, a user re-enters the customer and the tenant's own
+      directory silently acquires a duplicate with divergent details and its own future invoices.
+      *** THE ARGUMENT DOES NOT REACH ANY OPERATION IN THIS CONTRACT. *** Nobody re-creates a
+      colleague because a member lookup 404'd — this contract has no create at all, membership
+      arrives through an invitation, and an invitation to an address that is already a member is
+      refused rather than duplicated. Where the corruption argument does not reach, the fail-closed
+      answer is the right one.
+    itIsBreakingToRelaxLater: >-
+      Introducing a distinguishing response for an in-tenant-but-invisible member would be a new
+      disclosure requiring a new version and a security review, not a better error message.
+
+  theOWNERISNOTAVALIDTARGET:
+    ruling: >-
+      NO OPERATION IN THIS CONTRACT MAY SUSPEND, REACTIVATE OR REMOVE THE PRINCIPAL HOLDING
+      membership_role 'owner'. The refusal is failed_precondition, it applies to EVERY caller
+      including the owner themselves, and it is unconditional.
+    whyItIsNotAPERMISSION: >-
+      docs/decisions/0043 §3d states it and names why a permission cannot express it: THE RULE IS A
+      PROPERTY OF THE TARGET, NOT OF THE ACTOR. A permission answers "may this caller do this kind
+      of thing"; nothing in a permission id can say "except to that person".
+      *** WITHOUT IT, `admin` IS `owner` WITH EXTRA STEPS: demote the owner, then do anything. ***
+      0043 §3d's sentence, and it is the reason this clause is normative rather than advisory.
+    whyFailedPreconditionRatherThanForbidden: >-
+      DELIBERATE, AND THE TWO ARE NOT INTERCHANGEABLE HERE. forbidden is record-independent by
+      construction in this contract (step 3) and making it record-DEPENDENT for one case would
+      destroy that property for every case — a caller could then vary the target to learn which
+      targets are special. failed_precondition says "this Organization's state forbids this act",
+      which is true, is the same answer for every caller, and discloses only the fact that an
+      Organization has exactly one owner, which every member already knows.
+    whatItDoesNOTDO: >-
+      It does not protect the owner from losing ownership. THE OWNER IS CHANGED BY TRANSFER, which
+      is core.organization.transfer-ownership, is `critical`, and is NOT IN THIS CONTRACT. So the
+      route out of ownership exists and runs through a permission `admin` does not hold — which is
+      what makes this refusal a protection rather than a deadlock.
+    theTESTREQUIREMENT: >-
+      qa-agent owes a BEHAVIOURAL case per operation — three cases, not a comment in roles.ts
+      (0043 §8.4). Each must construct an `admin` caller and an `owner` target and assert
+      failed_precondition; and the negative control is an `admin` target, which must SUCCEED, or the
+      case is asserting "nothing works" rather than "the owner is protected".
+
+  theSPLITBETWEENSUSPENDANDREACTIVATE:
+    ruling: >-
+      TWO OPERATIONS, TWO PERMISSIONS, TWO ROUTES. Suspension is core.user.deactivate; reactivation
+      is core.user.reactivate, which this contract PROPOSES (see permissionRuling).
+    reasoning: >-
+      *** REACTIVATION IS AN ACCESS GRANT, NOT A RECOVERY, AND THAT IS WHAT DECIDES IT. *** Restoring
+      a suspended membership returns a live, credential-holding identity to the tenant's data with
+      every role it held. The obvious precedent points the other way and must be answered rather
+      than ignored: core.template.retire GATES BOTH DIRECTIONS on the reasoning that a separate
+      restore "could only ever be held alongside" the damaging half — "a split with no decision in
+      it".
+      THAT REASONING DEPENDS ON THE RECOVERY HALF BEING HARMLESS, AND HERE IT IS NOT. Restoring a
+      Template makes a business type adoptable again. Restoring a member lets a person who was
+      suspended for cause — a departure, a compromised account, an investigation — sign in again.
+      The nearest true precedent is core.principal.grant-platform-scope versus
+      core.principal.revoke-platform-scope: granting and revoking access are different risks in
+      opposite directions, and §3.2 splits them.
+    whatTheSPLITBUYS_ANDITISTHEMIRROROFTHEUSUALARGUMENT: >-
+      The platform-scope split exists so REVOKE can be held without GRANT — the break-glass
+      responder. THIS SPLIT EXISTS SO SUSPEND CAN BE HELD WITHOUT REACTIVATE: a security-response
+      role that can cut off a compromised account at 3am without being able to restore one.
+      Same split, opposite direction, and stating which direction it protects is the difference
+      between copying a precedent and applying one.
+    theCOSTOFTHESPLIT_RECORDEDRATHERTHANIMPLIED: >-
+      A help-desk role that may reinstate a locked-out employee now needs a permission somebody must
+      deliberately grant, and until they do, reinstatement requires the same role that can suspend.
+      THAT IS THE FAIL-CLOSED DIRECTION and it is the right one, but it is a real cost and it is not
+      hidden. The trigger to reopen it is a tenant reporting that reinstatement is bottlenecked, and
+      the answer then is a role holding reactivate alone — which this split makes a grant rather
+      than a redesign.
+
+  theSPLITBETWEENSUSPENDANDREMOVE:
+    ruling: >-
+      SEPARATE PERMISSIONS. Suspension is core.user.deactivate; removal is core.user.remove, which
+      this contract PROPOSES.
+    theOBVIOUSCOUNTERARGUMENT_ANSWEREDRATHERTHANSKIPPED: >-
+      core.user.deactivate reads "Withdraw a user's access to the tenant", and removing a member
+      withdraws their access to the tenant. ON THE PLAIN WORDS, REMOVAL IS ALREADY COVERED — and
+      under §3.2 read the way the catalogue reads it, a split where both halves reach the same
+      person and withdraw the same access is "a split with no decision in it".
+    whyITISSTILLASPLIT: >-
+      *** THE TWO DIFFER IN WHAT SURVIVES, NOT IN WHO THEY REACH. *** Suspension preserves the
+      membership row, the seed role and every custom role assignment — the configuration that would
+      restore access. Removal DESTROYS them. So removal is not "withdraw access", it is "withdraw
+      access AND discard what would restore it", and a grantor may reasonably want the first without
+      the second. That is the instrument 0044 §3d prescribes, answered yes.
+    andTHEONETHINGREMOVALMUSTNOTDESTROY: >-
+      THE AUDIT TRAIL. The `principal` row survives removal, every audit record naming that
+      principal survives, and this is not a courtesy: an audit trail whose actors can be deleted is
+      an audit trail an administrator can edit by removing people.
+
+  # -------------------------------------------------------------------------
+  # permissionRuling
+  # -------------------------------------------------------------------------
+  permissionRuling:
+    alreadyRegistered:
+      core.user.list: "read, scopes [organization, business, branch, team], phase 1. Gates the directory."
+      core.user.read: "read, scopes [organization, business, branch, team, own], phase 1. Gates the single-member read."
+      core.user.deactivate: "sensitive, scopes [organization, business], phase 1. Gates suspension."
+    proposedByThisContract:
+      core.user.reactivate: >-
+        NEW. sensitive, scopes [organization, business], phase 2, group identity, status proposed,
+        HELD BY NO ROLE. Restore a suspended membership. Full argument:
+        authorizationModel.theSPLITBETWEENSUSPENDANDREACTIVATE, and the short form is that it is an
+        ACCESS GRANT rather than a recovery, so folding it into core.user.deactivate would mean the
+        permission to withdraw access silently carried the permission to restore it.
+        SENSITIVE RATHER THAN write: it changes who may reach the tenant's data, which is
+        §6's "change membership" example verbatim. NOT critical: nothing is destroyed, no money
+        moves, and the same route that granted it can withdraw it again through its counterpart —
+        docs/decisions/0026 grades what the OPERATION does.
+      core.user.remove: >-
+        NEW. sensitive, scopes [organization], phase 2, group identity, status proposed, HELD BY NO
+        ROLE. Delete a membership and this Organization's role assignments to that principal. Full
+        argument: authorizationModel.theSPLITBETWEENSUSPENDANDREMOVE.
+        scopes [organization] AND NOT [organization, business], DELIBERATELY: membership is of the
+        ORGANIZATION, so a business-scope principal removing a member would be ending a relationship
+        it holds one side of. That is customer-directory-v1's reasoning for keeping
+        customers.customer.move and .delete at organization scope, and the intersection rule then
+        makes it impossible for a business-scope role to hold at all.
+        SENSITIVE RATHER THAN critical, AND THIS ONE IS CLOSER TO THE LINE THAN reactivate — saying
+        so beats asserting the rung. It destroys role assignments, which is destruction. What holds
+        it below critical is that it destroys CONFIGURATION and never DATA: no business record, no
+        audit record and no principal is touched, and the person can be invited back. If a future
+        change makes removal reach the audit trail or the principal, THE PERMISSION IS WHAT MUST BE
+        REVISITED, because §7's confirmation requirement is read from the permission's rung.
+    permissionsDeliberatelyNotDeclared:
+      - >-
+        core.user.export — no member export exists here and declaring the permission before an
+        operation exists is how one arrives without a decision. AUTHORIZATION_STANDARD.md §3.2
+        requires export to be separate from read, and the way to keep it separate is to not declare
+        it. The page cap of 100 is what stops core.user.list being an undeclared bulk export.
+      - >-
+        core.user.delete — THERE IS NO SUCH THING AND THERE MUST NOT BE. Dudo does not delete
+        people; it removes memberships. A permission named `delete` over a principal would be read
+        as erasing the person, and the first implementation of it would orphan every audit record
+        that names them.
+    theENUMERATIONTEST_SECURITY_MD_2a: >-
+      RUN, AND IT PASSES FOR EVERY AGGREGATE IN THIS CONTRACT — because there are none. This contract
+      publishes NO COUNT of any kind: no member total, no suspended total, no per-role breakdown.
+      *** THAT IS A DELIBERATE OMISSION AND A CHEAP ONE TO REVERSE WRONGLY. *** The reason it is
+      absent is pagination's, not §2a's: urn:dudo:schema:pagination:1's envelope forbids a total
+      because a total computed without a tenant predicate is a cross-tenant leak returning no records
+      at all. Whoever adds one owes THAT argument.
+      *** AND THEY ALSO OWE §2a's, WHICH THIS BLOCK PRE-CLEARED AND SHOULD NOT HAVE — CORRECTED
+      2026-09-13 ON security-agent's MEDIUM-2. *** It read: "Under §2a a member count would be safe —
+      its consumer holds core.user.list, which enumerates the counted population." THE QUALIFIER THAT
+      MAKES THAT FALSE IS SCOPE.
+      core.user.list is declared `scopes: [organization, business, branch, team]`. `business-admin` is
+      a BUSINESS-scope role. A MEMBER COUNT IS ORGANIZATION-WIDE. So for a business-scope holder the
+      count reaches PAST its consumer's enumeration right — §2a's failure condition, on the very
+      permission this block cleared it against.
+      THE CORRECT CLAIM: SAFE FOR AN ORGANIZATION-SCOPE HOLDER. For a business-scope holder the count
+      must be SCOPED TO THE AUTHORIZED BUSINESS SET, or WITHHELD.
+      *** THE MECHANISM IS WORTH MORE THAN THE CORRECTION, BECAUSE docs/decisions/0043 §4's ROW MADE
+      THE IDENTICAL ERROR INDEPENDENTLY. *** Both artifacts asked whether the consumer holds an
+      ENUMERATING PERMISSION and stopped one step short. §2a asks whether it enumerates THE COUNTED
+      POPULATION — and a permission holdable at a narrower scope than the population is counted over
+      does not. SCOPE AND POPULATION ARE DIFFERENT QUESTIONS, which is what 0043 §1b is itself the
+      record of, one field along.
+      WHENEVER §2a IS RUN, THE ANSWER MUST NAME THE SCOPE THE CONSUMER HOLDS ITS PERMISSION AT, not
+      only the permission. A bare "its consumer enumerates the population" is unfalsifiable until
+      somebody supplies the scope.
+
+  scopeRuling:
+    listAndRead: organization
+    suspendReactivateRemove: organization
+    reasoning: >-
+      THE OPERATION'S `scope` IS THE LEVEL ITS PERMISSION IS EVALUATED AT, A SINGLE VALUE — not the
+      list of scopes the permission may be declared at. Confusing the two is the escalation
+      AUTHORIZATION_STANDARD.md §4 warns about.
+      EVERY OPERATION HERE DECLARES `organization`, INCLUDING THE TWO READS, AND THAT LOCKS OUT
+      BUSINESS-SCOPE PRINCIPALS DELIBERATELY. business-read-v1 declares `business` precisely to avoid
+      locking out business-admin, and the opposite answer here is not an inconsistency: MEMBERSHIP IS
+      OF THE ORGANIZATION. A business-admin listing the Organization's members would be enumerating
+      a population wider than the Business it administers, and `core.user.list` at business scope is
+      for a Business-scoped directory that this contract does not publish.
+      A BUSINESS-SCOPED MEMBER LISTING IS A REAL FUTURE NEED AND IT IS A DIFFERENT OPERATION, in a
+      different contract, whose row set is the Business's own members. Recorded as TM-3 so that
+      widening THIS one is refused rather than argued.
+
+# ---------------------------------------------------------------------------
+# operations — the tenant-admin class. `operations:` is shared with the platform and session
+# classes; `requestClass:` above is what distinguishes them (0039).
+#
+# ROUTE ID PREFIX: `tenant.` — chosen the way `platform.` was, and for the same reason. An id
+# carries the class it belongs in, so a route registered in the WRONG registry is visible in the id
+# rather than only in a table. `core.` is taken by the Action pipeline and would make a
+# control-plane route indistinguishable from a tenant-data one.
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.members.list
+    title: "List the Organization's members"
+    method: GET
+    path: "/organization/members"
+    request: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/listMembersInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/listMembersOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.user.list
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    freeTierImpact:
+      pageCap: 100
+      boundingIndex: "organization_membership, keyed (principal_id, organization_id). The listing is a range scan on the SECOND component, which the primary key does not serve — SO THIS OPERATION NEEDS AN INDEX ON (organization_id, ...) AND ONE DOES NOT EXIST. 0003_organization_membership.sql declares no secondary index. That is a Core dependency and a migration, and it is named here rather than assumed."
+      whyABOUNDISREQUIREDHERE: >-
+        docs/decisions/0044 §3c: this class does NOT inherit the platform class's accidental read
+        bound. P4 makes every platform read a write, so the write ceiling bounds read cost; here
+        every read is a read and nothing bounds it but this cap.
+      whyNOTADEFAULT: >-
+        The cap is the MAXIMUM, declared. pageSize's `"default": 25` is the client's convenience and
+        is not a bound — 0044 §3c calls a default page size the fail-open version of this
+        requirement, because a route that forgot its bound and a route that accepted the default are
+        indistinguishable afterwards.
+    notes: >-
+      NO not_found: a collection endpoint never 404s for its contents. NO quota_exceeded: this is a
+      read, and 0014 §A.10 keeps reads available at a write ceiling.
+      audit: false, AND IT IS A RULING RATHER THAN AN OMISSION. 0044 §3c: this class does not audit
+      reads universally, because the actor is a member reading their own Organization's data and a
+      write per settings-page view costs the tenant's own allowance for no detection value. That is
+      a stated DIFFERENCE from the platform class rather than an inherited property — P4 audits
+      platform reads because the actor is outside the tenant and enumeration is reconnaissance.
+      THE CONSEQUENCE IS THAT NOTHING BOUNDS HOW OFTEN THIS IS READ. The cap bounds one response;
+      it does not bound a thousand of them. Rate limiting is the control for that and it belongs to
+      Core, not here — recorded as TM-5 rather than left to be discovered.
+
+  - id: tenant.members.get
+    title: "Read one member"
+    method: GET
+    path: "/organization/members/{principal_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/getMemberInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/getMemberOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: core.user.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: "organization_membership PRIMARY KEY (principal_id, organization_id) — a point lookup on the FULL key, served by the automatic index. This is the one read in this contract that needs no new index."
+      whyPageCapIsNull: >-
+        NOT AN ABSENT BOUND. This operation returns exactly one object and cannot return a
+        collection, so a page cap is not the instrument — the bounding index is, and it is named.
+        0044 §3c requires "a page cap OR the bounding index", and stating which one applies is what
+        stops `null` here reading as the omission the rule exists to refuse.
+    notes: >-
+      A principal_id that is not a member of the AUTHENTICATED Organization answers not_found,
+      identically in all three cases. The composite-key lookup is what makes that structural rather
+      than a branch: a statement naming only principal_id would find the person's membership of some
+      other Organization and would be a cross-tenant read, not a slower query.
+
+  - id: tenant.members.suspend
+    title: "Suspend a member"
+    method: POST
+    path: "/organization/members/{principal_id}/suspend"
+    request: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/changeMemberStatusInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/changeMemberStatusOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.user.deactivate
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: >-
+      TWO LEDGERS, AND THE SCALAR CANNOT SAY SO — the same shape template-lifecycle-v1's
+      set-template records. ORGANIZATION_MEMBERSHIP_ROW_WRITES (2, control-plane/
+      control-plane-admission.ts) against the CONTROL-PLANE budget, plus AUDIT_EVENT_ROW_WRITES
+      (5, storage/write-cost.ts) against THE TENANT'S OWN. 7 is the sum and the two halves refuse
+      independently, so a request can be admitted by one ceiling and refused by the other.
+      READ THE CONSTANTS, NOT THIS FIGURE. Both are named above; PLATFORM_OPERATOR_ACTION_ROW_WRITES
+      moved 2 -> 4 once and nine contract figures did not follow, which is why `check:row-writes`
+      exists — AND THAT CHECK DOES NOT COVER THIS CLASS. It buckets any non-platform declared class
+      as "other, P4 does not apply" and checks nothing. So this figure has no mechanical guard at
+      all, which is a gap in the tooling rather than in the contract, and it is reported as one.
+    theOWNERISREFUSED: "failed_precondition. authorizationModel.theOWNERISNOTAVALIDTARGET."
+    notes: >-
+      SUSPENSION IS IMMEDIATE AND THAT IS ALREADY TRUE IN CORE RATHER THAN REQUESTED HERE.
+      0003_organization_membership.sql: a suspended membership is treated identically to no
+      membership, and it "collapses a live session to organization not selected on the very next
+      request, which is what makes REVOCATION IMMEDIATE rather than effective at session expiry".
+      No session sweep is required and none is specified.
+      IDEMPOTENT ON THE TARGET STATE. Suspending a suspended member succeeds, changes nothing, and
+      WRITES NO AUDIT RECORD — a retry must not manufacture a second membership-change event in the
+      tenant's trail. maxRowWrites is the cost of the state-changing path; the no-op path costs 0.
+      A CALLER MAY SUSPEND THEMSELVES. That is not blocked, because blocking it requires reading the
+      actor into a target rule and the owner rule is the only target rule this contract has. The
+      consequence is a member locking themselves out, which is recoverable by anyone holding
+      core.user.reactivate — and an owner cannot do it at all, since the owner is not a valid target.
+
+  - id: tenant.members.reactivate
+    title: "Reactivate a suspended member"
+    method: POST
+    path: "/organization/members/{principal_id}/reactivate"
+    request: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/changeMemberStatusInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/changeMemberStatusOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.user.reactivate
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "As suspend: ORGANIZATION_MEMBERSHIP_ROW_WRITES (2, control plane) + AUDIT_EVENT_ROW_WRITES (5, the tenant's own). Two ledgers, refusing independently."
+    permissionIsPROPOSED: >-
+      *** core.user.reactivate IS PROPOSED AND HELD BY NO ROLE, SO THIS ROUTE IS FORBIDDEN TO EVERY
+      CALLER ALIVE THE DAY IT LANDS. *** That is the state a route acquires when its permission is
+      registered and ungranted, and it has bitten this repository before — the platform-operator
+      revoke route shipped unreachable, which is why
+      platform-routes.ts::assertEveryRoutePermissionIsReachable now FAILS THE BUILD rather than
+      producing a forbidden somebody has to diagnose. THE TENANT-ADMIN REGISTRY OWES THE SAME
+      ASSERTION, and 0044 §3d requires it "one arity up — per conjunct, not per route".
+    theOWNERISREFUSED: "failed_precondition, and the owner can never be suspended so can never need reactivating. The rule is stated for all three operations uniformly rather than being reasoned away here, because a target rule with an exception is a target rule somebody will find the exception to."
+    notes: "Idempotent on the target state; reactivating an active member succeeds and writes nothing."
+
+  - id: tenant.members.remove
+    title: "Remove a member from the Organization"
+    method: DELETE
+    path: "/organization/members/{principal_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/removeMemberInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-members:1#/$defs/removeMemberOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.user.remove
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 47
+    theREMOVALCOSTISBOUNDEDBYTHISFIELD: >-
+      *** 47 IS 2 + (20 x 2) + 5, AND THE MIDDLE TERM IS WHY tenant-members-v1.schema.json's
+      `custom_role_ids` CARRIES maxItems 20. *** The membership row is
+      ORGANIZATION_MEMBERSHIP_ROW_WRITES (2); each custom-role assignment deleted alongside it costs
+      the same order; the audit record is AUDIT_EVENT_ROW_WRITES (5) against the tenant's own budget.
+      THE SCALAR IS THE WORST CASE, NOT THE TYPICAL ONE. A member with no custom roles costs 7. The
+      field must declare the worst case, because a reservation sized to the typical case is a
+      reservation that fails halfway through a delete.
+      *** THE FIRST DRAFT BOUNDED custom_role_ids AT 50 AND WOULD HAVE MADE ONE REMOVAL COST 107 —
+      more than a sixth of PER_PRINCIPAL_DAILY_ROW_WRITES, which is 600. *** That was not caught by
+      reasoning about roles; it was caught by trying to write this number down. A response bound
+      chosen for rendering turned out to be a cost bound, and the two uses must not drift: raising
+      maxItems is a COST decision as well as a product one.
+      AND ROLE ASSIGNMENTS ARE DELETED RATHER THAN ORPHANED, DELIBERATELY. Leaving them keyed on
+      (organization_id, principal_id) would mean re-inviting the same person SILENTLY RESTORES
+      every role they used to hold — a resurrection hazard that looks like a convenience and is an
+      unaudited grant.
+    ordering: >-
+      THE AUDIT RECORD IS WRITTEN BEFORE THE MEMBERSHIP ROW IS DELETED, and the ordering is forced
+      rather than chosen: the record names a membership that will not exist a moment later, and a
+      trail written afterwards begins after the act it covers.
+      0003_organization_membership.sql instructs this milestone in terms — the audit record goes into
+      "the AFFECTED ORGANIZATION'S tenant-scoped audit_event table, not into the control plane" —
+      and here the affected Organization is the authenticated one, so there is no second tenant to
+      get wrong.
+    theOWNERISREFUSED: "failed_precondition. An Organization with no owner has nobody who may transfer or delete it, so removing the owner is not a permission question — it is a state the invariant forbids."
+    notes: >-
+      REMOVAL IS FROM THIS ORGANIZATION AND DELETES NO PERSON. The `principal` row survives, every
+      audit record naming them survives, and their membership of any other Organization is untouched
+      and unreadable from here.
+      THE RESPONSE DOES NOT ECHO THE SEAT. After this call the caller holds no membership
+      relationship with that person, so a response describing their former role and status would be
+      a disclosure obtainable by no other route — a small, natural, wrong thing to add.
+
+# ---------------------------------------------------------------------------
+# dependencies — WHAT THIS CONTRACT CANNOT SATISFY ITSELF.
+# READ BEFORE REPORTING ANY OF THIS AS CLOSED.
+# ---------------------------------------------------------------------------
+dependencies:
+
+  thereIsNoNameAndNoRecoverableIdentifier:
+    finding: >-
+      *** MEASURED IN THE MIGRATIONS, NOT ASSUMED. *** control-plane/0001_principal.sql defines
+      `principal` as exactly (principal_id, principal_type, status, created_at) — NO NAME.
+      control-plane/0006_principal_credential.sql stores `identifier_hash`, "base64url of
+      HMAC-SHA-256(IDENTITY_LOOKUP_KEY, normalize(email))", and states that "the plaintext
+      identifier is never stored and never logged".
+    consequence: >-
+      EVERY MEMBER ROW RENDERS AS A 22-CHARACTER OPAQUE IDENTIFIER, ON BOTH CLIENTS, TODAY AND UNTIL
+      SOMETHING STORES A NAME. A members directory in which nobody has a name is not a usable
+      members directory, and this contract settles the SHAPE of the answer without producing the
+      DATA for it. Stated here rather than discovered on a screen.
+    andTheTWOHALVESAREDIFFERENTPROBLEMS_WHICHISTHEPARTTHATMATTERS: >-
+      A NAME IS ABSENT. AN EMAIL IS UNRECOVERABLE. Adding a `display_name` column is an ordinary
+      additive migration. Recovering the login identifier is not available at any price: the HMAC is
+      one-way, and 0015 §D chose that deliberately — the plaintext exists only in the client's
+      hands at sign-in. So "just show their email in the directory" is not a small feature; it
+      requires STORING AN IDENTIFIER DUDO CURRENTLY REFUSES TO KEEP, which is a security decision
+      with its own record and not a field this contract may request.
+    whatWouldCloseIt: >-
+      A `display_name` on `principal` or on `organization_membership`, plus something that writes
+      it — which is the invitation flow, since that is where a person's name would first be typed.
+      NEITHER IS DESIGNED HERE. Both are migrations and therefore the user's, every time
+      (security.md §7).
+    whyTheFIELDISCONTRACTEDANYWAY: >-
+      Because contracting it is free now and breaking later, and because NOT contracting it is what
+      produces drift: left uncontracted, each client invents its own fallback for a nameless member.
+      business-read-v1's display_name is the identical case and the identical answer.
+
+  theListingRequiresAnIndexOnTheOrganizationComponent:
+    theCondition: >-
+      tenant.members.list is a range scan keyed on the SECOND component of
+      `organization_membership`'s composite primary key, so it requires an index leading with
+      `organization_id`. Stated as a CONDITION rather than as a fact about what does not exist
+      (0043 §7a).
+    measured: >-
+      *** `platform/core/migrations/control-plane/0020_organization_membership_by_organization.sql`
+      EXISTS. THIS DEPENDENCY IS MET. *** Read that file for what it declares rather than trusting
+      this line.
+    theCORRECTIONISTHEPOINT: >-
+      This entry read "0003_organization_membership.sql declares no secondary index… THIS CONTRACT
+      IS THE THING THAT MAKES THAT SENTENCE STOP BEING TRUE", and quoted 0003's own "NO SECONDARY
+      INDEX, and it is not an omission."
+      *** BOTH QUOTATIONS WERE ACCURATE AND THE CONCLUSION WAS FALSE. *** 0003 does declare no
+      secondary index; `0020` adds one, and I read 0003 without listing the directory that would
+      hold a later migration. **A citation checks out and the claim built on it is still wrong when
+      the citation is one file in a numbered sequence** — architecture.md §3c's reader half, and
+      workflow.md's *open the directory that would hold the thing*.
+      IT IS THE FOURTH SUCH CLAIM OF MINE FALSIFIED IN A DAY — the `invitation`, `tenant_role` and
+      `organization_deletion_request` tables were the others, all "does not exist" written while
+      core-agent was writing them. **The lesson is not to read more carefully; it is that in a tree
+      several agents are writing, AN ABSENCE IS THE ONE CLAIM WITH A SHELF LIFE MEASURED IN HOURS.**
+
+  noRouteInThisClassIsREGISTEREDYET: >-
+    *** MEASURED 2026-09-13 RATHER THAN ASSUMED, AND THE MEASUREMENT CORRECTED THE CLAIM. *** This
+    entry first read "the class does not exist". `platform/core/tenant-admin/` holds SEVEN modules —
+    tenant-admin-routes.ts, tenant-admin-permissions.ts, tenant-admin-authority.ts,
+    tenant-admin-audit.ts, owner-immunity.ts, membership-administration.ts, composition.ts — and a
+    search for route-id literals across all seven returns NOTHING.
+    *** WITH A POSITIVE CONTROL, WHICH THE FIRST VERSION OF THIS SENTENCE DID NOT HAVE. *** The
+    absence rested on two searches that each returned a clean nothing, and A CLEAN NOTHING OVER AN
+    UNREACHABLE CORPUS AND A CLEAN NOTHING OVER A REACHABLE ONE ARE THE SAME OUTPUT — the hazard
+    measured on this repository's search tool the same day, where a misspelled `glob` returns "no
+    matches" while a misspelled `path` errors. Control: the same directory searched for
+    `permission` returns 102 hits across 6 of the 7 files. THE CORPUS WAS REACHABLE.
+    AND THE PATTERN WAS RE-DERIVED RATHER THAN REUSED. The first two searches assumed the shape this
+    author had in mind — a line-anchored `- id:` with SINGLE quotes, and a `tenant.` prefix. An
+    unanchored `id:\s*['"`]` accepting any quoting and any prefix returns exactly ONE hit, in a
+    comment (`{kind: 'none', id: 'x'}`), which is not a route. workflow.md §11a: a pattern written
+    from the shape you had in mind cannot see the shape the code takes.
+    THE RESIDUAL, STATED BECAUSE THE THREE SEARCHES DO NOT CLOSE IT: an id COMPUTED rather than
+    written — assembled in a factory, as the Action route ids are — is invisible to every textual
+    pattern here. `check:request-class` covers exactly that case by EXECUTING the registries, and it
+    does not import this one. So the honest claim is "no route id is WRITTEN in this tree", and the
+    day a tenant-admin registry is executable, that checker is what settles it.
+    SO THE MACHINERY IS BEING BUILT AND THE REGISTRY IS EMPTY. Those are different states and the
+    difference matters to anyone reading this file: nothing here is reachable, and the reason is not
+    that Core has not started.
+    THE REGISTRY OWES THE REACHABILITY ASSERTION 0044 §3d REQUIRES — "one arity up, per conjunct,
+    not per route" — because a route whose conjunction no role satisfies is refused to every caller
+    alive, and a conjunction makes that defect easier to create by accident.
+    *** AND A CONTRACT LEADING AN IMPLEMENTATION IS UNCHECKED RATHER THAN AGREED. *** Every
+    operation id below is `UNREGISTERED` to `check:request-class`, so its declared class is a
+    statement about a route that does not exist and nothing can falsify it. It becomes checkable the
+    day Core registers the id — which is the direction that matters, because that is when a wrong
+    class starts refusing real callers.
+
+  theConfirmationChallengeRouteForThisClass: >-
+    Not needed by this contract, and named because its absence is load-bearing elsewhere in this
+    directory. NO OPERATION HERE IS `critical`, so none needs a confirmation — see README.md §2.4,
+    where the missing third challenge route makes every `critical` tenant-admin operation
+    unreachable on arrival. This contract is unaffected, and saying which contracts are affected is
+    what stops the dependency being read as universal.
+
+  twoProposedPermissions: >-
+    core.user.reactivate and core.user.remove are registered `status: proposed` and HELD BY NO ROLE.
+    Registration is not a grant (0007 rule 4). security-agent reviews before integration
+    (security.md §8), and only the user grants.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — contract level. Per-read bounds are on each operation, as 0044 §3c requires.
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    NO NEW TABLE. One new INDEX is required (see dependencies) and one optional new COLUMN is named
+    but not requested. Row-write costs are declared per operation against the constants that produce
+    them rather than as figures of this contract's own.
+  reads: >-
+    EVERY READ IN THIS CONTRACT DECLARES ITS BOUND AS A FIELD — `freeTierImpact.pageCap` or
+    `freeTierImpact.boundingIndex`, per operation. docs/decisions/0044 §3c: an absent bound is a
+    REGISTRATION FAILURE, never a fallback, and a default page size is the fail-open version of one.
+  theCEILINGTHISCLASSDOESNOTINHERIT: >-
+    P4 makes every platform read a write, so the platform write ceiling bounds platform read cost —
+    which 0042 recorded as load-bearing by accident. THIS CLASS HAS NO EQUIVALENT. An unbounded read
+    here is simply unbounded, which is why the bound is a declared field rather than a convention.
+  whatIsNOTBOUNDED_STATEDRATHERTHANROUNDEDUP: >-
+    THE NUMBER OF REQUESTS. Every response is bounded; nothing here bounds how many responses a
+    caller may ask for, and this class does not audit reads, so a member enumerating the directory
+    a thousand times leaves no record and pays nothing. Rate limiting is the control and it is
+    Core's. Recorded as TM-5, and NOT presented as covered by the page cap — the cap bounds one
+    response, and the vector is longitudinal.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TM-1
+    question: >-
+      Should a member be able to see their OWN seat through this contract without holding
+      core.user.read at organization scope? Every member needs to know their own role, and today
+      that requires a permission an ordinary member does not hold at this scope.
+    recommendation: >-
+      A separate self-read operation under `own` scope, in a different contract — not a widening of
+      tenant.members.get, which would make a record-dependent authorization decision out of a
+      record-independent one and reopen theUnknownIdentifierRuling's forbidden property.
+    status: open
+
+  - id: TM-2
+    question: >-
+      What happens to a member's SESSIONS on removal? Suspension is immediate by construction
+      (session resolution refuses a suspended membership). Removal deletes the row, which the same
+      resolver reads as "not a member" — so removal is also immediate. BUT NOTHING HAS MEASURED THAT
+      SECOND CLAIM, and it is asserted here from the same source that proves the first.
+    recommendation: >-
+      core-agent measures it against identity/session-resolution.ts before this contract is
+      accepted. A DELETED membership and a SUSPENDED one reaching the same branch is likely and is
+      not the same fact, and stating it as settled would be architecture.md §3c's citation defect.
+    status: OPEN — a claim in this contract depends on it.
+
+  - id: TM-3
+    question: "A Business-scoped member listing — the population a business-admin may see."
+    recommendation: "A different operation in a different contract, whose row set is the Business's own members. Widening tenant.members.list to business scope is refused: its row set is the Organization's members, which is a wider population than the caller administers."
+    status: open
+
+  - id: TM-4
+    question: "Ordering by Unicode code point is not locale-correct for Arabic or accented Latin."
+    recommendation: "Same root cause as customer-directory-v1's CD-6. Recorded rather than solved here; a collation decision belongs to one record covering every listing in Dudo, not to five contracts separately."
+    status: open
+
+  - id: TM-5
+    question: >-
+      Nothing bounds how OFTEN the directory is read. Reads are unaudited in this class by
+      0044 §3c's ruling, and the page cap bounds one response rather than a sequence of them.
+    recommendation: >-
+      Rate limiting in Core, keyed per principal. It is not a substitute for the cap and the cap is
+      not a substitute for it — the cap bounds a scrape, and the vector this leaves open is
+      longitudinal, which is the distinction core.template-adoption.read records for censuses.
+    status: open

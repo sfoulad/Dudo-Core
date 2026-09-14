@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:fixture:same-name-source:1",
+  "title": "Same-name cross-schema $ref — the SOURCE half",
+  "$defs": {
+    "widgetId": {
+      "$ref": "urn:dudo:fixture:same-name-target:1#/$defs/widgetId",
+      "description": "SAME NAME, annotation-only sibling. The TS2456 case: local `widgetId` -> remote `widgetId`. Must emit an import and a re-export, and NO local alias."
+    },
+    "widgetLabel": {
+      "$ref": "urn:dudo:fixture:same-name-target:1#/$defs/widgetName",
+      "description": "DIFFERENT NAME. THE MIRROR CONTROL — must still emit a real alias. Without this row, a repair that suppressed EVERY cross-schema alias passes every other assertion and the working path is gone."
+    },
+    "narrowedId": {
+      "$ref": "urn:dudo:fixture:same-name-target:1#/$defs/narrowedId",
+      "maxLength": 12,
+      "description": "SAME NAME, CONSTRAINING sibling. Must be REFUSED, not emitted — there is no correct output. See assertion 6."
+    },
+    "holder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/widgetId" },
+        "label": { "$ref": "#/$defs/widgetLabel" }
+      }
+    }
+  }
+}

@@ -1,4 +1,9 @@
 node_modules/
 dist/
+# The transport=http bundle `verify:no-fixtures` builds and inspects. Kept out
+# of `dist/` deliberately: overwriting the fixture build would destroy this
+# check's own negative control, which is that the SAME predicate must flag a
+# bundle that really does contain the fixtures.
+dist-http/
 .vite/
 *.local

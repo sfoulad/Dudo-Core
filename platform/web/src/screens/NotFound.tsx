@@ -47,6 +47,11 @@ export function NotFound() {
       <Panel>
         <StateBlock
           glyph="?"
+          /* The top-level 404 IS the page — nothing above it supplies an `h1`,
+             so `h2` here would leave the document with a level-2 heading and no
+             level 1. `/settings/no-such-section` correctly stays `h2`: it sits
+             inside the settings shell, which has its own. */
+          headingLevel="h1"
           title="This page does not exist"
           body="The address does not match anything in Dudo."
           actions={

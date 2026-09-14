@@ -1,0 +1,258 @@
+---
+# Organization Configuration — the adopted Template — tenant-admin contract, version 1
+#
+# Shapes: tenant-configuration-v1.schema.json. Shared class obligations: README.md here.
+#
+# Governed by: docs/decisions/0044 (Accepted) · 0043 (Accepted) · 0025 (Accepted) — a Template is a
+#              name and labels and NEVER logic · 0003 / 0008 — no App isolation mechanism is approved
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT.
+#
+# *** THIS CONTRACT IS ONE READ AND ONE REFUSAL, AND THE REFUSAL IS THE LARGER HALF. ***
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# THE REFUSAL. Read before the operation, because it is most of the assignment.
+# ---------------------------------------------------------------------------
+theAPPHALFISREFUSED:
+  theBrief: "Milestone 2 names 'organization template and installed-App configuration' as one area."
+  ruling: >-
+    *** THIS CONTRACT PUBLISHES NO APP INSTALL, NO APP CONFIGURATION, NO APP PERMISSION GRANT AND NO
+    APP LISTING. NOT AS A SHAPE, NOT AS A RESERVED FIELD, NOT AS A PLACEHOLDER. ***
+  whyNotJustTheShape_WHICHISTHETEMPTINGMIDDLE: >-
+    The tempting move is to publish the SHAPES now and let Core fill them later — contracts lead
+    implementation all over this corpus and `platform-operator-v1` says *"NEW WORK. No implementation
+    exists"* on its own face. **That is legitimate when the thing being contracted is DECIDED and
+    unbuilt. Here it is undecided.**
+  whatISMISSINGISADECISION_NOTCODE:
+    - >-
+      **THE APP ISOLATION MECHANISM IS UNSELECTED.** `CLAUDE.md` lists it under *"Genuinely open — do
+      not assume any of them"*: `0001` bound it to the stack and `0003` did not approve Workers for
+      Platforms, **which is paid-only and therefore prohibited under `0008`.** So there is no
+      approved way to RUN a third-party App at all.
+    - >-
+      **THERE IS NO MANIFEST-ADMISSION PATH.** The permission catalogue states it plainly: *"no SDK,
+      no App runtime, nothing that parses a manifest. `apps/customers` is COMPILED IN rather than
+      installed."* `platform/capabilities/` and `packages/sdk/` are README only.
+    - >-
+      **THE APP PERMISSION AND TRUST MODEL IS AN UNWRITTEN ADR.** The catalogue names it as what
+      would make its own scope rule enforceable, and records that the rule is a REVIEW OBLIGATION
+      today with nothing executing it.
+  whatPUBLISHINGANYWAYWOULDCOST: >-
+    *** A CONFIGURATION SHAPE IS A CLAIM ABOUT THE APP MODEL, AND THIS CONTRACT WOULD BE MAKING IT
+    FROM A SETTINGS SCREEN. *** Whether configuration is per-Organization or per-Business; whether it
+    is typed or opaque; whether a secret may live in it — `capability.configuration.type`'s
+    `secret-ref` is already flagged as needing `security-agent` AND the user — whether granting an
+    App a permission is one act or two. **Every one of those is decided by the shape somebody
+    publishes first**, and the shape would be published by the contract with the least standing to
+    decide it.
+    AND `core.app.install`, `.configure`, `.grant-permission`, `.revoke-permission`, `.upgrade`,
+    `.disable`, `.uninstall` ARE ALREADY CATALOGUED AND ALREADY HELD BY `owner` AND `admin`. **So the
+    permissions are granted and the capability is absent** — which means a route published here would
+    be reachable on the day it landed, gating an App model nobody had designed.
+  theHONESTALTERNATIVE: >-
+    An `apps` field is ADDITIVE to `getConfigurationOutput` (API_STANDARD.md §6), and the response is
+    an OBJECT rather than the Template itself precisely so that adding one costs no version. **That is
+    the only accommodation made, it is a shape decision rather than a content one, and no App field is
+    declared, named or reserved.**
+  whoOWNSTHEDECISION: >-
+    Not this contract and not `architecture-agent` alone. The isolation mechanism is the user's
+    (`0003`, `0008`); the App permission and trust model is an ADR the Team Lead records; the
+    `secret-ref` question needs `security-agent` and the user. **Recorded as TC-1 so the absence reads
+    as blocked-on-a-decision rather than as unwritten.**
+
+theTENANTCANNOTCHOOSEITSTEMPLATE:
+  ruling: "This contract publishes a READ and no write. There is no tenant route that sets, changes or clears the adopted Template."
+  why: >-
+    Adoption is `core.platform-organization.set-template` — `platform` scope, `sensitive`, an
+    operator act, published by `template-lifecycle-v1`. **No tenant role can hold a platform-scope
+    permission** (`0007` D16 constraint 3, and the intersection rule), so there is nothing to widen.
+  isTHATRIGHT_ASKEDRATHERTHANASSUMED: >-
+    *** IT IS THE STATUS QUO AND IT IS NOT OBVIOUSLY CORRECT, SO IT IS RECORDED AS A QUESTION. *** A
+    Template decides *"what every user in that Organization READS AS THE NAME OF THEIR OWN
+    STRUCTURE"* (the catalogue's own words about set-template) — which is a customer-facing vocabulary
+    the customer cannot change. **The same sentence is the argument for operator control and the
+    argument against it**, depending on whether you read a Template as platform configuration or as
+    the tenant's own vocabulary.
+    THIS CONTRACT DOES NOT DECIDE IT, and the reason is not deference: **a tenant-settable Template
+    needs a tenant permission that does not exist, a route in this class, and an answer to what
+    happens when a tenant adopts a RETIRED Template** — three decisions, none of them a read. TC-2.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2. One row of one control-plane table, keyed by the authenticated Organization."
+  model: "docs/decisions/0006. `organization.template_id` is control-plane, which is why this is tenant-admin and could not be an Action."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call."
+    - "NO organization_id in any shape — the operation takes no parameters at all, so there is nothing to refuse."
+    - >-
+      *** THE `template` ROW IS NOT TENANT DATA AND THE JOIN CROSSES A BOUNDARY IN THE SAFE
+      DIRECTION. *** A Template is platform configuration shared by every Organization that adopts
+      it, so reading one discloses nothing about another tenant. **What must never happen is the
+      reverse**: this operation reads the Template the AUTHENTICATED Organization adopted, never a
+      Template named by the caller, and never a list.
+    - >-
+      A CLIENT CANNOT ENUMERATE TEMPLATES THROUGH THIS ROUTE. It returns exactly one, chosen by the
+      Organization's own row. Reading a Template the Organization has not adopted would be a
+      platform-configuration disclosure with no permission behind it — `core.template.read` and
+      `core.template.list` are both `platform` scope.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+  evaluationOrder:
+    - "1. Authenticate. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context."
+    - "3. Authorize `core.organization.read`, record-independently. Failure -> forbidden."
+    - "4. Read `organization.template_id`; if non-null, read that `template` row. Return."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found"
+    ruling: "Declared for uniformity and unreachable — the operation takes no identifier. It becomes load-bearing the moment one is added, which is why it is not left off."
+    aDANGLINGtemplate_idISNOTnot_found: >-
+      *** IF `organization.template_id` NAMES A `template` ROW THAT DOES NOT EXIST, THAT IS
+      `internal`, NOT `null` AND NOT `not_found`. *** Returning null would report 'no Template
+      adopted' for an Organization that has adopted one, which is a false statement about the
+      customer's own configuration; returning not_found would attribute a caller error to a data
+      defect. **The row cannot legitimately dangle** — `0013_organization_template.sql` and template
+      retirement both preserve the row — so a dangling reference is a Core defect and must present as
+      one. This is `business-read-v1`'s aMissingRowIsNotAnAuthorizationFact pointed the other way:
+      there, a missing row must not remove access; here, a missing row must not be silently rendered
+      as an absent choice.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.organization.read: "read, scopes [organization], phase 1. Gates this read, as it gates the profile read."
+    whyNOTcore_setting_read: >-
+      `core.setting.read` exists — *"Read tenant settings"*, read, [organization, business, branch] —
+      and is the plausible alternative. **It is not used, because the adopted Template is not a tenant
+      SETTING: the tenant cannot set it.** Gating a read of platform-chosen configuration on a
+      permission whose name promises tenant settings would make the first App-configuration route
+      inherit a permission chosen for a different kind of object. `core.setting.read` is the right
+      permission for tenant settings and this is not one.
+    proposedByThisContract: "NONE."
+    permissionsDeliberatelyNotDeclared:
+      - "Anything tenant-side for CHANGING the Template. theTENANTCANNOTCHOOSEITSTEMPLATE, and TC-2."
+      - >-
+        Anything for Apps. The seven `core.app.*` permissions already exist and are already held by
+        `owner` and `admin`; **this contract deliberately gates nothing on them**, because a route
+        would be reachable the day it landed over a model nobody has designed. theAPPHALFISREFUSED.
+
+  scopeRuling:
+    theOperation: organization
+    reasoning: "`core.organization.read` is declared at [organization] alone. The adopted Template is an Organization-level fact and there is no Business-scoped variant of it."
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.organization.configuration.get
+    title: "Read the Organization's configuration"
+    method: GET
+    path: "/organization/configuration"
+    request: "No parameters. No body, no path parameter, no query parameter."
+    response: { schemaRef: "urn:dudo:schema:tenant-configuration:1#/$defs/getConfigurationOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.organization.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    reachableToday: false
+    whyITISUNREACHABLETODAY: "No route in this class is registered. The permission IS held — `core.organization.read` sits on `owner` and `admin` — so this is not additionally blocked on a grant."
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: >-
+        TWO POINT LOOKUPS ON PRIMARY KEYS — `organization` by the authenticated Organization, and
+        `template` by the id that row carries. Neither can return more than one row however the
+        request is shaped, and the second happens only when the first is non-null.
+      whyPageCapIsNull: "No collection and no parameter that could produce one. 0044 §3c requires a cap OR the bounding index; this is the second case, stated so `null` does not read as the omission the rule refuses."
+    notes: >-
+      NO not_found — the authenticated Organization always exists, and a null Template is a valid
+      state rather than an absent resource.
+      NOT AUDITED. A member reading their own Organization's configuration is 0044 §3c's central case.
+      *** THIS IS THE CHEAPEST READ IN MILESTONE 2 AND IT IS THE ONE A CLIENT WILL CALL ON EVERY PAGE
+      LOAD, *** because the level labels decide what every screen calls a Business and a Branch. That
+      is the intended use and the two point lookups are why it can bear it — **but a client should
+      fetch it once per session rather than per screen**, and the contract says so here because
+      nothing enforces it.
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  noRouteInThisClassIsRegisteredYet: "Measured 2026-09-13. Full measurement in tenant-members-v1."
+  theAppModelIsUNDECIDEDRATHERTHANUNBUILT: "theAPPHALFISREFUSED. Three open decisions — the isolation mechanism (the user's), the App permission and trust ADR (the Team Lead's), and `secret-ref` (security-agent and the user). TC-1."
+  templateV1MUSTREMAINTHEONESOURCEOFTHELABELDEFINITIONS: >-
+    This contract `$ref`s `templateId`, `templateName` and `levelLabels` from
+    `urn:dudo:schema:template:1` rather than restating them. **If those ever diverge, one
+    Organization is called two things by two consoles** — and `template-v1` is ACCEPTED, so it is the
+    authority and this file is the consumer.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read]
+  storage: "NO NEW TABLE AND NO NEW COLUMN. Everything read here already exists — `organization.template_id` (0013) and the `template` row (0012)."
+  reads: "At most two point lookups on primary keys. The tightest-bounded read in the milestone alongside the profile."
+  writes: "NONE, on any path."
+  theCEILINGTHISCLASSDOESNOTINHERIT: "0044 §3c. The bound is declared as a field."
+  whatIsNOTBOUNDED: "CALL FREQUENCY, and it matters less here than anywhere else because the cost is two point lookups. A per-session fetch is the intended pattern; nothing enforces it."
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TC-1
+    question: "Installed-App configuration is named in the milestone brief and is not published."
+    recommendation: >-
+      Blocked on three decisions, none of them a contract: the App isolation mechanism (the user's —
+      `0003` did not approve Workers for Platforms and `0008` prohibits paid-only), the App permission
+      and trust ADR (the Team Lead's), and `capability.configuration.type`'s `secret-ref`
+      (security-agent AND the user). **Publishing a shape first would decide the App model from a
+      settings screen, and the permissions are ALREADY granted to `owner` and `admin`, so the route
+      would be live the day it landed.**
+    status: "OPEN — blocked on decisions, not on work."
+
+  - id: TC-2
+    question: "Should an Organization be able to choose its own Template?"
+    recommendation: >-
+      Genuinely open. A Template is *'what every user in that Organization reads as the name of their
+      own structure'*, which is the argument for tenant control AND the argument for operator control
+      depending on whether it is platform configuration or the tenant's vocabulary. **It would need a
+      tenant permission, a route in this class, and a ruling on adopting a RETIRED Template.** Not
+      decided here because it is three decisions rather than a read.
+    status: open
+
+  - id: TC-3
+    question: "A retired Template's status is deliberately not shown to the Organization holding it."
+    recommendation: >-
+      Keep it hidden. Retirement blocks NEW adoption and existing adopters keep rendering the labels,
+      so the status changes nothing the customer can act on — and there is no tenant route to ask
+      about it. **Revisit if a tenant-settable Template ever exists (TC-2), because then the status
+      becomes actionable and hiding it becomes the defect.**
+    status: open

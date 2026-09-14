@@ -372,6 +372,31 @@ export const RESERVED_PRE_AUTH_PATH_PREFIXES: readonly string[] = Object.freeze(
   '/auth/',
   '/health',
   '/api/v1/platform/',
+  // ===========================================================================================
+  // ---- `/api/v1/organization/` — THE FIFTH REQUEST CLASS. `docs/decisions/0044`, 2026-09-13.
+  // ===========================================================================================
+  //
+  // The tenant-admin class (`tenant-admin/tenant-admin-routes.ts`) is served here. The reservation
+  // is added WITH THE CLASS AND AHEAD OF ITS FIRST ROUTE, which is the useful order: this constant
+  // is read by `assertNoReservedPathCollision` at CONSTRUCTION, so an App route table that could
+  // resolve onto the segment fails the build now rather than the day a route lands on top of it.
+  //
+  // *** THE REASON IS NOT THE ADMIN-CONSOLE ONE ABOVE, AND THE DIFFERENCE MATTERS. *** An App
+  // cannot impersonate this surface to a platform operator, because platform operators cannot
+  // reach it at all (`0044` §3a). What an App under this segment COULD do is present itself to an
+  // ORGANIZATION'S OWN ADMINISTRATOR as their settings screen — and collect the credential of the
+  // one principal in the tenant that can transfer ownership.
+  //
+  // THE TRAILING SLASH IS LOAD-BEARING, exactly as it is above: `/api/v1/organization` itself is
+  // reserved because `isReservedPreAuthPath` also matches the trimmed prefix, while
+  // `/api/v1/organizations` — a plausible future path, and one the platform class's own vocabulary
+  // already uses in the plural — is not.
+  //
+  // THIS IS THE CODE HALF. `organization` must also be added to `reservedApiPathSegments` in
+  // `packages/contracts/registries/core-object-registry.yaml`, which is `architecture-agent`'s
+  // file and is NOT changed by this work — requested through the Team Lead, exactly as the
+  // `platform` segment was.
+  '/api/v1/organization/',
 ]);
 
 /**

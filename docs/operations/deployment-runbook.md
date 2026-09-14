@@ -113,6 +113,96 @@ confirmation that **the partial unique index is BLIND TO ZERO**, documented rath
 batch atomicity stay unmeasured. **§3's *"the ✅ is the tool's claim — query the database"* applies
 in full and is not softened by a green local run.**
 
+### ⚠ THE SET IS NOT IDEMPOTENT. RUNNING IT TWICE FAILS AT `0007`. MEASURED 2026-09-13.
+
+**Found by `core-agent` re-running the set after the recency index landed; verified independently by
+the Team Lead before it went in this file.**
+
+```
+pass 1   23 control-plane migrations applied clean
+pass 2   FAILS AT 0007_membership_role.sql  ->  duplicate column name: role
+```
+
+**`0007` uses `ALTER TABLE … ADD COLUMN`, which has no `IF NOT EXISTS` form in SQLite.** Everything
+before it is `CREATE TABLE IF NOT EXISTS` and re-runs harmlessly — **so a second pass gets six
+migrations in before it stops**, and the operator meets a failure in the middle of a set they were
+told was one action.
+
+> **`wrangler d1 migrations apply` TRACKS WHAT IT HAS APPLIED and will not re-run them, so the normal
+> path is unaffected.** The hazard is **a hand-run** — pasting the set into a console, re-running
+> after a partial failure, or "just making sure" — **which is exactly what someone does when a
+> migration step has already gone wrong once.**
+
+**AND NOTE WHERE THAT PUTS YOU: the moment you are most likely to re-run by hand is immediately after
+a failure**, and that is the moment the set is guaranteed to fail again for a *different and
+misleading* reason. **`duplicate column name: role` tells you nothing about the problem you were
+actually chasing.**
+
+**This is pre-existing and is not a defect introduced by Milestone 2** — `0021` is idempotent and says
+so on its own face; **the SET is not, and no individual file claims otherwise.** Recorded because
+`§2a` requires executing the whole set before the list reaches the user, **and executing it twice is
+the obvious next thing to try.**
+
+**If a migration run fails partway: do not re-run the set. Read `d1_migrations` to find what
+applied, and resume from there.**
+
+### ⚠ AND A FRESH-DATABASE RUN IS NOT THE PRODUCTION SHAPE — `0019` CAN FAIL ON DATA THAT IS ALREADY THERE
+
+**Added 2026-09-13 by the Team Lead, and it is a DIFFERENT risk from the ordering cases above.**
+
+**Those 12 statements test what the index refuses at WRITE time** — promote-before-demote is refused,
+demote-then-promote succeeds. **All correct, all about a running system.** They are executed against
+a database the migration set has just built, **which is exactly the shape production is not in.**
+
+**The live control plane holds `0001`–`0017` AND ROWS.** So the honest test applies `0001`–`0017`,
+**populates it**, and then applies `0018`–`0023`. Measured that way, on three populations:
+
+```
+A  one owner per organization     OK        rows 2 -> 2 | triggers 8 -> 8 | none lost
+B  an organization with TWO       REFUSED   UNIQUE constraint failed: organization_membership.organization_id
+   owner rows already present               *** THIS IS A MIGRATION FAILURE, NOT A WRITE REFUSAL ***
+C  an organization with NO owner  OK        rows 1 -> 1 | triggers 8 -> 8 | none lost
+```
+
+**Row A is the good news and it is worth stating: `0018` rebuilds the table WITH DATA IN IT and loses
+nothing** — every row copied, **all eight triggers present afterwards.** The dangling-trigger defect
+that produced §2a in the first place is fixed **and is now verified by execution against a populated
+database rather than by reading the file.**
+
+> **ROW B IS THE ONE THAT MATTERS. `CREATE UNIQUE INDEX … WHERE role = 'owner'` IS EVALUATED AGAINST
+> THE ROWS THAT ALREADY EXIST.** If any live Organization holds two `owner` rows, **the index cannot
+> be created and `0019` fails.** No amount of testing the *running* behaviour reaches this, because
+> the offending rows predate the constraint.
+
+**AND THE FAILURE IS NOT CLEAN, WHICH IS THE OPERATIONAL HALF.** `wrangler d1 migrations apply` walks
+the files in order. **`0018` has already committed by the time `0019` runs** — the table is rebuilt,
+the old one dropped. **A failure at `0019` leaves the database HALF-MIGRATED**, with no automatic
+unwind, in the middle of a set the operator was told was one action.
+
+#### THE PRE-FLIGHT CHECK, AND IT IS ONE QUERY
+
+**Before `0018`–`0023` are applied to any real database, run this and read it:**
+
+```sql
+SELECT organization_id, COUNT(*) AS owners
+  FROM organization_membership
+ WHERE role = 'owner'
+ GROUP BY organization_id
+HAVING COUNT(*) > 1;
+```
+
+**Any row returned means the migration set WILL fail at `0019`, and the data must be corrected first
+— which is a production-data change and therefore the user's, every time** (`security.md` §7).
+**An empty result is the go condition.**
+
+**Do not reason from onboarding.** *"Onboarding creates exactly one owner, so this cannot happen"* is
+the shape `§11a` calls a claim about the tree that nobody ran — and the three live Organizations
+predate `0019`, so **nothing has ever enforced the property they are about to be measured against.**
+
+**Row C is already recorded above as the index being blind to zero.** It is unchanged by this and it
+is a data question rather than a migration one: **`0019` will apply cleanly to an ownerless
+Organization and leave it ownerless.**
+
 ### AND THE USER HEARS ONE THING FROM THIS THAT NO FILE SAYS
 
 **For the duration of `0018`, the mutual exclusion has NO database-level enforcement in either
@@ -791,6 +881,45 @@ wrangler.admin.jsonc   name: dudo-admin   routes: admin.dudo.work               
 
 **Both Workers are built from the same `worker.ts`. They are deployed separately and versioned
 separately.**
+
+> ### ⭑ AND THE SAME TABLE CARRIES A PROPERTY CODE NOW DEPENDS ON: THE CLIENT AND THE API DEPLOY ATOMICALLY
+>
+> **Recorded 2026-09-13 because a parser was changed on the strength of it, and it was handed back to
+> this file rather than left in a comment** (`architecture.md` §2a — name the artifact, not the path:
+> a claim about the platform's deployment topology belongs in the runbook, not in a console's parser).
+>
+> ```
+> dudo-core    main: worker.ts   assets.directory: ./platform/web/dist     app.dudo.work + api.dudo.work
+> dudo-admin   main: worker.ts   assets.directory: ./platform/admin/dist   admin.dudo.work
+> ```
+>
+> **Each Worker serves its own SPA bundle AND its own API from ONE deployment.** So for either
+> surface, **a Core that emits a value and a client that has never heard of it cannot coexist as
+> deployed artifacts.**
+>
+> **WHAT THAT LICENSES, AND IT IS BEING RELIED ON:** `platform/admin`'s `requireTemplateStatus` now
+> **throws** on an unrecognised Template status rather than rendering it in a neutral badge — an
+> honest parse of a `closed` enum (`0043` §7c-i), and a downgrade from *degraded but usable* to
+> *broken screen* on a value it cannot represent. **That trade is only acceptable because of the row
+> above.**
+>
+> **THE RESIDUAL EXPOSURE IS EXACTLY ONE THING: A BROWSER TAB HOLDING AN OLD BUNDLE ACROSS A DEPLOY.**
+> Real, narrow, and self-correcting on reload.
+>
+> **⚠ AND THE PROPERTY EXPIRES ON AN EVENT NOBODY WILL ANNOUNCE.** The day either SPA is served from
+> anywhere other than the Worker that serves its API — a CDN, a separate Worker, a cached shell —
+> **the two stop deploying atomically and every hard-parse decision resting on this needs revisiting.**
+>
+> **It is NOT left as prose.** `platform/admin/scripts/verify-platform.mjs` parses
+> `wrangler.admin.jsonc` and asserts the property, with the assertion labelled so the red points at
+> `requireTemplateStatus` — the code that depends on it — and with four known-failing inputs shaped
+> like real splits: bundle to a CDN, bundle to its own Worker, an assets-only config. **`§12`'s
+> uncollected deferral, given a red state instead of a reader.**
+>
+> **`platform/web` has the identical shape and deliberately carries NO such check**, because nothing
+> there parses against a closed enum yet — *"an assertion with no dependent is a check hunting for a
+> subject"*, which is the failure that gets a check deleted as noise later. **It becomes owed the
+> moment the web client hard-parses a closed enum, and that is a trigger rather than a date.**
 
 **Consequences, none of which are obvious from either config:**
 

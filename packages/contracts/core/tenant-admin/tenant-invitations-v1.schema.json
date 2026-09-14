@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-invitations:1",
+  "title": "Organization Invitations — contract v1",
+  "description": "Every request and response shape of the Organization INVITATIONS contract, contract version 1. SHAPES ONLY — the authorization expectation, the conjunction, the acceptance refusal and the retention question are in tenant-invitations-v1.contract.yaml, and the obligations shared across this directory are in README.md.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044). No organization_id appears in any shape here and none may be added.\n\n*** THIS CONTRACT COVERS THE ADMINISTRATOR'S HALF ONLY. ACCEPTANCE IS NOT HERE AND CANNOT BE. *** An invitee is not yet a member, so no tenant resolves for them from the authenticated context — the defining property of this class refuses the route. See tenant-invitations-v1.contract.yaml -> theAcceptanceRefusal.\n\nNOT EXECUTED. Normative and hand-checked; no report may describe these schemas as validated.",
+  "$defs": {
+
+    "errorResponse": {
+      "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope",
+      "description": "The body of every failed response from every operation in this contract."
+    },
+
+    "invitationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "description": "One invitation, in the authenticated Organization. Opaque, non-sequential, unguessable.\n\n*** IT IS NOT THE ACCEPTANCE TOKEN AND THE TWO MUST NEVER BE THE SAME VALUE. *** This identifier is returned to administrators, appears in listings, and travels in URLs an administrator's browser history keeps. An acceptance token is a bearer credential sent to one person's inbox. If the identifier IS the token, then every administrator who can list invitations can accept any of them on the invitee's behalf, and a screenshot of the invitations screen is a set of live credentials. The token appears in no shape in this file, and see tenant-invitations-v1.contract.yaml -> theTokenIsNotOnThisSurface."
+    },
+
+    "invitationIdentifier": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 254,
+      "description": "The email address the invitation is sent to. A PLAINTEXT ADDRESS, not a hash. Normalised by the rule in urn:dudo:schema:account-identifier:1 — NFKC plus ASCII-only case folding — before storage and before the already-a-member check, because two spellings of one address are one person.\n\n*** THIS IS THE ONE PLACE IN DUDO THAT HOLDS A PLAINTEXT LOGIN IDENTIFIER, AND IT IS NOW A RULED DECISION RATHER THAN AN OPEN QUESTION. *** control-plane/0006_principal_credential.sql stores an HMAC and states that 'the plaintext identifier is never stored and never logged'. An invitation cannot obey that rule and still be deliverable — you cannot send an email to a hash — so this table necessarily holds, FOR A BOUNDED WINDOW, exactly the value Dudo refuses to hold for its own members. See tenant-invitations-v1.contract.yaml -> theRECIPIENTCOLUMN, which carries the shape, the retention rule and the product consequence of the alternative.\n\n*** THE WINDOW IS THE WHOLE MITIGATION — AND IT CLOSES BY CONSTRAINT ON ACCEPT AND REVOKE, AND BY A SWEEP ON EXPIRY. *** The first two write the row and cannot pass the CHECK without clearing; **expiry is computed and writes nothing, so a lapsed invitation keeps its address until a later write triggers the sweep.** See invitationRecord.identifier for the three states side by side, and the contract's theRECIPIENTCOLUMN for the residual and who owns it. The field is nullable in every response for this reason, and `createInvitationInput.identifier` is required because you cannot invite nobody.\n\nCLASSIFICATION: sensitive-personal, AND IT BELONGS TO A NON-MEMBER. That is what makes core.invitation.list a separate permission from core.user.list rather than a fourth member of the same family — the populations differ, and this one has not agreed to anything.\n\nIt is DECLARED rather than $ref'd to urn:dudo:schema:account-identifier:1 because that contract is `proposed` and the reference would be to a shape not yet accepted. The canonical rule is there; this is a pointer with a bound, and the duplication is a named drift surface."
+    },
+
+    "invitationStatus": {
+      "type": "string",
+      "enum": ["pending", "accepted", "revoked", "expired"],
+      "enumPolicy": "closed",
+      "description": "Where this invitation is in its life.\n\n  pending   sent, not yet answered, not yet past its expiry.\n  accepted  the invitee joined. Terminal.\n  revoked   an administrator withdrew it. Terminal.\n  expired   its expires_at passed without an answer. Terminal.\n\n*** 'expired' IS COMPUTED FROM expires_at AND IS NOT A ROW SOMEBODY WRITES. *** There is no expire operation in this contract and no permission gates one, because forcing an invitation to expire early is REVOKING it under a second name — two words for one act, which is the reasoning core.template.retire used against calling itself `archive`. A sweep that materialises the value is an implementation choice; a route that lets an administrator cause it is a duplicate operation and is refused.\n\nCLOSED. A fifth state is a decision about the invitation lifecycle, which is what `closed` denotes (docs/decisions/0041). Note that closing the enum does NOT make any predicate over it exhaustive — architecture.md §3a-i — and this contract has no predicate keyed on individual members: the two mutating operations key on `pending` as the sole ADMISSIBLE state and refuse every other value by default, including one nobody has invented."
+    },
+
+    "invitationRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invitation_id", "identifier", "membership_role", "status", "created_at", "expires_at", "invited_by"],
+      "properties": {
+        "invitation_id": { "$ref": "#/$defs/invitationId" },
+        "identifier": {
+          "oneOf": [{ "$ref": "#/$defs/invitationIdentifier" }, { "type": "null" }],
+          "description": "The address, or null.\n\n*** REQUIRED AND NULLABLE. THE FIELD IS ALWAYS PRESENT, AND IT IS NON-NULL WHILE `status` IS `pending`. *** security-agent's retention ruling, 2026-09-13; the contract's theRECIPIENTCOLUMN carries the three arguments.\n\n*** ⚠ CLEARING IS UNSKIPPABLE ON TWO OF THE THREE TERMINAL STATES AND BEST-EFFORT ON THE THIRD, AND THIS DESCRIPTION SAID 'cleared when the invitation is accepted, revoked or expires' AS THOUGH ALL THREE WERE ALIKE. ***\n  accept  · revoke  — WRITE the row, so `CHECK (status = 'pending' OR identifier IS NULL)` cannot be passed without clearing. A constraint, not a discipline.\n  expired          — COMPUTED. It writes nothing, so the CHECK has nothing to fire on; a lapsed invitation still reads `pending` and keeps its address until an amortised sweep materialises the status on a LATER WRITE THAT MAY NEVER COME.\n\n**So a client must not read a non-null `identifier` as proof the invitation is live** — it may be a lapsed one whose sweep has not run. `status` is the authority for that, and this field is not a proxy for it.\n\nTHE RESIDUAL IS A PROPERTY RATHER THAN A DEFECT: an Organization that stops inviting retains its lapsed invitees' addresses indefinitely, bounded by its own historical invitation count. Accepted today and reopened by the Team Lead, who owns it; **no remedy is encoded here, because the three candidates are three different owners' calls.**\n\nA CLIENT MUST NOT INFER STATUS FROM NULLNESS, and must not render null as 'unknown recipient'. **The honest rendering of a terminal invitation is that the address was deliberately removed**, which is a different sentence from 'we do not know' and is the one that tells an administrator the system did what it promised.\n\n*** THE COST IS REAL AND IS NOT HIDDEN: AFTER CLEARING, NOTHING IN DUDO CAN SAY WHO WAS INVITED ON A REVOKED OR EXPIRED INVITATION. *** security-agent checked the thing that would have made the ruling pointless — `TenantAdminActionTarget` is a closed union of IDENTIFIERS ONLY, with no plaintext address anywhere in the audit trail — **so clearing removes the address from the system rather than relocating it to a place nobody looks.** That is what makes it effective and it is also what makes the loss total."
+        },
+        "membership_role": {
+          "$ref": "urn:dudo:schema:tenant-members:1#/$defs/membershipRole",
+          "description": "The seed role the invitee receives on acceptance. REFERENCED rather than restated, so that adding a role to the union changes one definition — the duplicated-constraint defect workflow.md §12 records is what a second copy of this enum would be.\n\n'owner' IS A VALID VALUE OF THE REFERENCED UNION AND IS REFUSED BY THIS OPERATION. Ownership is singular and is acquired by TRANSFER, never by invitation — an Organization with two owners is a state the partial unique index refuses anyway, so an invitation that promised one would be a promise the database breaks. The refusal is invalid_argument at validation, and it is a constraint of the operation rather than of the shape, because the shape is shared with the member seat where 'owner' is legitimate."
+        },
+        "custom_role_ids": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/roleId" },
+          "description": "Custom roles to assign on acceptance, possibly empty. Same bound as the member seat, for the same reason, and the two must not drift.\n\n*** A ROLE DELETED BETWEEN INVITATION AND ACCEPTANCE IS DROPPED, NOT AN ERROR, AND ACCEPTANCE IS NEVER BLOCKED BY ONE. *** The alternative — refusing acceptance — hands any administrator who can delete a role the power to silently break every outstanding invitation naming it. Dropping is the fail-closed direction here: the invitee joins with LESS authority than intended, which an administrator can see and repair, rather than being unable to join at all for a reason nobody can see."
+        },
+        "status": { "$ref": "#/$defs/invitationStatus" },
+        "created_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC. When the invitation was first created. A resend does NOT move it — see resent_at." },
+        "resent_at": { "type": ["string", "null"], "format": "date-time", "description": "RFC 3339, UTC, or null if never resent. The last time the invitation email was sent again.\n\nIT IS A SEPARATE FIELD FROM created_at DELIBERATELY: a resend that overwrote created_at would erase how long a person has been waiting, which is the one thing an administrator looking at this list wants to know." },
+        "expires_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC. After this instant the invitation is `expired` and cannot be accepted.\n\nIT IS ALWAYS PRESENT AND NEVER NULL. A null expiry is an invitation that is valid forever — a permanent credential to join a company, sitting in an inbox somebody eventually loses control of. The window's length is a Core policy constant, not a per-invitation input: an administrator choosing the expiry is an administrator who can choose 'never' by choosing a large enough number." },
+        "invited_by": {
+          "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId",
+          "description": "The member who created the invitation. Present even if that member has since been suspended or removed — the record of who invited someone must outlive their own membership, for the same reason removal preserves the audit trail."
+        }
+      },
+      "description": "One invitation.\n\n*** WHAT IS DELIBERATELY ABSENT: ***\n  1. NO acceptance token, and no field derived from one. See invitationId.\n  2. NO delivery state — no 'sent', 'bounced', 'opened'. Those describe an email service Dudo has not selected, and a bounce flag would make this shape depend on a capability decision nobody has recorded.\n  3. NO organization_id. The tenant is the authenticated one.\n  4. NO principal_id for the invitee. They are not a principal yet, and inventing one at invitation time would create an account for somebody who has not agreed to anything."
+    },
+
+    "listInvitationsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "page_size": { "$ref": "urn:dudo:schema:pagination:1#/$defs/pageSize" },
+        "cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/cursor" }
+      },
+      "description": "Paging only. No status filter in v1, and the absence is the same ruling tenant-members-v1's listing makes: a filter needs a default, a default of `pending` hides the terminal states, and the escape hatch for that is an `all` member whose omission is exactly how a recovery queue becomes invisible (workflow.md §11a). The listing returns every state with `status` on each row.\n\n*** AND A SECOND REASON THIS FILE GAVE HAS BEEN FALSIFIED BY ITS OWN RETENTION RULING, WHICH IS WHY IT IS CORRECTED RATHER THAN LEFT. *** It read: 'an accepted or revoked invitation is the RECORD OF WHO WAS INVITED AND WHAT HAPPENED.' **After clearing it is the record of WHAT HAPPENED and no longer of WHO** — the address is gone by design (see invitationRecord.identifier).\n\nTHE CONCLUSION SURVIVES ON THE WEAKER PREMISE AND IS RE-DERIVED RATHER THAN PROPPED UP (`workflow.md` §12): a terminal invitation still records that somebody was invited, by whom, into what role, and how it ended. **That is a history worth not defaulting out of a list, even with the recipient removed** — an administrator asking 'did we already try to hire for this' is answered by it, and 'who exactly' is the part deliberately given up."
+    },
+
+    "listInvitationsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "next_cursor"],
+      "properties": {
+        "data": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/invitationRecord" } },
+        "next_cursor": { "$ref": "urn:dudo:schema:pagination:1#/$defs/nextCursor" }
+      },
+      "description": "The standard collection envelope, capped at 100. NO TOTAL — the pagination envelope forbids one, and the pending COUNT is a separate operation under a CONJUNCTION for a reason that is not paging: docs/decisions/0043 §4 ran security.md §2a over it and it failed.\n\nORDER IS FIXED AND TOTAL: created_at descending, then invitation_id ascending. Newest first is what an administrator wants and invitation_id is the tiebreaker that makes the cursor correct."
+    },
+
+    "createInvitationInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identifier", "membership_role"],
+      "properties": {
+        "identifier": { "$ref": "#/$defs/invitationIdentifier" },
+        "membership_role": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/membershipRole" },
+        "custom_role_ids": { "type": "array", "maxItems": 20, "items": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/roleId" } }
+      },
+      "description": "Invite one person. ONE, NOT A BATCH — a bulk invite is a bulk write against the tenant's own row budget and a bulk disclosure of addresses in one request, and it is a separate operation with its own argument if it is ever wanted.\n\n*** THE CALLER MAY NOT GRANT WHAT THE CALLER DOES NOT HOLD. *** docs/decisions/0007 D16 constraint 1 — a custom role may contain only permissions the creating principal itself holds, and creating a role IS a grant — applies identically to assigning one: an invitation naming a role whose permissions exceed the inviter's is refused with forbidden. WITHOUT THAT, INVITATION IS A PRIVILEGE-ESCALATION ROUTE THAT LOOKS LIKE ONBOARDING: invite a new account with a role you may not hold, then sign in as it.\n\n'owner' IS REFUSED with invalid_argument. Ownership is transferred, never invited.\n\nAN ADDRESS THAT IS ALREADY AN ACTIVE OR SUSPENDED MEMBER IS REFUSED with conflict, after normalisation. A SUSPENDED member is refused too, and that is the case worth stating: re-inviting a suspended person is an attempt to route around core.user.reactivate — a second membership for the same person, granted by whoever holds invite. Reactivation is the operation for that and it has its own permission.\n\nA SECOND PENDING INVITATION TO THE SAME ADDRESS IS REFUSED with conflict. Resend is the operation for that, and two live invitations to one address are two acceptance tokens where the second silently supersedes the first."
+    },
+
+    "createInvitationOutput": { "$ref": "#/$defs/invitationRecord" },
+
+    "invitationActionInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invitation_id"],
+      "properties": { "invitation_id": { "$ref": "#/$defs/invitationId" } },
+      "description": "The invitation to resend or to revoke. A PATH parameter on both routes.\n\nBOTH REQUIRE status 'pending' AND REFUSE EVERY OTHER VALUE, INCLUDING ONE THAT DOES NOT EXIST YET. The predicate is keyed on the single admissible state rather than on the inadmissible ones — architecture.md §3a-i: a guard that must be REMEMBERED when the enum grows is a discipline, and one whose DEFAULT catches the new value is a mechanism. Refusal is failed_precondition.\n\nAn invitation_id naming nothing in the authenticated Organization answers not_found, identically whether it belongs to another Organization or to nobody."
+    },
+
+    "invitationActionOutput": { "$ref": "#/$defs/invitationRecord" },
+
+    "pendingInvitationCountOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pending"],
+      "properties": {
+        "pending": { "type": "integer", "minimum": 0, "description": "How many invitations in this Organization are currently `pending`." }
+      },
+      "description": "A scalar total and nothing else.\n\n*** NO BREAKDOWN, NO GROUPING, NO by_status MAP, NO by_role MAP — AND THE SHAPE IS THE ENFORCEMENT. *** security.md §2a: any of those transposes into a mapping, and the mapping is the object docs/decisions/0028 Decision 1 refuses. A count of pending invitations grouped by inviter is a report on which administrator is hiring.\n\nIT IS GATED ON A CONJUNCTION — core.user.invite AND core.invitation.list — and that is docs/decisions/0043 §4's finding rather than a precaution: core.user.invite is a CREATE permission and grants no enumeration, so a count of pending invitations reaches PAST its consumer's enumeration right. Under docs/decisions/0007 D16 the conjunction is the only form that survives, because a tenant may mint a role holding one conjunct without the other and no static observation about today's roles can prevent it (security.md §2a-0)."
+    }
+  }
+}

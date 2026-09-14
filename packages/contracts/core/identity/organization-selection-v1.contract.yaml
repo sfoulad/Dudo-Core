@@ -79,10 +79,16 @@ documentsExistingImplementation: partial   # See PROVENANCE above. Per operation
 # authorization, no tenant, no permission.
 #
 # *** IT USES `operations:`, THE SAME BLOCK KEY THE PLATFORM CLASS USES, AND THAT COLLISION IS WHY
-# `0039` EXISTS. *** Four request classes share three block keys. A reader inferring the class from
-# the key reads `operations:` and concludes `platform` — which is wrong here and right for ten
+# `0039` EXISTS. *** There are more request classes than block keys. A reader inferring the class
+# from the key reads `operations:` and concludes `platform` — which is wrong here and right for ten
 # other contracts, with nothing in either file to say which. The Team Lead's ruling that the three
 # keys mapped cleanly onto three classes was falsified by this contract specifically.
+#
+# *** AND THE COLLISION GOT WORSE RATHER THAN BEING RESOLVED: docs/decisions/0044 PUTS A THIRD
+# CLASS ON `operations:`. *** This paragraph said "four request classes share three block keys"
+# until 2026-09-13. The count is removed rather than incremented — the authority is
+# `REQUEST_CLASSES` in packages/contracts/generator/generate-types.mjs, and the property this
+# paragraph exists to state does not need a number to be true.
 requestClass: session
 #
 # =========================================================================================

@@ -79,6 +79,43 @@ import type { PlatformMessageKey, Refusal } from '@/api/platform';
  * Keys are dotted and grouped by surface. **They are not sentences**, because a
  * key that is its own English text makes a missing translation invisible: the
  * lookup returns something readable and nobody notices.
+ *
+ * ===========================================================================
+ * KEYS NO SOURCE FILE REFERENCES — MEASURED, LEFT IN PLACE, WITH A TRIGGER
+ * ===========================================================================
+ *
+ * **A dead message key is residue nothing goes red on.** It keeps its
+ * translation, it passes the both-dictionaries check, and it renders nowhere.
+ * Nothing in this repository looks for one.
+ *
+ * **Measured 2026-09-13 — a dated measurement, not a live claim.** Re-derive it
+ * rather than believing this paragraph: take every key declared below, and
+ * search `src/**` (excluding this file) for the quoted literal. Ten came back
+ * unreferenced; two of them — `locale.en` and `locale.ar` — are reached through
+ * `LOCALE_LABEL_KEYS` further down this file, which is the only indirection
+ * table here. That leaves:
+ *
+ *     app.title · nav.openMenu · nav.closeMenu · identity.recorded
+ *     restore.effect · orgTemplate.clear · loading.organizationDetail
+ *     loading.credential
+ *
+ * ⚠ **THEY ARE NOT DELETED AND NO CHECK ENFORCES THIS, DELIBERATELY.** Ruled
+ * 2026-09-13. `/settings` has ten sections and **every one is `built: false`**;
+ * five contract sets landed in a single afternoon. **A key that is dead today
+ * is a key for a surface nobody has written yet.** A sweep run against a
+ * half-built product deletes the pre-added half, somebody re-adds them, and the
+ * check has bought two rounds of churn enforcing a property nothing was
+ * violating.
+ *
+ * **THE TRIGGER IS AN EVENT, NOT A DATE: the first `built: true` section.** At
+ * that point the population stops meaning *"keys for surfaces nobody has
+ * written"* and starts meaning *"keys nothing uses"* — the same measurement
+ * answering a different and now-meaningful question. That is when the check is
+ * worth building.
+ *
+ * This is stated as the reason rather than as a TODO on purpose
+ * (`workflow.md` §12): a deferral with no stated cause becomes an instruction
+ * somebody follows out of context, and the cause here is the whole content.
  */
 export const en = {
   'app.title': 'Dudo platform administration',
@@ -672,6 +709,70 @@ export const en = {
    * dated, attributed assertion apart from a fact. The Arabic is first person
    * for the same reason.
    */
+  /*
+   * ⚠ `.short` IS NOT SHORT IN ARABIC, AND THE KEY'S NAME PROMISES THAT IT IS.
+   *
+   *     identity.cr.label   'Commercial registration (CR)'   السجل التجاري
+   *     identity.cr.short   'CR'                             السجل التجاري   <- IDENTICAL
+   *
+   * English abbreviates from 28 characters to 2. **Arabic does not abbreviate
+   * at all** — both keys carry the same phrase. So a surface that picks
+   * `.short` because it has a narrow column is **correct in English and broken
+   * in Arabic, invisibly to whoever picked it.**
+   *
+   * ⚠ **RULED 2026-09-13, FOR EVERY `.short` KEY AND NOT FOR THIS PAIR:**
+   *
+   * > **A `.short` key's contract is "the abbreviated form WHERE THE LANGUAGE
+   * > HAS ONE", and NO LAYOUT MAY DEPEND ON ITS WIDTH IN ANY LANGUAGE.**
+   *
+   * **The ruling sits on the family because the defect is a property of the
+   * vocabulary, not of CR.** The key's NAME encodes an assumption about how
+   * languages shorten things — and that assumption is false for one of the two
+   * we ship. **Neither Arabic string in either pair is an abbreviation of
+   * anything:** English abbreviates to two and three characters because English
+   * abbreviates; Arabic drops a preposition, which is not the same operation.
+   *
+   * A surface needing a narrow label needs a layout that survives the long
+   * form, not a key promising brevity it cannot deliver.
+   *
+   * **No live defect today**: every consumer interpolates it into a sentence
+   * through `fill` (`OrganizationIdentity.tsx` — `identity.numberLabel`,
+   * `identity.notRecorded.notNone`, and two others), so the Arabic reads long
+   * but reads correctly. The hazard is the next author who reaches for it.
+   *
+   * **An Arabic abbreviation is not being invented here.** That belongs to
+   * someone who reads the language; inventing one would be the same class of
+   * error as inventing a permission. Recorded as owed.
+   *
+   * ⚠ **AND THE TWIN-KEY CHECK CANNOT SEE THE SIBLING INSTANCE OF THIS.**
+   * `identity.vat.label` / `identity.vat.short` carry the SAME hazard —
+   * `التسجيل في ضريبة القيمة المضافة` against `تسجيل ضريبة القيمة المضافة`,
+   * neither of them an abbreviation of anything — **and the check never groups
+   * them, because the two Arabic strings are not byte-identical.**
+   *
+   * The check tests *identical in one language, divergent in the other*, which
+   * is a PROXY for the property that matters here: **is `.short` actually
+   * shorter.** Two long strings that differ slip through. `workflow.md` §11a's
+   * *a check cannot distinguish "no such case exists" from "the case was shaped
+   * so I cannot see it"* — here the shape is a near-miss rather than a match.
+   *
+   * ⚠ **AND THE LENGTH ASSERTION ADDED TO CLOSE IT DOES NOT REACH VAT EITHER.**
+   * `verify-platform.mjs` now asserts every `.short` is strictly shorter than
+   * its `.label` in both languages. Measured in code points:
+   *
+   *     cr   ar   13 vs 13   ratio 1.00   CAUGHT
+   *     vat  ar   26 vs 31   ratio 0.84   PASSES
+   *
+   * **26 against 31 is technically shorter and not short.** The contract
+   * promises *shorter*; the layout needs *short*; **no lexical comparison of
+   * two strings expresses the second**, and a ratio threshold fitted to two
+   * pairs is the fuzzy kind that gets switched off in a week.
+   *
+   * **So two instruments now cover this and NEITHER reaches `identity.vat`** —
+   * `§11a`'s complementary-coverage case, where the argument for cover is
+   * *"one of them will catch it"* and nobody checks which. **The ruling above
+   * is the control. The checks are proxies and are labelled as proxies.**
+   */
   'identity.cr.label': 'Commercial registration (CR)',
   'identity.cr.short': 'CR',
   'identity.cr.registry': 'Sijilat',
@@ -1125,6 +1226,35 @@ export const en = {
   'identity.editForm': 'Edit this business’s name and registrations',
   'identity.saving': 'Saving…',
   'identity.saveChanges': 'Save changes',
+  /*
+   * ⚠ THE ENGLISH DRAWS A DISTINCTION THAT THE ARABIC LOSES, AND THE DIRECTION
+   * OF THE REPAIR IS THE RULING.
+   *
+   *     identity.nothingChangedDraft   'Nothing has changed.'   لم يتغيّر شيء.
+   *     identity.nothingChanged        'Nothing was changed.'   لم يتغيّر شيء.   <- IDENTICAL
+   *
+   * **These are different facts about the world.** `…Draft` means *you have not
+   * edited anything yet* — the form is untouched. `nothingChanged` means *your
+   * save did nothing* — the request went to Core and changed no row. An
+   * operator needs to tell those apart, and an Arabic reader currently cannot.
+   *
+   * **RULED 2026-09-13: the ARABIC acquires the distinction; the ENGLISH does
+   * not surrender it.**
+   *
+   * ⚠ **THE DIRECTION IS THE WHOLE RULING, because the wrong one is cheaper and
+   * makes the check green.** Collapsing the two English strings into one would
+   * clear the twin-key pair in a single edit — **by deleting information from
+   * the language that still had it.** A translation gap resolved by making both
+   * languages equally uninformative is not a repair.
+   *
+   * The Arabic wording is not being invented here, for the same reason as
+   * `identity.cr.short` above: it belongs to someone who reads the language.
+   * Recorded as owed, and the pair stays declared in `verify-platform.mjs`'s
+   * twin-key set until it is written.
+   *
+   * `identity.nothingChanged` carries a pointer back to this block rather than
+   * a second copy of it.
+   */
   'identity.nothingChangedDraft': 'Nothing has changed.',
   'identity.updated.zero': '{count} fields were updated.',
   'identity.updated.one': 'One field was updated.',
@@ -1198,6 +1328,24 @@ export const en = {
     'Nobody has given this business a name in Dudo, so it is known by the identifier at the top of this page. That is normal for a business onboarded before names existed — it is not an error and nothing is missing. Press',
   'identity.noNameExplainAfter': 'to record one.',
   'identity.notRecorded': 'Not recorded',
+  /*
+   * ⚠ UNREFERENCED, AND IT IS THE ONE WORTH KNOWING ABOUT — see the block above
+   * `en` for why the unreferenced keys are being kept rather than swept.
+   *
+   * `identity.recordedOn` is live (`OrganizationIdentity.tsx`). This one is
+   * not, and **both carry the identical English string `'Recorded'`.** The
+   * Arabic is where they diverge:
+   *
+   *     identity.recorded     'Recorded'   مسجَّل      an adjective — "recorded"
+   *     identity.recordedOn   'Recorded'   سُجِّل في    a phrase   — "recorded on"
+   *
+   * **So an author who reaches for the wrong one sees correct English and ships
+   * wrong Arabic.** The mistake is invisible in the language they are reading
+   * and only wrong in the language they are not. That is worse than an ordinary
+   * dead key: it is a live trap for the next person who autocompletes
+   * `identity.record…`, and neither the type system nor the both-dictionaries
+   * check can see it, because both keys exist and both are translated.
+   */
   'identity.recorded': 'Recorded',
   'identity.numberRecorded': 'Number recorded',
   'identity.unknownRecord': 'This console does not understand this record.',
@@ -1242,6 +1390,13 @@ export const en = {
   'identity.untickRemovesVerification': 'Unticking this removes the existing verification.',
   'identity.verifyMeaning': 'The customer has told me this again today.',
   'identity.destroys': 'This destroys what is recorded.',
+  /*
+   * ⚠ SHARES ONE ARABIC STRING WITH `identity.nothingChangedDraft`, WHICH MEANS
+   * SOMETHING DIFFERENT. *Your save did nothing* against *you have not edited
+   * anything yet*. **Do not resolve that by collapsing the English** — the
+   * ruling and the reason are at `identity.nothingChangedDraft`, kept in one
+   * place rather than copied.
+   */
   'identity.nothingChanged': 'Nothing was changed.',
   'identity.wholeOrNothing':
     'The update is applied whole or not at all, so there is no half-saved record.',

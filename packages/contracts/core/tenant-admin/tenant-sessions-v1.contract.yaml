@@ -1,0 +1,480 @@
+---
+# Organization Sessions and Security Controls — tenant-admin contract, version 1
+#
+# Shapes: tenant-sessions-v1.schema.json. Shared class obligations: README.md in this directory.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the class · 0043 (Accepted) — §3d owner immunity,
+#              §5's obligations · 0014 §C (Accepted) — session resolution · 0024 · 0006
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT.
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# THE TWO PROPERTIES OF THE SESSION TABLE THAT DECIDE THIS CONTRACT.
+# Both measured in control-plane/0004_session.sql rather than assumed.
+# ---------------------------------------------------------------------------
+
+theSESSIONIDISTHECREDENTIAL:
+  measured: >-
+    `session_id TEXT NOT NULL PRIMARY KEY`, and the migration's own comment says why it is shaped as
+    it is: *"Opaque, non-sequential, unguessable: 128 bits of base64url from the platform CSPRNG.
+    Not a counter and not timestamp-prefixed — A SESSION IDENTIFIER THAT COULD BE ORDERED OR GUESSED
+    WOULD BE A SESSION STEALABLE WITHOUT A CREDENTIAL."*
+  ruling: >-
+    *** `session_id` NEVER APPEARS IN ANY SHAPE IN THIS CONTRACT, IN ANY DIRECTION. *** Not in a
+    listing, not as a revocation target, not truncated, not hashed, not as a prefix.
+  why: >-
+    THE PRIMARY KEY AND THE BEARER SECRET ARE THE SAME VALUE. A listing that returned it would hand
+    every holder of `core.session.list` a live credential for every session they can see — and the
+    disclosure would be indistinguishable from an ordinary administrative screen, screenshotted into
+    a support ticket in the first week.
+    *** THIS IS THE INVITATION-TOKEN RULING AGAIN AND IT IS WORSE HERE. *** tenant-invitations-v1
+    keeps the acceptance token off the administrative surface by having a SEPARATE administrative
+    handle — `invitation_id` — which is not the token. **A session has no such second value. The
+    handle and the secret were never separated, so there is nothing safe to publish.**
+  whatITCOSTS: >-
+    Everything downstream in this contract. No per-session revoke, no stable sort key, no way for a
+    client to correlate a row across two reads. Each of those is a real product loss and each is
+    named at the shape it affects rather than collected here, so a reader meeting the limitation
+    meets its reason with it.
+
+thePERSESSIONREVOKEISBLOCKEDONAHANDLE:
+  theGap: >-
+    An administrator can revoke a member's sessions and cannot revoke ONE of them. The obvious use —
+    *"this laptop was stolen, end that session and leave the phone alone"* — is not served.
+  whyITISNOTBUILTANYWAY: >-
+    IT WOULD REQUIRE NAMING A SESSION, AND THE ONLY NAME A SESSION HAS IS ITS CREDENTIAL. Publishing
+    the credential to enable the feature trades a missing capability for a live disclosure on every
+    read, which is the worse side of the trade by a wide margin.
+  theREPAIR_ANDITISNOTMINE: >-
+    A NON-SECRET REFERENCE COLUMN on `session` — a second opaque identifier, safe to publish,
+    carrying no authentication power. That is a MIGRATION and therefore the user's, every time
+    (security.md §7), and it is a small one.
+    *** IT IS RECORDED AS TS-1 RATHER THAN REQUESTED HERE, because a contract that specified a column
+    would be deciding Core's shape as a side effect of publishing a screen *** — the same refusal
+    business-read-v1 made about a Business name, and organization-onboarding-v1's write order is
+    what happens when a contract does not make it.
+  whatMUSTNOTBEDONEINSTEAD: >-
+    *** DO NOT PUBLISH A TRUNCATION OR A PREFIX OF `session_id` AS THE HANDLE. *** It reads as a
+    compromise and it is not one: a prefix narrows the search space for the rest, and the value it
+    narrows is a credential that needs no other factor. The choice is a separate column or no
+    feature.
+    AND DO NOT PUBLISH A HASH WITHOUT A DECISION. A one-way digest is genuinely safer and it is
+    still a value derived from a credential, published on an administrative surface, whose
+    resistance depends on a construction nobody has recorded. If it is wanted, it is security-agent's
+    to rule on and it is not cheaper than the column.
+
+theSCOPEOFEVERYWHERE:
+  measured: "`session.active_organization_id` is NULLABLE and may name any Organization the principal belongs to. It is not a foreign key, deliberately — membership is re-validated on every request."
+  ruling: >-
+    *** EVERY OPERATION IN THIS CONTRACT IS SCOPED TO SESSIONS WHOSE `active_organization_id` IS THE
+    AUTHENTICATED ORGANIZATION. *** A session active in another Organization, or in none, is not
+    listed, not counted, not reflected in `truncated`, and NOT REVOKED.
+  whyTHELISTINGMUSTBESCOPED: >-
+    A principal may belong to several Organizations. Listing all of a member's sessions to an
+    administrator of one of them discloses that the person has sessions elsewhere — and the COUNT
+    alone is enough, without any identifier. That is core-object-registry.yaml's CO1: *"a user's list
+    of Organizations must never be visible to any of them."*
+    *** THE FIELD ITSELF IS ALSO WITHHELD, AND BOTH HALVES ARE NEEDED. *** Scoping the query without
+    withholding the field would return a constant; withholding the field without scoping the query
+    would return a count that leaks. Neither alone is the control.
+  whyREVOCATIONMUSTBESCOPEDTOO_ANDTHISISTHEUNCOMFORTABLEHALF: >-
+    *** THE SECURITY-RESPONSE ANSWER AND THE ISOLATION ANSWER POINT IN OPPOSITE DIRECTIONS HERE, AND
+    ISOLATION WINS. *** An administrator responding to a compromised account wants every session
+    everywhere gone, and this contract cannot give them that: revoking another Organization's
+    sessions is acting on that Organization's principals through a route it never authorized, by an
+    administrator it has no relationship with.
+    SO THE RESIDUAL IS REAL AND IS STATED RATHER THAN SOLVED: a compromised principal who belongs to
+    two Organizations keeps their other sessions after Organization A does everything it can. **What
+    reaches across is the PRINCIPAL-level control — credential reset — which is a PLATFORM operation
+    (`core.credential.reset`, critical) and is deliberately not available to a tenant.** An
+    Organization that needs it asks the platform, and that is the escalation path rather than a gap
+    in this contract.
+  theCLIENTRULE: >-
+    *** NORMATIVE, BINDING ON BOTH CLIENTS: NO SURFACE MAY SAY "SIGN OUT EVERYWHERE", "ALL DEVICES"
+    OR "EVERY SESSION". *** The honest label is scoped to this Organization. A false statement to an
+    administrator ABOUT A SECURITY ACTION is the worst class of copy defect in this milestone: they
+    will stop looking, and the thing they stopped looking for is a live session on a compromised
+    account.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2."
+  model: "docs/decisions/0006. `session` is a CONTROL-PLANE table, which is why this is tenant-admin and could not be an Action (0044 §1)."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call."
+    - "NO organization_id in any shape, in any position. 0044 §3b.2 refuses such a route at REGISTRATION."
+    - >-
+      *** EVERY QUERY CARRIES `active_organization_id = <authenticated>` AS WELL AS
+      `principal_id`, AND THE SECOND PREDICATE IS THE TENANT ONE. *** A statement naming only
+      `principal_id` returns that person's sessions IN EVERY ORGANIZATION — it is not a slower
+      query, it is a cross-tenant read, and on the revoke path it is a cross-tenant WRITE that ends
+      another Organization's sessions.
+      **THIS IS THE MOST DAMAGING SINGLE OMITTED PREDICATE IN MILESTONE 2**, because `principal_id`
+      is unique platform-wide by generation and the statement looks complete without it.
+    - >-
+      A session whose `active_organization_id` IS NULL belongs to no Organization yet and is
+      invisible to this contract in both directions. It is neither listed nor revoked.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context."
+    - "3. Authorize the declared permission, record-independently. Failure -> forbidden."
+    - "4. Validate the input schema. Failure -> invalid_argument."
+    - "5. Resolve the named member WITHIN the authenticated Organization. Absent -> not_found."
+    - "6. Apply the owner rule. failed_precondition."
+    - "7. Act, scoped to sessions active in the authenticated Organization. On revoke, write the audit record into that Organization's own audit_event."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found — on both operations."
+    ruling: >-
+      A principal_id that is not a member of the authenticated Organization answers not_found,
+      identically whether they are a member elsewhere, a principal of no Organization, or nothing.
+    andITMATTERSMORETHANUSUALHERE: >-
+      A sessions endpoint is the most attractive place in the milestone to build an existence oracle,
+      because the natural implementation reads `session` by `principal_id` and a distinguishable
+      answer would confirm that a guessed identifier names a real, currently-signed-in person. The
+      membership resolution at step 5 is what prevents it, and it happens BEFORE any session is read.
+
+  theOWNERISNOTAVALIDTARGET:
+    ruling: >-
+      NO OPERATION IN THIS CONTRACT MAY REVOKE THE SESSIONS OF THE PRINCIPAL HOLDING
+      membership_role 'owner'. failed_precondition, for every caller including the owner.
+      docs/decisions/0043 §3d names revoke-sessions explicitly among the acts `admin` may not perform
+      on the owner.
+    whyLISTINGISALSOREFUSED: >-
+      *** READING THE OWNER'S SESSIONS IS ALSO REFUSED, AND THAT IS A JUDGEMENT THIS CONTRACT MAKES
+      RATHER THAN INHERITS. *** 0043 §3d's list is about acting ON the owner, and a read is not an
+      act in that sense — so the uniform answer needs an argument rather than an assumption.
+      THE ARGUMENT: a session listing is a presence signal. "The owner has two active sessions,
+      started at 09:14" is surveillance of the one principal the tier system exists to protect from
+      the tier below it, and it is available to every `admin`. It discloses nothing an attacker
+      needs and everything an internal actor preparing to act would want.
+      **IF THIS IS WRONG IT IS WRONG IN THE RECOVERABLE DIRECTION** — an administrator cannot see
+      whether the owner is signed in — and the alternative is not recoverable. Recorded as TS-3 so a
+      later widening argues against this paragraph rather than around it.
+    theOWNERSOWNSESSIONS: >-
+      The owner reads and revokes their own sessions through the `own`-scope path, which is TS-2 and
+      is NOT PUBLISHED BY THIS CONTRACT. **So today the owner has no route to their own session
+      list at all**, which is a gap this contract creates and names rather than one it inherits.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.session.list: "sensitive, scopes [organization, own], phase 1. Gates the listing. ITS FIRST ROUTE."
+      core.session.revoke: "sensitive, scopes [organization, own], phase 1. Gates the revocation. ITS FIRST ROUTE."
+    proposedByThisContract: "NONE. Both exist and neither needs widening."
+    theSCOPEDECLARATIONISorganizationANDTHEomitted own PATHISTHEGAP: >-
+      Both permissions are declared at [organization, own]. THIS CONTRACT EVALUATES BOTH AT
+      `organization`, so it serves an ADMINISTRATOR reading another member's sessions and does not
+      serve a member reading their own.
+      *** THE `own` HALF IS A DIFFERENT OPERATION AND IT IS THE ONE MOST USERS WOULD EXPECT FIRST. ***
+      "Where am I signed in, and sign out my other devices" is an ordinary self-service security
+      feature, it is what the `own` scope in the catalogue is for, and it is TS-2. It is not folded
+      in here because an `own`-scoped operation takes NO principal_id — the subject is the caller —
+      and merging the two would produce a route whose target is sometimes a parameter and sometimes
+      the caller, which is the shape that gets an authorization check wrong.
+    whyLISTANDREVOKEARESEPARATEPERMISSIONS: >-
+      They already are in the catalogue and this contract inherits rather than decides it. Worth
+      noting only because both are `sensitive` and the split still buys the usual thing: a role that
+      may SEE whether a member is signed in without being able to sign them out.
+
+  scopeRuling:
+    bothOperations: organization
+    reasoning: >-
+      A membership is an organization-level object and so is the question "is this member signed in
+      to this Organization". A business-scope principal has no Business to narrow a session by —
+      the same reason tenant-members-v1 declares `organization` throughout.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.members.sessions.list
+    title: "List a member's sessions in this Organization"
+    method: GET
+    path: "/organization/members/{principal_id}/sessions"
+    request: { schemaRef: "urn:dudo:schema:tenant-sessions:1#/$defs/listMemberSessionsInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-sessions:1#/$defs/listMemberSessionsOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, internal, unavailable, timeout]
+    permission: core.session.list
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 5
+    reachableToday: false
+    theAUDITRULING: >-
+      *** `audit: false` UNTIL 2026-09-13. RULED `required`, AND THE STRUCTURAL ARGUMENT NEEDS NO
+      JUDGEMENT ABOUT WHAT COUNTS AS SURVEILLANCE. ***
+      TWO OPERATIONS IN THIS FILE, SAME OBJECT, SAME SENSITIVITY, SAME SCOPE, BOTH ACTING ON ANOTHER
+      MEMBER: revoke was audited and list was not. **The act was recorded and the enumeration was
+      not.** And there is NO self-read route in this contract at all — TS-2's `own`-scope path is
+      unpublished — **so `audit: false` cannot have been inherited from a self-read case, because
+      this file has none.**
+      *** THE LICENCE I CITED DOES NOT COVER IT, AND THE DEFECT WAS IN THE RECORD RATHER THAN IN MY
+      READING. *** `0044` §3c says *"the actor is a member reading THEIR OWN DATA"*; Core's
+      transcription says *"their own ORGANIZATION'S data"* — one word, inserted in transcription,
+      turning a self-read licence into one covering every intra-tenant read, which is every route in
+      the class. **§3c is amended: the contrast with P4 is the ACTOR'S POSITION, which licenses only
+      the absence of a BLANKET read audit and licenses NO individual exemption** — being inside the
+      tenant is true of every route here and therefore distinguishes none of them.
+      *** AND THE FREQUENCY ARGUMENT WAS THE WRONG WAY ROUND. *** It said polling makes auditing
+      expensive. **But it describes the benign case and the attack in identical words** — an
+      administrator repeatedly reading one member's session list is vigilance AND is surveillance,
+      **and the audit record is the only thing that separates them.** The argument declined to pay
+      for exactly the signal that would have resolved its own ambiguity, and it optimised the wrong
+      case: high-volume benign use is what makes auditing costly, while **the low-volume targeted
+      read is where detection matters and auditing is nearly free.**
+      AND *"the audit log already shows this"* IS FALSE, CHECKED BEFORE IT COULD BE OFFERED: reads
+      are unaudited, so **a member who signs in and only reads leaves no audit record and a live
+      session.** This surface discloses precisely the activity the trail deliberately does not
+      carry. The two complement rather than duplicate.
+    writes: "AUDIT_EVENT_ROW_WRITES (5, platform/core/storage/write-cost.ts) into the tenant's own audit_event. A READ THAT WRITES — see freeTierImpact for why that is the point rather than a cost to apologise for."
+    whyITISUNREACHABLETODAY: >-
+      TWO REASONS, LIKE THE REST OF THIS DIRECTORY. No route in this class is registered, AND
+      `core.session.list` is `status: proposed`, scopes [organization, own], **HELD BY NO ROLE**.
+      *** THIS ENTRY SAID THE OPPOSITE — "the permission IS held… so unlike most of this directory,
+      this operation is not additionally blocked on a grant" — AND IT WAS WRONG THREE WAYS. ***
+      MEASURED: `grep -i session platform/core/authorization/roles.ts` returns **ZERO HITS**; the word
+      does not appear. `core.session.list` and `core.session.revoke` appear in exactly **TWO** role
+      blocks in the catalogue — `owner` and `admin` — and not in `business-admin`, which I named.
+      1. **A CATALOGUE ROLE LIST IS A DECLARATION, NOT A GRANT** (`security.md` §8-0). Every
+         `GRANTED BY THE USER` marker in this repository is on `platform-admin`; not one is on a
+         tenant role. **The claim "the permission is held" is a claim about `roles.ts`, and I checked
+         the catalogue** — different file, different question, indistinguishable at a glance.
+      2. **`business-admin` DOES NOT LIST IT.** I named a holder the register does not carry.
+      3. **AND THE WHOLE DIRECTORY IS UNIFORM, SO "unlike most of this directory" WAS WRONG IN BOTH
+         DIRECTIONS.** Measured across the tenant-admin contracts: **21 distinct permissions
+         declared, 8 granted by Core's four seed roles, and 21 of 21 ungranted.** There is no
+         operation here of which *"not additionally blocked on a grant"* would have been true.
+      *** A FOURTH CLAIM WAS ATTEMPTED AS THE REPAIR AND IT WAS ALSO WRONG — RECORDED BECAUSE THE
+      CORRECTION OF AN ERROR IS WHERE THIS FILE KEEPS ACQUIRING THE NEXT ONE. *** The first fix said
+      `business-admin` "could not hold it anyway" under D16 constraint 2, since [organization, own]
+      carries no `business` member. **`qa-agent` drove it through Core's own function and it is
+      false**: `platform/core/authorization/scope.ts` ranks `own` at 5 and defines
+      `implies(g, r) = SCOPE_RANK[g] <= SCOPE_RANK[r]`, so **`implies('business','own')` is TRUE.**
+      A business-scope role MAY hold `core.session.list` at `own` — *"list MY sessions"* — entirely
+      legitimately. See aBUSINESSSCOPEROLECANNOTENUMERATEANOTHERMEMBERS for the reason that IS true.
+      *** THE CORRECTION MATTERS MORE THAN THE ERROR BECAUSE OF WHAT THE SENTENCE WOULD HAVE STOPPED.
+      *** This operation is a `sensitive` read with `audit: false`, and the reassurance sat directly
+      beside that trade — `architecture.md` §3b: a dismissal specific about the wrong party is worse
+      than silence, because silence prompts the question. **It is also the sentence a Core
+      implementer would act on**: "not blocked on a grant" invites registering the route early, and
+      `assertEveryRoutePermissionIsReachable` would have refused it, with this contract as the reason
+      somebody doubted the tool.
+    aBUSINESSSCOPEROLECANNOTENUMERATEANOTHERMEMBERS: >-
+      *** A BUSINESS-SCOPE ROLE CANNOT SATISFY THIS ROUTE. IT CAN HOLD THE PERMISSION. *** The two
+      are different claims and only the first is true.
+      THE ROUTE requires `organization` scope, because it lists ANOTHER MEMBER'S sessions. A
+      business-scope grant does not imply `organization` —
+      `platform/core/authorization/scope.ts`: `implies('business','organization')` is false. **So a
+      `business-admin` cannot enumerate a colleague's sessions, at any grant it could be given.**
+      THE PERMISSION is declared [organization, own], and `own` IS reachable from a business-scope
+      grant: `SCOPE_RANK.own` is 5 and `implies(g,r)` is `RANK[g] <= RANK[r]`, so
+      **`implies('business','own')` is TRUE.** A business-scope role may legitimately hold
+      `core.session.list` at `own` — *"list MY sessions"* — which is the `own`-scope path this
+      contract does not publish (TS-2).
+      *** WHY THE DISTINCTION IS LOAD-BEARING RATHER THAN PEDANTIC, AND IT IS `qa-agent`'s: ***
+      *"'cannot hold the permission' justifies REMOVING IT FROM THE ROLE. 'Can hold it at a narrower
+      scope that does not reach this route' is a fact about the route."* **And a check depends on
+      it**: `registry-coherence.ts`'s CHECK 1 correctly does not flag that pair, so the false
+      mechanism would have made a sound check look like it had a gap — and somebody would have
+      "fixed" the check.
+      THE NARROWING IS STILL DELIBERATE AND STILL RIGHT: a session is a property of a PRINCIPAL and
+      of the Organization it is active in, and there is no Business to narrow one by — the same
+      reason `tenant-members-v1` declares `organization` throughout.
+    freeTierImpact:
+      pageCap: 50
+      boundingIndex: >-
+        `session`, and *** THE INDEX THIS OPERATION REQUIRES DOES NOT FOLLOW FROM THE PRIMARY KEY. ***
+        `session_id` is the PK; this query filters on `principal_id` AND `active_organization_id`,
+        neither of which leads an index that 0004_session.sql declares. Read that file for what it
+        has rather than trusting this line (0043 §7a) — and if the index is absent, this listing is
+        a full scan of every session on the platform, filtered, which is a tenant-isolation review
+        surface as well as a cost.
+      whyACAPANDNOTAPAGE: >-
+        0044 §3c names sessions as one of the three shapes where a bound is easy to forget "because
+        none of them feels like a list". It is bounded at 50 and DELIBERATELY NOT PAGEABLE: a cursor
+        holds a position in a set whose members are being revoked underneath the reader, and there is
+        no stable sort key to hold it by — every field that would break a tie is absent or is the
+        credential. `truncated` reports the overflow as a boolean rather than a count.
+    notes: >-
+      SCOPED TO THIS ORGANIZATION'S SESSIONS. theSCOPEOFEVERYWHERE — a session active elsewhere is
+      not listed and not counted, on CO1.
+      AUDITED ON SUCCESS AND ON DENIAL. See theAUDITRULING. `auditOnDenial` was always right and was
+      never the whole of it — somebody who does NOT hold the permission trying to read a colleague's
+      sessions is worth recording, **and so is somebody who does.**
+      THE OWNER'S SESSIONS ARE REFUSED with failed_precondition. authorizationModel.theOWNERISNOTAVALIDTARGET.
+
+  - id: tenant.members.sessions.revoke
+    title: "Sign a member out of this Organization"
+    method: POST
+    path: "/organization/members/{principal_id}/sessions/revoke"
+    request: { schemaRef: "urn:dudo:schema:tenant-sessions:1#/$defs/revokeMemberSessionsInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-sessions:1#/$defs/revokeMemberSessionsOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.session.revoke
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 11
+    reachableToday: false
+    whyITISUNREACHABLETODAY: >-
+      No route in this class is registered, AND `core.session.revoke` is `status: proposed`, scopes
+      [organization, own], **HELD BY NO ROLE** — measured the same way as its sibling: the word
+      "session" does not appear in `roles.ts` at all. It is listed by `owner` and `admin` in the
+      catalogue, **which is a declaration and not a grant** (`security.md` §8-0).
+    writes: >-
+      Up to the cap of 50 session rows DELETED, plus AUDIT_EVENT_ROW_WRITES (5) into the tenant's own
+      audit_event. **11 IS 3 x SESSION_ROW_WRITES + 5 AND IT IS A TYPICAL CASE RATHER THAN A WORST
+      ONE, WHICH IS A PROBLEM THIS FIELD CANNOT EXPRESS.** SESSION_ROW_WRITES is 2
+      (platform/core/identity/control-plane-admission.ts); a member with 50 sessions costs 105.
+      *** SO THE DECLARED FIGURE IS EITHER A LIE ABOUT THE WORST CASE OR AN ABSURD RESERVATION FOR
+      THE COMMON ONE, AND THE SCALAR ADMITS NO THIRD ANSWER. *** tenant-members-v1 met the same shape
+      on removal and resolved it by bounding the multiplicand at 20; here the multiplicand is how
+      many devices a person signs in from, which is not a bound this contract may choose.
+      RECORDED AS TS-5 AND FLAGGED FOR THE TEAM LEAD rather than resolved by picking a number. The
+      candidate answers are a per-request session cap in Core, or a `maxRowWrites` that admits a
+      range, and the second is a change to a field every contract in the corpus declares.
+    notes: >-
+      REVOKES EVERY SESSION OF THAT MEMBER IN THIS ORGANIZATION AND NO OTHER. theSCOPEOFEVERYWHERE,
+      including the client rule that no surface may call this "everywhere".
+      REVOCATION IS IMMEDIATE BY CONSTRUCTION rather than by promise: deleting the row makes the next
+      request's session resolution fail, the same mechanism that makes a suspended membership
+      immediate (0003_organization_membership.sql).
+      ZERO SESSIONS IS SUCCESS, NOT not_found — the member exists and had nothing active. A client
+      must render it distinctly from a failure.
+      *** A CALLER MAY REVOKE THEIR OWN SESSIONS THROUGH THIS ROUTE, WHICH SIGNS THEM OUT MID-REQUEST.
+      *** It is not blocked: blocking it needs a self-check, and the caller's own session is the one
+      target they are unambiguously entitled to end. **The client owes the warning** — `is_current` on
+      the listing exists precisely so a client can give it — and the response still returns normally,
+      because the session is destroyed after the request is authorized.
+      THE OWNER IS REFUSED with failed_precondition, for every caller including the owner themselves.
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  noRouteInThisClassIsRegisteredYet: "Measured 2026-09-13: `platform/core/tenant-admin/` holds seven modules and no route id literal. Full measurement in tenant-members-v1."
+  thisContractRequiresAnIndexLeadingWithTheSCOPEDPREDICATE: >-
+    Both operations filter `session` on (principal_id, active_organization_id) and neither leads
+    `session_id`, which is the primary key. An index is required; whether one exists is a question
+    for 0004_session.sql and any later migration, and it must be READ rather than assumed — this
+    contract already had one index dependency falsified within a day.
+  aNONSECRETSESSIONREFERENCE: >-
+    Required by per-session revocation and by any stable sort. A migration, therefore the user's.
+    TS-1. **NOT REQUESTED BY THIS CONTRACT** — the shape of a column is Core's.
+  theOWNSCOPEPATH: "TS-2. A member's own session list and self-revocation. Not published here, and today no route serves it, so the owner has no route to their own sessions at all."
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read, d1-rows-written]
+  storage: "NO NEW TABLE AND NO NEW COLUMN REQUIRED BY WHAT THIS CONTRACT PUBLISHES. One index is required and one optional column (TS-1) is named but not requested."
+  reads: "One read, capped at 50 and unpageable, with its bound declared as a field and its reason given. IT WRITES AN AUDIT RECORD — see below."
+  writes: "The revocation's cost is UNBOUNDED IN THE MULTIPLICAND — see the operation and TS-5. This is the only operation in the directory whose declared maxRowWrites cannot honestly cover its worst case."
+  theCEILINGTHISCLASSDOESNOTINHERIT: >-
+    `0044` §3c states that this class has no equivalent of P4's accidental read bound, which `0042`
+    recorded as load-bearing-by-accident: P4 makes every platform read a write, so the write ceiling
+    bounds read cost.
+  *** AND AUDITING THE LISTING REINSTATES THAT BOUND FOR THIS ROUTE, DELIBERATELY ***: >-
+    THE CHARGE IS THE METER. An administrator gets
+
+        PER_PRINCIPAL_DAILY_ROW_WRITES / AUDIT_EVENT_ROW_WRITES
+
+    session-list reads per UTC day, and **the derivation is stated rather than the number** so the
+    sentence moves when either constant does (`workflow.md` §11a — name the authority, never the
+    value; `PLATFORM_OPERATOR_ACTION_ROW_WRITES` moved 2 -> 4 once and nine contract figures did not
+    follow). Both constants: `platform/core/identity/control-plane-admission.ts` and
+    `platform/core/storage/write-cost.ts`.
+    *** SO THE TRADE IS NOT "DETECTION VERSUS ALLOWANCE". IT IS "DETECTION PLUS A BOUND" VERSUS
+    "NEITHER". *** The frequency argument that used to sit here rested on there being no rate limit;
+    **auditing IS the rate limit.** `0042`'s load-bearing-by-accident, restored on purpose for one
+    route.
+    THE COST FALLS ON THE TENANT'S OWN ALLOWANCE AND THAT IS THE HONEST FRAMING RATHER THAN A
+    FOOTNOTE. It is generous for legitimate use and it is also roughly where longitudinal
+    observation of one colleague starts to hurt — **the same number bounding both is what makes it
+    a control rather than a tax.**
+  whatIsNOTBOUNDED: >-
+    NOTHING ON THE READ PATH ANY MORE, WHICH IS THE POINT OF THE CHANGE. What remains unbounded is
+    the REVOCATION's multiplicand (TS-5) — a member with many devices costs 2N + 5 and the scalar
+    field cannot express a range.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TS-1
+    question: "Per-session revocation needs a non-secret handle, and `session_id` is the credential."
+    recommendation: "A separate opaque reference column on `session`, carrying no authentication power. A migration, therefore the user's. NOT a truncation and NOT a hash of session_id — both are values derived from a credential published on an administrative surface."
+    status: "OPEN — blocks a real capability, and the workaround (revoke all) is correct rather than equivalent."
+
+  - id: TS-2
+    question: "A member's own session list and self-revocation, at `own` scope."
+    recommendation: "A separate operation taking no principal_id, because the subject is the caller. Merging it into these routes would produce a target that is sometimes a parameter and sometimes the caller. **Today this means the owner cannot see their own sessions**, since the owner is refused as a target here."
+    status: "OPEN — and it is the gap an ordinary user notices first."
+
+  - id: TS-3
+    question: "Reading the owner's session list is refused, which goes beyond 0043 §3d's list of ACTS."
+    recommendation: "Keep the refusal. A session listing is a presence signal about the one principal the tier system protects from the tier below it. Recorded so a widening argues against this paragraph rather than around it."
+    status: open
+
+  - id: TS-4
+    question: "The listing was unaudited on success while the revocation, over the same object at the same sensitivity, was audited."
+    recommendation: >-
+      *** CLOSED 2026-09-13: `audit: required`. See the operation's theAUDITRULING. ***
+      THE ORIGINAL RECOMMENDATION SAID *"revisit if rate limiting lands, because that removes the
+      frequency argument"*, AND THAT UNDERSTATED IT IN THE DIRECTION THAT LET IT SIT OPEN.
+      **The frequency argument does not merely EXPIRE when rate limiting arrives. AUDITING THE READ
+      IS THE RATE LIMIT** — the audit charge meters the read against
+      `PER_PRINCIPAL_DAILY_ROW_WRITES`, which is `0042`'s load-bearing-by-accident bound reinstated
+      on purpose for one route. **So the thing I was waiting for was the thing I was declining to
+      build**, and a question phrased as *"revisit when X arrives"* is one nobody revisits, because
+      nothing announces X.
+      AND THE ARGUMENT WAS SELF-DEFEATING ON ITS OWN TERMS: polling is vigilance and is
+      surveillance, in identical words, **and the audit record is the only thing that tells them
+      apart** — so declining it to save the cost of polling declined precisely the signal that
+      would have resolved what the polling meant.
+    status: "CLOSED — and the two remaining exemptions in this directory were re-argued in the same pass. See tenant-invitations-v1."
+
+  - id: TS-5
+    question: >-
+      `maxRowWrites` is a scalar and this operation's cost is 2N + 5 where N is how many devices a
+      person uses. The declared 11 is a typical case; the capped worst case is 105.
+    recommendation: >-
+      Team Lead ruling owed. Candidates: a per-request session cap in Core, or a `maxRowWrites` that
+      admits a range — the second changes a field every contract declares. **Picking a number here
+      would make the field precise and wrong**, which is worse than the range being undeclared.
+    status: "OPEN — and this contract declines to resolve it by choosing."

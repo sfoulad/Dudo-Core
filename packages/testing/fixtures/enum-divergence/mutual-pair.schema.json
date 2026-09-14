@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:fixture:enum-divergence:1",
+  "title": "A mutually-declared enumPolicyDivergence pair — the READER's known-present input",
+  "$comment": "THIS FIXTURE EXISTS BECAUSE THE CORPUS CAN LEGITIMATELY CONTAIN ZERO OF THESE. On 2026-09-13 the Team Lead narrowed `templateStatus` to `closed` and stripped both markers of the only live mutually-declared pair — a correct ruling that removed the last instance of a category. The live floor asserting `>= 2` declared divergences then fired, and it was RIGHT to: `no exemption is declared` and `the reader has stopped seeing the field` are different facts and produce the identical empty list. This file is what separates them. It is never emitted, never referenced by a contract, and exists only so `enumOccurrences` can be shown to still read `enumPolicyDivergence` off a real file on disk.",
+  "$defs": {
+    "responseStatus": {
+      "type": "string",
+      "enum": ["active", "retired"],
+      "enumPolicy": "extensible",
+      "enumPolicyDivergence": {
+        "counterpart": "#/$defs/requestStatusFilter",
+        "reason": "Response versus request direction — the shape 0041 amendment 1 licenses."
+      },
+      "description": "The RESPONSE half. `extensible`, because a value added later must not break a client reading it."
+    },
+    "requestStatusFilter": {
+      "type": "string",
+      "enum": ["active", "retired"],
+      "enumPolicy": "closed",
+      "enumPolicyDivergence": {
+        "counterpart": "#/$defs/responseStatus",
+        "reason": "Request versus response direction — amendment 1 makes a request enum always closed."
+      },
+      "description": "The REQUEST half. `closed`, because a request enum is always closed."
+    }
+  }
+}

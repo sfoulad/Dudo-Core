@@ -52,11 +52,13 @@
  */
 
 import {
+  Outlet,
   createBrowserHistory,
   createRootRoute,
   createRoute,
   createRouter,
   redirect,
+  useRouterState,
 } from '@tanstack/react-router';
 import { RootLayout } from '@/routes/root-layout';
 import { CustomerList } from '@/screens/CustomerList';
@@ -64,6 +66,10 @@ import { CustomerDetail } from '@/screens/CustomerDetail';
 import { CustomerForm } from '@/screens/CustomerForm';
 import { NotFound } from '@/screens/NotFound';
 import { customerListSearchSchema } from '@/routes/customer-list-search';
+import { SettingsShell } from '@/components/settings/SettingsShell';
+import { SettingsNotFound } from '@/components/settings/SettingsState';
+import { SettingsOverview } from '@/screens/settings/SettingsOverview';
+import { SettingsSection } from '@/screens/settings/SettingsSection';
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -149,12 +155,166 @@ function CustomerEditRoute() {
   return <CustomerForm customerId={customerId} />;
 }
 
+/* =========================================================================
+   /settings — Organization administration (ADR 0035, Milestone 2)
+   =========================================================================
+
+   A NESTED LAYOUT ROUTE, WHICH IS THE FIRST ONE IN THIS TREE. Everything above
+   is flat: each route draws a whole screen. `/settings` draws a frame — the
+   section navigation — and its children draw into it through the `<Outlet/>`
+   below. **The alternative was eleven top-level routes each rendering the
+   navigation themselves**, which is eleven copies of a layout and eleven
+   chances for one to fall behind.
+
+   ⚠ **THE PATHS ARE SPELLED TWICE, AND A CHECK CLOSES IT RATHER THAN A
+   CONVENTION.** `lib/settings-sections.ts` holds the FULL path
+   (`/settings/profile`) because the navigation's `Link to=` is typed against
+   full paths; a child route below declares a RELATIVE segment (`/profile`)
+   because that is what `getParentRoute` composes. **They are two spellings of
+   one fact, and `§12` is explicit that a duplicated constraint has no citations
+   and no sweep can find it.** So `scripts/verify-settings.mjs` derives the
+   expected segments from the registry, reads the declared ones out of this
+   file, and goes red on any disagreement — including a section present in one
+   and absent from the other, which is the silent direction: a route with no
+   navigation entry is reachable by address and invisible in the menu.
+
+   ⚠ **`/settings` MUST NOT COLLIDE WITH A WORKER PREFIX.** `wrangler.jsonc`
+   sets `run_worker_first` for `/api/*`, `/auth/*` and `/health`: a request
+   under one of those reaches the Worker and never reaches this router, so a
+   screen mounted there would be dead on the deployed build and perfectly alive
+   in `vite dev`. `/settings` is clear of all three. */
+
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  component: SettingsLayout,
+  /*
+   * A SETTINGS-SCOPED NOT-FOUND, RATHER THAN FALLING THROUGH TO THE ROOT'S.
+   * `/settings/nonsense` is still inside settings: keeping the navigation
+   * on screen means the reader can reach a real section from where they
+   * landed, instead of being dropped on a whole-application 404 that has
+   * forgotten where they were going.
+   */
+  notFoundComponent: SettingsNotFoundRoute,
+});
+
+function SettingsLayout() {
+  /*
+   * THE PATH COMES FROM THE ROUTER, NOT FROM `window.location`. The shell marks
+   * the current section with `aria-current`, and reading the address directly
+   * would be a second source that is correct until the first client-side
+   * navigation the router performs without a reload.
+   */
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  return (
+    <SettingsShell currentPath={pathname}>
+      <Outlet />
+    </SettingsShell>
+  );
+}
+
+function SettingsNotFoundRoute() {
+  return <SettingsNotFound />;
+}
+
+/**
+ * The index. `/settings` itself, not a redirect to `/settings/overview`.
+ *
+ * A redirect would put a second address in every reader's history for one
+ * screen, and the navigation would then have to decide which of the two counts
+ * as current. The registry names `/settings` and this serves it.
+ */
+const settingsIndexRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/',
+  component: SettingsOverview,
+});
+
+/*
+ * The ten sections. Each is `SettingsSection` with its registry id today; when
+ * one becomes real, its `component` here changes to that section's own screen
+ * and nothing else moves. See `screens/settings/SettingsSection.tsx` for why
+ * there is no override table sitting empty in the meantime.
+ */
+const settingsProfileRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/profile',
+  component: () => <SettingsSection id="profile" />,
+});
+
+const settingsBusinessesRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/businesses',
+  component: () => <SettingsSection id="businesses" />,
+});
+
+const settingsMembersRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/members',
+  component: () => <SettingsSection id="members" />,
+});
+
+const settingsInvitationsRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/invitations',
+  component: () => <SettingsSection id="invitations" />,
+});
+
+const settingsRolesRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/roles',
+  component: () => <SettingsSection id="roles" />,
+});
+
+const settingsSessionsRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/sessions',
+  component: () => <SettingsSection id="sessions" />,
+});
+
+const settingsAppsRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/apps',
+  component: () => <SettingsSection id="apps" />,
+});
+
+const settingsAuditRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/audit',
+  component: () => <SettingsSection id="audit" />,
+});
+
+const settingsDataRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/data',
+  component: () => <SettingsSection id="data" />,
+});
+
+const settingsPlanRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/plan',
+  component: () => <SettingsSection id="plan" />,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   customersRoute,
   customerNewRoute,
   customerDetailRoute,
   customerEditRoute,
+  settingsRoute.addChildren([
+    settingsIndexRoute,
+    settingsProfileRoute,
+    settingsBusinessesRoute,
+    settingsMembersRoute,
+    settingsInvitationsRoute,
+    settingsRolesRoute,
+    settingsSessionsRoute,
+    settingsAppsRoute,
+    settingsAuditRoute,
+    settingsDataRoute,
+    settingsPlanRoute,
+  ]),
 ]);
 
 export const router = createRouter({

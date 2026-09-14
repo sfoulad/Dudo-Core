@@ -1,0 +1,512 @@
+---
+# Organization Lifecycle — ownership transfer, deletion request, retention — tenant-admin, v1
+#
+# Shapes: tenant-lifecycle-v1.schema.json. Shared class obligations: README.md in this directory.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the class · 0043 (Accepted) — §3c singular
+#              ownership, §3d what `admin` must never hold, §5's obligations, §7a condition form ·
+#              0007 D15 (Accepted) — confirmation derives from the rung · 0026 — what grades a rung
+#              · 0027 / confirmation-v1 — the mechanism · 0024, 0006
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT.
+#
+# *** TWO OF THE FOUR OPERATIONS ARE `critical` AND CANNOT BE CALLED BY ANYONE TODAY. *** Flagged on
+# each operation's own face rather than only here, because a dependency block is the part of a file
+# a reader skips.
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# THE CONFIRMATION GAP — READ BEFORE THE OPERATIONS. It is the reason this contract was
+# authored ahead of its own reachability rather than after it.
+# ---------------------------------------------------------------------------
+theConfirmationChallengeRoute:
+  theRequirement: >-
+    docs/decisions/0007 D15 makes every `critical` permission carry a confirmation AUTOMATICALLY —
+    "with no code change and no chance of omission" — and confirmation-v1 requires ONE CHALLENGE
+    ROUTE PER REQUEST CLASS, so a caller can obtain the confirmation it must present.
+  theState: >-
+    *** confirmation-v1 §whereItLIVES.theTWOCHALLENGEROUTES NAMES TWO — "one Action, one platform
+    route" — AND ONLY THE PLATFORM ONE IS REGISTERED. THE TENANT-ADMIN CLASS NEEDS A THIRD AND
+    NOBODY OWNS IT. ***
+    So tenant.organization.transfer-ownership and tenant.organization.request-deletion authorize
+    correctly, gate correctly, and CANNOT BE SATISFIED BY ANY CALLER. The lock is sound and the key
+    cannot be minted — the same state DeleteCustomer has been in since the Action-class challenge
+    was deferred.
+  whyTHISCONTRACTISAUTHOREDANYWAY: >-
+    *** BECAUSE REGISTERING THESE ROUTES IS WHAT MAKES THE MISSING WORK FAIL A BUILD RATHER THAN SIT
+    IN A COMMENT. *** core-agent's class carries `assertGatedRoutesCanObtainAConfirmation`, which
+    fails the build when a route requires a `critical` permission and no challenge route for its
+    class exists. So registering these does not ship an unreachable operation somebody has to
+    diagnose from a `forbidden` — IT STOPS THE BUILD AND NAMES THE GAP.
+    That is the same mechanism platform-routes.ts::assertEveryRoutePermissionIsReachable provides
+    for unreachable permissions, and it exists because the platform revoke route once shipped
+    unreachable and somebody had to work out why.
+  andTHEDEFERRALTHATCOVEREDTHISISSPENT: >-
+    *** platform-routes.ts DEFERRED `core.confirmations.request` "until a critical Action exists —
+    there is currently nothing to validate it against." THAT CONDITION HAS NOW FIRED. *** The
+    deferral is SPENT, not standing, and a reader meeting it should not read it as current.
+    workflow.md §12: a conditional whose condition has become true reads as an instruction the
+    moment it does, and the instruction it now gives is the opposite of the one it gave when
+    written.
+  whatTHISCONTRACTDOESNOTDO: >-
+    IT DOES NOT DESIGN THE CHALLENGE ROUTE. Its shape, its binding and its statement composition are
+    confirmation-v1's, and that contract is ACCEPTED — extending it to a third class is an amendment
+    to an accepted contract and therefore the Team Lead's, not a shape invented here.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2. Every operation here acts on exactly one row of one control-plane table, keyed by the authenticated Organization."
+  model: "docs/decisions/0006 — one shared D1 database behind resolver indirection."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call."
+    - >-
+      *** NO IDENTIFIER OF ANY KIND IN ANY REQUEST SHAPE EXCEPT `to_principal_id`, AND THAT NAMES A
+      MEMBER RATHER THAN AN ORGANIZATION. *** Three of the four operations take no parameters at
+      all. 0044 §3b.2 refuses an organization identifier at REGISTRATION; here there is nothing to
+      refuse, which is the strongest form of the guarantee and is available because every operation
+      acts on the caller's own Organization.
+    - >-
+      THE DELETION-REQUEST TABLE IS KEYED `PRIMARY KEY (organization_id)` (0023). A write that lost
+      its tenant predicate would not create a stray row — IT WOULD OVERWRITE ANOTHER COMPANY'S
+      DELETION REQUEST, or start one for them. **That is the most damaging single statement in
+      Milestone 2** and it is named here because the primary key makes the bad statement look
+      complete.
+    - "No response carries an organization identifier."
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context. No membership, no tenant, no route."
+    - "3. Authorize the declared permission, record-independently. Failure -> forbidden."
+    - >-
+      4. FOR A `critical` OPERATION: require and consume the confirmation the pipeline derives from
+      the permission's rung. Absent or unsatisfiable -> the pipeline refuses. TODAY THIS STEP CAN
+      NEVER PASS — see theConfirmationChallengeRoute.
+    - "5. Validate the input schema. Failure -> invalid_argument."
+    - "6. Resolve any named member WITHIN the authenticated Organization. Absent -> not_found."
+    - "7. Apply the state rules. failed_precondition."
+    - "8. Write the audit record into this Organization's own audit_event, then mutate."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found"
+    ruling: >-
+      `to_principal_id` naming somebody who is not a member of the authenticated Organization
+      answers not_found — identically whether they are a member of another Organization, a
+      principal of none, or nothing at all.
+    theSTATEREFUSALSARENOTTHISCASEANDTHEDISTINCTIONISLOADBEARING: >-
+      A SUSPENDED member is a member: the identifier resolves and the refusal is
+      failed_precondition, about STATE. A NON-member is not found. Collapsing the two would either
+      leak that a stranger's identifier names a real person somewhere (if suspension answered
+      not_found's sibling) or hide a real, fixable precondition behind a 404 the administrator
+      cannot act on.
+      *** THE TEST OF WHETHER THIS IS RIGHT IS THAT THE CALLER CAN ACT ON EACH ANSWER: *** not_found
+      means "you have the wrong person"; failed_precondition means "reactivate them first". Two
+      different next steps, so two different answers.
+
+  theOWNERSHIPINVARIANT:
+    ruling: >-
+      EXACTLY ONE `owner` PER ORGANIZATION, ALWAYS, INCLUDING DURING A TRANSFER. docs/decisions/0043
+      §3c: a partial unique index, enforced IN THE SAME STATEMENT THAT WRITES IT.
+    theORDERINGISFORCEDRATHERTHANCHOSEN: >-
+      A transfer is ONE ATOMIC DEMOTE-AND-PROMOTE, never a promote followed by a demote. The
+      intermediate state of the second ordering is TWO OWNERS, which the index must refuse anyway —
+      so the ordering is not a preference, it is the only sequence the constraint admits.
+      architecture.md §3a: the in-statement guard is the layer with no window, and this is the case
+      it was written for.
+    whyTHECONTRACTSTATESADATABASECONSTRAINT: >-
+      Because a client renders the consequence. A transfer that half-succeeded would leave an
+      Organization with two owners or none, and both are states this contract's own
+      getLifecycleOutput declares impossible — `owner_principal_id` is NOT nullable. A contract
+      whose response shape depends on an invariant must say which layer holds it.
+    transferringTOTHECURRENTOWNER: >-
+      Succeeds, changes nothing, and WRITES NO AUDIT RECORD. A no-op that manufactured an
+      ownership-change event would put a false entry in the one trail that answers "who owns this
+      company" — and that is the trail most likely to be read years later by somebody who was not
+      there.
+
+  theADMINEXCLUSIONISENFORCEDBYTHEPERMISSIONANDNOTBYTHISCONTRACT:
+    ruling: >-
+      `admin` MUST NEVER HOLD core.organization.transfer-ownership OR core.organization.delete
+      (0043 §3d). THIS CONTRACT DOES NOT ENFORCE THAT AND CANNOT — it is a property of the ROLE
+      COMPOSITION, and the catalogue is where it is decided.
+    whatTHISCONTRACTDOESINSTEAD: >-
+      It declares the permission. The exclusion holds because `admin`'s permission list in
+      packages/contracts/registries/permission-catalog.yaml does not contain these two, and because
+      neither is held by ANY role today.
+      *** SAYING WHICH LAYER HOLDS IT MATTERS HERE MORE THAN USUAL, *** because a reader of this
+      contract could reasonably conclude the route enforces it. It does not: a route enforces
+      "does the caller hold the permission", and "which roles hold it" is a different question
+      answered in a different file. architecture.md §3a's ranking, stated rather than assumed.
+    andTHETHIRDEXCLUSIONISNOTAPERMISSIONATALL: >-
+      `admin` must also never ACT ON THE OWNER — suspend, remove, demote. That is a property of the
+      TARGET and no permission can express it (0043 §3d). It binds tenant-members-v1 and
+      tenant-roles-v1; it does not bind this contract, because nothing here targets the owner as a
+      victim. Transfer CHANGES the owner, which is the sanctioned route, and that is precisely why
+      it is gated at `critical` instead.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.organization.read: "read, [organization], phase 1. Gates the lifecycle read."
+      core.organization.transfer-ownership: >-
+        critical, [organization], phase 2. Registered 2026-09-13, HELD BY NO ROLE. The catalogue
+        argues the rung and it is not arguable: "Every other critical act in this product is
+        recoverable by somebody still holding authority. THIS ONE HANDS THE AUTHORITY AWAY: the
+        actor cannot undo it afterwards, because the new owner can simply refuse to transfer back."
+      core.organization.request-deletion: >-
+        critical, [organization], phase 2. Registered 2026-09-13, HELD BY NO ROLE. Separate from
+        core.organization.delete on three axes the catalogue enumerates — a different ACTOR, a
+        different REVERSIBILITY, and a different position relative to the retention window.
+      core.organization.cancel-deletion-request: >-
+        sensitive, [organization], phase 2. Registered 2026-09-13, HELD BY NO ROLE. The RECOVERY
+        half, split so it can be held WITHOUT the damaging one — "an on-call responder who can stop
+        a mistaken or hostile deletion of an entire Organization without being able to start one".
+    proposedByThisContract: "NONE. All four exist. This contract is the first thing to use any of them."
+    theSTRONGCONFIRMATIONISTHERUNG_NOTABESPOKEGATE: >-
+      The Milestone 2 brief asks for "ownership transfer with strong confirmation". IT IS SATISFIED
+      BY `critical` AND NOTHING IS HAND-BUILT. The catalogue already ruled this on the entry itself:
+      "docs/decisions/0007 D15 makes every `critical` permission carry the confirmation
+      automatically, with no code change and no chance of omission — so hand-building a second gate
+      here would be inventing one the ladder already provides."
+      SO EVERY OPERATION BELOW DECLARES `confirmation: derived`, AND THE VALUE IS READ OFF THE
+      CATALOGUE RATHER THAN CHOSEN PER ROUTE — the two `critical` ones carry a confirmation, the
+      `sensitive` one does not, and neither fact is a decision this contract made.
+    whyCANCELISNOTALSOCRITICAL: >-
+      A CONFIRMATION ON THE RECOVERY OPERATION WOULD BE ACTIVELY HARMFUL AND THE CATALOGUE ALREADY
+      GRADES IT `sensitive`: cancelling "destroys nothing, changes no authority, and moves the
+      Organization from a pending-deletion state back to the state it was already in".
+      *** AND THE OPERATIONAL ARGUMENT IS THE ONE WORTH KEEPING: A CONFIRMATION IS A SECOND STEP,
+      AND THE RECOVERY PATH IS THE ONE WHERE A SECOND STEP COSTS THE MOST. *** The person stopping a
+      mistaken or hostile deletion is acting under time pressure against a clock somebody else
+      started. Gating that behind a re-authentication is the failure mode 0026 warns about from the
+      other direction — grading an operation by how SERIOUS its subject is rather than by what the
+      operation DOES.
+
+  scopeRuling:
+    everyOperation: organization
+    reasoning: >-
+      All four permissions are declared at exactly one scope, [organization]. There is no judgement
+      here: an Organization's ownership and its existence are organization-scoped by construction,
+      and a business-scope principal acting on either would be reaching above the boundary it holds.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.organization.lifecycle.get
+    title: "Read the Organization's lifecycle state"
+    method: GET
+    path: "/organization/lifecycle"
+    request: "No parameters. No body, no path parameter, no query parameter."
+    response: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/getLifecycleOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.organization.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    reachableToday: true
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: >-
+        TWO POINT LOOKUPS ON PRIMARY KEYS — `organization_deletion_request` keyed
+        PRIMARY KEY (organization_id), and the owner from `organization_membership`'s partial unique
+        index on role='owner'. Neither can return more than one row however the request is shaped.
+      whyPageCapIsNull: >-
+        No collection and no parameter that could produce one. 0044 §3c requires a page cap OR the
+        bounding index; naming which applies is what stops `null` reading as the absent bound the
+        rule refuses.
+    notes: >-
+      NO not_found — the authenticated Organization always exists. A null `deletion_request` means
+      one has never been made, which is DIFFERENT from `cancelled` and both must render distinctly.
+      NOT AUDITED: a member reading their own Organization's state is 0044 §3c's central case.
+      *** THE CLIENT MUST NOT RENDER `scheduled_purge_at` AS A COUNTDOWN. *** 0023 is explicit that
+      nothing reads that column and nothing purges. It is the date deletion BECOMES PERMISSIBLE, not
+      the date it happens, and a countdown is a promise Dudo cannot presently keep.
+
+  - id: tenant.organization.transfer-ownership
+    title: "Transfer ownership of the Organization"
+    method: POST
+    path: "/organization/transfer-ownership"
+    request: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/transferOwnershipInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/transferOwnershipOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.organization.transfer-ownership
+    scope: organization
+    sensitivity: critical
+    unknownIdentifierResponse: not_found
+    confirmation: required
+    audit: required
+    auditOnDenial: true
+    exposure: [internal]
+    maxRowWrites: 9
+    reachableToday: false
+    theEXPOSURERULING: >-
+      *** `[internal, public]` UNTIL 2026-09-13. RULED `[internal]` ONLY, AND IT APPLIES TO EVERY
+      `critical` OPERATION IN THIS CLASS. ***
+      THE CONFIRMATION MECHANISM ASSUMES A PRINCIPAL WHO READS A STATEMENT. `confirmation-v1`
+      renders a server-authored statement naming what is about to happen and binds the confirmation
+      to it — that is the whole of what it proves.
+      **A Bearer caller on `api.dudo.work` — a service account, an integration, a script — mints its
+      own challenge and answers it in the same second. THE STATEMENT IS RENDERED TO NOBODY.**
+      *** SO `critical` + `public` IS A CONFIRMATION GATE WITH NO READER. *** It is `security.md`
+      §2's hidden-button defect from the other end: not a control removed, **a control satisfied by
+      something that cannot be the thing it was protecting against.** The gate passes, the audit
+      record says a confirmation was presented, and nobody was ever asked.
+      AND IT NEEDED NO ARGUMENT ABOUT THE APPLE CLIENT AND NO FREE-TIER CHECK, which is why it was
+      ruled ahead of the other ~28: **the reasoning is entirely about what a confirmation IS.**
+    whyITISUNREACHABLETODAY: >-
+      *** TWO INDEPENDENT REASONS, EITHER OF WHICH IS SUFFICIENT, AND NEITHER IS A DEFECT IN THIS
+      CONTRACT. ***
+      1. NO ROLE HOLDS core.organization.transfer-ownership. It is `status: proposed` and ungranted,
+         so the route is `forbidden` to every caller alive.
+      2. NO TENANT-ADMIN CONFIRMATION CHALLENGE ROUTE EXISTS, so even a granted caller could not
+         obtain the confirmation the rung requires. theConfirmationChallengeRoute.
+      REGISTERING IT FAILS THE BUILD rather than shipping either state silently —
+      `assertGatedRoutesCanObtainAConfirmation` for (2), and the reachability assertion 0044 §3d
+      requires for (1). **That is the point of registering it now.**
+    writes: >-
+      TWO MEMBERSHIP ROWS — the demote and the promote — at ORGANIZATION_MEMBERSHIP_ROW_WRITES
+      (2 each, platform/core/identity/control-plane-admission.ts) against the CONTROL-PLANE budget,
+      plus AUDIT_EVENT_ROW_WRITES (5, platform/core/storage/write-cost.ts) against THE TENANT'S OWN.
+      9 across two ledgers that refuse independently. READ THE CONSTANTS, NOT THIS FIGURE.
+      *** AND `check:row-writes` DOES NOT COVER THIS CLASS *** — it buckets any non-platform
+      declared class as "other, P4 does not apply". So this figure has no mechanical guard, which is
+      a tooling gap rather than a contract one and is reported as one.
+    theATOMICITYREQUIREMENT: >-
+      ONE STATEMENT, DEMOTE-AND-PROMOTE. authorizationModel.theOWNERSHIPINVARIANT. The partial
+      unique index refuses two owners, so a promote-then-demote ordering fails at the database
+      having already spent the confirmation — and A CONSUMED CONFIRMATION ON A FAILED TRANSFER is
+      the worst outcome available here, because confirmation-v1 makes them single-use: the caller
+      must re-authenticate to try again, on an operation they were entitled to perform.
+    notes: >-
+      `to_principal_id` must be an ACTIVE member. A non-member is not_found; a SUSPENDED member is
+      failed_precondition — two different next steps for the administrator, so two different
+      answers. Transferring to the current owner succeeds, changes nothing and writes no audit
+      record.
+      NO `from_principal_id`: the current owner is a fact the server holds, and a field whose only
+      interesting value is a wrong one is a field that can disagree with the server.
+
+  - id: tenant.organization.request-deletion
+    title: "Request deletion of the Organization"
+    method: POST
+    path: "/organization/deletion-request"
+    request: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/requestDeletionInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/requestDeletionOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, conflict, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.organization.request-deletion
+    scope: organization
+    sensitivity: critical
+    unknownIdentifierResponse: not_found
+    confirmation: required
+    audit: required
+    auditOnDenial: true
+    exposure: [internal]
+    maxRowWrites: 7
+    reachableToday: false
+    theEXPOSURERULING: "`[internal]` only, on tenant.organization.transfer-ownership's ruling: a `critical` operation on a Bearer surface is a confirmation gate with no reader. The rule is per-SENSITIVITY rather than per-route, so it binds any future `critical` operation in this class without being re-argued."
+    whyITISUNREACHABLETODAY: "Both reasons above: the permission is held by no role, and no tenant-admin challenge route exists. Registering it fails the build naming the second."
+    writes: "The deletion-request row (2) plus AUDIT_EVENT_ROW_WRITES (5) into the tenant's own audit_event. The first term is an estimate; re-derive it from 0023's columns and indexes."
+    theSINGULARITYANDWHATITCOSTS: >-
+      0023 declares `PRIMARY KEY (organization_id)`, so THERE IS AT MOST ONE DELETION REQUEST PER
+      ORGANIZATION, EVER. A request while one is already `pending` is `conflict`.
+      *** A REQUEST AFTER A CANCELLATION OVERWRITES THE CANCELLED ROW RATHER THAN INSERTING BESIDE
+      IT, AND THAT HAS A CONSEQUENCE THE SHAPE CANNOT EXPRESS: THE RECORD THAT SOMEBODY ONCE ASKED
+      AND SOMEBODY ELSE STOPPED IT SURVIVES ONLY IN THE AUDIT TRAIL. *** See
+      theHISTORYLIVESINTHEAUDITTRAILANDNOTHERE.
+    notes: >-
+      201, because a resource is created. NO PARAMETERS AT ALL — no reason field, no retention
+      period. The window is a Core constant; a caller choosing it can choose one day.
+      *** IT IS NOT THE DELETION. *** The catalogue is explicit that request-deletion and
+      core.organization.delete are separate on three axes, and nothing in Dudo purges: 0023 says so
+      and declares `purged` unreachable. **A client must not tell a customer their data will be
+      deleted on a date.** It may say the request is recorded and when the window ends.
+
+  - id: tenant.organization.cancel-deletion-request
+    title: "Cancel the deletion request"
+    method: POST
+    path: "/organization/deletion-request/cancel"
+    request: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/cancelDeletionRequestInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-lifecycle:1#/$defs/cancelDeletionRequestOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.organization.cancel-deletion-request
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    reachableToday: false
+    whyITISUNREACHABLETODAY: >-
+      ONE REASON ONLY, AND THE DIFFERENCE FROM THE TWO ABOVE IS THE WHOLE POINT OF THE SPLIT: the
+      permission is held by no role. **NO CONFIRMATION IS REQUIRED**, because the rung is
+      `sensitive` — so the day this permission is granted, THIS OPERATION WORKS while the two
+      `critical` ones still cannot be satisfied.
+      *** THAT IS THE RECOVERY HALF BECOMING AVAILABLE BEFORE THE DAMAGING HALF, WHICH IS THE RIGHT
+      ORDER AND IS A CONSEQUENCE OF THE SPLIT RATHER THAN A COINCIDENCE. ***
+    writes: "The deletion-request row updated to `cancelled` with `closed_at` and `closed_by_principal_id` (2) plus AUDIT_EVENT_ROW_WRITES (5)."
+    notes: >-
+      NO PARAMETERS — there is at most one request, so there is nothing to name, and an identifier
+      on a recovery operation is a value the caller can get wrong under time pressure.
+      NO REQUEST AT ALL -> not_found. A request already `cancelled` or `purged` ->
+      failed_precondition. The predicate keys on `pending` as the SOLE ADMISSIBLE state and refuses
+      every other value by default, including one nobody has invented (architecture.md §3a-i).
+      THE RESPONSE IS THE CANCELLED REQUEST, not an empty body: the client renders who stopped it
+      and when, and the row survives as the record that it happened.
+
+# ---------------------------------------------------------------------------
+# dependencies — stated as CONDITIONS, never as facts about what does not exist (0043 §7a).
+# ---------------------------------------------------------------------------
+dependencies:
+
+  thisContractRequiresATenantAdminConfirmationChallengeRoute: >-
+    Two operations are `critical` and a `critical` operation requires a confirmation the caller can
+    OBTAIN. confirmation-v1 requires one challenge route per class; extending it to a third class is
+    an amendment to an ACCEPTED contract and therefore the Team Lead's.
+    **UNTIL THAT ROUTE EXISTS, `assertGatedRoutesCanObtainAConfirmation` FAILS THE BUILD** when
+    these routes are registered — which is the intended outcome and the reason this contract was
+    written ahead of it.
+
+  thisContractRequiresAnOrganizationDeletionRequestTable: >-
+    A table keyed per Organization carrying status, requester, window end and closure. The migration
+    creating or altering one is the USER'S TO APPROVE, every time (security.md §7).
+    THE SHAPES HERE WERE WRITTEN AGAINST `0023_organization_deletion_request.sql` — read that file
+    for what it declares rather than trusting this line. **Every row-write figure naming that table
+    is an ESTIMATE and must be re-derived from it.**
+
+  thePermissionsAreREGISTEREDANDHELDBYNOROLE: >-
+    core.organization.transfer-ownership, .request-deletion and .cancel-deletion-request are
+    `status: proposed`. Registration is not a grant (0007 rule 4); security-agent reviews before
+    integration (security.md §8); only the user grants. **Every route above except the read is
+    forbidden to every caller alive until that happens**, and the tenant-admin registry owes the
+    reachability assertion 0044 §3d requires.
+
+  nothingPURGES: >-
+    0023 declares `purged` and states that nothing reaches it. **THIS CONTRACT STARTS A CLOCK THAT
+    NOTHING ACTS ON**, and that must be said to the customer honestly rather than rendered as a
+    countdown. A purge mechanism is a decision, a migration and a destructive operation — none of
+    which is designed here, and the last of which is the user's every time.
+
+  theCLASSREGISTRYISCORES: >-
+    Measured 2026-09-13: `platform/core/tenant-admin/` holds seven modules and no route id literal.
+    Machinery under construction, registry empty. Full measurement in tenant-members-v1.
+
+# ---------------------------------------------------------------------------
+# theHISTORYLIVESINTHEAUDITTRAILANDNOTHERE
+# ---------------------------------------------------------------------------
+theHISTORYLIVESINTHEAUDITTRAILANDNOTHERE:
+  finding: >-
+    `PRIMARY KEY (organization_id)` means the deletion-request table holds THE CURRENT REQUEST AND
+    NO HISTORY. Request, cancel, request again — and the first pair is gone from the table.
+  whyITISNOTADEFECT: >-
+    The audit records are written into the Organization's own `audit_event` on every one of those
+    acts, so the history exists where a tenant can read it. A second table holding superseded
+    requests would be a second copy of a fact the trail already carries, and the trail is the one
+    that survives a row being overwritten.
+  whatITOBLIGES: >-
+    *** THE AUDIT RECORD MUST CARRY WHAT THE ROW WILL NOT. *** For a request: the requester and the
+    window end. For a cancellation: who cancelled and what they cancelled — including the original
+    requester, because after the overwrite there is nowhere else to learn it.
+    "Cancelled the deletion request" is a record of nothing on the one act that stops a company's
+    data being destroyed.
+  andTHECLIENTMUSTNOTINFERHISTORYFROMTHEROW: >-
+    A `cancelled` row says one request was stopped. IT DOES NOT SAY IT WAS THE ONLY ONE. A client
+    rendering "this Organization has had 1 deletion request" from this shape would be stating
+    something the data cannot support — the count is a property of the audit trail, and it is not
+    published by this contract.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    NO NEW TABLE REQUIRED BY THIS CONTRACT BEYOND THE DELETION-REQUEST TABLE ITS DEPENDENCIES NAME.
+    At most one row per Organization, ever, by primary key — so this surface cannot grow the
+    control plane by more than the number of Organizations.
+  reads: "One operation reads: two point lookups on primary keys. Its bound is declared as a field."
+  writes: "Three operations write. Each costs its rows plus AUDIT_EVENT_ROW_WRITES against the tenant's own budget, across two ledgers that refuse independently."
+  theCEILINGTHISCLASSDOESNOTINHERIT: "0044 §3c — no accidental read bound, so the read declares its own."
+  whatIsNOTBOUNDED: >-
+    NOTHING MEANINGFUL, AND THE REASON IS THE RUNG RATHER THAN A CONTROL THIS CONTRACT ADDS. Two
+    operations require a single-use confirmation, which bounds repetition harder than any rate limit
+    would; the third is idempotent on a single row; the read is two point lookups. **This is the one
+    contract in the directory where the confirmation mechanism is doing free work as a rate control**
+    — and it is worth naming, because it means the day these routes become reachable, THAT is what
+    is bounding them, not anything written here.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TL-1
+    question: >-
+      Who owns the tenant-admin confirmation challenge route? confirmation-v1 is ACCEPTED and names
+      two; the class needs a third; nobody has been assigned it.
+    recommendation: >-
+      An amendment to confirmation-v1 by architecture-agent on the Team Lead's instruction, then
+      Core. NOT invented here: extending an accepted contract is the Team Lead's, and a shape
+      guessed in this file would be a second spelling of a mechanism that already exists.
+    status: "OPEN — blocks both `critical` operations, and the build fails naming it."
+
+  - id: TL-2
+    question: >-
+      `scheduled_purge_at` is a date nothing acts on, and this contract publishes it to a customer.
+    recommendation: >-
+      Publish it and have the client say what it means — the date deletion becomes permissible —
+      rather than withholding it. Withholding means the customer cannot see the window at all, which
+      is worse; rendering it as a countdown states a capability Dudo does not have. **The wording is
+      the control and there is no mechanism behind it**, which is stated rather than glossed.
+    status: open
+
+  - id: TL-3
+    question: >-
+      Should requesting deletion SUSPEND the Organization, or leave it fully operational during the
+      window?
+    recommendation: >-
+      Leave it operational, and this contract assumes that. Suspending on request makes a
+      cancellable act immediately destructive of availability, which collapses the distinction
+      between request and execution that the two permissions exist to preserve. Recorded because the
+      opposite is a reasonable product instinct and would arrive as a small change.
+    status: open
+
+  - id: TL-4
+    question: >-
+      A transfer names no `from_principal_id`, so two administrators transferring concurrently both
+      succeed and the last writer wins.
+    recommendation: >-
+      Acceptable, and the reason is that both callers held a `critical` permission and a single-use
+      confirmation each. If it is ever not acceptable, the answer is an optimistic-concurrency token
+      derived from the current owner — NOT a caller-supplied `from_principal_id`, which is a
+      precondition the caller can lie about.
+    status: open

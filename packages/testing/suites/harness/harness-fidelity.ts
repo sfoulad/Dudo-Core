@@ -408,17 +408,43 @@ function omissionDefects(map: Readonly<Record<string, DeliberateOmission>>): str
 export function buildPlatformMigrationCoverageSuite(): Suite {
   const suite = new Suite('Harness — the platform fixture applies every control-plane migration');
 
-  suite.test('the platform fixture omits nothing', () => {
-    // Unlike the AZ2 fixture, this one deliberately applies ALL of them — the mutual exclusion is
-    // a question about two tables and the platform suites need the whole control plane. So there
-    // is no omission list here, and there must not be one: an omission would be a platform suite
-    // running against a control plane that cannot hold the state it is testing.
+  suite.test('the platform fixture omits nothing — and this is now a PIN, not a comparison', () => {
+    // ⚠ THE ASSERTION THIS REPLACES CANNOT FAIL ANY MORE, AND SAYING SO IS THE POINT.
+    //
+    // It compared `PLATFORM_MIGRATIONS` against the directory. **Both are now derived from the
+    // same `readdirSync`**, so that comparison is `derived === derived` — `§11a`'s *two
+    // derivations that share a scope are one derivation*, arriving as a side effect of a repair
+    // rather than as a design error. Left in place it would have been a permanently green case
+    // in a suite whose whole subject is fixture drift.
+    //
+    // **What deriving removed was the FIXTURE LAGGING PRODUCTION. What it also removed, and must
+    // be put back deliberately, is SOMEBODY HAVING TO LOOK.** The census fired six times and
+    // every answer was "apply it" — but the sixth firing is how the two-owner seed was found, so
+    // the prompt is worth keeping even though the bookkeeping is not.
+    //
+    // A population pin does both: the fixture is always current, and a new migration still turns
+    // this red until a human moves the number. **It fails in BOTH directions** — the same
+    // discipline as `check:source-bytes`'s NUL pin, because a pin that only catches growth lets a
+    // deleted migration through silently.
     const onDisk = migrationsOnDisk();
     const applied = [...PLATFORM_MIGRATIONS, MUTUAL_EXCLUSION_MIGRATION].sort();
+
+    // The one comparison that is NOT vacuous: `0010` is filtered out of the derivation by name,
+    // so this still catches that filter removing the wrong file or nothing at all.
     assertEqual(
-      'the applied set is exactly what is on disk',
-      applied.join(','),
-      onDisk.join(','),
+      'the conditional migration is excluded from the automatic set exactly once',
+      PLATFORM_MIGRATIONS.filter((name) => name === MUTUAL_EXCLUSION_MIGRATION).length,
+      0,
+    );
+    assertEqual('and adding it back reconstitutes the directory', applied.join(','), onDisk.join(','));
+
+    // THE PIN. Move it deliberately, in the change that adds the migration, having asked whether
+    // the fixture should apply it — which is the question the old census existed to force.
+    assertEqual(
+      'PIN: 23 control-plane migrations. A new one turns this red until somebody looks — the ' +
+        'fixture already applies it, so this is a prompt rather than a breakage',
+      onDisk.length,
+      23,
     );
   });
 

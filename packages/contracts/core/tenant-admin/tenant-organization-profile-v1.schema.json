@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-organization-profile:1",
+  "title": "Organization Profile — contract v1",
+  "description": "Every request and response shape of the Organization PROFILE contract, contract version 1 — the Organization's own view of itself: display name, legal name, registrations, contact, language, timezone and regional settings. SHAPES ONLY; the rulings are in tenant-organization-profile-v1.contract.yaml and the shared class obligations in README.md.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044). No organization_id in any shape — the Organization is the authenticated one, and this contract has no way to name another.\n\n*** THIS CONTRACT IS WHAT CLOSES organization-identity-v1's OI-1. *** That contract records, as an accepted limitation, that 'the customer still cannot enter or correct their own name, CR or VAT number' — because the values are control-plane and an Action reaches no control-plane port. docs/decisions/0044 created the class that can, and §4 of that record is explicit: OI-1 is closed BY A ROUTE IN THIS CLASS BEING BUILT, not by the record. So OI-1 stays open until this contract is implemented, and must not be reported otherwise.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "organizationDisplayName": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "description": "What this Organization calls itself in the product. Trimmed; empty after trimming is not a name.\n\nNULLABLE, AND NULL IS THE STATE EVERY EXISTING ORGANIZATION IS IN. `organization.display_name` is added by 0015_organization_identity.sql and nothing backfills it, so every row written before that migration carries null. A client renders null as the Organization's identifier rather than inventing a placeholder — the same rule business-read-v1 and tenant-members-v1 apply to a nameless Business and a nameless member, stated identically in all three so the clients cannot each choose differently.\n\nIT IS NOT THE LEGAL NAME. See legalName: one is what the company calls itself, the other is what it is registered as, and collapsing them is how an invoice acquires a trading name where a legal entity belongs."
+    },
+
+    "legalName": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "\\S",
+      "description": "The registered legal name of the entity, as it appears on the commercial registration. Nullable; null means not recorded.\n\n*** IT IS A SEPARATE FIELD FROM display_name AND MERGING THEM WOULD BE A REAL DEFECT RATHER THAN A TIDY-UP. *** A company trading as 'Dudo' may be registered as 'Dudo Technologies W.L.L.', and the two appear in different places: the display name is a UI label a tenant changes freely, and the legal name is what a tax authority matches against a registration number. A single field means either the invoice carries a trading name or the sidebar carries a legal suffix, and somebody will fix whichever one they noticed.\n\nLONGER THAN display_name AT 300 BECAUSE LEGAL FORMS ARE LONG — suffixes, bilingual registrations and branch designations all sit inside the registered string, and a bound chosen for a UI label truncates a legal identity.\n\nEDITING IT CLEARS NO VERIFICATION, because it carries none: verification attests to a NUMBER checked against a registry. That asymmetry is deliberate and is recorded on registrationSubmission."
+    },
+
+    "contactEmail": {
+      "type": ["string", "null"],
+      "minLength": 3,
+      "maxLength": 254,
+      "description": "An address for correspondence about this Organization. Nullable.\n\n*** IT IS NOT A LOGIN IDENTIFIER AND MUST NEVER BE TREATED AS ONE. *** It is not normalised by the account-identifier rule, it is not unique, it is not a KDF salt, and no authentication path may read it. workflow.md §12's own worked example is a customer's contact `email` being left out of an identifier harmonisation sweep for exactly this reason: it answers to a different rule for a different purpose, and 'harmonising' it would drag a correspondence field into the credential path.\n\nIT IS A COMPANY ADDRESS RATHER THAN A PERSON'S, and a client should say so where it is collected. accounts@ is the intended shape; a named individual's mailbox here becomes stale the day they leave and is personal data with no owner."
+    },
+
+    "contactPhone": {
+      "type": ["string", "null"],
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^\\+?[0-9 ()-]+$",
+      "description": "A telephone number for correspondence. Nullable. Stored as entered, within a permissive grammar.\n\n*** DELIBERATELY NOT E.164-NORMALISED, AND THAT IS A RULING RATHER THAN LAZINESS. *** Normalising requires a region to resolve a national number, Dudo does not reliably know the Organization's country (see regionalSettings — `country` is nullable), and a wrong region silently produces a number in a different country. Storing what the tenant typed is honest; a normaliser that guesses is a field that quietly becomes wrong.\n\nNOTHING DIALS IT AND NOTHING VALIDATES IT BEYOND THE GRAMMAR. If Dudo ever sends an SMS from this field, that is a new capability with a new decision, and normalisation becomes its problem rather than this field's."
+    },
+
+    "languageTag": {
+      "type": "string",
+      "enum": ["en", "ar"],
+      "enumPolicy": "closed",
+      "description": "The Organization's default interface language, as a BCP 47 primary subtag.\n\nCLOSED AT TWO, AND THE CLOSURE IS A STATEMENT ABOUT DUDO RATHER THAN ABOUT LANGUAGES. A value here is only meaningful if Dudo has a message dictionary for it; accepting 'fr' would store a preference that renders as English and would tell a tenant their choice took effect. Adding a language is a decision and a translation pass, which is exactly what `closed` denotes (docs/decisions/0041).\n\n*** IT IS A DEFAULT FOR THE ORGANIZATION, NOT A SETTING FOR A PERSON. *** A per-member language preference is a different field on a different object, and this one must not be read as it — an Organization defaulting to Arabic does not make every member's interface Arabic if they have chosen otherwise. That precedence rule belongs to whichever contract publishes the personal preference, and it does not exist yet."
+    },
+
+    "timezone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "An IANA time zone name — 'Asia/Bahrain', 'Europe/London'. NOT a UTC offset.\n\nAN OFFSET IS NOT A TIME ZONE. '+03:00' cannot express daylight saving, so a stored offset is correct for half the year in any zone that observes it, and the failure is silent and seasonal. The IANA name carries the rules.\n\nVALIDATED AGAINST THE PLATFORM'S OWN LIST RATHER THAN BY THIS PATTERN, which admits any short string. There is no enum here because the IANA database has hundreds of entries and changes; an enum would be a copy that goes stale, and a stale copy would refuse a zone that exists. Core refuses an unrecognised name with invalid_argument.\n\n*** WHAT IT AFFECTS IS NARROWER THAN IT LOOKS, AND SAYING SO PREVENTS A WRONG ASSUMPTION: *** every timestamp Dudo stores is RFC 3339 UTC and stays that way. This is a RENDERING preference and a reporting-boundary input — 'today' in a daily summary — and nothing about it changes what is written."
+    },
+
+    "regionalSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "timezone", "country", "currency", "week_starts_on"],
+      "properties": {
+        "language": { "$ref": "#/$defs/languageTag" },
+        "timezone": { "$ref": "#/$defs/timezone" },
+        "country": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Z]{2}$",
+          "description": "ISO 3166-1 alpha-2, uppercase, or null. Nullable because nothing collects it today and a default would be a guess about a customer's jurisdiction — which is the input to tax behaviour, so a guessed value is worse than an absent one."
+        },
+        "currency": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217, uppercase, or null.\n\n*** IT IS A DISPLAY PREFERENCE AND IT IS NOT A FINANCIAL SETTING, AND THIS CONTRACT CANNOT MAKE IT ONE. *** No money moves in Dudo, there is no Finance App, and no amount is stored anywhere. When one exists, THE CURRENCY OF A RECORDED AMOUNT BELONGS TO THAT AMOUNT and never to a tenant-wide preference — changing this field must never reinterpret a stored figure. That sentence is here because this is the field somebody will reach for when the Finance App needs a default, and the difference between a default and a reinterpretation is a customer's ledger."
+        },
+        "week_starts_on": {
+          "type": "string",
+          "enum": ["saturday", "sunday", "monday"],
+          "enumPolicy": "closed",
+          "description": "The first day of the week in calendars and weekly reports.\n\nTHREE VALUES BECAUSE THREE ARE IN USE IN DUDO'S OWN MARKET AND THE SURROUNDING ONES — Saturday across much of the Gulf, Sunday, and Monday under ISO 8601. It is a real setting rather than a decoration: a weekly total computed against the wrong week boundary is wrong by a day's trading, every week, invisibly.\n\nCLOSED. A fourth is a decision, and the enum is not a predicate — nothing in this contract branches on individual members (architecture.md §3a-i)."
+        }
+      },
+      "description": "How this Organization reads dates, numbers and its own week. Every field is present in the response; `country` and `currency` may be null.\n\nNO NUMBER FORMAT AND NO DATE FORMAT. Both are derivable from language and country by the platform's formatting layer, and storing them separately creates a second source that disagrees with the first — a tenant with language `ar` and an explicitly stored `dd/MM/yyyy` has two answers and no rule for which wins."
+    },
+
+    "registrationSubmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["not_recorded", "not_applicable", "recorded"],
+          "enumPolicy": "closed",
+          "description": "Mirrors organization-identity-v1's three states. `not_applicable` is a POSITIVE statement that this entity has no such registration, which is different from nobody having entered one — and the difference is what stops an administrator being chased forever for a number that does not exist."
+        },
+        "number": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S",
+          "description": "The registration number, required when state is `recorded` and null otherwise. Not validated against any national format: Dudo serves more than one jurisdiction and a format check that is right for one is a refusal for another."
+        }
+      },
+      "description": "A registration as SUBMITTED BY THE TENANT.\n\n*** IT CARRIES NO PROVENANCE FIELDS AND CANNOT. *** `recorded_at`, `declared_at`, `verified_by_principal_id` and `verified_at` are server-stamped, exactly as organization-identity-v1 requires — 'provenance a caller supplies is not provenance, and additionalProperties: false is what refuses it rather than a rule someone remembers'.\n\n*** AND IT CARRIES NO `verified` FIELD, WHICH IS THE DIFFERENCE FROM THE PLATFORM'S SUBMISSION SHAPE AND IS THE MOST IMPORTANT LINE IN THIS SCHEMA. *** organization-identity-v1's operator submission requires `verified` so the operator makes the claim explicitly. A TENANT CANNOT VERIFY ITS OWN REGISTRATION — that is the entire content of a verification: somebody other than the claimant checked the number against the issuing registry. A self-verified registration is a claim wearing a verification's clothes, and it would be indistinguishable in the response from one an operator checked.\n\nSO EVERY TENANT EDIT LEAVES verification null. See tenant-organization-profile-v1.contract.yaml -> theVERIFICATIONISCLEAREDBYATENANTEDIT."
+    },
+
+    "getProfileOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "legal_name", "contact_email", "contact_phone", "regional", "commercial_registration", "vat_registration"],
+      "properties": {
+        "display_name": { "$ref": "#/$defs/organizationDisplayName" },
+        "legal_name": { "$ref": "#/$defs/legalName" },
+        "contact_email": { "$ref": "#/$defs/contactEmail" },
+        "contact_phone": { "$ref": "#/$defs/contactPhone" },
+        "regional": { "$ref": "#/$defs/regionalSettings" },
+        "commercial_registration": {
+          "$ref": "urn:dudo:schema:organization-identity:1#/$defs/registrationRecord",
+          "description": "The commercial registration AS RECORDED, including its verification or null. REFERENCED from organization-identity-v1 rather than restated, so that the tenant and the platform read one shape — a second copy would be the drift surface where 'verified' means one thing on the operator console and another in the customer's settings."
+        },
+        "vat_registration": {
+          "$ref": "urn:dudo:schema:organization-identity:1#/$defs/registrationRecord",
+          "description": "As commercial_registration."
+        }
+      },
+      "description": "The Organization's own profile, whole.\n\n*** WHAT IS DELIBERATELY ABSENT: ***\n  1. NO organization_id. The Organization is the authenticated one and there is nothing to name.\n  2. NO status — not active, not suspended, not pending-deletion. An Organization's lifecycle state is set by the platform and by the deletion-request controls, and putting it in a PROFILE response would make a settings screen the place a tenant discovers they are being deleted.\n  3. NO plan, quota or usage. Separate contract, separate permission, and folding them in would let core.organization.read disclose commercial standing.\n  4. NO member count, no Business count, no Template. Each is another contract's, and a profile that accretes counts becomes the dashboard by accident.\n  5. NO created_at. Harmless and absent because nothing needs it; adding it is additive.\n\nTHE WHOLE BLOCK IS RETURNED BY THE UPDATE TOO, not just the changed fields — organization-identity-v1's reasoning, adopted rather than re-derived: 'a console applying a partial response to local state has to guess what the server did with the fields it omitted; a whole block cannot be guessed wrong. It also shows the operator the consequence they are most likely not to expect — that editing a number cleared its verification.' The tenant is more likely to be surprised by that than an operator, not less."
+    },
+
+    "updateProfileInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "display_name": { "$ref": "#/$defs/organizationDisplayName" },
+        "legal_name": { "$ref": "#/$defs/legalName" },
+        "contact_email": { "$ref": "#/$defs/contactEmail" },
+        "contact_phone": { "$ref": "#/$defs/contactPhone" },
+        "regional": { "$ref": "#/$defs/regionalSettings" },
+        "commercial_registration": { "$ref": "#/$defs/registrationSubmission" },
+        "vat_registration": { "$ref": "#/$defs/registrationSubmission" }
+      },
+      "description": "A PARTIAL update. Every property is optional; an omitted property is left unchanged and a property present with null CLEARS the value. minProperties 1 refuses an empty request, which would otherwise succeed as a no-op that writes an audit record.\n\n*** ABSENT AND NULL MEAN DIFFERENT THINGS HERE AND THAT IS DECLARED RATHER THAN LEFT TO A CONVENTION. *** Omit `contact_phone` to leave it alone; send `contact_phone: null` to delete it. The alternative — a whole-object replacement — makes every edit of one field a re-assertion of all seven, so two administrators editing different fields concurrently overwrite each other, and the second one's audit record claims they changed everything.\n\n`regional` IS THE ONE EXCEPTION AND IT IS A WHOLE OBJECT. Its five fields are interdependent — language and country drive formatting together — and a partial regional update would need per-field absent/null semantics one level deeper, which is a rule nobody would read correctly. Send the whole block or omit it.\n\nNO SERVER-STAMPED FIELD MAY BE SENT. There is no verification, no verified_at, no recorded_at anywhere in this shape, and additionalProperties: false is what refuses them.\n\nNO STATUS, NO TEMPLATE, NO PLAN. A profile update is not a lifecycle operation. Each of those is gated by a different permission and reachable through a different route, and accepting one here would let core.organization.update perform it through a field — the defect template-lifecycle-v1 refused when it kept `status` out of every update shape."
+    },
+
+    "updateProfileOutput": { "$ref": "#/$defs/getProfileOutput" }
+  }
+}

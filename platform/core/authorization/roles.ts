@@ -54,18 +54,83 @@
  */
 
 import type { PermissionGrant, PrincipalGrants } from './authorizer.ts';
+// THE CRITICAL SET IS READ, NEVER RESTATED. `critical-permissions.ts` owns it and imports only
+// `action/action.ts` and `statements.ts`, so there is no cycle — checked before adding this line.
+import { criticalPermissions } from '../confirmation/critical-permissions.ts';
 
 /**
- * The two roles of the closed beta. A CLOSED UNION OF LITERALS, never free text.
+ * ===========================================================================================
+ * THE SEED ROLE SET. **TWO UNTIL 2026-09-13, FOUR NOW — `docs/decisions/0043` §3.**
+ * ===========================================================================================
  *
- * TWO RATHER THAN ONE, DELIBERATELY (`0019`). A single role lets the mapping degenerate into a
- * constant — `if (member) return EVERYTHING` — and whoever adds the second discovers the
- * indirection was never really there. Two forces the lookup to exist and to be exercised.
+ * A CLOSED UNION OF LITERALS, never free text. The original two, and why there were two rather
+ * than one (`0019`): *a single role lets the mapping degenerate into a constant — `if (member)
+ * return EVERYTHING` — and whoever adds the second discovers the indirection was never really
+ * there.*
+ *
+ * ```
+ * owner            organization   exactly ONE per Organization.  Everything, including delete
+ *                                 and transfer.
+ * admin            organization   everything owner has EXCEPT delete, transfer, and acting on
+ *                                 the owner.
+ * business-admin   business        administers the Businesses it is assigned to.
+ * member           business        ordinary user.
+ * ```
+ *
+ * **THE GAP `0043` §1a FOUND WAS NOT "TWO ROLES AGAINST SIX". IT WAS THAT NEITHER VOCABULARY HAD
+ * AN ORGANIZATION ADMINISTRATOR AT ALL** — the catalogue's `business-admin` is `scope: business`
+ * and administers one Business, so the ladder went straight from *can delete the Organization* to
+ * *administers one Business*, and no amount of reconciling the two vocabularies produces the tier
+ * in between.
+ *
+ * ===========================================================================================
+ * THE ADDITION IS ADDITIVE, AND THE TWO STORED SPELLINGS DO NOT CHANGE
+ * ===========================================================================================
+ *
+ * `0043` §3a: **ALIGN THE UNBUILT VOCABULARY TO THE BUILT ONE, NEVER THE REVERSE.**
+ * `organization_membership.role` holds `'owner'` and `'member'` today behind a `CHECK`; renaming
+ * either costs a migration plus a data change on live rows plus an audit-history rewrite. The
+ * catalogue's `business-owner` is `status: proposed` and unbuilt, so **it** is what moved.
+ *
+ * NO EXISTING ROW CHANGES VALUE. `0018_membership_role_admin.sql` widens the `CHECK` and touches
+ * no data.
+ *
+ * *** AND THE ORDER OF DEPLOYMENT AND MIGRATION DOES NOT MATTER, WHICH IS A PROPERTY WORTH
+ * NAMING BECAUSE IT IS EASY TO SPEND. *** `toMembershipRole` returns `null` for an unrecognised
+ * stored string and `null` denies everything, so:
+ *
+ *   DATABASE AHEAD OF THE BUILD   a row reading `'admin'` meets a two-member union -> `null` ->
+ *                                 deny all, on the same path as an absent membership.
+ *   BUILD AHEAD OF THE DATABASE   nothing can write `'admin'`; the `CHECK` refuses it.
+ *
+ * **A PERMISSIVE DEFAULT ADDED WHILE WIDENING THIS UNION WOULD DESTROY THAT**, which is why `0043`
+ * §3a states it as a requirement of the widening rather than as a happy accident.
+ *
+ * ===========================================================================================
+ * `scope:` IN THE CATALOGUE AND `scope` ON A GRANT ARE DIFFERENT AXES — `0043` §1b
+ * ===========================================================================================
+ *
+ * The table above says `business-admin` and `member` are `business` scope, and **every grant in
+ * this file is still issued at `organization` scope, including theirs.** That is not a
+ * contradiction to be resolved by picking one:
+ *
+ *   a permission's `scopes:`   the width a grant may be held at. `holdsAtOrAbove` reads it.
+ *   a role entry's `scope:`    **has no consumer anywhere.**
+ *
+ * The narrowing that actually applies to a business-scoped role is the AUTHORIZED BUSINESS SET,
+ * computed per request (`0020`). `0043` §1b records this precisely because *"the reconciliation
+ * will otherwise 'fix' Core to match a field no code reads"* — and doing so would break
+ * `assertRoleMappingIsCoherent`'s organization-scope invariant for a field nothing consults.
  */
-export type MembershipRole = 'owner' | 'member';
+export type MembershipRole = 'owner' | 'admin' | 'business-admin' | 'member';
 
 /** The runtime value set, for validating a stored string on read. */
-export const MEMBERSHIP_ROLES: readonly MembershipRole[] = Object.freeze(['owner', 'member']);
+export const MEMBERSHIP_ROLES: readonly MembershipRole[] = Object.freeze([
+  'owner',
+  'admin',
+  'business-admin',
+  'member',
+]);
 
 /**
  * Collapses a stored value to a role this build understands, or to `null`.
@@ -190,8 +255,121 @@ const MEMBER_PERMISSIONS: readonly string[] = Object.freeze([
   BUSINESS_READ,
 ]);
 
+/**
+ * ===========================================================================================
+ * `admin` — AND IT GRANTS EXACTLY WHAT `owner` GRANTS TODAY, WHICH IS A DERIVATION RATHER THAN
+ * A CHOICE. `docs/decisions/0043` §3.
+ * ===========================================================================================
+ *
+ * `0043` §3: *"admin — everything owner has EXCEPT delete, transfer, and acting on the owner."*
+ *
+ * **NONE OF THOSE THREE IS IN `OWNER_PERMISSIONS`.** `core.organization.delete` and
+ * `core.organization.transfer-ownership` are catalogue entries no role in this file holds, and
+ * owner-immunity is a property of a TARGET that no permission expresses (§3d). So the two sets are
+ * identical **today**, and the difference appears as the Milestone 2 permissions are granted —
+ * which is when this constant stops being `OWNER_PERMISSIONS` and starts being a list.
+ *
+ * *** IT IS SPELLED AS ITS OWN CONSTANT RATHER THAN AS `owner: ADMIN_PERMISSIONS`, EVEN THOUGH
+ * THE VALUE IS THE SAME. *** Sharing the array would make the two roles diverge by SOMEBODY
+ * SPLITTING A CONSTANT, at the moment they are already busy adding a permission — and the split
+ * is the security-relevant act. Two names now means the day `owner` gains
+ * `core.organization.delete`, the edit is one line in one list and `admin` is untouched by
+ * construction.
+ *
+ * **NOTHING HOLDS THIS ROLE AND NOTHING CAN**, until `0018_membership_role_admin.sql` is applied —
+ * which is the user's action, every time (`security.md` §7).
+ */
+const ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
+  CUSTOMER_CREATE,
+  CUSTOMER_READ,
+  CUSTOMER_LIST,
+  CUSTOMER_UPDATE,
+  CUSTOMER_ARCHIVE,
+  CUSTOMER_RESTORE,
+  CUSTOMER_MOVE,
+  BUSINESS_READ,
+]);
+
+/**
+ * `business-admin` — the full record set for the Businesses it is assigned to, **without `move`.**
+ *
+ * `customers.customer.move` CHANGES WHICH BUSINESS A RECORD BELONGS TO, and the Customer Directory
+ * contract evaluates it at `organization` scope for exactly that reason: *"a move spans two
+ * Businesses and a business-scope grant is authority over one"* (`scope.ts`). `0019` excluded it
+ * from `member` on the narrower version of the same argument.
+ *
+ * **THE NARROWING TO ITS ASSIGNED BUSINESSES IS NOT DONE BY THIS LIST AND CANNOT BE.** The grant
+ * is issued at `organization` scope like every other grant here; what confines it is the
+ * authorized business set computed per request (`0020`). See `MembershipRole`'s header on why the
+ * catalogue's `scope: business` is a different axis from a grant's scope.
+ *
+ * *** SO A `business-admin` WITH AN AUTHORIZED BUSINESS SET OF EVERY BUSINESS IS AN
+ * ORGANIZATION-WIDE ADMINISTRATOR OF RECORDS. *** That is a property of `0020`'s computation and
+ * not of this file, it is true today for any principal whose `businessScope` resolves to
+ * `'organization'`, and it is named here because a reader of this list would otherwise conclude
+ * the confinement lives in the permission set.
+ */
+const BUSINESS_ADMIN_PERMISSIONS: readonly string[] = Object.freeze([
+  CUSTOMER_CREATE,
+  CUSTOMER_READ,
+  CUSTOMER_LIST,
+  CUSTOMER_UPDATE,
+  CUSTOMER_ARCHIVE,
+  CUSTOMER_RESTORE,
+  BUSINESS_READ,
+]);
+
+/**
+ * ===========================================================================================
+ * *** EVERY PERMISSION ANY TENANT ROLE GRANTS. THE WIDENING ABOVE INTRODUCED NONE. ***
+ * ===========================================================================================
+ *
+ * Two roles became four on 2026-09-13 and **the set of permission identifiers granted to at least
+ * one role did not change.** That is the property that makes the widening safe to ship without the
+ * user having granted anything — `security.md` §8: no agent may approve a permission — and it is
+ * asserted below in BOTH directions rather than claimed here.
+ *
+ * **A PROSE CLAIM WOULD HAVE BEEN THE WRONG INSTRUMENT.** `workflow.md`'s standing user ruling is
+ * to derive counts and enforce equality rather than restate a figure, and the same reasoning
+ * applies to a set: *"the sets are unchanged"* is a sentence that was true when it was typed and
+ * that nothing re-checks. This constant is the thing that goes red.
+ *
+ * **ADDING A MILESTONE 2 PERMISSION TO A ROLE THEREFORE TAKES TWO EDITS**, and the second is here,
+ * where the register is named: `permission-catalog.yaml` is what decides (`0007` rule 4), and
+ * `0007` rule 9 requires the change audited — a gap `0043` §7 records as now LIVE rather than as
+ * debt, because this milestone makes role assignment a product feature.
+ *
+ * *** WHAT DOES **NOT** DECIDE IT: THE CATALOGUE'S `status:` FIELD. CORRECTED 2026-09-13. ***
+ * An earlier version of this comment said *"every Milestone 2 entry is still `status: proposed`"*
+ * as though that were the gate. **Measured: `core.business.read` and `customers.customer.read` are
+ * BOTH `status: proposed` and BOTH granted by this file today.** So `proposed` is a lifecycle
+ * marker on a catalogue entry and **not a statement about whether a permission may be granted** —
+ * reading it as one would have blocked work that is already shipped, and citing it as the reason
+ * would have been a real observation generalised one step too far.
+ *
+ * **THE ACTUAL GATE IS `security.md` §8: the USER grants and the Team Lead relays.** The worked
+ * precedent is `platform-permissions.ts`, whose four Template permissions were transcribed only
+ * after *"GRANTED BY THE USER on 2026-09-11 and relayed by the Team Lead, who does not approve."*
+ * A grant recorded in this file needs that sentence and a date, or it is an agent approving a
+ * permission.
+ */
+const TENANT_GRANTED_PERMISSIONS: readonly string[] = Object.freeze([
+  CUSTOMER_CREATE,
+  CUSTOMER_READ,
+  CUSTOMER_LIST,
+  CUSTOMER_UPDATE,
+  CUSTOMER_ARCHIVE,
+  CUSTOMER_RESTORE,
+  CUSTOMER_MOVE,
+  BUSINESS_READ,
+]);
+
 const GRANTS_BY_ROLE: Readonly<Record<MembershipRole, PrincipalGrants>> = Object.freeze({
   owner: Object.freeze({ grants: Object.freeze(OWNER_PERMISSIONS.map(organizationGrant)) }),
+  admin: Object.freeze({ grants: Object.freeze(ADMIN_PERMISSIONS.map(organizationGrant)) }),
+  'business-admin': Object.freeze({
+    grants: Object.freeze(BUSINESS_ADMIN_PERMISSIONS.map(organizationGrant)),
+  }),
   member: Object.freeze({ grants: Object.freeze(MEMBER_PERMISSIONS.map(organizationGrant)) }),
 });
 
@@ -309,4 +487,188 @@ export function assertRoleMappingIsCoherent(
   }
 }
 
+/**
+ * ===========================================================================================
+ * *** NO PERMISSION IS GRANTED TO A TENANT ROLE THAT `TENANT_GRANTED_PERMISSIONS` DOES NOT
+ * DECLARE, AND NONE IS DECLARED THAT NOTHING HOLDS. ***
+ * ===========================================================================================
+ *
+ * BOTH DIRECTIONS ARE LOAD-BEARING AND THEY CATCH DIFFERENT THINGS. A permission **granted and
+ * not declared** is a privilege that entered the platform without the edit that names the
+ * register. One **declared and granted to nobody** is a stale line that makes the first check
+ * weaker every time it is added to, because the declared set stops describing what is actually
+ * held.
+ *
+ * `workflow.md` §11a's test for whether two checks are one: name an input each goes red on that
+ * the other passes. Adding `core.user.list` to `ADMIN_PERMISSIONS` alone fires the first and not
+ * the second; deleting a role's list fires the second and not the first.
+ *
+ * ===========================================================================================
+ * *** IT IS A SEPARATE FUNCTION FROM `assertRoleMappingIsCoherent`, AND IT WAS INSIDE IT UNTIL
+ * A QA CASE PROVED THAT WAS WRONG. ***
+ * ===========================================================================================
+ *
+ * That guard's parameters exist so a test can drive its branches with **a different but coherent
+ * mapping**. This property is not a property of *a* mapping — it is a property of **the shipped
+ * one**, checked against a constant that names the register. Leaving it inside meant a legitimate
+ * alternative mapping was **rejected for granting a smaller set**, and the message named
+ * `TENANT_GRANTED_PERMISSIONS` — **a red pointing at an artifact that was not wrong.**
+ *
+ * `workflow.md` §11a: *a suite that goes red under load teaches a team to ignore red*, and a
+ * check that fires on a correct input is the fastest route there. **The shape properties (every
+ * role mapped, no wildcard, right scope, nothing excluded) hold of ANY mapping. This policy
+ * property holds of THIS one.** Two questions, two functions, and the parameter list of each now
+ * says which it is.
+ */
+export function assertGrantedUniverseIsDeclared(
+  mapping: Readonly<Record<MembershipRole, PrincipalGrants>> = GRANTS_BY_ROLE,
+  grantedUniverse: readonly string[] = TENANT_GRANTED_PERMISSIONS,
+): void {
+  const granted = new Set<string>();
+  for (const role of MEMBERSHIP_ROLES) {
+    for (const grant of mapping[role].grants) {
+      granted.add(grant.permissionId);
+    }
+  }
+  for (const permissionId of granted) {
+    if (!grantedUniverse.includes(permissionId)) {
+      throw new RoleMappingIncoherentError(
+        `'${permissionId}' is granted to a tenant role and is not in ` +
+          'TENANT_GRANTED_PERMISSIONS. Granting a permission is a privilege change: ' +
+          'permission-catalog.yaml is the register (docs/decisions/0007 rule 4), every Milestone ' +
+          '2 entry in it is still `status: proposed`, and no agent may approve a permission ' +
+          '(.claude/rules/security.md §8). If the user has granted it, add it to that list in ' +
+          'the same change and record who granted it and when.',
+      );
+    }
+  }
+  for (const permissionId of grantedUniverse) {
+    if (!granted.has(permissionId)) {
+      throw new RoleMappingIncoherentError(
+        `'${permissionId}' is in TENANT_GRANTED_PERMISSIONS and is granted to no role. A ` +
+          'declared-but-unheld entry makes the check above weaker: the declared set stops ' +
+          'describing what is actually held, so the next real widening has more room to hide in. ' +
+          'Remove it, or grant it — and see NOT_GRANTED_TO_ANY_ROLE for the deliberate case, ' +
+          'which is a different list for a different reason.',
+      );
+    }
+  }
+}
+
+/**
+ * ===========================================================================================
+ * *** NO TENANT ROLE MAY HOLD A `critical` PERMISSION THAT HAS NOT BEEN DELIBERATELY CLEARED.
+ * THIS IS `0038`'s DEFERRAL TRIGGER, STATED AS THE EVENT RATHER THAN AS A PROXY FOR IT. ***
+ * ===========================================================================================
+ *
+ * `0038` defers the Action-class challenge route, on a population measured at zero: no Action-class
+ * `critical` operation is reachable by any principal alive. **The trigger for reopening it is
+ * exactly *"the first `critical` Action-class operation that any role can hold"*, and this is the
+ * only assertion in the repository that can see that event.**
+ *
+ * *** IT REPLACES A SAFETY NET THAT DID NOT EXIST. *** The ruling first named
+ * `assertGatedRoutesCanObtainAConfirmation`, which iterates the TENANT-ADMIN route table and cannot
+ * see an Action; `assertConfirmationCoverageIsCoherent` iterates the PLATFORM one. **Nothing checked
+ * the Action registries at registration time**, and the only Action-side confirmation code is
+ * `action/pipeline.ts`'s runtime gate — so the trigger would have fired as *every call to that
+ * operation failing in production*, with no build ever going red.
+ *
+ * ===========================================================================================
+ * WHY IT KEYS ON THE GRANT RATHER THAN ON WHETHER A PERMISSION IS "ACTION-CLASS"
+ * ===========================================================================================
+ *
+ * **CLASSIFYING A PERMISSION AS ACTION-CLASS IS THE PART THAT WOULD GO WRONG.** A namespace
+ * heuristic — *`core.*` is a route, anything else is an App* — is a guess that is correct today and
+ * silently wrong the first time a Core Action carries a `critical` permission or an App declares a
+ * route. **So this asks a question it can actually answer: is this critical permission one somebody
+ * deliberately decided a tenant role may hold?**
+ *
+ * `architecture.md` §3a-i, keyed on the exception: **the allow-list is the exception and everything
+ * else is refused by default**, including a permission nobody has classified. A new `critical`
+ * permission reaching a role fails the build whether it gates an Action, a route, or something
+ * nobody has invented — and a human then decides which, which is the decision `0038` wants made.
+ *
+ * **THE LIST IS EMPTY AND THAT IS THE MEASURED STATE**, not an omission: 21 of 21 tenant-admin
+ * permissions are granted by no role, and no role holds a `critical` permission of any kind. **So
+ * this check examines every grant and finds nothing, which is why it returns its population** — a
+ * count of zero critical grants and a check that stopped working render identically otherwise
+ * (`workflow.md` §11a).
+ */
+const CRITICAL_PERMISSIONS_A_TENANT_ROLE_MAY_HOLD: readonly string[] = Object.freeze([]);
+
+export function assertNoRoleHoldsAnUnclearedCriticalPermission(
+  mapping: Readonly<Record<MembershipRole, PrincipalGrants>> = GRANTS_BY_ROLE,
+  critical: readonly string[] = criticalPermissions(),
+  cleared: readonly string[] = CRITICAL_PERMISSIONS_A_TENANT_ROLE_MAY_HOLD,
+): { readonly grantsExamined: number; readonly criticalHeld: number } {
+  let grantsExamined = 0;
+  let criticalHeld = 0;
+  for (const role of MEMBERSHIP_ROLES) {
+    for (const grant of mapping[role].grants) {
+      grantsExamined += 1;
+      if (!critical.includes(grant.permissionId)) {
+        continue;
+      }
+      criticalHeld += 1;
+      if (cleared.includes(grant.permissionId)) {
+        continue;
+      }
+      throw new RoleMappingIncoherentError(
+        `The tenant role '${role}' holds '${grant.permissionId}', which is a 'critical' ` +
+          'permission that has not been cleared for tenant roles. Two things follow and BOTH need ' +
+          'a decision before this list grows. (1) A critical permission requires a confirmation ' +
+          'on every call, so whatever it gates is now reachable and must have a challenge route ' +
+          'that can issue one — if it gates an ACTION, there is no such route: ' +
+          'docs/decisions/0038 defers it on the measured ground that no role could hold one, and ' +
+          'this grant is that deferral\'s trigger. Reopen it rather than adding the permission ' +
+          'here. (2) Granting a permission is a privilege change and needs the user ' +
+          '(.claude/rules/security.md §8). Add it to ' +
+          'CRITICAL_PERMISSIONS_A_TENANT_ROLE_MAY_HOLD only once a challenge route exists for it, ' +
+          'and record who granted it and when.',
+      );
+    }
+  }
+  // =========================================================================================
+  // *** THE FLOORS. WITHOUT THESE, A RENAMED OR BROKEN REGISTRY MAKES THIS GREEN FOREVER. ***
+  // =========================================================================================
+  //
+  // **This check's verdict is `no grant matched the critical set`, and that sentence is true both
+  // when nothing is wrong and when THE CRITICAL SET IS EMPTY.** `workflow.md` §11a's empty-list
+  // reader, on the assertion that is `0038`'s only trigger — so it is refused rather than reported.
+  //
+  // *** THE SET'S SHAPE IS CHECKED ELSEWHERE AND ITS EMPTINESS WAS NOT — MEASURED, NOT ASSUMED. ***
+  // `assertCriticalSetIsCoherent` rejects blanks, wildcards, duplicates, disorder and one specific
+  // misclassification, **and every one of those is a loop body or an `includes`, so all of them
+  // pass on an empty list.** `qa-agent` does floor it — `suites/platform-operator/confirmation.ts`
+  // asserts `criticalPermissions().length > 0` — **but that runs in a suite and this runs at module
+  // load**, so between a broken registry and the next suite run the build is green and this check
+  // is examining nothing.
+  //
+  // **THE COUNT IS DELIBERATELY NOT PINNED HERE.** `registry-coherence.ts` compares Core's critical
+  // set against `permission-catalog.yaml`, which is the register (`0007` rule 4) — **that is the
+  // layer that owns the number, and a second copy in this file is the duplicated count the user
+  // ruled against.** This floor asserts only that the population is not zero.
+  if (critical.length === 0) {
+    throw new RoleMappingIncoherentError(
+      'The critical permission set is EMPTY, so this check compared every grant against nothing ' +
+        'and passed. That is not a state any correct tree reaches: `critical-permissions.ts` ' +
+        'declares a non-empty frozen list, and an empty one means it has been renamed, emptied or ' +
+        'failed to load. Refused rather than reported, because this assertion is the only trigger ' +
+        "for `0038`'s deferral of the Action-class challenge route, and a silent zero here is that " +
+        'deferral quietly losing its collector.',
+    );
+  }
+  if (grantsExamined === 0) {
+    throw new RoleMappingIncoherentError(
+      'No role grants any permission, so this check examined nothing. Every tenant role is ' +
+        'defined in this file with a non-empty grant list, so zero means the mapping has been ' +
+        'emptied or is not being read — and a check handed nothing reports success, which is the ' +
+        'most confident wrong answer available.',
+    );
+  }
+  return { grantsExamined, criticalHeld };
+}
+
 assertRoleMappingIsCoherent();
+assertGrantedUniverseIsDeclared();
+assertNoRoleHoldsAnUnclearedCriticalPermission();

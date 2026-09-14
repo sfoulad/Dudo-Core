@@ -1,14 +1,71 @@
 /**
  * The error envelope, client side.
  *
- * SOURCE: packages/contracts/common/error-envelope.schema.json
- *   { error: { code, message, request_id, details?, retry_after_seconds? } }
+ * SOURCE: `packages/contracts/common/error-envelope.schema.json`, and the
+ * shapes below are now CONSUMED from its generated module rather than restated
+ * here (ADR 0037 requirement 2).
  *
  * Every failure a screen handles arrives as an `ApiError`, so there is one
- * place that decides how a failure is worded and whether a retry is worth
- * offering.
+ * place that decides whether a retry is worth offering.
+ *
+ * ===========================================================================
+ * ⚠ THIS FILE HELD TWO DUPLICATES AND BOTH OF THEM DIVERGED. THE DUPLICATION
+ * WAS THE LESSER PROBLEM.
+ * ===========================================================================
+ *
+ * ```
+ * generated ErrorCode   TWELVE values, including `not_implemented`
+ * this file's           ELEVEN — `not_implemented` absent
+ *
+ * generated envelope    a DISCRIMINATED UNION on whether retry_after_seconds
+ *                       is possible at all
+ * this file's           a flat interface with retry_after_seconds OPTIONAL
+ * ```
+ *
+ * **The second is a type that is WRONG rather than merely missing.** A flat
+ * optional permits `retry_after_seconds` on `not_found` — which the contract
+ * forbids, and which this client could therefore have written and read without
+ * anything objecting.
+ *
+ * **The first is quieter and worse in its own way.** `not_implemented` is a
+ * code this client's type said could not arrive. Nothing crashed — the title
+ * lookup falls through to a generic sentence — so **nothing would ever have
+ * reported it.** A wrong type that degrades gracefully is a wrong type nobody
+ * finds.
+ *
+ * Neither was found by review. Both were found by counting declarations
+ * against the generated set while doing an unrelated swap.
  */
 
+import type {
+  ErrorCode,
+  ErrorDetails,
+  ErrorEnvelope,
+} from '@dudo/contracts/common/error-envelope';
+
+export type { ErrorCode, ErrorEnvelope } from '@dudo/contracts/common/error-envelope';
+
+/**
+ * ⚠ `ErrorDetail` IS SINGULAR HERE AND THE CONTRACT EMITS THE ARRAY.
+ *
+ * The generated module has `ErrorDetails = ReadonlyArray<{field, issue}>` and
+ * no name for one element. This client passes single details around, so the
+ * element type is derived from the array rather than restated — **the same
+ * shape by construction, and it moves if the contract's does.**
+ */
+export type ErrorDetail = ErrorDetails[number];
+
+/**
+ * The codes, as a runtime list, BOUND TO THE CONTRACT IN BOTH DIRECTIONS.
+ *
+ * The type is the contract's now, so this constant is the only thing that could
+ * drift — and it did: it was eleven values against the contract's twelve.
+ *
+ *   `satisfies`   every listed code is a real contract code
+ *   `Exclude<>`   every contract code is listed — **the direction that was
+ *                 already violated**, and the one that stays violated silently
+ *                 because an unlisted code simply never appears in a loop.
+ */
 export const ERROR_CODES = [
   'invalid_argument',
   'unauthenticated',
@@ -19,26 +76,14 @@ export const ERROR_CODES = [
   'quota_exceeded',
   'rate_limited',
   'internal',
+  'not_implemented',
   'unavailable',
   'timeout',
 ] as const;
-
-export type ErrorCode = (typeof ERROR_CODES)[number];
-
-export interface ErrorDetail {
-  field: string;
-  issue: string;
-}
-
-export interface ErrorEnvelope {
-  error: {
-    code: ErrorCode;
-    message: string;
-    request_id: string;
-    details?: ErrorDetail[];
-    retry_after_seconds?: number;
-  };
-}
+ERROR_CODES satisfies readonly ErrorCode[];
+type MissingErrorCode = Exclude<ErrorCode, (typeof ERROR_CODES)[number]>;
+const ERROR_CODES_ARE_EXHAUSTIVE: MissingErrorCode extends never ? true : never = true;
+void ERROR_CODES_ARE_EXHAUSTIVE;
 
 export class ApiError extends Error {
   readonly code: ErrorCode;
@@ -61,8 +106,34 @@ export class ApiError extends Error {
     this.retry_after_seconds = init.retry_after_seconds ?? null;
   }
 
+  /**
+   * ⚠ IT WAS `new ApiError(envelope.error)` — A SPREAD OF THE WHOLE WIRE
+   * OBJECT INTO THE CONSTRUCTOR, AND IT STOPPED COMPILING FOR THE RIGHT REASON.
+   *
+   * The generated envelope is a DISCRIMINATED UNION: `retry_after_seconds`
+   * exists on the `rate_limited`/`quota_exceeded` arm and **does not exist on
+   * the other**. The flat interface this file used to declare made it optional
+   * everywhere, which permitted it on `not_found` — a shape the contract
+   * forbids and this client could have read without anything objecting.
+   *
+   * So the fields are now taken **one at a time, by name**, with the property
+   * narrowed rather than assumed. That also removes the second-order problem
+   * the spread had: **whatever the server sent, the constructor received** —
+   * `platform/admin` was hardened the same way for the same reason.
+   *
+   * `details` is copied because the contract emits `ReadonlyArray` and this
+   * class exposes a mutable array to callers.
+   */
   static fromEnvelope(envelope: ErrorEnvelope): ApiError {
-    return new ApiError(envelope.error);
+    const body = envelope.error;
+    return new ApiError({
+      code: body.code,
+      message: body.message,
+      request_id: body.request_id,
+      details: body.details === undefined ? undefined : [...body.details],
+      retry_after_seconds:
+        'retry_after_seconds' in body ? (body.retry_after_seconds ?? null) : null,
+    });
   }
 }
 
@@ -93,10 +164,34 @@ export function isRetryable(error: Pick<ApiError, 'code'> | null | undefined): b
   return (['internal', 'unavailable', 'timeout', 'rate_limited'] as ErrorCode[]).includes(error.code);
 }
 
-const TITLES: Record<ErrorCode, string> = {
+/**
+ * ⚠ THIS WORDING IS THE CUSTOMER DIRECTORY'S, AND SAYING SO IS THE POINT.
+ *
+ * `not_found` reads *"This customer is not here"* and `failed_precondition`
+ * talks about archived customers. **Both are false on any other surface**, and
+ * for a while this was the application's ONLY error vocabulary — which is how a
+ * settings screen reaching for `ErrorBlock` would have told a reader about a
+ * customer they were not looking at.
+ *
+ * `components/settings/SettingsState.tsx` holds the settings equivalent, and
+ * the split is deliberate: **one map serving both surfaces would have to be
+ * vague enough to be true of neither**, and a vague error message is the one
+ * nobody can act on. The CLASSIFICATION — `ErrorCode`, `ApiError`,
+ * `isRetryable` — is shared and lives here; only the wording forks.
+ *
+ * **A third surface needs a third map, not an edit to this one.**
+ */
+const CUSTOMER_DIRECTORY_TITLES: Record<ErrorCode, string> = {
   invalid_argument: 'Check the details you entered',
   unauthenticated: 'You need to sign in',
   forbidden: 'You do not have access to this',
+  /*
+   * `not_implemented` ARRIVED FROM THE CONTRACT, NOT FROM A PRODUCT DECISION.
+   * This map was `Record<ErrorCode, string>` over an ELEVEN-value local union;
+   * adopting the generated twelve-value one made the compiler name the missing
+   * arm. It had been a code this client's type said could not arrive.
+   */
+  not_implemented: 'That is not available',
   not_found: 'This customer is not here',
   conflict: 'That conflicts with an existing record',
   failed_precondition: 'That is not possible in this state',
@@ -109,7 +204,7 @@ const TITLES: Record<ErrorCode, string> = {
 
 export function errorTitle(error: Pick<ApiError, 'code'> | null | undefined): string {
   if (!error) return 'Something went wrong';
-  return TITLES[error.code] ?? 'Something went wrong';
+  return CUSTOMER_DIRECTORY_TITLES[error.code] ?? 'Something went wrong';
 }
 
 const BODIES: Partial<Record<ErrorCode, string>> = {

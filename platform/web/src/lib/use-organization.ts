@@ -52,7 +52,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { probeSession } from '@/api/auth';
 import { onPreconditionFailed } from '@/api/session-signal';
 import { toApiError, type ApiError } from '@/api/errors';
-import type { Transport } from '@/api/fixture-transport';
+import type { Transport } from '@/api/transport';
 import type { EnterableOrganization, OrganizationClient } from '@/api/organization';
 
 export interface OrganizationSelection {

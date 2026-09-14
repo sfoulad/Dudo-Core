@@ -552,7 +552,15 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
     {
       name: 'INSERT INTO organization_membership for a principal that is a platform operator',
       run: (control) => {
-        seedMembership(control, PRN_ADMIN, ORG_ALPHA, 'owner');
+        // `'member'` since 2026-09-13. `createTriggerWorld` already seeds `PRN_TENANT_OWNER` as
+        // the `owner` of `ORG_ALPHA`, so `'owner'` here made this the SECOND owner of one
+        // Organization — which `0019_organization_single_owner.sql` now refuses with a UNIQUE
+        // constraint, BEFORE the mutual-exclusion trigger this case exists to observe.
+        //
+        // **The case would have gone on "passing" in the withTriggers arm for the wrong reason**:
+        // it asserts only that the write was refused and that the message names `0024`, and the
+        // second half is what caught it. A refusal is not evidence until you read which refusal.
+        seedMembership(control, PRN_ADMIN, ORG_ALPHA, 'member');
       },
     },
     {
@@ -632,7 +640,11 @@ export function buildMutualExclusionSuite(make: MakePlatformWorld = createPlatfo
       seedOrganization(control, ORG_ALPHA);
       seedPrincipal(control, PRN_BOTH_TABLES);
       seedPlatformOperator(control, PRN_BOTH_TABLES, 'platform-admin');
-      seedMembership(control, PRN_BOTH_TABLES, ORG_ALPHA, 'owner');
+      // `'member'` since 2026-09-13, for the reason recorded at the fixture's own seed site:
+      // `0019`'s partial unique index permits ONE `owner` per Organization, and this principal's
+      // role was never what the case is about — the co-existence of an operator row and a
+      // membership row is.
+      seedMembership(control, PRN_BOTH_TABLES, ORG_ALPHA, 'member');
 
       const raised = attempt(() => {
         control.raw.exec(

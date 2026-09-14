@@ -166,12 +166,39 @@ export const CONFIG: WebConfig = Object.freeze({
 });
 
 /**
+ * The message keys this module hands to the presentation layer.
+ *
+ * ===========================================================================
+ * DECLARED HERE RATHER THAN IMPORTED, AND THE DIRECTION IS LOAD-BEARING
+ * ===========================================================================
+ *
+ * **`api/**` must not import `lib/i18n`.** This module is loaded under bare
+ * Node by four verification scripts, where there is no React and no DOM;
+ * `lib/i18n` calls `createContext` at module scope and would make every one of
+ * them fail at import. So the badge names its keys as a narrow union of string
+ * literals and `lib/i18n` asserts — at compile time, in one line — that both
+ * are real keys in the dictionary.
+ *
+ * **That bridge is a mechanism, not a convention.** Rename one of these
+ * without touching the dictionary and the build fails at the bridge naming both
+ * sides, rather than rendering `undefined` in the header.
+ */
+export type ConfigMessageKey = 'app.transport.live' | 'app.transport.fixture';
+
+/**
  * What the header badge says. Deliberately blunt in both directions: a fixture
  * build must never be mistaken for a live one, and a live build must never be
  * mistaken for a demonstration.
+ *
+ * ⚠ **IT RETURNS A KEY, NOT A SENTENCE.** It was `{ label: 'Live API' }` — an
+ * English string produced in the data layer, which is the one place a
+ * translation can never reach. **A header that stays English while the rest of
+ * the page is Arabic is the most visible untranslated string in the
+ * application**, and it is the one that says whether the reader is looking at
+ * real data.
  */
-export function transportBadge(): { label: string; live: boolean } {
+export function transportBadge(): { labelKey: ConfigMessageKey; live: boolean } {
   return CONFIG.transport === 'http'
-    ? { label: 'Live API', live: true }
-    : { label: 'Fixture data', live: false };
+    ? { labelKey: 'app.transport.live', live: true }
+    : { labelKey: 'app.transport.fixture', live: false };
 }

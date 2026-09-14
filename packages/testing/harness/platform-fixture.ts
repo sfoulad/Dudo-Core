@@ -50,7 +50,7 @@
  * credential material of any kind.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 import { createSqliteDatabase } from './sqlite-d1.ts';
 import type { SqliteHarness } from './sqlite-d1.ts';
@@ -478,11 +478,58 @@ const MIGRATION_DIRECTORY = new URL(
 );
 
 /**
- * All ten, in order. `0010` is separated below because a suite has to be able to build the world
- * WITHOUT it — asserting that the triggers refuse a write is only evidence if the same write
- * succeeds when they are absent.
+ * Applied SEPARATELY and conditionally, so a suite can build the world without it.
+ *
+ * DECLARED HERE RATHER THAN BELOW THE LIST, because the derivation now filters on it and a
+ * `const` is in its temporal dead zone until its own line — the module would have thrown on
+ * import, which is `workflow.md` §2b's *a suite that dies at import is NOT RUN*, self-inflicted.
  */
-export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
+export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';
+
+/**
+ * ===========================================================================================
+ * DERIVED FROM DISK SINCE 2026-09-13. THE TRANSCRIBED LIST IS STRUCK AND KEPT BELOW.
+ * ===========================================================================================
+ *
+ * Every one in numeric order, minus `0010`, which is separated because a suite has to be able
+ * to build the world WITHOUT it — asserting the triggers refuse a write is only evidence if the
+ * same write succeeds when they are absent.
+ *
+ * **Why it is derived now:** the census control fired six times, and every single time the answer
+ * was *"apply it"* — never once *"omit it"*. A decision point whose answer has never varied is a
+ * chore wearing a control's clothes, **and this session it cost six migrations arriving at once
+ * against a fixture stuck at seventeen.** `platform-fixture.ts` itself states the principle that
+ * settles it: **a fixture matches production unless there is a stated reason it should not.** So
+ * the default is APPLY, and an omission is a declared exception (`architecture.md` §3a-i).
+ *
+ * *** WHAT THE CENSUS WAS ACTUALLY WORTH, WHICH IS NOT THE BOOKKEEPING. *** Applying the six
+ * turned **203 cases red at once** and that is how the two-owner seed was found — the fixture had
+ * been constructing a state production forbids, invisibly, for its whole life. **The value was in
+ * APPLYING the migrations, not in a human retyping their filenames**, and deriving keeps the first
+ * while dropping the second.
+ *
+ * *** AND THE TRAP THIS COULD HAVE WALKED INTO, NAMED BECAUSE IT ALMOST DID. ***
+ * `harness-fidelity.ts`'s `the platform fixture omits nothing` compares this list against the
+ * directory. **With both sides derived that comparison is `derived === derived` and can never
+ * fail** — `§11a`'s *two derivations that share a scope are one derivation*, arriving as a
+ * side effect of a repair. It is replaced there by a population pin a human must move.
+ */
+const DELIBERATE_OMISSIONS: Readonly<Record<string, string>> = Object.freeze({});
+
+export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze(
+  readdirSync(MIGRATION_DIRECTORY)
+    .filter((entry) => entry.endsWith('.sql'))
+    .filter((entry) => entry !== MUTUAL_EXCLUSION_MIGRATION)
+    .filter((entry) => !(entry in DELIBERATE_OMISSIONS))
+    .sort(),
+);
+
+/* THE RETIRED HAND-MAINTAINED LIST, kept verbatim as a COMMENT rather than as an unused
+   constant. `workflow.md` §12 keeps a struck ruling visible when it was right on its own terms —
+   and the same section says a removed thing is REMOVED, NOT TOMBSTONED, so an unread array of
+   filenames would be the defect one size smaller. The per-entry reasons are the part worth
+   reading: each records a census firing and the judgement that followed it.
+
   '0001_principal.sql',
   '0002_organization.sql',
   '0003_organization_membership.sql',
@@ -533,9 +580,34 @@ export const PLATFORM_MIGRATIONS: readonly string[] = Object.freeze([
   // full scan after it had been fixed. **A fixture that lags a schema change reports the old
   // world with complete confidence.**
   '0017_organization_template_index.sql',
-]);
-
-export const MUTUAL_EXCLUSION_MIGRATION = '0010_platform_operator_mutual_exclusion.sql';
+  // ADDED 2026-09-13 — MILESTONE 2, SIX AT ONCE, AND THE CENSUS CONTROL FIRED FOR THE SIXTH TIME.
+  //
+  // `0043` and `0044` landed the tenant-admin surface in a single morning and six control-plane
+  // migrations arrived with it. **Not one of them was applied by this fixture**, and the drift was
+  // reported by `suites/harness/harness-fidelity.ts` naming all six — the same case that caught
+  // `0013`, `0014`, `0015` and `0017` one at a time.
+  //
+  // *** WHAT MAKES THIS ARRIVAL DIFFERENT FROM THE FOUR BEFORE IT: SIX AT ONCE, WHILE EVERY
+  // TENANT-ADMIN SUITE WAS BEING WRITTEN AGAINST THE FIXTURE. *** A fixture missing
+  // `0018_membership_role_admin.sql` has a `CHECK` constraint permitting only `owner` and
+  // `member`, so a case exercising `0043` §3's four seed roles would fail at INSERT — and it
+  // would fail looking like a defect in the role model rather than like a stale fixture. The
+  // other five are the same shape: no `tenant_role` table, no `invitation` table, no partial
+  // unique index enforcing singular ownership.
+  //
+  // **`0019` is the one worth naming individually.** It is the partial unique index that makes
+  // `0043` §3c's *exactly one owner* structural rather than procedural — *"a transfer is one
+  // atomic demote-and-promote, never a promote followed by a demote"*. Without it applied here, a
+  // fixture would accept two owners and any suite asserting the invariant would pass against a
+  // database that does not enforce it. **That is the worst available outcome for an invariant
+  // test: green, and about nothing.**
+  '0018_membership_role_admin.sql',
+  '0019_organization_single_owner.sql',
+  '0020_organization_membership_by_organization.sql',
+  '0021_invitation.sql',
+  '0022_tenant_role.sql',
+  '0023_organization_deletion_request.sql',
+*/
 
 export function readControlPlaneMigration(fileName: string): string {
   return readFileSync(new URL(fileName, MIGRATION_DIRECTORY), 'utf8');
@@ -592,6 +664,35 @@ export function createPlatformControlPlane(
   }
   if (options.withMutualExclusionTriggers !== false) {
     harness.raw.exec(readControlPlaneMigration(MUTUAL_EXCLUSION_MIGRATION));
+  } else {
+    // *** `withMutualExclusionTriggers: false` MEANS NONE OF `0010`'s TRIGGERS EXIST, AND SINCE
+    // 2026-09-13 SKIPPING `0010` NO LONGER ACHIEVES THAT. ***
+    //
+    // `0018_membership_role_admin.sql` cannot alter a `CHECK`, so it rebuilds
+    // `organization_membership` — `DROP TABLE` then `RENAME` — and **a `DROP TABLE` takes its
+    // triggers with it**, so `0018` correctly re-creates the two that live on that table. Its own
+    // header flags the hazard in capitals. The consequence lands here rather than there: this
+    // option's contract was satisfied by NOT APPLYING `0010`, and a later migration now creates
+    // half of `0010`'s triggers as a side effect of doing something else entirely.
+    //
+    // > **NEITHER SIDE IS WRONG AND NOTHING COULD HAVE DECLARED IT.** `0018` must recreate what it
+    // > dropped; this option is a legitimate isolation control. **A migration that rebuilds a
+    // > table changes what a later, unrelated toggle MEANS, and the toggle lives in another
+    // > agent's tree.** The four cases that exist to prove *"without `0010` the same statement
+    // > succeeds — so `0010` is what refused it"* failed with the trigger's own message, which
+    // > reads exactly like the thing they were asserting.
+    //
+    // All four are dropped, not the two on `organization_membership` that `0018` recreates: the
+    // option promises the absence of `0010`, and a mode that leaves two of four is a mode whose
+    // name is false. It also survives the next migration that rebuilds either table.
+    for (const trigger of [
+      'platform_operator_excludes_membership_on_insert',
+      'platform_operator_excludes_membership_on_update',
+      'membership_excludes_platform_operator_on_insert',
+      'membership_excludes_platform_operator_on_update',
+    ]) {
+      harness.raw.exec(`DROP TRIGGER IF EXISTS ${trigger};`);
+    }
   }
   return harness;
 }
@@ -1186,12 +1287,69 @@ function seedWorld(harness: SqliteHarness, withTriggers: boolean): void {
   seedTemplate(harness, TEMPLATE_RETIRED, TEMPLATE_RETIRED_NAME, 'retired');
 
   // The forbidden state. See the header above for why it is created this way and not another.
-  if (withTriggers) {
-    harness.raw.exec('DROP TRIGGER IF EXISTS platform_operator_excludes_membership_on_insert;');
-    harness.raw.exec('DROP TRIGGER IF EXISTS membership_excludes_platform_operator_on_insert;');
+  //
+  // *** THE DROP IS UNCONDITIONAL SINCE 2026-09-13, AND THE `if (withTriggers)` IT REPLACES HAD
+  // SILENTLY STOPPED WORKING. ***
+  //
+  // The old guard assumed that `withMutualExclusionTriggers: false` means no triggers exist,
+  // because `0010` is the only thing that creates them and it is skipped in that mode.
+  // **`0018_membership_role_admin.sql` falsified that assumption.** SQLite cannot alter a `CHECK`,
+  // so `0018` rebuilds `organization_membership` — `DROP TABLE` then `RENAME` — and **a
+  // `DROP TABLE` takes its triggers with it, so `0018` correctly RE-CREATES
+  // `membership_excludes_platform_operator_on_insert` at its line 176.** Its own header flags the
+  // hazard in capitals at line 35.
+  //
+  // So in `withTriggers: false` mode the trigger was present anyway, and the four cases that
+  // exist to prove *"without `0010` the same statement succeeds — so `0010` is what refused it"*
+  // could no longer isolate `0010`. They failed with the trigger's own message, which reads
+  // exactly like the thing they were asserting.
+  //
+  // > **NEITHER SIDE IS WRONG.** `0018` must recreate what it dropped, and the fixture's mode is a
+  // > legitimate isolation control. **The interaction is the defect, and nothing could have
+  // > declared it** — a migration that rebuilds a table changes what a LATER, UNRELATED toggle
+  // > means, and the toggle lives in another agent's tree.
+  //
+  // Dropping unconditionally and re-applying only under `withTriggers` gives both modes what they
+  // ask for, and survives the next migration that rebuilds this table.
+  // ALL FOUR, NOT THE TWO `_on_insert` ONES. `0010` creates four — an insert and an update guard
+  // on each of the two tables — and the old code dropped two. That was correct while it ran only
+  // in `withTriggers: true` mode, where the two `_on_update` triggers are irrelevant to an INSERT
+  // and `0010` is re-applied immediately afterwards. **It is not correct for `withTriggers:
+  // false`, whose contract is that the fixture has NONE of `0010`'s triggers** — and the case
+  // asserting exactly that reported `expected 0, actual 1`.
+  for (const trigger of [
+    'platform_operator_excludes_membership_on_insert',
+    'platform_operator_excludes_membership_on_update',
+    'membership_excludes_platform_operator_on_insert',
+    'membership_excludes_platform_operator_on_update',
+  ]) {
+    harness.raw.exec(`DROP TRIGGER IF EXISTS ${trigger};`);
   }
   seedPlatformOperator(harness, PRN_BOTH_TABLES, 'platform-admin');
-  seedMembership(harness, PRN_BOTH_TABLES, ORG_ALPHA, 'owner');
+  // *** `'member'`, NOT `'owner'`, SINCE 2026-09-13 — AND THE CHANGE IS A FINDING RATHER THAN A
+  // FIX. ***
+  //
+  // This line read `'owner'` and `ORG_ALPHA` ALREADY HAS ONE: `PRN_TENANT_OWNER`, seeded twenty
+  // lines up. **So this fixture has been constructing a two-owner Organization for as long as it
+  // has existed**, and nothing said so, because nothing enforced singular ownership.
+  //
+  // `0019_organization_single_owner.sql` enforces it now — the partial unique index `0043` §3c
+  // requires, *"in the same statement that writes it"* — and applying that migration here turned
+  // **203 platform-operator cases red at once** with `UNIQUE constraint failed:
+  // organization_membership.organization_id`. That cascade is the migration working: the fixture
+  // was seeding a state the production schema refuses.
+  //
+  // > `workflow.md` §11a: **a fixture that can construct an input the real transport cannot is a
+  // > fixture that can prove a defect which does not exist.** Every one of those 203 cases had
+  // > been running against a control plane whose membership table held a shape production would
+  // > have rejected on insert.
+  //
+  // **THE ROLE WAS NEVER LOAD-BEARING HERE AND THAT IS WHY THIS IS SAFE.** `PRN_BOTH_TABLES` is a
+  // deliberate fault injection for `0024`'s mutual exclusion — a principal carrying BOTH an
+  // operator row and a membership row — and every assertion about it is about the CO-EXISTENCE of
+  // the two rows. Grepped before changing it: the role appears at exactly two seed sites and is
+  // asserted at none, so `member` preserves the meaning of every case that reads it.
+  seedMembership(harness, PRN_BOTH_TABLES, ORG_ALPHA, 'member');
   if (withTriggers) {
     harness.raw.exec(readControlPlaneMigration(MUTUAL_EXCLUSION_MIGRATION));
   }

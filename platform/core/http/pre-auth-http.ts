@@ -78,7 +78,7 @@ import {
   unauthenticated,
   unavailable,
 } from '../kernel/errors.ts';
-import { REQUEST_ID_HEADER, CORRELATION_ID_HEADER } from './response.ts';
+import { REQUEST_ID_HEADER, CORRELATION_ID_HEADER, CORE_SECURITY_HEADERS } from './response.ts';
 
 /** The single success body. One constant, used by both `acknowledged` and `issued`. */
 export const PRE_AUTH_ACK_BODY_TEXT = JSON.stringify({ status: 'ok' });
@@ -99,6 +99,10 @@ function baseHeaders(requestId: string, correlationId: string): Headers {
     [REQUEST_ID_HEADER]: requestId,
     [CORRELATION_ID_HEADER]: correlationId,
     'cache-control': 'no-store',
+    // `security-agent` finding 6. SPREAD FROM `response.ts` RATHER THAN RESTATED — this function
+    // and that one build byte-identical header sets, and the AUTH path is the half `_headers`
+    // cannot reach that a fix applied only to the API renderer would have missed.
+    ...CORE_SECURITY_HEADERS,
   });
 }
 

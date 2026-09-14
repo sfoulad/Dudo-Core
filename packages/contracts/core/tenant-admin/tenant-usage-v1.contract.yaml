@@ -1,0 +1,281 @@
+---
+# Organization Plan, Quota and Usage — tenant-admin contract, version 1
+#
+# Shapes: tenant-usage-v1.schema.json. Shared class obligations: README.md in this directory.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the class · 0043 (Accepted) — §5's obligations ·
+#              0008 (Accepted) — zero cost · 0030 (Accepted) — CONFIGURATION never SCHEMA ·
+#              0014 §A.10 (Accepted) — reads remain available at a write ceiling
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT.
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# THE RULING THIS CONTRACT EXISTS TO MAKE
+# ---------------------------------------------------------------------------
+theDERIVATIONRULING:
+  ruling: >-
+    *** EVERY `used` FIGURE IS DERIVED FROM ROWS ALREADY WRITTEN. NO COUNTER COLUMN, NO SUMMARY ROW,
+    NO AGGREGATE MAINTAINED ON WRITE. ***
+  theTestItIsDecidedAgainst: >-
+    docs/decisions/0030: *"The free tier may cost us CONFIGURATION. It must never cost us SCHEMA."*
+    Its list of violations names the exact shape a usage counter takes — **"aggregating on write and
+    losing the source rows"** — beside denormalising to save row-writes and omitting an audit record
+    because it costs five writes.
+  whyACOUNTERISTHESCHEMACOST: >-
+    A counter incremented on every write is cheap to read and it **replaces the source with a
+    total**. Once it exists, the answer to *"what did we spend it on"* is gone, every future question
+    about consumption has to be asked of a number rather than of the events, and correcting a drifted
+    counter means recomputing from rows the counter was introduced to avoid reading.
+    *** AND IT IS PAID FOREVER: `0030`'s distinction is that a configuration workaround is reversible
+    by changing that configuration, and a schema workaround is paid by every query, every migration
+    and every future reader. *** A counter is the second kind.
+  whatDERIVINGCOSTS_STATEDRATHERTHANMINIMISED: >-
+    *** THE DERIVED FIGURE IS EXPENSIVE, AND ON A CONSUMPTION SCREEN THAT IS AN AWKWARD SENTENCE
+    RATHER THAN A COMFORTABLE ONE: READING YOUR USAGE CONSUMES THE ALLOWANCE IT REPORTS ON. ***
+    It is a scan over rows already written, bounded by the UTC day.
+    IT IS STILL THE RIGHT TRADE, and the reason is `0030`'s own: the read cost is CONFIGURATION —
+    reducible by an index, a narrower window, a cached projection, or a ceiling on how often the
+    screen may be polled, **every one of which is reversible.** The counter is not.
+    AND THE HONEST CONSEQUENCE IS ON THE WIRE: `measured_at` is REQUIRED, because a derived figure is
+    a measurement rather than a running total and a measurement without a timestamp reads as current.
+  whatWOULDCHANGETHISRULING: >-
+    A measured cost that makes the derivation unaffordable at real volume. **That is a CONFIGURATION
+    problem first** — index it, narrow the window, cache the projection with the source rows intact —
+    and only if all of those fail is a stored aggregate on the table. **If it ever is, `0030` requires
+    the SOURCE ROWS SURVIVE**: an aggregate beside the events is a cache; an aggregate instead of them
+    is the violation. Recorded as TU-1 so the distinction is not lost the day somebody optimises this.
+
+theBREAKDOWNISREFUSED:
+  ruling: "NO PER-MEMBER BREAKDOWN. The response reports the ORGANIZATION's aggregate against a per-member ceiling, never a row per member."
+  why: >-
+    security.md §2a's shape constraint, and the object is worse than the usual one. A map from member
+    to consumption is **an activity report on named colleagues** — who worked, how much, on which
+    days — assembled from audit rows and presented on a settings screen.
+    *** IT ALSO FAILS §2a's OWN TEST. *** The consumer holds `core.usage.read`, declared
+    [organization, business]. That permission grants no enumeration of MEMBERS — `core.user.list`
+    does — so a per-member figure reaches past its consumer's enumeration right, which is §2a's
+    definition of a new disclosure.
+    AND UNDER `0007` D16 THE USUAL ESCAPE IS CLOSED: *"every role holding usage.read also holds
+    user.list"* is an observation about today's roles that a tenant can falsify by minting one. It
+    would need `core.usage.read ∧ core.user.list` as a conjunction, **and a conjunction is the right
+    mechanism for a count, not for a report on individuals.**
+  andTHEAGGREGATEITSELFPASSES: >-
+    §2a run on what IS published: the figures are the CALLER'S OWN ORGANIZATION'S consumption, they
+    count no population the caller might enumerate, and they name nobody. **0043 §4 already said §2a
+    is the wrong instrument for usage** — *"a quota figure is not a count over a population… it is a
+    measurement of the tenant's own consumption"* — and required the tenant-boundary argument
+    instead, which is: the figures are this Organization's, they name no other tenant, and they are
+    not derivable into platform-wide totals because nothing here discloses a denominator.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2."
+  model: "docs/decisions/0006."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call."
+    - "NO organization_id in any shape. The operation takes no parameters at all."
+    - >-
+      *** THE DERIVATION IS A SCAN AND A SCAN IS THE SHAPE MOST LIKELY TO LOSE ITS PREDICATE. ***
+      Every row counted must come through the tenant-scoped boundary. A count over `audit_event`
+      without the tenant clause does not fail and does not return zero — **it returns the platform's
+      total, rendered to one customer as their own consumption**, which is a cross-tenant disclosure
+      that looks like a large number rather than like an error.
+    - >-
+      AND IT IS THE ONE OPERATION WHOSE WRONG ANSWER IS PLAUSIBLE. A leaked member list is obviously
+      wrong to whoever reads it; a leaked usage figure is just a bigger number. `qa-agent` owes an
+      isolation case that asserts the figure against a second tenant's writes.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+  evaluationOrder:
+    - "1. Authenticate. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context."
+    - "3. Authorize the declared permission, record-independently. Failure -> forbidden."
+    - "4. Derive the figures from rows already written, through the tenant-scoped boundary. Stamp measured_at."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found"
+    ruling: >-
+      DECLARED FOR UNIFORMITY AND UNREACHABLE. The operation takes no identifier, so it cannot meet
+      an unknown one. It is declared because 0043 §5.1 requires the field on every operation and an
+      operation silently omitting it is indistinguishable from one that forgot — the same reasoning
+      tenant-organization-profile-v1 records, and it becomes load-bearing the moment any identifier
+      is added.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.subscription.read: "read, scopes [organization], phase 1. 'View the tenant's plan, quotas, and usage' — this contract is that sentence's first route."
+      core.usage.read: "read, scopes [organization, business], phase 1. 'View metered usage, including AI token and cost attribution'."
+    theTWOARENOTSPLITACROSSTWOOPERATIONS_ANDTHATNEEDSSAYING: >-
+      *** ONE OPERATION, GATED ON `core.subscription.read` ALONE. *** The catalogue describes both
+      permissions as covering usage and they overlap; publishing two routes, or a conjunction, would
+      manufacture a distinction the catalogue does not draw.
+      `core.subscription.read` IS THE ONE CHOSEN because its description covers the whole response —
+      plan, quotas AND usage — while `core.usage.read` covers only the second half, and a route must
+      not require less than it discloses.
+      *** AND `core.usage.read`'s OWN DESCRIPTION NAMES SOMETHING THIS CONTRACT DOES NOT PUBLISH: ***
+      *"including AI token and cost attribution."* There is no AI metering, no token count and no cost
+      anywhere in Dudo — `core.ai.invoke` gates nothing today. **When AI usage exists it is that
+      permission's route and this contract is not it**, which is why the permission is named here and
+      not used.
+    proposedByThisContract: "NONE."
+    permissionsDeliberatelyNotDeclared:
+      - >-
+        *** NOTHING GATES `core.subscription.change` HERE, AND THE MILESTONE BRIEF IS THE REASON. ***
+        The user's scope is "plan, quota and free-tier usage visibility WITHOUT INTRODUCING BILLING."
+        That permission is `critical` and the catalogue calls it "A spend decision"; `0008` reserves
+        spend to the user absolutely. **A plan-change route would be the billing product arriving as
+        a settings control.**
+      - "core.usage.export — not declared. §3.2 keeps export separate from read, and the way to keep it separate is to not declare it until an export operation exists."
+
+  scopeRuling:
+    theOperation: organization
+    reasoning: >-
+      `core.subscription.read` is declared at [organization] alone, so there is no judgement to make.
+      **Note that `core.usage.read` IS declared at [organization, business], and a Business-scoped
+      usage view would be a different operation** — its figures would have to be attributable to a
+      Business, and nothing in the write-admission path records which Business a write belonged to.
+      Recorded as TU-3 rather than left as an apparent oversight.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.organization.usage.get
+    title: "Read the Organization's plan and consumption"
+    method: GET
+    path: "/organization/usage"
+    request: "No parameters. No body, no path parameter, no query parameter."
+    response: { schemaRef: "urn:dudo:schema:tenant-usage:1#/$defs/getUsageOutput" }
+    successStatus: 200
+    errors: [unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.subscription.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    reachableToday: false
+    whyITISUNREACHABLETODAY: "No route in this class is registered. The permission IS held — `core.subscription.read` sits on `owner` and `admin` — so this is not additionally blocked on a grant."
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: >-
+        *** THE BOUND IS THE UTC DAY, NOT AN INDEX, AND THAT IS THE HONEST ANSWER RATHER THAN A
+        MISSING ONE. *** The derivation counts rows written since the last reset, so the population
+        is bounded by what one Organization can write in a day — which is bounded by the very
+        ceilings being reported. **The allowance bounds its own measurement**, which is a real
+        property and not a coincidence.
+        AN INDEX ON (tenant_id, created_at) OVER THE COUNTED TABLE IS STILL REQUIRED for that scan
+        to be a range rather than a table walk. Whether one exists is a question for the migration
+        and must be READ rather than assumed.
+      whyPageCapIsNull: >-
+        No collection and no parameter that could produce one. 0044 §3c requires a page cap OR the
+        bounding index; naming which applies is what stops `null` reading as the omission the rule
+        refuses.
+      andTHISISTHEONEREADINTHEMILESTONETHATISNOTCHEAP: >-
+        Stated plainly because every other read in this directory is a point lookup or a capped page.
+        **This one scans.** 0044 §3c's warning that usage is one of the three shapes where a bound is
+        easy to forget applies with an extra edge here: the bound exists, and it is large.
+    notes: >-
+      NO quota_exceeded — a read, and 0014 §A.10 keeps reads available at a write ceiling. **That
+      matters more here than anywhere else in the corpus: the screen that tells a customer they have
+      hit their ceiling must not be the screen the ceiling refuses.**
+      NOT AUDITED. A member reading their own Organization's consumption is 0044 §3c's central case,
+      and this read is already the most expensive in the directory — charging five row-writes to
+      record that somebody looked at their allowance would consume the allowance to report on it.
+      *** READING YOUR USAGE CONSUMES THE ALLOWANCE IT REPORTS ON, and a client must not poll this. ***
+      A refresh button is correct; a five-second interval is a screen that spends the customer's
+      budget watching itself. Recorded as TU-2 because the contract cannot enforce it.
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  noRouteInThisClassIsRegisteredYet: "Measured 2026-09-13. Full measurement in tenant-members-v1."
+  thereIsNoUSAGETABLEANDTHISCONTRACTDOESNOTASKFORONE: >-
+    *** STATED AS A CONDITION AND AS A DELIBERATE REFUSAL, WHICH IS THE UNUSUAL COMBINATION HERE. ***
+    This contract requires that consumption be DERIVABLE from rows already written. It does NOT
+    require, and specifically declines to request, a usage table or a counter column —
+    theDERIVATIONRULING.
+    **So the dependency is on a derivation existing in Core, not on a migration existing for the
+    user.** That is the only set in Milestone 2 whose main dependency is not the user's.
+  theCEILINGCONSTANTSARECORESANDARETHEAUTHORITY: >-
+    `limit` reports `PER_PRINCIPAL_DAILY_ROW_WRITES` and its Organization-level sibling. The constants
+    live in `platform/core/identity/control-plane-admission.ts` and **this contract deliberately
+    quotes no figure for either** — `workflow.md` §11a: name the authority, never the value, because
+    `PLATFORM_OPERATOR_ACTION_ROW_WRITES` moved 2 -> 4 once and nine contract figures did not follow.
+  anIndexOverTheCOUNTEDTABLE: "A range scan bounded by the UTC day needs an index leading with the tenant and the timestamp. Read the migration; do not assume."
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-rows-read]
+  storage: "NO NEW TABLE AND NO NEW COLUMN. That is the ruling rather than an outcome — theDERIVATIONRULING."
+  reads: "One scan per call, bounded by the UTC day and by the ceilings it reports. Its bound is declared as a field and its cost is stated rather than minimised."
+  writes: "NONE. Zero row-writes on every path, including the audit path, which is why this is the only operation in the directory that can be served while the tenant is at its write ceiling."
+  itIsCONFIGURATIONANDNOTSCHEMACOST: >-
+    *** 0030's test, applied and passed, and it is the reason this contract exists in this shape. ***
+    The free tier costs us a more expensive read; it costs us no change to the shape of the data. A
+    counter column would have been cheaper to read and would have been the schema cost paid forever.
+  whatIsNOTBOUNDED: >-
+    HOW OFTEN THIS IS CALLED — and here that is not a footnote, because the read is a scan and it is
+    unaudited. **A polling client turns the cheapest-looking screen into the most expensive one.**
+    Rate limiting is Core's. TU-2.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TU-1
+    question: "The derivation may prove too expensive at real volume."
+    recommendation: >-
+      Exhaust the CONFIGURATION answers first — an index, a narrower window, a cached projection —
+      because every one is reversible. **If a stored aggregate is ever required, `0030` demands the
+      SOURCE ROWS SURVIVE**: an aggregate beside the events is a cache and an aggregate instead of
+      them is the violation. Recorded so the distinction is available the day somebody optimises this.
+    status: open
+
+  - id: TU-2
+    question: "Reading usage consumes the allowance it reports on, and nothing stops a client polling it."
+    recommendation: "Rate limiting in Core. The contract states the hazard and cannot enforce it; a client owes a refresh button rather than an interval."
+    status: open
+
+  - id: TU-3
+    question: "`core.usage.read` is declared at [organization, business] and no Business-scoped view exists."
+    recommendation: "It would need writes attributable to a Business, and the write-admission path records no such attribution. Not an oversight and not cheap — recorded so the declared scope does not read as an unbuilt promise."
+    status: open
+
+  - id: TU-4
+    question: >-
+      `core.usage.read`'s catalogue description promises "AI token and cost attribution" and there is
+      no AI metering anywhere in Dudo.
+    recommendation: >-
+      Leave the permission as it is and do not use it here. **It is a catalogue entry describing a
+      capability that does not exist** — `workflow.md` §12's absence-claim shape inverted, a PRESENCE
+      claim about something unbuilt — and correcting it is a catalogue edit somebody should make
+      deliberately rather than a thing this contract silently works around.
+    status: "OPEN — flagged because a permission description promising a capability is read as a plan."

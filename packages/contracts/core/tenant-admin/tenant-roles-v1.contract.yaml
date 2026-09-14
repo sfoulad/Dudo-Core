@@ -1,0 +1,846 @@
+---
+# Organization Roles and Permission Assignment — tenant-admin contract, version 1
+#
+# Shapes: tenant-roles-v1.schema.json. Shared class obligations: README.md in this directory.
+#
+# Governed by: docs/decisions/0044 (Accepted) — the class · 0043 (Accepted) — §2's role model,
+#              §5.6's visibility obligation · 0007 (Accepted) — the permission model, D6's scopes
+#              intersection, D16's custom roles and their four constraints · 0024, 0006
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT.
+#
+# THIS CONTRACT REQUIRES A ROLE TABLE, A ROLE-PERMISSION TABLE AND A ROLE-ASSIGNMENT TABLE; the
+# migrations creating them are the USER'S TO APPROVE, every time (security.md §7). *** WRITTEN AS A
+# CONDITION RATHER THAN AS A FACT, per 0043 §7a. *** This line read "the custom-role table does not
+# exist" and was false within hours — `0022_tenant_role.sql` creates all three.
+# 0043 §2d still binds and is unaffected by the file existing: NOTHING MAY REPORT CUSTOM ROLES AS
+# AVAILABLE until the creation route exists AND enforces all four D16 constraints, "each of which is
+# a test requirement rather than a comment".
+
+readThisFirst: "packages/contracts/core/tenant-admin/README.md"
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: tenant-admin
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+requestClass: tenant-admin
+
+# ---------------------------------------------------------------------------
+# THE VISIBILITY OBLIGATION — 0043 §5.6, and it is why this contract looks unusual
+# ---------------------------------------------------------------------------
+theGrantsAreVisible:
+  ruling: >-
+    EVERY ROLE THIS CONTRACT RETURNS CARRIES ITS EXACT PERMISSION LIST — complete, ordered, never
+    truncated and never summarised. Seed roles and custom roles alike.
+  why: >-
+    docs/decisions/0043 §5.6: "A role set a tenant cannot inspect is indistinguishable from an
+    arbitrary one, and under D16 the tenant is authoring roles against those grants — so visibility
+    stops being a courtesy and becomes an input to the tenant's own security decisions."
+  theCONSEQUENCEISTHATPERMISSIONIDSAREONTHEWIRETOCUSTOMERS: >-
+    *** THIS IS THE ONLY CONTRACT IN DUDO THAT DOES THAT, AND IT IS A DELIBERATE DISCLOSURE RATHER
+    THAN AN INCIDENTAL ONE. *** A tenant reads `core.user.deactivate` and `customers.customer.delete`
+    as strings. What that discloses is DUDO'S OWN PERMISSION VOCABULARY, which is published in
+    packages/contracts/registries/permission-catalog.yaml in a public repository — so it is not a
+    secret, and treating it as one would be security through a repository nobody can read anyway.
+    WHAT IT DOES NOT DISCLOSE: which permissions any OTHER tenant's roles hold, whether a permission
+    is granted anywhere, or any platform-scope permission. A tenant sees the ids IN ITS OWN ROLES,
+    and the composer offers only ids the CALLER holds — see theASSIGNMENTCEILING.
+  andTHECLIENTMUSTNOTINVENTFRIENDLYNAMESFORTHEM: >-
+    NORMATIVE, BINDING ON BOTH CLIENTS. A client may render a permission's `description` from the
+    catalogue alongside its id; IT MUST RENDER THE ID. A UI showing only "Can remove staff" hides
+    which grant is being made, and two permissions with similar descriptions become
+    indistinguishable on the screen where the tenant is composing authority. The id is the fact; a
+    description is a gloss on it.
+    *** AND NEITHER CLIENT MAY HARDCODE A PERMISSION LIST. *** The catalogue is the authority and it
+    grows; a client with its own copy shows a tenant a composer missing the permission they came
+    for, or worse, offers one that no longer exists. That copy is workflow.md §12's duplicated
+    constraint with a customer reading it.
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: "MULTITENANCY_STANDARD.md §2. A custom role belongs to exactly one Organization and is visible to no other."
+  model: "docs/decisions/0006 — one shared D1 database behind resolver indirection."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call."
+    - "NO organization_id in any shape, in any position. 0044 §3b.2 refuses such a route at REGISTRATION."
+    - >-
+      THE CUSTOM-ROLE TABLE IS TENANT-KEYED AND ITS NAME UNIQUENESS IS COMPOSITE, over
+      (organization_id, normalized_name). A unique index on the name alone makes one tenant's role
+      name refuse another tenant's — a cross-tenant collision presenting as a bug report about a
+      stranger, and it is the specific mistake a "role names must be unique" requirement invites.
+    - >-
+      *** ROLE ASSIGNMENT IS THE ONE OPERATION IN THIS DIRECTORY WITH TWO IDENTIFIERS FROM
+      DIFFERENT TABLES, AND BOTH MUST BE RESOLVED WITHIN THE AUTHENTICATED ORGANIZATION. *** A
+      composite check on one and a bare lookup on the other attaches this Organization's role to
+      another Organization's member, or the reverse. Neither identifier is safe alone: both are
+      unique platform-wide by generation, so both resolve.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, on every call. Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate. Failure -> unauthenticated."
+    - "2. Resolve the tenant from the authenticated context."
+    - "3. Authorize the declared permission, record-independently. Failure -> forbidden."
+    - "4. Validate the input schema. Failure -> invalid_argument."
+    - "5. Resolve every named role and principal WITHIN the authenticated Organization. Absent -> not_found."
+    - >-
+      6. Apply D16 constraint 1 — the ceiling. A permission in the resulting set that the CALLER
+      does not hold -> forbidden. THIS IS RECORD-DEPENDENT AND IT IS THE ONE PLACE IN THIS DIRECTORY
+      WHERE forbidden DEPENDS ON THE REQUEST, which is stated rather than left to be noticed. It
+      does not reopen the existence oracle, because the fact it depends on is the CALLER'S OWN
+      GRANTS and not the target's existence.
+    - "7. Apply the target rules — seed role, owner. failed_precondition."
+    - "8. Write the audit record into this Organization's own audit_event, then mutate."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found — on every operation taking an identifier."
+    ruling: >-
+      A role_id or principal_id not belonging to the authenticated Organization answers not_found,
+      identically whether it belongs to another Organization or to nothing.
+    aSEEDROLESIDENTIFIERISALSONOTFOUND: >-
+      Seed roles have NO role_id — they are an enum value on the membership row (0043 §3a). So a
+      caller passing 'owner' or a fabricated identifier for one receives not_found for the ordinary
+      reason rather than a special refusal, and THAT IS STRUCTURAL: there is no row to find, so
+      there is no branch to write correctly.
+
+  # -------------------------------------------------------------------------
+  # THE CEILING — D16 constraint 1, which is the whole safety argument for custom roles
+  # -------------------------------------------------------------------------
+  theASSIGNMENTCEILING:
+    theRule: >-
+      docs/decisions/0007 D16 constraint 1: "A CUSTOM ROLE MAY CONTAIN ONLY PERMISSIONS THE CREATING
+      PRINCIPAL ITSELF HOLDS. Creating a role is a grant." Accepted 2026-09-01.
+    whereItApplies: >-
+      create — every id in the set · update — every id in the RESULTING set, not the delta ·
+      set-membership-role — the tier's whole permission set · assign — the role's whole permission
+      set at the moment of assignment.
+    whyUPDATEISONTHERESULTINGSETANDNOTTHEDELTA: >-
+      A caller who may not grant `X` must not be able to EDIT a role that already holds `X` and
+      leave it in place. PRESERVING A GRANT IS THE SAME ACT AS MAKING ONE when the alternative is
+      removing it — and the delta reading would let a low-privilege editor rename a powerful role,
+      reshape everything else about it, and carry the one permission they could never have added.
+    whyITISFORBIDDENANDNOTINVALID_ARGUMENT: >-
+      The request is well-formed; the caller lacks the authority. AND THE REFUSAL MUST NOT NAME
+      WHICH PERMISSION WAS MISSING — that is an enumeration of the caller's own ceiling delivered
+      one probe at a time, and a composer UI does not need it: it should only ever offer ids the
+      caller holds, so a well-behaved client cannot produce this error at all.
+    whatIT_DOESNOTCOVER_ANDTHEGAPISREAL: >-
+      *** THE CEILING IS CHECKED AT WRITE TIME AND THE CALLER'S GRANTS CAN CHANGE AFTERWARDS. ***
+      A role created lawfully by a principal who is later demoted continues to hold permissions its
+      creator no longer has, and every member holding that role keeps them. D16's constraint is
+      about the ACT of creating, not a standing invariant over the role set.
+      THAT IS architecture.md §3a's "a fact can go stale between the mint and the write", one level
+      up: here it goes stale between the write and forever. It is not repairable by re-checking at
+      authorization time — the role's permissions authorize its HOLDERS, and its creator's current
+      grants are irrelevant to them.
+      RECORDED AS TR-1 RATHER THAN SOLVED. The candidate answer is a periodic reconciliation that
+      FLAGS rather than strips, because silently stripping authority from members because somebody
+      else was demoted is an outage with no visible cause.
+    theSCOPESINTERSECTION:
+      theRule: >-
+        D16 constraint 2 — "D6's intersection applies unchanged". A permission's declared `scopes`
+        bound the width a grant may be held at, and the intersection of the caller's scope with the
+        permission's declared scopes is what a custom role may carry.
+      status: >-
+        *** SPECIFIED AND UNENFORCED. THIS ENTRY SAID IT WAS "enforced at CREATION" AND THAT WAS A
+        CLAIM ABOUT CORE MADE WITHOUT OPENING THE FUNCTION THAT WOULD DO IT. ***
+        MEASURED: `clearRoleCeiling(store, organizationId, creatorPrincipalId, permissionIds:
+        readonly string[])` compares against `heldPermissions(): readonly string[]`. **Neither side
+        carries a scope.** Constraint 1 — WHICH permissions — is enforced. Constraint 2 — AT WHAT
+        WIDTH — is not enforced anywhere.
+      whyITISNOTAHEDGE: >-
+        `architecture.md` §3b: a precisely-worded dismissal is worse than silence, because a reviewer
+        reading *"enforced at creation"* correctly stops looking. **The port is unbuilt, so whoever
+        builds it will reach for `clearRoleCeiling`, pass ids, and the scope half will be silently
+        unchecked with a contract sentence saying it is not.** The sentence is corrected rather than
+        softened.
+      theCONCRETEESCALATION: >-
+        A caller holding `core.user.read` at `own` — reading only themselves — can put it in a custom
+        role at `organization`, and the write succeeds. **Assign that role and the holder reads every
+        member.** The permission id passes the ceiling because the caller does hold it; the width is
+        never compared.
+      whyTHECORPUSPROPERTYTHATUSEDTOCOVERTHISISGONE: >-
+        *** `authorization/roles.ts` ISSUES EVERY TENANT GRANT AT `organization` SCOPE, WITH NO
+        EXCEPTIONS. *** For the four seed roles there is no width to get wrong, which is why nothing
+        has needed this check. **`tenant_role_permission.scope` is NOT NULL and per-permission, so a
+        custom role is the first construct in Dudo where two grants of one permission can differ in
+        width — the property breaks BY DESIGN rather than by drift.** The collision arrives from the
+        role table, not from anything in the scope model, which is why nobody predicted it.
+      whatISOWED: >-
+        The ceiling compares (permission_id, scope) PAIRS against the caller's own pairs, and
+        `heldPermissions()` carries the width. **The instrument is core-agent's; the target is
+        recorded here as TR-6.** It applies to create, update, set-membership-role and — see
+        theRESTORECEILING — restore.
+      andCONSTRAINT_1_ISNOTAFFECTED: >-
+        Stated because the two are easy to collapse: WHICH permissions is checked and works. **Only
+        the width is open.** A reader must not conclude the ceiling is absent.
+    theENVELOPEIMPOSSIBILITY: >-
+      D16 constraint 3 — a tenant principal cannot put a platform-scope permission in a role —
+      FOLLOWS from constraints 1 and 2 rather than being a separate check, and 0043 §2a records that
+      this makes it stronger than the check it replaces: a tenant principal holds no platform
+      permission, so cannot include one. NO OPERATION HERE FILTERS platform-scope ids out of a list,
+      because none can reach one. A filter would be a second mechanism that could disagree with the
+      first, and the first cannot be forgotten.
+
+  theSEEDROLESARENOTEDITABLE:
+    ruling: >-
+      update and delete REFUSE a seed role with failed_precondition. No permission grants either,
+      and none may be created.
+    why: >-
+      The four seed roles are the platform's vocabulary (0043 §3) and their grants are decided by
+      the catalogue, not by a tenant. A tenant that could edit `member` would be redefining what
+      every other surface in Dudo means by the word — and `member`'s grants are already load-bearing
+      in Core's roles.ts.
+      *** IT IS failed_precondition RATHER THAN forbidden BECAUSE IT IS A PROPERTY OF THE TARGET. ***
+      Making it forbidden would make forbidden record-dependent for this case, and this contract
+      already has one record-dependent forbidden (the ceiling) — adding a second, on a different
+      axis, is how the distinction stops being reliable.
+    andWHATATENANTDOESINSTEAD: >-
+      Copy it. A tenant wanting "member, plus one thing" creates a custom role with member's
+      permission list and the extra id — WHICH THEY CAN ONLY DO IF THEY HOLD THE EXTRA ID
+      THEMSELVES. That is D16 working as designed, and it is why the seed lists are published in
+      full rather than summarised: the composer needs them as a starting point.
+
+  permissionRuling:
+    alreadyRegistered:
+      core.role.read: "read, scopes [organization, business], phase 1. Gates the listing and the single read."
+      core.role.create: "sensitive, scopes [organization], phase 1. Gates create."
+      core.role.update: "sensitive, scopes [organization], phase 1. Gates update AND delete — see below."
+      core.role.assign: "sensitive, scopes [organization, business, branch, team], phase 1. Gates assign and set-membership-role."
+      core.role.revoke: "sensitive, scopes [organization, business, branch, team], phase 1. Gates revoke."
+    proposedByThisContract: "NONE. All five exist, and this contract is the first thing to use any of them."
+    theRETIRERULING_WHICHISTHEONEJUDGEMENTCALLHERE:
+      supersedes: >-
+        *** THIS BLOCK ARGUED FOR A DELETE OPERATION UNTIL 2026-09-13. docs/decisions/0043 §7b row 3
+        REPLACED IT WITH RETIRE/RESTORE, AGAINST THIS CONTRACT. *** The reasoning below is kept
+        because its CONCLUSION survived the change of operation — one permission, no
+        core.role.delete — and because the argument it lost is worth reading beside the one that
+        won: a refusal is a rule someone can be talked out of; a lifecycle state is a fact the data
+        carries. Read tenant.roles.retire for what actually ships.
+        *** AND THE PERMISSION QUESTION SURVIVED THE REWRITE UNCHANGED, WHICH IS NOT LUCK: *** the
+        instrument is "would a grantor want editing without this", and the answer is no for both
+        deleting and retiring. **An argument that survives its subject being replaced was about the
+        right thing.**
+      ruling: >-
+        RETIREMENT AND RESTORATION ARE GATED ON core.role.update. No core.role.delete and no
+        core.role.retire is declared, and none is requested. THERE IS NO DELETE OPERATION AT ALL.
+      reasoning: >-
+        THE INSTRUMENT IS 0044 §3d's: would a grantor ever want to grant role EDITING without role
+        DELETION? The answer is no in the direction that matters, and the reason is that UPDATE IS
+        STRICTLY MORE POWERFUL THAN DELETE HERE. An editor can already empty a role of everything
+        except one harmless permission, which leaves every holder with no useful authority — the
+        same outcome as deletion, reached by a permission the grantor did give, and WITHOUT the
+        protection deletion carries.
+        DELETION IS THE MORE PROTECTED OPERATION OF THE TWO: a role held by any member is REFUSED,
+        so deletion cannot change anybody's authority at all, while update changes everybody's at
+        once. A separate `delete` permission would guard the weaker act.
+      theCOUNTERARGUMENT_STATEDBECAUSEITISNOTSILLY: >-
+        §3.2's splitting discipline says destructive acts get their own permission, and deletion is
+        destructive of a record. WHAT DEFEATS IT HERE IS THAT THE RECORD IS UNREFERENCED BY
+        CONSTRUCTION at the moment of deletion — the operation refuses while anyone holds it. So
+        the "destruction" removes a definition nothing depends on, and the audit record of its
+        existence survives.
+        TWO TRIGGERS REOPEN THE SPLIT, stated the way core.template.retire states its own: a role
+        acquiring history worth preserving after deletion, OR a deletion that cascades. IF DELETE
+        EVER CASCADES TO HOLDERS, IT NEEDS ITS OWN PERMISSION IMMEDIATELY — the cascade is what the
+        refusal currently prevents, and it is the entire basis of this ruling.
+    permissionsDeliberatelyNotDeclared:
+      - >-
+        core.role.delete — AND THERE IS NO DELETE OPERATION FOR IT TO GATE. A custom role is retired,
+        never removed, so its name stays spent for the Organization's lifetime. That is the trade
+        core.template.retire already made and its own entry names the two triggers that reopen it.
+      - "core.role.retire — retirement is gated on core.role.update. Ruled above; a separate name would be a split with no decision in it, because an editor can already reach the same outcome."
+      - "core.permission.list — the catalogue is PUBLIC (a public repository, architecture.md §8) and this contract publishes the ids a tenant's own roles hold. A permission gating the vocabulary would gate something anybody can read on GitHub, which is a control that looks like one and is not."
+
+  scopeRuling:
+    readOperations: organization
+    writeOperations: organization
+    reasoning: >-
+      EVERY OPERATION DECLARES `organization`, INCLUDING assign AND revoke, WHOSE PERMISSIONS ARE
+      DECLARED AT FOUR SCOPES. That is deliberate and it locks out business-, branch- and team-scope
+      holders of core.role.assign.
+      WHY: a custom role in this contract is an ORGANIZATION-scoped object — created by the
+      Organization, holding permissions bounded by the creator's organization-scope grants, and
+      assignable to any member. A business-scope principal assigning it would be granting
+      organization-wide authority from inside one Business.
+      A BUSINESS-SCOPED ASSIGNMENT SURFACE IS A REAL NEED AND IT IS A DIFFERENT OPERATION — TR-3 —
+      whose roles are themselves business-scoped. Those do not exist, and 0043 §1b is the reason
+      they are not modelled here: a role's `scope:` field has NO consumer in Core today, so
+      publishing business-scoped roles would be publishing a distinction nothing enforces.
+
+# ---------------------------------------------------------------------------
+# operations
+# ---------------------------------------------------------------------------
+operations:
+
+  - id: tenant.roles.list
+    title: "List the Organization's roles"
+    method: GET
+    path: "/organization/roles"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/listRolesInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/listRolesOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, internal, unavailable, timeout]
+    permission: core.role.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    freeTierImpact:
+      pageCap: 100
+      boundingIndex: "role, keyed (organization_id, name). THIS NAMES THE INDEX THE LISTING REQUIRES; read `0022_tenant_role.sql` for what it declares rather than trusting this line (0043 §7a). NOTE THE COLUMN IS `display_name` THERE AND `name` HERE — ruled in 0043 §7b: ALIGN ON `name`, BOTH SIDES. The four seed roles are not rows at all; they are the platform's own list, served without a query."
+      theSECONDBOUNDNOBODYDECLARED: >-
+        *** A PAGE OF 100 ROLES EACH CARRYING UP TO 200 PERMISSION IDS IS ~20,000 STRINGS, AND THAT
+        NUMBER IS THE PRODUCT OF TWO INDEPENDENTLY REASONABLE CAPS RATHER THAN A DECISION. *** The
+        response IS bounded, which is what 0044 §3c requires, and the bound is one nobody chose.
+        Recorded as TR-4 rather than silently accepted: 0044 §3c's requirement is satisfied and its
+        PURPOSE — that somebody has thought about the size of the answer — is only half met by an
+        arithmetic consequence.
+    notes: >-
+      SEED ROLES FIRST, IN AUTHORITY ORDER (owner, admin, business-admin, member), then custom roles
+      by name. The seed block's order is not alphabetical, deliberately: a permission screen listing
+      `admin` above `owner` misrepresents the ladder at a glance, and a tenant composing a role
+      reads this list as the vocabulary.
+      NOT AUDITED. Reading one's own Organization's role definitions is the member-reading-own-data
+      case 0044 §3c describes, and it discloses no personal data — unlike the invitation listing,
+      which is audited for exactly that reason. The asymmetry between the two is argued in both
+      places rather than inherited from either.
+
+  - id: tenant.roles.get
+    title: "Read one role"
+    method: GET
+    path: "/organization/roles/{role_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/getRoleInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/getRoleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: core.role.read
+    scope: organization
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    freeTierImpact:
+      pageCap: null
+      boundingIndex: "role PRIMARY KEY — a point lookup. A page cap is not the instrument for a single object; naming the index is what stops `null` reading as an absent bound (0044 §3c)."
+    notes: "Returns roleDetail, which adds provenance. A seed role returns created_by null and created_at null, which is the honest rendering of 'the platform made this'."
+
+  - id: tenant.roles.create
+    title: "Create a custom role"
+    method: POST
+    path: "/organization/roles"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/createRoleInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/createRoleOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, conflict, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.role.create
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 9
+    writes: >-
+      The role row and its permission rows (an estimate of 4 against a table that does not exist —
+      one row, one name index, plus the permission set) plus AUDIT_EVENT_ROW_WRITES (5) into the
+      tenant's own audit_event. RE-DERIVE THE FIRST TERM FROM THE MIGRATION; it is a guess with a
+      reason, not a measurement.
+    theAUDITRECORDCARRIESTHESET: >-
+      *** THE AUDIT RECORD MUST CONTAIN THE PERMISSION LIST, NOT A ROLE NAME. *** "Created role
+      'Bookkeeper'" is a record of nothing: the name says nothing about the authority granted, and
+      the role can be edited afterwards, so a later reader cannot reconstruct what was approved.
+      docs/decisions/0007 rule 9 requires privilege changes audited, and CREATING A ROLE IS A GRANT
+      (D16 constraint 1's own words) — so the grant is what the record must carry.
+    notes: >-
+      201. minItems 1 on `permissions`: a role granting nothing is a label somebody will assign
+      believing it does something. A name colliding with an existing role OR with a seed role name
+      is conflict. Every id must be registered (invalid_argument) and held by the caller
+      (forbidden) — two different failures with two different causes, not one message.
+
+  - id: tenant.roles.update
+    title: "Edit a custom role"
+    method: PATCH
+    path: "/organization/roles/{role_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/updateRoleInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/updateRoleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, conflict, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.role.update
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 9
+    writes: "As create: the role and its permission rows (4, estimated) plus AUDIT_EVENT_ROW_WRITES (5)."
+    theREPLACEMENTRULING: >-
+      `permissions` IS THE COMPLETE REPLACEMENT SET, NEVER A DELTA, and there is no add/remove pair.
+      A DELTA API OVER A PERMISSION SET IS A LOST-UPDATE HAZARD WITH A SECURITY CONSEQUENCE: two
+      administrators editing concurrently each apply their own delta and the role ends up holding
+      the union of two intentions neither approved. A replacement makes the last writer's intent the
+      whole answer, and makes the audit record a statement of what the role now IS rather than a
+      diff against a state nobody can reconstruct.
+    theREACHISWIDERTHANCREATE_ANDTHERUNGDOESNOTSAYSO: >-
+      *** AN UPDATE CHANGES THE AUTHORITY OF EVERY MEMBER ALREADY HOLDING THE ROLE, IN ONE CALL,
+      WITH NO PER-MEMBER RECORD. *** A create reaches nobody until something is assigned. That is
+      exactly core.template.update's argument for being `sensitive` with "STRICTLY MORE REACH THAN
+      CREATE", and here the thing being reached is authority rather than a label.
+      IT IS STILL `sensitive` AND NOT `critical`, on docs/decisions/0026's ladder — nothing is
+      destroyed, no money moves, and a wrong value is corrected by the same route that set it. But
+      the asymmetry with create is real and is recorded rather than absorbed, because the rung is
+      read from the PERMISSION and both operations sit under different permissions of the same rung.
+    notes: >-
+      A SEED ROLE IS failed_precondition, not forbidden — a property of the target. At least one of
+      `name` and `permissions` must be present; a request naming only role_id is invalid_argument
+      rather than a no-op that writes an audit record. D16 constraint 1 applies to the RESULTING
+      set, so a caller may not preserve a permission they could not have added.
+
+  - id: tenant.roles.retire
+    title: "Retire a custom role"
+    method: POST
+    path: "/organization/roles/{role_id}/retire"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleLifecycleInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleLifecycleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.role.update
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "One row updated in `tenant_role` (2) plus AUDIT_EVENT_ROW_WRITES (5) into the tenant's own audit_event. Re-derive the first term from 0022's columns and indexes."
+    thisREPLACEDADELETEANDTHEREPLACEMENTWENTAGAINSTTHISCONTRACT: >-
+      *** THIS OPERATION WAS `tenant.roles.delete` UNTIL 2026-09-13 — a DELETE refused while any
+      member held the role, with a long argument that refusing beats cascading. docs/decisions/0043
+      §7b row 3 ruled against it and the reason is better than the ruling: A REFUSAL IS A RULE
+      SOMEONE CAN BE TALKED OUT OF; A LIFECYCLE STATE IS A FACT THE DATA CARRIES. ***
+      The old argument was right about the HAZARD — a cascade would strip authority from every
+      holder in one un-reviewable act, with none of them named in the request or its single audit
+      record — and wrong about the INSTRUMENT. Retirement removes the hazard by construction: a
+      retired role is still held and still authorizes, so there is nothing to cascade.
+    whatRETIREMENTDOESNOTDO: >-
+      *** IT DOES NOT REVOKE ANYTHING. EXISTING HOLDERS KEEP THE ROLE AND KEEP ITS PERMISSIONS. ***
+      Retirement blocks NEW assignment only, exactly as core.template.retire blocks new adoption.
+      A CLIENT RENDERING `retired` AS "nobody has this any more" WOULD STATE THE OPPOSITE OF WHAT IS
+      TRUE, on the screen where a tenant is reasoning about who can do what. Withdrawing a person's
+      authority is tenant.roles.revoke, one member at a time, each writing its own record — which is
+      the same deliberate, per-member act the old no-cascade refusal was protecting, now reached by
+      a route that exists rather than by an operation that fails.
+    whyITSTILLSHARES core.role.update: >-
+      Unchanged from the delete ruling and it survives the rewrite: would a grantor ever want to
+      grant role EDITING without role RETIREMENT? No — an editor can already empty a role of
+      everything useful, which reaches the same outcome through a permission the grantor did give.
+      RETIREMENT IS NOW THE WEAKER OF THE TWO rather than merely the more protected one: update
+      changes what every holder can do, retirement changes nothing for any holder.
+      THE TRIGGER THAT REOPENS THE SPLIT HAS CHANGED WITH THE OPERATION, AND THE OLD ONE IS SPENT:
+      it was "if delete ever cascades". It is now "if retirement ever revokes".
+    notes: "Requires status `active`; every other value is failed_precondition. A seed role is failed_precondition — no permission grants it, so it is a property of the target. Idempotent in effect: retiring a retired role is refused rather than silently succeeding, because unlike a status toggle there is a distinct restore operation and a caller reaching this one has a wrong belief worth telling them about."
+
+  - id: tenant.roles.restore
+    title: "Restore a retired role"
+    method: POST
+    path: "/organization/roles/{role_id}/restore"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleLifecycleInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleLifecycleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.role.update
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "As retire: one row updated in `tenant_role` (2) plus AUDIT_EVENT_ROW_WRITES (5)."
+    theRESTORECEILING: >-
+      *** RESTORE APPLIES D16 CONSTRAINT 1 TO THE ROLE'S WHOLE PERMISSION SET. ADDED 2026-09-13 ON
+      security-agent's FINDING, WHICH NAMED THE RIGHT HAZARD THROUGH A MECHANISM THAT DOES NOT HOLD
+      — AND BOTH HALVES ARE WORTH RECORDING. ***
+      WHAT IT SAID: *"restore RE-CONFERS the role's whole permission set on every member holding it,
+      and carries no permission list for a ceiling to key on."*
+      *** THE MECHANISM IS WRONG ON THIS CONTRACT'S OWN SEMANTICS, AND THE ERROR IS MINE TO HAVE
+      INVITED: retirement does not withdraw anything. *** A retired role is still held and still
+      authorizes — this contract says so twice and a client is forbidden from rendering `retired` as
+      "nobody has this any more". **So no holder ever loses the permissions, and restore re-confers
+      nothing to anybody.** The finding read `retire`/`restore` as the reduce/re-confer pair the
+      names suggest, which is exactly how those names read.
+      *** AND THE HAZARD IS REAL ANYWAY, THROUGH A DIFFERENT PATH. *** Restore makes a role
+      ASSIGNABLE again, and nothing re-examines whether the restorer could have created it. An
+      administrator who authored a powerful role, was then demoted, and restores it has **made
+      available to others a role they could no longer create** — not a grant, but the precondition
+      for one, performed by somebody the ceiling would now refuse.
+      SO THE CEILING APPLIES TO RESTORE. It costs nothing — the role's permission set is readable —
+      and it closes "make available what you could not create". **`assign` still carries its own
+      ceiling; this is not a substitute for it, it is the earlier gate.**
+      *** WHAT THIS DOES NOT CHANGE: retire and restore keep ONE permission and ONE input shape. ***
+      The split test is *would a grantor want editing without this*, and the answer is still no in
+      both directions — see below. **A finding that a shared shape hides an asymmetry is answered by
+      making the asymmetry explicit, not by splitting the shape**; the two operations differ in what
+      they CHECK, and they now do, while continuing to differ in nothing else.
+      AND IT IS THE ONLY PLACE IN THIS CONTRACT WHERE A CEILING KEYS ON A SET THE REQUEST DOES NOT
+      CARRY. create and update key on `permissions` in the body; assign keys on the named role's set;
+      **restore keys on a set the caller never names**, which is why nobody looked for it. TR-7.
+    whyONEPERMISSIONGATESBOTHDIRECTIONS: >-
+      core.template.retire's merge, and the test it depends on holds here: RESTORING A ROLE GRANTS
+      NOBODY ANYTHING THEY DID NOT ALREADY HOLD. A retired role's holders kept it throughout, so
+      restoring returns it to assignability and changes no principal's authority.
+      *** THAT IS THE SAME TEST THAT MADE core.user.reactivate A SEPARATE PERMISSION AND IT COMES OUT
+      THE OTHER WAY HERE, WHICH IS WHY IT IS WORTH STATING RATHER THAN COPYING. *** Reactivating a
+      MEMBER returns a live credential-holding identity to the tenant's data; restoring a ROLE
+      returns a definition to a list. The recovery half is harmless here and is not there.
+      TWO TRIGGERS REOPEN THE SPLIT, on core.template.retire's own terms: a retirement carrying a
+      reason that must not be undone, OR a responder role needing recovery without withdrawal.
+    notes: >-
+      Requires status `retired`; every other value is failed_precondition. A SEED ROLE IS
+      failed_precondition.
+      *** THE D16 CEILING APPLIES — CORRECTED 2026-09-13. *** This note previously read "restoring is
+      not a re-grant and the ceiling check does not re-run", which is true about HOLDERS and misses
+      the path that matters: restore makes the role ASSIGNABLE, and a restorer who could not now
+      create it would be making available to others what the ceiling would refuse them. **The
+      refusal is forbidden, and it must not name which permission was missing** — that is an
+      enumeration of the caller's own ceiling, one probe at a time.
+      SEE theRESTORECEILING for why the finding that produced this was right in its target and wrong
+      in its stated mechanism, and why both halves are recorded.
+
+  - id: tenant.roles.assign
+    title: "Grant a custom role to a member"
+    method: POST
+    path: "/organization/roles/{role_id}/members/{principal_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleAssignmentInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleAssignmentOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.role.assign
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "The assignment row (2) plus AUDIT_EVENT_ROW_WRITES (5)."
+    notes: >-
+      ONE ROLE, ONE MEMBER. Not a batch: a batch of authority changes in one audit record makes
+      "who was granted what, and when" unanswerable per person.
+      THE CEILING APPLIES TO THE ROLE'S WHOLE PERMISSION SET at the moment of assignment — a caller
+      may not grant a role holding more than they hold, which is D16 constraint 1 read through the
+      role rather than through the id list. forbidden.
+      IDEMPOTENT: assigning a role a member already holds succeeds, changes nothing and writes no
+      audit record. A retry must not manufacture a second privilege-change event.
+      THE RESPONSE IS THE MEMBER'S SEAT, not the role. What changed is the member's authority, and
+      returning the seat means a client re-renders the person rather than reasoning about which of
+      two objects moved.
+      *** A MEMBER WHO IS SUSPENDED CAN STILL BE ASSIGNED A ROLE, AND THAT IS DELIBERATE. ***
+      Refusing would make role administration depend on a status that is about access rather than
+      about configuration, and an administrator preparing a returning employee's roles before
+      reactivating them is the ordinary case.
+      THE OWNER IS A VALID TARGET HERE, unlike in tenant-members-v1. Adding a custom role to the
+      owner grants them nothing they lack — the owner holds everything — so the target rule that
+      protects the owner from LOSING authority does not reach an operation that only adds. Stated
+      because the uniform-rule instinct is the wrong one here, and an unexplained exception is the
+      thing somebody later "fixes".
+
+  - id: tenant.roles.revoke
+    title: "Revoke a custom role from a member"
+    method: DELETE
+    path: "/organization/roles/{role_id}/members/{principal_id}"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleAssignmentInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/roleAssignmentOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.role.revoke
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "The assignment row removed (2) plus AUDIT_EVENT_ROW_WRITES (5)."
+    notes: >-
+      SEPARATE FROM assign, AND THE CATALOGUE ALREADY SPLIT THEM — core.role.assign and
+      core.role.revoke are two entries. §3.2's grant/revoke discipline, and the separation buys the
+      same thing core.principal.revoke-platform-scope buys: a responder who can strip a role at 3am
+      without being able to hand one out.
+      NO CEILING CHECK. Revoking reduces authority and cannot escalate, so D16 constraint 1 does not
+      apply — a caller may revoke a role holding permissions they do not themselves hold. THAT IS
+      DELIBERATE AND IT IS THE FAIL-CLOSED DIRECTION: the alternative would mean a powerful role,
+      once granted, could only be revoked by someone equally powerful, which is exactly the
+      situation where you most want a less privileged person to be able to act.
+      IDEMPOTENT: revoking a role the member does not hold succeeds and writes nothing.
+      *** REVOCATION TAKES EFFECT ON THE MEMBER'S NEXT CALL, NOT IMMEDIATELY, AND THE DIFFERENCE
+      MATTERS. *** The catalogue says so — core.role.revoke: "Effective on the principal's next
+      call" — and 0007's own rule is that no decision is cached beyond its scope. A client must not
+      tell an administrator that access has been revoked "now" if an in-flight request may still
+      complete under the old grant. Recorded as TR-2 because nothing in this repository has measured
+      where authorization decisions are cached.
+
+  - id: tenant.roles.set-membership-role
+    title: "Change a member's role tier"
+    method: PUT
+    path: "/organization/members/{principal_id}/membership-role"
+    request: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/setMembershipRoleInput" }
+    response: { schemaRef: "urn:dudo:schema:tenant-roles:1#/$defs/setMembershipRoleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.membership.set-role
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 7
+    writes: "ORGANIZATION_MEMBERSHIP_ROW_WRITES (2, control plane) plus AUDIT_EVENT_ROW_WRITES (5, the tenant's own). Two ledgers refusing independently."
+    theSPLITOFFcoreRoleAssign_SECURITYAGENT_HIGH2: >-
+      *** THIS OPERATION DECLARED core.role.assign UNTIL 2026-09-13 AND security-agent RATED THE
+      COMBINATION HIGH. *** One permission was gating two different acts: granting a CUSTOM ROLE, and
+      changing a member's TIER.
+      THE ATTACK, ENTIRELY WITHIN THE RULES AS THIS CONTRACT WROTE THEM: `business-admin` holds
+      core.role.assign; roles.ts issues every tenant grant at `organization` scope, so it satisfied
+      this operation's organization-scope evaluation; the D16 ceiling bounds WHICH tier may be set
+      and says nothing about WHOSE; and setting a target to `business-admin` passes the ceiling
+      trivially because the set is the caller's own. **The owner is refused. AN `admin` IS NOT** — so
+      a business-admin could demote every `admin`, unilaterally.
+      *** WHAT I GOT WRONG WAS NOT THE TARGET RULE, WHICH IS WHY MY OWN REVIEW WOULD NOT HAVE FOUND
+      IT. *** This contract reasoned carefully about the owner as a target and about the ceiling as a
+      bound on the tier. **Both were right. The gap was between them: the ceiling bounds the VALUE
+      and the target rule bounds ONE PERSON, and nothing bounded the SET OF PEOPLE in between.**
+      *** ⚠ THIS PARAGRAPH SAID THE SCOPE DECLARATION MAKES THE PERMISSION "UNHOLDABLE by a
+      business- or branch-scope role rather than merely ungranted", AND THAT "a placement can be
+      widened later by somebody who does not read this paragraph; a declared scope cannot." BOTH
+      SENTENCES ARE FALSE. CORRECTED 2026-09-13 against docs/decisions/0043 §1b. ***
+      `holdsAtOrAbove` calls `implies(grant.scope, actionScope)` — **the GRANT's scope against the
+      ACTION's, both runtime values. The declared `scopes:` list is not an input and Core never reads
+      the catalogue.** A `business-admin` holding this permission would be evaluated at
+      `organization`, because `organizationGrant()` issues every tenant grant there, and would be
+      ALLOWED.
+      *** SO THE SPLIT IS PROTECTED BY THE PERMISSION NOT BEING IN business-admin's LIST — A
+      TRANSCRIPTION DISCIPLINE, WHICH IS THE THING I CLAIMED IT ESCAPED. *** The declared scope is a
+      reviewable line, not a mechanism, and it is exactly as widenable as a placement.
+      **WHAT THE SPLIT STILL BUYS, UNCHANGED:** one permission gating two acts of different blast
+      radius was invisible; two permissions make the dangerous one a line somebody must deliberately
+      add. **That is worth having. It is not the structural guarantee this paragraph asserted**, and
+      the difference matters to a reviewer deciding how hard to look at role composition.
+      AND IT IS THE SECOND TIME IN ONE DAY I ASSERTED A SCOPE DECLARATION HAD MECHANICAL FORCE — the
+      first was `core.session.list`, where the claim was that `[organization, own]` made it
+      unholdable by a business-scope role and `implies('business','own')` is true. **Different
+      permission, different wrong mechanism, same shape: reasoning about the catalogue as though
+      Core executed it.** `0043` §1b now records that NEITHER field is executed — a role's `scope:`
+      has no consumer and a permission's `scopes:` has none either.
+      AND THE SPLIT DOES NOT TAKE core.role.assign FROM `business-admin` — assigning a custom role
+      within a Business is legitimate work, and the repair that removed it would close this hole by
+      deleting a different capability.
+    whyITLIVESINTHISCONTRACTANDNOTINtenantMembers: >-
+      IT ACTS ON A MEMBERSHIP ROW AND IT IS A ROLE ASSIGNMENT, so either home is arguable and the
+      choice needs a reason rather than a preference. IT IS HERE BECAUSE THE PERMISSION DECIDES:
+      core.role.assign gates it, and a contract whose operations are gated by a permission family
+      it does not otherwise use is a contract that has acquired an operation by adjacency.
+      tenant-members-v1 is about WHO IS A MEMBER; this is about WHAT THEY MAY DO.
+    theOWNERVALUEISREFUSED: >-
+      *** 'owner' IS invalid_argument, AND THIS IS THE MOST IMPORTANT REFUSAL IN THE CONTRACT. ***
+      Ownership is singular (0043 §3c) and is acquired by TRANSFER — core.organization.transfer-ownership,
+      `critical`, carrying a confirmation by 0007 D15, published by
+      packages/contracts/core/tenant-admin/tenant-lifecycle-v1 as tenant.organization.transfer-ownership.
+      IF THIS ROUTE COULD SET 'owner' IT WOULD BE A TRANSFER PERFORMED UNDER A `sensitive`
+      PERMISSION: the strong-confirmation requirement the milestone brief asks for, routed around by
+      a field value.
+      *** THIS PARAGRAPH SAID TRANSFER WAS "in NEITHER this contract nor this directory" AND THAT WENT
+      FALSE AT 12:10, BY MY OWN HAND, WHEN tenant-lifecycle-v1 LANDED IN THIS DIRECTORY DECLARING IT.
+      *** The refusal's MERITS are untouched — transfer does carry the strong gate, which is the whole
+      argument — and only the LOCATIONAL claim rotted. It is corrected rather than struck because
+      this is the load-bearing paragraph of the most important refusal in this contract, and A READER
+      WHO CHECKS A CLAIM, FINDS IT FALSE, AND CANNOT TELL WHICH HALF WAS WRONG WILL DISTRUST THE
+      ARGUMENT IT SUPPORTS. An hour, one author, two files (workflow.md §12).
+      THAT IS THE PRECISE SHAPE template-lifecycle-v1 REFUSED — "NOT its status: retirement is
+      core.template.retire, and there is no `status` field in any request shape… so this permission
+      cannot perform that one through a field." Same defect, higher stakes.
+      AND THE DATABASE WOULD REFUSE IT ANYWAY, which is the backstop rather than the control: the
+      partial unique index permits exactly one owner per Organization, so the request would fail
+      AFTER passing authorization — architecture.md §3a's ranking, where the in-statement guard is
+      the layer with no window and the contract's refusal is the layer that stops it being reached.
+    theOWNERISNOTAVALIDTARGET: >-
+      failed_precondition. Demoting the current owner is the same act from the other side, and
+      tenant-members-v1's theOWNERISNOTAVALIDTARGET states the rule as a property of the TARGET for
+      exactly this reason — so it binds an operation in a different contract without being restated
+      as a second, driftable copy.
+    notes: >-
+      PUT, because it sets a value rather than creating a resource, and the value is total. D16
+      constraint 1 applies to the tier's whole permission set. Idempotent: setting the tier a member
+      already holds succeeds and writes nothing.
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  thisContractRequiresThreeRoleTables: >-
+    *** STATED AS A CONDITION, NOT AS A FACT — 0043 §7a. *** This entry read "the custom-role tables
+    do not exist" and `0022_tenant_role.sql` creates all three.
+    THE CONDITION, TRUE ON BOTH SIDES OF THAT: a `role` table, a role-permission table and a
+    role-assignment table are required; the migrations are the USER'S to approve, every time
+    (security.md §7); and 0043 §2d's bar is unmoved — nothing may report custom roles as available
+    until the creation route exists AND enforces all four D16 constraints.
+    *** THREE DIVERGENCES FROM `0022`, RULED IN 0043 §7b, AND TWO GO AGAINST THIS CONTRACT: ***
+    ROLE LIFECYCLE — Core carries `status IN ('active','retired')`; this contract carried DELETE
+    refused-while-held and no status. **CORE WINS, and the reason is better than the ruling: a
+    refusal is a rule someone can be talked out of, a lifecycle state is a fact the data carries.**
+    This contract's tenant.roles.delete and its no-cascade argument are therefore SUPERSEDED and owe
+    a rewrite to retire/restore on the core.template.retire pattern — NOT YET DONE, and named here
+    rather than left as a silent contradiction between an operation and its own dependency block.
+    PER-PERMISSION `scope` — CLOSED 2026-09-13. `tenant_role_permission.scope` is NOT NULL with a
+    CHECK admitting six values and refusing `platform`; this contract omitted the field, arguing from
+    0043 §1b that a role's scope has no consumer. **§1b is about the scope of a ROLE; that column is
+    the scope of a GRANT — D6's intersection, which `holdsAtOrAbove` reads.** A correct ruling
+    applied to the wrong axis. `permissions` is now an array of `rolePermissionGrant`
+    ({permission_id, scope}) on the summary, the detail, create and update.
+    `name` VERSUS `display_name` — ALIGN ON `name`, BOTH SIDES. This contract already says `name`;
+    the change is Core's, and nothing here moved.
+
+  theSEEDROLEVOCABULARYHASALREADYLANDEDINCORE:
+    measured: >-
+      *** OPENED AND READ 2026-09-13, NOT CITED: platform/core/authorization/roles.ts DECLARES
+      `export type MembershipRole = 'owner' | 'admin' | 'business-admin' | 'member';` AND
+      control-plane/0018_membership_role_admin.sql WIDENS THE CHECK TO THE SAME FOUR. *** So the
+      vocabulary this contract publishes and the vocabulary Core enforces AGREE, today, and this is
+      not a dependency at all.
+    theCORRECTIONISTHEPARTWORTHKEEPING: >-
+      *** THIS ENTRY FIRST READ "MEASURED: roles.ts:65 DECLARES MembershipRole = 'owner' | 'member'"
+      AND EVERY WORD OF THAT WAS WRONG EXCEPT THE FILE NAME. *** It was not measured — it was
+      transcribed from docs/decisions/0043 §1, which HAD measured it, correctly, hours earlier the
+      same day. `core-agent` landed the widening in between.
+      TWO SEPARATE DEFECTS IN ONE SENTENCE, AND BOTH ARE IN THE RULES ALREADY:
+        architecture.md §3c — a comment asserting what a file says is a claim about that file, and
+        the word "MEASURED" made it a claim about an act nobody performed. A citation dressed as a
+        measurement is worse than a citation, because it tells the next reader the file was opened.
+        architecture.md §3c's line-number clause — the record said line 65 and the symbol is at 122.
+        A LINE NUMBER IS NOT AN IDENTIFIER, and here the line moved for an unrelated reason while
+        the symbol stayed; quoting the symbol is what survived.
+      AND THE GENERAL FORM, WHICH IS THE ONE THIS PASS KEEPS MEETING: an ACCEPTED decision record is
+      a measurement WITH A TIMESTAMP. 0043 was accepted today and one of its measured facts was
+      stale within hours, because this milestone is being built by several agents at once. In a tree
+      three agents are writing, A RECORD'S MEASUREMENTS ARE EVIDENCE ABOUT THE MOMENT IT WAS
+      WRITTEN — workflow.md §2a's "state a number as what X handed over at time T", applied to a
+      decision record rather than to a suite run.
+    whatREMAINSADEPENDENCY: >-
+      The MIGRATION, not the type. 0018 rebuilds `organization_membership` and a migration is the
+      user's, every time (security.md §7). Until it is applied, a write of 'admin' or
+      'business-admin' fails at the old CHECK.
+      THE FAILURE DIRECTION IS SAFE IN BOTH ORDERINGS and 0043 §3a says why: `toMembershipRole`
+      returns null for an unrecognised stored string, which denies everything — so a DATABASE ahead
+      of a deployment fails closed, and a DEPLOYMENT ahead of the database fails at the CHECK rather
+      than storing a value nothing recognises.
+
+  thereIsNoAuditedPathForAROLECHANGE_ANDTHISMILESTONEMAKESITLIVE: >-
+    0043 §7: "There is still no audited path for a role or permission change (0018, 0019,
+    roles.ts:135). THIS MILESTONE MAKES ROLE ASSIGNMENT A PRODUCT FEATURE, WHICH TURNS THAT GAP FROM
+    A RECORDED DEBT INTO A LIVE ONE — role assignment is precisely the privilege change 0007 rule 9
+    requires audited. It is closed inside this milestone, not carried past it."
+    *** EVERY MUTATING OPERATION IN THIS CONTRACT DECLARES audit: required, WHICH IS THE CONTRACT'S
+    HALF AND IS NOT THE CLOSURE. *** The path that writes the record is Core's, and the declaration
+    is a requirement on it rather than evidence it exists.
+
+  noRouteInThisClassIsREGISTEREDYET: >-
+    MEASURED 2026-09-13: `platform/core/tenant-admin/` holds seven modules and NO ROUTE ID LITERAL.
+    Machinery under construction, registry empty. Full measurement in tenant-members-v1 ->
+    dependencies rather than restated here.
+
+  theCatalogueIsTheAUTHORITYFORTHEPERMISSIONVOCABULARY: >-
+    Neither client may hardcode a permission list and Core may not either. The composer's options
+    are derived from packages/contracts/registries/permission-catalog.yaml intersected with the
+    caller's own grants. NOTHING IN THIS REPOSITORY PARSES THAT FILE AT RUNTIME TODAY, so the
+    derivation is a Core dependency and not a contract one — and a hand-transcribed copy in Core
+    would be the same duplicated constraint one layer down.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    THREE NEW TABLES — role, role_permission, role_assignment — plus a composite unique index on
+    (organization_id, normalized_name). ALL THE USER'S TO APPROVE. Growth is bounded by the number
+    of roles a tenant creates times the permissions in each, which is small, and by assignments,
+    which is members times roles.
+  reads: "Both reads declare a bound as a field. The listing's cap is 100 roles; the single read is a point lookup."
+  writes: >-
+    Every mutation costs its rows plus AUDIT_EVENT_ROW_WRITES (5) against the tenant's own budget.
+    THE ROLE-TABLE TERMS ARE ESTIMATES AGAINST TABLES THAT DO NOT EXIST and must be re-derived from
+    the migrations rather than trusted from here.
+  theCEILINGTHISCLASSDOESNOTINHERIT: "0044 §3c — no accidental read bound, so every read declares its own."
+  whatIsNOTBOUNDED: >-
+    THE PRODUCT OF THE TWO CAPS ON tenant.roles.list — 100 roles times 200 permission ids. Bounded,
+    and at a number nobody chose. TR-4.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: TR-1
+    question: >-
+      D16 constraint 1 is checked at WRITE TIME. A role created lawfully by a principal who is later
+      demoted keeps permissions its creator no longer holds, and so does every member holding it.
+    recommendation: >-
+      A periodic reconciliation that FLAGS rather than strips. Silently removing authority from
+      members because a third party was demoted is an outage with no visible cause. Not solvable at
+      authorization time: the role authorizes its HOLDERS, and its creator's current grants are
+      irrelevant to them.
+    status: open
+
+  - id: TR-2
+    question: "core.role.revoke is 'effective on the principal's next call'. Where, if anywhere, are authorization decisions cached, and can an in-flight request complete under a revoked grant?"
+    recommendation: "core-agent measures it. 0007's rule is that no decision is cached beyond its scope; nothing in this repository has verified where that holds. A client must not tell an administrator access is revoked 'now' until the answer is known."
+    status: "OPEN — a client-facing claim depends on it."
+
+  - id: TR-3
+    question: "Business-scoped roles and a business-scoped assignment surface."
+    recommendation: "Deferred, and 0043 §1b is why: a role's `scope:` field has NO consumer in Core today, so publishing business-scoped roles would publish a distinction nothing enforces. It needs the scope field to mean something first."
+    status: open
+
+  - id: TR-4
+    question: "tenant.roles.list is bounded at 100 roles x 200 permission ids — a response size that is the product of two independently chosen caps rather than a decision."
+    recommendation: "Either a smaller role cap on the listing, or permission lists only on the single read. 0044 §3c's requirement is met; its purpose is only half met by an arithmetic consequence."
+    status: open
+
+  - id: TR-5
+    question: >-
+      Should the seed roles' permission lists be served from the catalogue, or from Core's roles.ts?
+      They are two copies of one fact today and they have already disagreed — the catalogue's
+      business-owner list and roles.ts's grants are maintained separately.
+    recommendation: >-
+      One authority, and registry-coherence.ts already asserts a version of this for platform-admin.
+      Deriving from the catalogue is right in principle; the catalogue is not parsed at runtime, so
+      the practical answer is a generated constant with an equality assertion — never a second
+      hand-maintained list.
+    status: open

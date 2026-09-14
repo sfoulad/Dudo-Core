@@ -92,6 +92,44 @@ sense if ownership is singular and precious.** Both requirements point at the sa
 > — **or the constraint is enforced where the grant is WRITTEN, which is where D16 constraint 1 also
 > belongs. They may be one mechanism.** The tenant half of `registry-coherence.ts` is the cheap
 > interim and is commissioned.
+>
+> ### ⚠ AND IT RECURRED TWICE MORE THE SAME DAY, AFTER THIS CORRECTION WAS WRITTEN, BOTH TIMES WITH THE TEAM LEAD ENDORSING IT
+>
+> **This section exists because two agents built on a false claim about `scopes:`. Recording the two
+> further instances, because a corrected claim that keeps being re-derived is a different problem
+> from a claim that was wrong once.**
+>
+> | | the assertion | why it is false |
+> |---|---|---|
+> | **`core.session.list`** | *"`[organization, own]` makes it UNHOLDABLE by a business-scope role"* | **`implies('business','own')` is TRUE.** A `business-admin` may hold it at `own`. What it cannot satisfy is the ROUTE, which needs `organization` — **a fact about the route, not the permission** |
+> | **`core.membership.set-role`** | *"`scopes: [organization]` makes it UNHOLDABLE — not ungranted"* and *"a placement can be widened later; a declared scope cannot"* | **Both false, for THIS SECTION'S reason.** Core never reads the catalogue. Nothing stops the permission being added to a business-scope role's list |
+>
+> **THE TEAM LEAD ASSERTED THE FIRST AND EXPLICITLY ENDORSED THE SECOND** — *"that permission IS
+> unholdable"* — **after this correction was already in this record.** `architecture-agent` corrected
+> the first when told and found the second itself, naming the class: ***"reasoning about the
+> catalogue as though Core executed it."***
+>
+> > **THE RECURRENCE HAS A CAUSE AND IT IS NOT CARELESSNESS: `scopes:` LOOKS EXECUTABLE.** It is a
+> > machine-readable field, in a register, spelling out a constraint in the vocabulary of a real
+> > runtime function — **and `workflow.md` §12 is explicit that a machine-readable constraint
+> > INSTRUCTS where prose describes.** So every reader correctly treats it as more binding than a
+> > comment, **and it is enforced by nothing.**
+>
+> **The general form, and it is the durable half:**
+>
+> > ### **A DECLARATION IN `packages/contracts/**` ENFORCES NOTHING UNTIL SOMETHING IN `platform/core/**` READS IT — AND THE ONLY WAY TO KNOW WHICH IS TO GREP CORE FOR THE FIELD.**
+>
+> **One command, and it is the same command every time:** does any file under `platform/core/**` read
+> this field? **`scopes:` — no. `enumPolicy` — no, the generator reads it. `exposure` — open at the
+> time of writing and routed to `core-agent`.** *(`workflow.md` §12's three-state table: **stated**,
+> **expressed in a machine-readable form**, **actually executed on the live path** — and the second
+> column has now passed for the third three times in one day, in one repository, on three different
+> fields.)*
+>
+> **What the split still buys, said plainly so the correction does not read as a withdrawal:** one
+> permission gating two acts of very different blast radius was **invisible**; two permissions make
+> the dangerous one **a line somebody must deliberately add.** **That is real and it is discipline.
+> What is gone is the claim that nobody CAN add it.**
 
 ~~A permission's `scopes:` is **the width a grant may be held at**, and `holdsAtOrAbove` reads it.~~ A
 role entry's `scope:` has **no consumer anywhere** — `roles.ts` grants every tenant permission at
@@ -378,6 +416,36 @@ it belongs in the usage contract.**
    > record and `0044` was the precise one; this clause is corrected rather than the contracts.**
 
    ### 5.4a. `tenant.invitations.pending-count` — RULED, because it is the one §4 singled out
+
+   > #### ⚠ SUPERSEDED IN OUTCOME, NOT IN REASONING. 2026-09-13. THE OPERATION IS NOW `audit: required`.
+   >
+   > **The ruling below stands as reasoning and no longer describes the contract.** It rested on
+   > `0044` §3c's licensing clause — **and that clause has been amended, because on its own words it
+   > licensed none of the three exemptions built on it, and because `API_STANDARD.md` §1 says `audit`
+   > is *mandatory* for `sensitive` and `critical` with no "unless".**
+   >
+   > **The argument that actually overturned this one was in this record's own footnote:**
+   > `security.md` §2a's answer for a longitudinal shape is one sentence — ***the permission is the
+   > control and the audit trail is the detection*** — and this operation **had the permission control,
+   > argued at length, and no detection at all.** *"A daily ceiling does not stop one call a day for a
+   > year; only legibility in the trail does."*
+   >
+   > **THE EXEMPTION LIST IS NOW EMPTY AND §5.4 IS UNCONDITIONAL — which is what §5.4 said before any
+   > exemption existed.**
+   >
+   > **What is NOT withdrawn, and `qa-agent` was right to insist on the distinction: the reasoning
+   > below.** It is still what would apply if this operation ever returned to `audit: false`, **and
+   > the conditional machinery in the suite is kept, because it costs nothing over an empty list and
+   > it is the mechanism this section depends on.** *The contract changed; the ruling did not.*
+   >
+   > **AND IT WAS CAUGHT BY THE PIN'S SECOND DIRECTION, WHICH EXISTS FOR EXACTLY THIS:**
+   >
+   > > **The first direction catches an unaudited sensitive route nobody excused. The second catches
+   > > AN EXCUSE THAT HAS OUTLIVED WHAT IT EXCUSED** — and left standing, it would have silently
+   > > permitted these two to go unaudited again, **with an argument attached that no longer applies.**
+   >
+   > `workflow.md` §12's residue, caught by a mechanism rather than by a reader — **and by the author
+   > of the exemption, against its own list.**
 
    **`qa-agent` raised this rather than asserting it, correctly, and it is a real question.**
    `security.md` §2a says of exactly this shape: *"the permission is the control **and the audit
@@ -669,6 +737,62 @@ sets are identical**, and they name **two different objects** — a membership's
 Organization's. **The sameness is the coincidence.** *"Make them agree"* is the wrong instruction;
 **"decide each against its own `CHECK`"** is the right one. Both answers happen to be `closed`, and
 arriving there by the right route is what makes the next pair decidable.
+
+### 7c-i. THE NEXT PAIR, DECIDED BY THAT ROUTE — `roleStatus` AND THE `templateStatus` RESIDUAL IT SURFACED
+
+**Added 2026-09-13. §7c said arriving by the right route is what makes the next pair decidable. It
+was, twice, within the day — and the second one is a ruling this record owes.**
+
+**`roleStatus` (`tenant-roles-v1`) did not exist when §7c was written**, and `0041` amendment 1's
+check grouped it with `template-v1`'s pair on the coincidence of `['active','retired']`.
+**`architecture-agent` decided it against its own `CHECK` and declined to borrow the neighbouring
+exemption:**
+
+- **`0022_tenant_role.sql:113` admits exactly those two**, so an unknown arm would guard against a
+  value no row can hold — amendment 3's hazard with nothing on the other side of the trade.
+- **The request test does not apply, and saying so beat borrowing it.** `roleLifecycleInput` carries
+  `role_id` alone; retire and restore are separate ROUTES rather than a target-state field. **The
+  `CHECK` argument carries the decision by itself.**
+- **It declared NO divergence marker**, on the ground that *"it is not claiming an exemption; it is
+  claiming the correct policy."* **Right — and a one-sided marker would have suppressed the finding
+  rather than resolved it**, which is what the check already refuses.
+
+**RULED `closed`. All ten tenant-admin enums are now `closed`.**
+
+#### AND THE RESIDUAL IT CORRECTLY REFUSED TO SETTLE — `templateStatus`, RULED HERE
+
+```
+template-v1#/$defs/templateStatus         extensible   ["active","retired"]   divergence DECLARED
+template-v1#/$defs/templateStatusFilter   closed       ["active","retired"]   divergence DECLARED
+0012_template.sql:135                     CHECK (status IN ('active','retired'))
+```
+
+**That is `organizationStatus`'s case, character for character**, and §7c already ruled that one:
+*the unknown arm can never be reached by anything the database can hold.* The request test does not
+apply either — **the filter is the request def and is already `closed`.**
+
+> **RULED: `templateStatus` is narrowed to `closed`.** A third Template status requires a migration
+> to move the `CHECK`, **which is exactly the decision `closed` exists to force** — §7c's own answer
+> to *"but a value might arrive later."*
+
+**AND THE MUTUAL `enumPolicyDivergence` COMES OFF BOTH SIDES IN THE SAME CHANGE.** Once both are
+`closed` there is no divergence to exempt, and **an exemption whose subject has gone is a live
+suppression sitting over a group that now agrees** — it would silently absorb the next real
+divergence in that file. `workflow.md` §12: the residue of a decision being *made*.
+
+**THIS IS A BREAKING CHANGE TO AN ACCEPTED CONTRACT AND IS RECORDED AS ONE** (`architecture.md` §1),
+on §7c's identical terms: **narrowing removes the unknown arm, a consumer that added one loses the
+branch, and the compiler names it — the loud direction. `web-agent` is told before the build goes
+red, not by it.**
+
+**And §7c's own evidence says the arm is worth removing rather than merely harmless.** The unknown
+branch is where `platform/admin` renders a raw value beside an English `sr-only` note **on an Arabic
+console** — correct, unreachable, and untranslated. **Removing the arm removes the string.**
+
+> **The process half is the part to copy: the agent that could see the residual did not own the
+> decision, said so, and named why** — *"narrowing it is a breaking change to an accepted contract
+> and therefore the Team Lead's."* **`security.md` §8a's shape without the field: it reported the
+> finding and left the act to the party whose act it is.**
 
 ## 7d. WHERE A MEMBER'S DISPLAY NAME LIVES — `organization_membership`, and the boundary decides it
 

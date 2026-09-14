@@ -24,22 +24,35 @@
  *     because `CustomerAction` excludes them, adding a call is a compile error.
  */
 
-import type { Transport } from './fixture-transport';
+import type { DudoAction, Transport } from './transport';
 import { ApiError } from './errors';
 import {
   PAGE_SIZE_MAX,
-  type CollectionEnvelope,
+  type ArchiveCustomerInput,
+  type ArchiveCustomerOutput,
   type CreateCustomerInput,
-  type Customer,
+  type CreateCustomerOutput,
   type CustomerAction,
-  type CustomerSummary,
+  type GetCustomerInput,
+  type GetCustomerOutput,
   type ListCustomersInput,
+  type ListCustomersOutput,
+  type MoveCustomerToBusinessInput,
+  type MoveCustomerToBusinessOutput,
+  type RestoreCustomerInput,
+  type RestoreCustomerOutput,
   type SearchCustomersInput,
+  type SearchCustomersOutput,
   type UpdateCustomerChanges,
+  type UpdateCustomerInput,
+  type UpdateCustomerOutput,
 } from '../contracts/customer-directory';
 import {
   RESOLVE_BATCH_MAX,
   type BusinessSummary,
+  type ListAuthorizedBusinessesInput,
+  type ListAuthorizedBusinessesOutput,
+  type ResolveBusinessReferencesInput,
   type ResolveBusinessReferencesOutput,
 } from '../contracts/business-read';
 
@@ -65,7 +78,7 @@ export const ROUTES: Record<CustomerAction, { method: string; path: string }> = 
 };
 
 /** Strip keys whose value is `undefined`, so "absent" survives to the wire. */
-function compact(input: Record<string, unknown>): Record<string, unknown> {
+function compact(input: object): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) out[key] = value;
@@ -73,15 +86,118 @@ function compact(input: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+/* ===========================================================================
+   THE OPERATION MAP — AN ACTION NAME AND ITS TWO CONTRACT SHAPES, IN ONE PLACE
+   ===========================================================================
+
+   Every method below used to end `as Promise<Customer>`, with the Output type
+   chosen at the call site. **Eight independent assertions about the wire, each
+   correct by the author's care rather than by anything holding them to the
+   Action they were invoking.** Nothing refused
+   `invoke('customers.GetCustomer', …) as Promise<CustomerSummary>`, and nothing
+   refused a body with a misspelled field, because `Transport.invoke` takes
+   `Record<string, unknown>` and returns `unknown` — which is the correct shape
+   for a transport and the reason the checking has to live here.
+
+   ⚠ THE CAST DOES NOT DISAPPEAR AND MUST NOT BE DESCRIBED AS IF IT HAD. There
+   is exactly one, in `call` below, and it is unavoidable: a generated type says
+   what the contract PROMISES and never checks what ARRIVED — the generated
+   file's own words. What changes is that the promise is now **derived from the
+   Action name** instead of restated beside it. `architecture.md` §3a: eight
+   remembered assertions are a discipline; one derived from a required argument
+   is a mechanism, and picking the wrong Output no longer compiles.
+
+   ⚠ IT IS KEYED ON `DudoAction`, WHICH IS BOTH CONTRACTS, AND THE SCOPE IS THE
+   DECISION RATHER THAN THE CONVENIENCE. `Transport.invoke` accepts a
+   `DudoAction`, so **the honest key set for a map that says "these Actions have
+   checked shapes" is exactly what the transport accepts.** Covering only the
+   Customer Directory's eight would have left the two `core.*` calls on
+   hand-picked casts — one client with two vocabularies again, along a different
+   seam, and the smaller half is the one a later reader copies.
+
+   IT DECIDES NOTHING. This is a lookup from a string literal to two types. No
+   permission, no tenant, no filtering — those are Core's on every call
+   (`security.md` §2). */
+type Operations = {
+  'customers.CreateCustomer': { input: CreateCustomerInput; output: CreateCustomerOutput };
+  'customers.GetCustomer': { input: GetCustomerInput; output: GetCustomerOutput };
+  'customers.ListCustomers': { input: ListCustomersInput; output: ListCustomersOutput };
+  'customers.SearchCustomers': { input: SearchCustomersInput; output: SearchCustomersOutput };
+  'customers.UpdateCustomer': { input: UpdateCustomerInput; output: UpdateCustomerOutput };
+  'customers.ArchiveCustomer': { input: ArchiveCustomerInput; output: ArchiveCustomerOutput };
+  'customers.RestoreCustomer': { input: RestoreCustomerInput; output: RestoreCustomerOutput };
+  'customers.MoveCustomerToBusiness': {
+    input: MoveCustomerToBusinessInput;
+    output: MoveCustomerToBusinessOutput;
+  };
+  'core.ListAuthorizedBusinesses': {
+    input: ListAuthorizedBusinessesInput;
+    output: ListAuthorizedBusinessesOutput;
+  };
+  'core.ResolveBusinessReferences': {
+    input: ResolveBusinessReferencesInput;
+    output: ResolveBusinessReferencesOutput;
+  };
+};
+
+/* BOUND TO `DudoAction` IN BOTH DIRECTIONS, and the two catch different defects
+ * — the same pair `contracts/customer-directory.ts` uses on its runtime
+ * constants, for the same reason.
+ *
+ *   an operation with no Action  ->  a map entry naming a route no contract
+ *                                    declares, or one this client is not
+ *                                    permitted to invoke (contract §11.1)
+ *   an Action with no operation  ->  an Action reachable through `invoke` with
+ *                                    NO contract shapes checking it, which is
+ *                                    the state this whole block removes
+ *
+ * ⚠ THE SECOND IS THE ONE THAT MATTERS AND IT IS THE ONE NOBODY WRITES. Adding
+ * an Action to either contract's union and forgetting the map here would leave
+ * exactly one operation back on an unchecked body and a hand-picked Output — a
+ * single exception in a file that otherwise reads as covered.
+ *
+ * ⚠ AND `Record<DudoAction, …>` WOULD ONLY BE THE SECOND DIRECTION. It proves
+ * every Action has an entry; it cannot say the entries are the right ones,
+ * because the key set is then the thing being asserted about rather than the
+ * thing asserted against. **A guard keyed on the population it is checking
+ * inherits that population's mistakes** — `Record<K, V>` proves you covered
+ * `K`, never that `K` is the right set. */
+type OperationWithoutAction = Exclude<keyof Operations, DudoAction>;
+const EVERY_OPERATION_IS_AN_ACTION: OperationWithoutAction extends never ? true : never = true;
+void EVERY_OPERATION_IS_AN_ACTION;
+
+type ActionWithoutOperation = Exclude<DudoAction, keyof Operations>;
+const EVERY_ACTION_HAS_AN_OPERATION: ActionWithoutOperation extends never ? true : never = true;
+void EVERY_ACTION_HAS_AN_OPERATION;
+
+/**
+ * Invoke one Action with the input its contract declares, resolving to the
+ * output its contract declares.
+ *
+ * `compact` still runs on every body: "absent" and "present and null" are
+ * different instructions in a partial update, and only `undefined` may be
+ * dropped.
+ */
+function call<A extends keyof Operations>(
+  transport: Transport,
+  action: A,
+  input: Operations[A]['input'],
+): Promise<Operations[A]['output']> {
+  return transport.invoke(action, compact(input)) as Promise<Operations[A]['output']>;
+}
+
 export interface CustomerDirectoryClient {
-  listCustomers(input?: ListCustomersInput): Promise<CollectionEnvelope<CustomerSummary>>;
-  searchCustomers(input: SearchCustomersInput): Promise<CollectionEnvelope<CustomerSummary>>;
-  getCustomer(customerId: string): Promise<Customer>;
-  createCustomer(input: CreateCustomerInput): Promise<Customer>;
-  updateCustomer(customerId: string, changes: UpdateCustomerChanges): Promise<Customer>;
-  archiveCustomer(customerId: string): Promise<Customer>;
-  restoreCustomer(customerId: string): Promise<Customer>;
-  moveCustomerToBusiness(customerId: string, businessId: string): Promise<Customer>;
+  listCustomers(input?: ListCustomersInput): Promise<ListCustomersOutput>;
+  searchCustomers(input: SearchCustomersInput): Promise<SearchCustomersOutput>;
+  getCustomer(customerId: string): Promise<GetCustomerOutput>;
+  createCustomer(input: CreateCustomerInput): Promise<CreateCustomerOutput>;
+  updateCustomer(customerId: string, changes: UpdateCustomerChanges): Promise<UpdateCustomerOutput>;
+  archiveCustomer(customerId: string): Promise<ArchiveCustomerOutput>;
+  restoreCustomer(customerId: string): Promise<RestoreCustomerOutput>;
+  moveCustomerToBusiness(
+    customerId: string,
+    businessId: string,
+  ): Promise<MoveCustomerToBusinessOutput>;
   listAuthorizedBusinesses(): Promise<BusinessSummary[]>;
   resolveBusinessReferences(businessIds: string[]): Promise<ResolveBusinessReferencesOutput>;
 }
@@ -89,25 +205,19 @@ export interface CustomerDirectoryClient {
 export function createCustomerDirectoryClient(transport: Transport): CustomerDirectoryClient {
   return {
     listCustomers(input = {}) {
-      return transport.invoke('customers.ListCustomers', compact({ ...input })) as Promise<
-        CollectionEnvelope<CustomerSummary>
-      >;
+      return call(transport, 'customers.ListCustomers', input);
     },
 
     searchCustomers(input) {
-      return transport.invoke('customers.SearchCustomers', compact({ ...input })) as Promise<
-        CollectionEnvelope<CustomerSummary>
-      >;
+      return call(transport, 'customers.SearchCustomers', input);
     },
 
     getCustomer(customerId) {
-      return transport.invoke('customers.GetCustomer', {
-        customer_id: customerId,
-      }) as Promise<Customer>;
+      return call(transport, 'customers.GetCustomer', { customer_id: customerId });
     },
 
     createCustomer(input) {
-      return transport.invoke('customers.CreateCustomer', compact({ ...input })) as Promise<Customer>;
+      return call(transport, 'customers.CreateCustomer', input);
     },
 
     /**
@@ -117,22 +227,18 @@ export function createCustomerDirectoryClient(transport: Transport): CustomerDir
      * which is why `compact()` removes only `undefined`.
      */
     updateCustomer(customerId, changes) {
-      return transport.invoke(
-        'customers.UpdateCustomer',
-        compact({ customer_id: customerId, ...changes }),
-      ) as Promise<Customer>;
+      return call(transport, 'customers.UpdateCustomer', {
+        customer_id: customerId,
+        ...changes,
+      });
     },
 
     archiveCustomer(customerId) {
-      return transport.invoke('customers.ArchiveCustomer', {
-        customer_id: customerId,
-      }) as Promise<Customer>;
+      return call(transport, 'customers.ArchiveCustomer', { customer_id: customerId });
     },
 
     restoreCustomer(customerId) {
-      return transport.invoke('customers.RestoreCustomer', {
-        customer_id: customerId,
-      }) as Promise<Customer>;
+      return call(transport, 'customers.RestoreCustomer', { customer_id: customerId });
     },
 
     /**
@@ -142,10 +248,10 @@ export function createCustomerDirectoryClient(transport: Transport): CustomerDir
      * picker, and the Business list has no contract yet.
      */
     moveCustomerToBusiness(customerId, businessId) {
-      return transport.invoke('customers.MoveCustomerToBusiness', {
+      return call(transport, 'customers.MoveCustomerToBusiness', {
         customer_id: customerId,
         business_id: businessId,
-      }) as Promise<Customer>;
+      });
     },
 
     /**
@@ -167,10 +273,10 @@ export function createCustomerDirectoryClient(transport: Transport): CustomerDir
       // Bounded: the page size is capped at 100 by the contract, and the guard
       // stops a malformed cursor chain from looping forever.
       for (let page = 0; page < 20; page += 1) {
-        const response = (await transport.invoke(
-          'core.ListAuthorizedBusinesses',
-          compact({ page_size: PAGE_SIZE_MAX, cursor }),
-        )) as CollectionEnvelope<BusinessSummary>;
+        const response = await call(transport, 'core.ListAuthorizedBusinesses', {
+          page_size: PAGE_SIZE_MAX,
+          cursor,
+        });
         all.push(...response.data);
         if (!response.next_cursor) break;
         cursor = response.next_cursor;
@@ -203,9 +309,9 @@ export function createCustomerDirectoryClient(transport: Transport): CustomerDir
           }),
         );
       }
-      return transport.invoke('core.ResolveBusinessReferences', {
+      return call(transport, 'core.ResolveBusinessReferences', {
         business_ids: businessIds,
-      }) as Promise<ResolveBusinessReferencesOutput>;
+      });
     },
   };
 }

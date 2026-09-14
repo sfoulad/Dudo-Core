@@ -185,6 +185,37 @@ is not a less important place to know that.
 > fine. **The finding was that the check's SUBJECT was unmeasurable, and only its author could see
 > that** — from a candidate list that included *"is your 390 really 390"*.
 
+## 3c. ⚠ THREE DOM-WALK TRAPS, ALL MEASURED, ALL OVER-REPORTING — AND THE FIRST WOULD HAVE BEEN THE LOUDEST AND MOST WRONG
+
+**Added 2026-09-13 from `web-agent`'s first render of `/settings`. All three were caught before any
+conclusion was drawn, which is the only reason the rest of that report is worth believing.**
+
+| The walk | First reading | Cause |
+|---|---|---|
+| **Latin runs in the Arabic render** | **~30 "untranslated" strings** | **the TreeWalker entered `<noscript>`.** With JS on it renders nothing **and its text nodes are still in the DOM** — it read the entire CSP explainer |
+| **hover-only affordances** | **all 10 section cards** | flagged non-focusable elements carrying `hover:` classes that are **nested inside** focusable `<a>`s — decoration on a keyboard-reachable control |
+| **focus order** | a collapsed nav toggle **at desktop** | **`querySelectorAll` returns `display:none` elements**, so the reported tab order was one no keyboard user experiences |
+
+> **THE `<noscript>` ONE IS THE DANGEROUS ONE AND NOT BECAUSE IT WAS THE BIGGEST NUMBER.** It would
+> have produced **thirty fabricated Arabic defects on the one axis with a genuine defect history** —
+> so every one would have been believed, chased, and "fixed" against a element the user never sees.
+
+**Binding, and it costs three lines in any DOM walk:**
+
+- **Skip `<noscript>` explicitly.** Its content is in the DOM and is not rendered. **No visual
+  instrument can see it and every text walk can.**
+- **A hover class on a NON-FOCUSABLE element is not a finding if a focusable ANCESTOR exists.** Walk
+  up before flagging; decoration inside a control is the normal shape.
+- **`querySelectorAll` is not the tab order.** Filter by rendered visibility — **an element nobody
+  can reach cannot be in the wrong place in a sequence nobody experiences.**
+
+**And the general form, which is `§11a`'s population rule pointed at a live DOM:** all three
+over-reported, **and an over-reporting instrument on a rendering axis is worse than an
+under-reporting one**, because each false positive is individually plausible and arrives with a
+screenshot-shaped confidence behind it. **§3a records the mirror — a scan that was too narrow. This
+is the same file's instrument being too wide, found the same way: by reading what it produced rather
+than trusting that it ran.**
+
 ## 4. ⚠ WHAT A LIVE CHECK STRUCTURALLY CANNOT COVER — and this is not a tooling gap
 
 **Recorded 2026-09-13, before it could arrive as a surprise at the end of a milestone.**

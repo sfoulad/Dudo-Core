@@ -35,7 +35,7 @@ export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
 
 export type InvitationRecord = {
   readonly invitation_id: InvitationId;
-  readonly identifier: InvitationIdentifier;
+  readonly identifier: InvitationIdentifier | null;
   readonly membership_role: MembershipRole;
   readonly custom_role_ids?: ReadonlyArray<RoleId>;
   readonly status: InvitationStatus;

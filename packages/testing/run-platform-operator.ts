@@ -70,6 +70,9 @@ import { buildSuccessStatusSuite } from './suites/platform-operator/success-stat
 import { buildRequestClassCheckSuite } from './suites/contracts/request-class-check.ts';
 import { buildEnumPolicyConsistencySuite } from './suites/contracts/enum-policy-consistency.ts';
 import { buildContractYamlStructureSuite } from './suites/contracts/yaml-structure.ts';
+import { buildSameNameRefSuite } from './suites/contracts/same-name-ref.ts';
+import { buildBindingCoverageSuite } from './suites/platform-operator/binding-coverage.ts';
+import { buildHeadersParitySuite } from './suites/headers/headers-parity.ts';
 import { buildCredentialResetSuite } from './suites/platform-operator/credential-reset.ts';
 import { buildOnboardingSuite } from './suites/platform-operator/onboarding.ts';
 import { buildTemplatesSuite } from './suites/platform-operator/templates.ts';
@@ -183,6 +186,28 @@ async function main(): Promise<void> {
     // cannot run a parser, so this is the one place a swallowed key can be caught by something
     // other than its author's re-read. Builds no world; runs in the primary set only.
     buildContractYamlStructureSuite(),
+    // The confirmation binding's two ends. `m2-contracts` found that the challenge takes a nested
+    // CLIENT-SUPPLIED object while the submission DERIVES `(body \ three) ∪ pathParams` — and
+    // `confirmation-gate.ts`'s own ruling refuses that shape in terms. Measured: there is ONE
+    // canonicaliser, so the risk is not two implementations drifting but the derived key set being
+    // NARROWER than what the operation acts on. **The union has no query-parameter term**, which
+    // is the checkable half. Builds no world.
+    buildBindingCoverageSuite(),
+    // A cross-schema `$ref` to a `$def` of the SAME NAME emits `export type X = X;` — TS2456,
+    // and SILENT until something compiles the generated output, which nothing does at emission
+    // time. The fixture and the six-row assertion table are `architecture-agent`'s: it owns
+    // `packages/contracts/**` and has no Bash tool, so it can specify this and not run it.
+    // Row 4 is the mirror control and carries the weight — without it, a repair suppressing
+    // EVERY cross-schema alias passes every other row and the working path is gone.
+    buildSameNameRefSuite(),
+    // The two `_headers` files, compared to each other. `security-agent` measured that NOTHING in
+    // this repository asserted a response header — the population was zero — and that wrangler
+    // does not validate `_headers` at deploy time, so a malformed line uploads clean and the
+    // deploy exits 0. This is the SOURCE half: two files in two packages that must otherwise
+    // agree, which is `0040`'s divergence class one layer below the code. The DEPLOYED half is
+    // `verify-staging.ts` §9, and neither substitutes for the other — this one cannot prove a
+    // byte reached a browser, and that one cannot run without a deploy. Builds no world.
+    buildHeadersParitySuite(),
     // The third contract-set sweep, and the narrowest. `common/error-envelope.schema.json`
     // discriminates every error body on `code` through two enum subsets that must partition the
     // canonical list — an invariant JSON Schema cannot express, which the schema itself says is

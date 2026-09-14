@@ -1,0 +1,128 @@
+-- Control-plane migration 0019 — exactly one `owner` per Organization.
+-- `docs/decisions/0043` §3c · `.claude/rules/architecture.md` §3a.
+--
+-- IT BELONGS TO `DB_CONTROL`. See 0002.
+--
+-- *** NOT APPLIED BY THE AGENT THAT WROTE IT. *** A verified D1 backup first, then the migration,
+-- then the deploy — the user's sequence, and applying it is a production action requiring the
+-- user's explicit approval every time (`.claude/rules/security.md` §7).
+--
+-- *** MUST BE APPLIED AFTER `0018`. *** That migration DROPS AND RECREATES `organization_membership`
+-- to widen a CHECK constraint, and a `DROP TABLE` takes this index with it. **A dropped index
+-- breaks no query**, so the wrong order leaves the uniqueness silently unenforced while every
+-- statement still succeeds. See `0018`'s ordering section.
+--
+-- ROLLBACK PATH: `DROP INDEX organization_single_owner`. It removes an invariant rather than data,
+-- so nothing becomes unreadable — but from that moment two owners are creatable and the only
+-- remaining layer is the in-statement guard in the adapter. **That makes this rollback a decision
+-- rather than a cleanup**, unlike `0017`'s.
+-- FORWARD-ONLY and idempotent: `IF NOT EXISTS`, so a re-run is safe.
+--
+-- =============================================================================================
+-- *** IT WILL FAIL TO CREATE IF ANY ORGANIZATION ALREADY HAS TWO OWNERS, AND THAT IS A FEATURE.
+-- =============================================================================================
+--
+-- A `CREATE UNIQUE INDEX` is validated against existing rows, unlike a CHECK constraint and unlike
+-- a trigger — `0010` records that its triggers *"DO NOT VALIDATE EXISTING ROWS"* and `0007` says
+-- the same of its CHECK. **This one does.** So applying it is also the audit: if it fails, the
+-- control plane holds a state `0043` §3c says is impossible, and that is worth knowing before a
+-- transfer route is built on the assumption.
+--
+-- WHOEVER APPLIES IT SHOULD RUN THE COUNT FIRST, from the same backup, so a failure is a known
+-- answer rather than a surprise mid-migration:
+--
+--   SELECT organization_id, COUNT(*) AS owners
+--     FROM organization_membership WHERE role = 'owner'
+--    GROUP BY organization_id HAVING owners > 1;
+--
+-- **Expected: zero rows.** Onboarding writes exactly one membership per Organization
+-- (`createOrganizationWithFirstAdmin`) and nothing else in this repository writes the table at all,
+-- so a non-empty result means a hand-run statement or a restore — which is exactly the population
+-- `0025` names for `platform_operator` and the reason authorization-time checks are the control.
+--
+-- =============================================================================================
+-- WHY A PARTIAL INDEX AND NOT A FULL ONE
+-- =============================================================================================
+--
+--   UNIQUE (organization_id) WHERE role = 'owner'
+--
+-- A full unique index on `organization_id` would permit exactly one MEMBERSHIP per Organization,
+-- which is the opposite of what an Organization is. The `WHERE` is what makes the constraint say
+-- *"one owner"* rather than *"one member"*.
+--
+-- **SQLITE INDEXES ONLY THE MATCHING ROWS IN A PARTIAL INDEX**, so a member with `role = 'member'`,
+-- `role = 'admin'` or `role IS NULL` produces no entry at all — which is what keeps the ongoing
+-- write cost off every membership row and onto the owner's alone. See the free-tier section.
+--
+-- =============================================================================================
+-- *** WHAT IT CANNOT SEE, AND IT IS THE HALF THAT MATTERS: IT REFUSES **TWO** OWNERS AND IS BLIND
+-- TO **ZERO**. ***
+-- =============================================================================================
+--
+-- A unique index constrains duplicates. **An Organization with no owner at all satisfies it
+-- perfectly**, and that is the state a careless demotion produces — which is precisely the state
+-- `0043` §3c's singular ownership exists to prevent, because *"without singular ownership,
+-- 'transfer' is just 'add a second owner' and the strong confirmation is theatre."*
+--
+-- SO THE ZERO DIRECTION IS ENFORCED ELSEWHERE AND MUST NOT BE ASSUMED HERE:
+--
+--   * `owner-immunity.ts::clearOwnerImmunity` refuses an `owner` target **whoever the actor is**,
+--     including the owner itself — so ownership cannot be given up through the
+--     member-administration path at all;
+--   * `MembershipAdministrationStore.assignRole` takes a `NonOwnerMembershipRole`, so the only
+--     method that can write `'owner'` is `transferOwnership`;
+--   * that method's first statement demotes **conditional on the named principal actually being
+--     the owner**, and the batch fails if it changes no row.
+--
+-- **`architecture.md` §3a's closing warning applies directly: this index is one of four layers and
+-- it is not the load-bearing one.** The in-statement guards are, because they are the only layer
+-- with no window between the check and the write. Do not describe this file as the enforcement.
+--
+-- =============================================================================================
+-- WHY THE TRANSFER IS DEMOTE-THEN-PROMOTE, AND WHY THIS INDEX IS WHAT FORCES IT
+-- =============================================================================================
+--
+-- `0043` §3c: *"A transfer is one atomic demote-and-promote, never a promote followed by a demote —
+-- the intermediate state of the second ordering is two owners, which the index must refuse anyway,
+-- so the ordering is forced rather than chosen."*
+--
+-- **AND IT CANNOT BE ONE STATEMENT.** A single multi-row `UPDATE … SET role = CASE principal_id …`
+-- is order-dependent: SQLite checks a UNIQUE index per row as it writes, so whether the promote
+-- lands before the demote is a property of row order rather than of the statement, and the same
+-- statement can succeed or abort depending on data nobody wrote. **Two statements in one atomic
+-- batch, demote first** — see `tenant-admin/membership-administration.ts::transferOwnership`, where
+-- both statements and both guards are written out.
+--
+-- =============================================================================================
+-- FREE-TIER IMPACT (.claude/rules/architecture.md §6a, docs/decisions/0008)
+-- =============================================================================================
+--
+-- ALLOWANCES: d1-rows-written (worse, narrowly), d1-storage (worse, narrowly), d1-rows-read
+-- (better, incidentally).
+--
+-- **WRITES: ONLY A ROW WHOSE `role` IS OR BECOMES `'owner'` MAINTAINS AN ENTRY.** A partial index
+-- is not maintained for non-matching rows. In estimate terms the honest upper bound for a
+-- membership write is therefore one higher than it was, and `ORGANIZATION_MEMBERSHIP_ROW_WRITES`
+-- moves to cover it **in the same change as `0020`** — see that migration, which raises the
+-- constant once for both indexes and states the arithmetic.
+--
+-- **THE CONSTANT IS AN UPPER BOUND AND OVER-CHARGES AN ORDINARY MEMBER WRITE BY ONE.** That is the
+-- trade `SESSION_ROW_WRITES` and `CONFIRMATION_SPEND_ROW_WRITES` both make and both explain: a
+-- second constant conditional on the role would be correct today and silently wrong the first time
+-- a caller reached the wrong one, and `0014` §A.12 is explicit about which direction to be wrong
+-- in — *"the failure mode of over-reserving is a delayed write, and of under-reserving is a
+-- platform outage."*
+--
+-- STORAGE: one b-tree entry per Organization, because there is one owner per Organization. At the
+-- closed beta's scale this is under a kilobyte.
+--
+-- READS: incidentally, *"who owns this Organization"* becomes a seek. **That query has no route and
+-- must not acquire one on the strength of being cheap** — the same warning `0017` carries about the
+-- adoption index, and for the same reason: this index makes a query faster to run and no more
+-- permitted to write.
+--
+-- COST: USD 0 / BD 0 per month. No new table, no new binding, no new service.
+
+CREATE UNIQUE INDEX IF NOT EXISTS organization_single_owner
+  ON organization_membership (organization_id)
+  WHERE role = 'owner';

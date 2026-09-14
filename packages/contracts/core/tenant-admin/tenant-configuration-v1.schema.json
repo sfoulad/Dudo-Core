@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-configuration:1",
+  "title": "Organization Configuration — the adopted Template — contract v1",
+  "description": "The Organization's view of its own adopted Template. SHAPES ONLY; the rulings are in tenant-configuration-v1.contract.yaml.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044).\n\n*** THIS SET WAS SCOPED AS 'TEMPLATE AND INSTALLED-APP CONFIGURATION' AND PUBLISHES ONLY THE FIRST HALF, AS ONE READ. *** The App half is REFUSED — there is no App runtime, no manifest-admission path and no installed App anywhere in Dudo, so a configuration shape published now would be designing the App model from a settings screen. See the contract's theAPPHALFISREFUSED. That refusal is the larger part of this contract's value.\n\nAND THE TENANT CANNOT CHANGE ITS TEMPLATE. Adoption is `core.platform-organization.set-template`, `platform` scope, an operator act. This contract publishes a READ and no write at all.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "adoptedTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_id", "name", "level_labels"],
+      "properties": {
+        "template_id": { "$ref": "urn:dudo:schema:template:1#/$defs/templateId" },
+        "name": { "$ref": "urn:dudo:schema:template:1#/$defs/templateName" },
+        "level_labels": { "$ref": "urn:dudo:schema:template:1#/$defs/levelLabels" }
+      },
+      "description": "The Template this Organization has adopted, as the Organization sees it.\n\n*** IT REFERENCES `template-v1`'s DEFINITIONS RATHER THAN RESTATING THEM, AND THAT MATTERS MORE HERE THAN USUAL: A TEMPLATE'S LABELS RENDERED DIFFERENTLY ON TWO SURFACES WOULD BE THE SAME ORGANIZATION CALLED TWO THINGS. *** The operator console reads `template-v1`; this is what the customer's own console reads; one set of definitions keeps them the same words.\n\n*** NO `status`, AND ITS ABSENCE IS A DELIBERATE ASYMMETRY WITH THE OPERATOR VIEW. *** `template-v1`'s `templateOutput` carries one, because retirement is an operator concern: it blocks NEW adoption. **An Organization that has already adopted a retired Template keeps it and keeps rendering its labels** — `core.template.retire`'s own entry says so — so the status changes nothing the customer can act on, and showing it would invite a question ('is ours being withdrawn?') whose answer is no and whose route to ask does not exist.\n\nNO `created_at`, NO ADOPTION DATE, NO OPERATOR IDENTITY. Who set this Organization's Template and when is an operator-action fact; it lives in `platform_operator_action` and in the tenant's own audit trail, and putting it here would make a configuration read a partial audit feed."
+    },
+
+    "getConfigurationOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template"],
+      "properties": {
+        "template": {
+          "oneOf": [{ "$ref": "#/$defs/adoptedTemplate" }, { "type": "null" }],
+          "description": "The adopted Template, or null.\n\n*** NULL IS THE ORDINARY CASE AND NOT AN ERROR. *** `organization.template_id` is nullable and onboarding does not require one; an Organization with no Template renders Dudo's own default vocabulary. **A client must render null as the default structure rather than as 'not configured'** — the second reads as a setup step the customer cannot perform, because adoption is an operator act and there is no tenant route to it.\n\nAND A CLIENT MUST NOT OFFER A PICKER. There is nothing for a tenant to choose from: listing Templates is `core.template.list` at `platform` scope, which no tenant role can hold."
+        }
+      },
+      "description": "The Organization's configuration.\n\n*** ONE FIELD, AND THE SHAPE IS AN OBJECT RATHER THAN THE TEMPLATE ITSELF SO THAT IT CAN GROW WITHOUT A VERSION. *** Installed-App configuration, when there is such a thing, is a second field here and is additive (API_STANDARD.md §6). Returning the Template alone at the top level would make the App half a breaking change to a shape that had no reason to be narrow.\n\n**That is the one accommodation this contract makes for a capability that does not exist**, and it is a shape decision rather than a content one — no App field is declared, named, or reserved."
+    }
+  }
+}

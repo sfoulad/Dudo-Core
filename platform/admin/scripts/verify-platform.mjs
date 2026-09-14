@@ -698,6 +698,47 @@ try {
   console.log('PASS  a non-object level_labels is refused');
 }
 
+/*
+ * ⚠ THE STATUS PARSE CHANGED BEHAVIOUR ON 2026-09-13 AND NOTHING HERE WOULD
+ * HAVE NOTICED — `check('status', …, 'active')` above passes under both the old
+ * parse and the new one.
+ *
+ * `templateStatus` was `extensible`; a regeneration closed it, so the emitted
+ * type lost its `(string & {})` arm and `requireString` stopped being an honest
+ * parse of the field. It now REJECTS a value the contract does not declare,
+ * where it previously passed one through to a neutral badge.
+ *
+ * **That is a behaviour change on an operator-facing path, so it is asserted
+ * rather than left to the type.** The type only says the parse RETURNS a
+ * two-member union; nothing in it says what happens when a third value arrives,
+ * and "throws" and "casts" are indistinguishable to `tsc`.
+ *
+ * The retired-status case is the precision half: closing the enum must not make
+ * the second DECLARED value refused too, which is the obvious way to get this
+ * wrong.
+ */
+check(
+  'a declared non-default status is carried, not refused',
+  parseTemplate({ ...TEMPLATE_BODY, status: 'retired' }).status,
+  'retired',
+);
+try {
+  parseTemplate({ ...TEMPLATE_BODY, status: 'mothballed' });
+  failures += 1;
+  console.log(
+    'FAIL  an UNDECLARED status is refused\n        expected a throw, got none — the enum is closed and the parse is asserting rather than checking',
+  );
+} catch {
+  console.log('PASS  an UNDECLARED status is refused now that templateStatus is closed');
+}
+try {
+  parseTemplate({ ...TEMPLATE_BODY, status: 42 });
+  failures += 1;
+  console.log('FAIL  a non-string status is refused\n        expected a throw, got none');
+} catch {
+  console.log('PASS  a non-string status is refused');
+}
+
 const templatePage = parseListTemplates({ data: [TEMPLATE_BODY], next_cursor: null });
 check('list data is TOP-LEVEL, not body.data.data', templatePage.data.length, 1);
 check('list next_cursor', templatePage.next_cursor, null);
@@ -2169,6 +2210,230 @@ console.log('\n=== Template lifecycle: transitions are routes, not a field ===\n
     'retire and restore are separate client methods',
     /async retireTemplate\(/.test(platformApi) && /async restoreTemplate\(/.test(platformApi),
   );
+
+  /*
+   * =========================================================================
+   * THE TEMPLATE STATUS BADGE — TRANSLATED, AND WITH NO UNKNOWN ARM
+   * =========================================================================
+   *
+   * ⚠ IT WAS RENDERING THE RAW WIRE VALUE. `{status}` interpolated straight
+   * from the response, so an Arabic operator read English `active` / `retired`
+   * on the Templates list — **visibly, not `sr-only`** — while `template.
+   * active` and `template.retired` sat in both dictionaries with only `retired`
+   * wired, and only from a different screen.
+   *
+   * **No prose scan could have found it.** Every untranslated-string
+   * instrument in this repository looks for English TEXT in the source; a value
+   * interpolated from a response is not text, and the dictionary was not
+   * missing an entry. It was found by asking what else believed in the unknown
+   * status arm while removing that arm.
+   *
+   * The first assertion is deliberately about ABSENCE of the raw interpolation,
+   * because the presence of a `t(...)` call elsewhere in the badge would not
+   * have caught anything.
+   *
+   * ⚠ AND THE FIRST VERSION OF THAT PATTERN WAS BLIND TO THE DEFECT IT WAS
+   * WRITTEN FOR. It required `>` … `{status}` … `<`, because that is the shape
+   * a one-child badge has in the author's head. **The real badge had a SECOND
+   * child** — the `{!known ? …}` arm — so `{status}` was followed by `{`, and
+   * the pattern could not fire on the only instance that ever existed.
+   *
+   * Measured rather than reasoned about, against the pre-edit source:
+   *
+   * ```
+   * >\s*\{status\}\s*<     original=false  current=false   BLIND
+   * >\s*\{status\}         original=true   current=false   fires on the defect only
+   * ```
+   *
+   * This is `workflow.md` §11a's *a pattern written from the shape you had in
+   * mind cannot see the shape the code takes* — **the third instance in this
+   * repository and the first where the author had read the rule the same day.**
+   * Knowing it does not confer seeing it; running the pattern against the real
+   * original does.
+   */
+  checkTrue(
+    'the template status badge renders a translated label, never the raw wire value',
+    /TEMPLATE_STATUS_KEYS\[status\]/.test(templatesScreen) &&
+      !/>\s*\{status\}/u.test(templatesScreen),
+  );
+  checkTrue(
+    'and the label map is TOTAL over the closed union, so a third status cannot be unlabelled',
+    /Record<KnownTemplateStatus,\s*MessageKey>/.test(templatesScreen),
+  );
+  /*
+   * `templateStatus` is closed (`0043` §7c-i) and three layers forbid a third
+   * value: the column's CHECK, the contract enum, and `requireTemplateStatus`.
+   * **The compiler cannot state this one** — the badge's parameter had been
+   * `string`, so `tsc` exited 0 with the dead arm standing.
+   */
+  check(
+    'the template badge carries no unknown arm',
+    /isKnownTemplateStatus/.test(templatesScreen),
+    false,
+  );
+
+  /*
+   * ⚠ AND THE SHARED KEY MUST NOT HAVE DIED WITH THE ARM.
+   *
+   * `unknown.status` was expected to become dead when the template arm went —
+   * **it did not, because it is shared by FOUR badges and only one narrowed.**
+   * The other three are ORGANIZATION status, whose generated type also closed
+   * in the same emission and which this console does not consume: it declares
+   * its own `status: string` shapes, so those arms are still reachable.
+   *
+   * **A dead message key is residue nothing goes red on** — it keeps its
+   * translation, keeps passing the both-dictionaries check, and renders
+   * nowhere. So the liveness is asserted rather than assumed, across every
+   * screen on disk rather than the three that happen to use it today.
+   *
+   * If the organization statuses are ever narrowed too, this goes red and the
+   * key should be REMOVED FROM BOTH DICTIONARIES in that change, not exempted
+   * here.
+   */
+  {
+    const referencing = screenNames.filter((name) =>
+      readScreen(name).includes("'unknown.status'"),
+    );
+    checkTrue(
+      'the shared unknown.status key did not die with the template arm',
+      referencing.length > 0,
+    );
+    console.log(
+      `      population: unknown.status is referenced by ${String(referencing.length)} of ${String(screenNames.length)} screens — ${referencing.join(', ')}`,
+    );
+  }
+
+  /*
+   * THE KNOWN-FAILING INPUTS. Every one is the badge AS IT ACTUALLY SHIPPED,
+   * not a shape invented to make a pattern fire — `workflow.md` §11a, and the
+   * reason it matters here is that the first draft of the raw-value pattern
+   * passed against an invented one-child badge and could not see the two-child
+   * badge that was really there.
+   */
+  {
+    const RAW_BADGE_AS_SHIPPED =
+      '    >\n      {status}\n' +
+      `      {!known ? <span className="sr-only"> {t('unknown.status')}</span> : null}\n` +
+      '    </span>\n';
+    const TRANSLATED_BADGE = '    >\n      <bdi>{t(TEMPLATE_STATUS_KEYS[status])}</bdi>\n    </span>\n';
+
+    checkTrue(
+      'NEGATIVE CONTROL: the raw-value pattern fires on the badge as it actually shipped',
+      /(?:>\s*\{status\})/u.test(RAW_BADGE_AS_SHIPPED),
+    );
+    check(
+      'NEGATIVE CONTROL: and is silent on the translated badge that replaced it',
+      /(?:>\s*\{status\})/u.test(TRANSLATED_BADGE),
+      false,
+    );
+    checkTrue(
+      'NEGATIVE CONTROL: the unknown-arm pattern fires on the arm as it actually shipped',
+      /isKnownTemplateStatus/.test(`  const known = isKnownTemplateStatus(status);`),
+    );
+    /*
+     * The dead-key control is the one with a real subject: it must go red when
+     * NO screen references the key, which is the state the template removal was
+     * predicted to produce and did not.
+     */
+    check(
+      'NEGATIVE CONTROL: a key no screen references is caught',
+      ['A.tsx', 'B.tsx'].filter((n) => `const ${n} = 1;`.includes("'unknown.status'")).length > 0,
+      false,
+    );
+  }
+
+  /*
+   * =========================================================================
+   * THE ATOMIC-DEPLOY PROPERTY THAT `requireTemplateStatus` RESTS ON
+   * =========================================================================
+   *
+   * That parser throws on a status the contract does not declare, and the
+   * console has no graceful path left for one. **What makes that affordable is
+   * not a type — it is that this SPA and the API it calls ship as ONE Worker**,
+   * so a Core emitting a third status and a client that never learned one
+   * cannot coexist as deployed artifacts. The only exposure is a browser tab
+   * holding an old bundle across a deploy.
+   *
+   * ⚠ **THE ARGUMENT EXPIRES THE DAY THE BUNDLE IS SERVED FROM SOMEWHERE
+   * ELSE — a CDN, a second Worker, a cached shell — AND NOTHING ABOUT THAT DAY
+   * ANNOUNCES ITSELF.** `workflow.md` §12: a deferral with no owner is an
+   * obligation nobody collects, and this one would be collected by an operator
+   * meeting a blank screen.
+   *
+   * **So the premise is asserted rather than believed.** This is the trigger
+   * that sends someone back to the parser, and it is the whole reason the
+   * comment there is a reason and not a `TODO`.
+   *
+   * It reads a ROOT config the Team Lead owns. That is deliberate and it is
+   * read-only: the property being asserted is this console's own precondition,
+   * so it belongs beside the code that depends on it rather than in a
+   * cross-tree checker.
+   */
+  {
+    const wranglerPath = join(import.meta.dirname, '..', '..', '..', 'wrangler.admin.jsonc');
+    const jsonc = readFileSync(wranglerPath, 'utf8');
+    /*
+     * A FLOOR ON THE READER, and it is the reason this parses rather than
+     * greps: a regex over a JSONC file matches inside comments, and this file
+     * is mostly comments. A parse failure is loud; a regex that stopped
+     * matching would report the property absent, which is the same red for a
+     * completely different reason.
+     */
+    let wrangler = null;
+    try {
+      wrangler = JSON.parse(jsonc.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, ''));
+    } catch {
+      wrangler = null;
+    }
+    checkTrue('wrangler.admin.jsonc was read and parsed', wrangler !== null);
+
+    /*
+     * ⚠ THE PREDICATE IS EXTRACTED SO THE CHECK AND THE CONTROLS SHARE LOGIC
+     * AND NOT INPUTS.
+     *
+     * The first draft inlined the comparison and then "controlled" it with a
+     * second inline copy over an object literal — **which asserts that `?.`
+     * works and says nothing about the check.** That is the shape
+     * `verify-settings.mjs` records against itself: *a control that fires
+     * whichever way the corpus goes contributed nothing, and the real-tree half
+     * was decoration.* Same author, same day, opposite script.
+     *
+     * Now the assertion feeds it the tree and every control feeds it a literal.
+     * A config change can make the assertion fail; it can no longer make a
+     * control lie.
+     */
+    const servesBothFromOneWorker = (config) =>
+      typeof config?.main === 'string' && config?.assets?.directory === './platform/admin/dist';
+
+    checkTrue(
+      'the admin SPA and its API ship as ONE Worker — the premise requireTemplateStatus rests on',
+      servesBothFromOneWorker(wrangler),
+    );
+    /*
+     * THE FAILING INPUTS ARE THE TWO SHAPES A REAL SPLIT TAKES: the bundle
+     * moves to a CDN and the Worker keeps the API, or the bundle gets a Worker
+     * of its own and this config loses `main`.
+     */
+    check(
+      'NEGATIVE CONTROL: a Worker that kept the API and lost the bundle is caught',
+      servesBothFromOneWorker({ main: 'worker.ts' }),
+      false,
+    );
+    check(
+      'NEGATIVE CONTROL: a bundle served from somewhere else is caught',
+      servesBothFromOneWorker({ main: 'worker.ts', assets: { directory: '../cdn-upload' } }),
+      false,
+    );
+    check(
+      'NEGATIVE CONTROL: an assets-only config with no API is caught',
+      servesBothFromOneWorker({ assets: { directory: './platform/admin/dist' } }),
+      false,
+    );
+    checkTrue(
+      'NEGATIVE CONTROL: and the shape that is deployed today is not flagged',
+      servesBothFromOneWorker({ main: 'worker.ts', assets: { directory: './platform/admin/dist' } }),
+    );
+  }
   /*
    * AND SEPARATE HOOKS. A single `useSetTemplateStatus(id, direction)` would
    * type-check and re-merge the split one layer above the transport — which is
@@ -6027,6 +6292,360 @@ check(
     body.first_workspace_name,
     DISCARDED_WORKSPACE_NAME_PLACEHOLDER,
   );
+}
+
+/* =========================================================================
+   TWIN KEYS — identical in one language, divergent in the other
+   =========================================================================
+
+   ⚠ THE DEFECT IS IN THE RELATIONSHIP BETWEEN TWO ENTRIES THAT ARE EACH
+   INDIVIDUALLY PERFECT, WHICH IS WHY NOTHING HERE COULD SEE IT.
+
+   `identity.recorded` and `identity.recordedOn` both carry the English string
+   `'Recorded'`. The Arabic diverges — `مسجَّل` is an adjective, `سُجِّل في` is a
+   phrase. **So an author who autocompletes `identity.record…` and picks wrong
+   sees correct English and ships wrong Arabic: invisible in the language they
+   are reading, wrong only in the one they are not.**
+
+   Both keys exist. Both are translated. The type system is satisfied and the
+   both-dictionaries check is satisfied. `architecture.md` §3b-ii: a property of
+   a COLLECTION, where every review technique here examines one member at a
+   time.
+
+   Same instrument as `0041` amendment 1's enum-policy check — identical values
+   in one dimension, compared in another, with a declared exemption for a
+   legitimate divergence.
+
+   ---------------------------------------------------------------------------
+   THE VACUITY QUESTION WAS ASKED BEFORE THIS WAS BUILT, AND IT CHANGED THE
+   DESIGN RATHER THAN CONFIRMING IT
+   ---------------------------------------------------------------------------
+
+   *Would this pass against a dictionary where no two keys share a value?* If
+   the corpus held one such group and that group were `identity.recorded`, this
+   would be a check hunting for a population and should not exist.
+
+   Measured first: **18 divergent groups on shared English — and NINE of them
+   are PLURAL FAMILIES.** English has two plural forms and Arabic has six, so
+   one English string legitimately serves five Arabic ones. **A naive check
+   would have been half false positives on its first run**, which is the load
+   that gets a check switched off in a week.
+
+   The exemption for those is MECHANICAL rather than a list: every key in the
+   group ends in a plural category AND they all share one stem. Both halves
+   matter — two unrelated keys that happen to end in `.other` are not a family.
+
+   ⚠ AND IT RUNS IN BOTH DIRECTIONS. The rule is *identical in one language,
+   divergent in another*; Arabic is only where it bit. The reverse direction
+   found EIGHT more, none of them plural families, including
+   `identity.cr.label` / `identity.cr.short` — **"Commercial registration (CR)"
+   and "CR" are one string in Arabic, so the SHORT variant is not short there**,
+   and a layout that chose it for width gets the full phrase.
+   ========================================================================= */
+
+console.log('\n=== Twin keys: identical in one language, divergent in the other ===\n');
+
+{
+  const ENTRY = /^ {2}'([a-zA-Z0-9._-]+)':\s*\n?\s*'((?:[^'\\]|\\.)*)'/gmu;
+  const rawDictionary = readFileSync(
+    join(import.meta.dirname, '..', 'src', 'lib', 'i18n.tsx'),
+    'utf8',
+  );
+  const entries = [...rawDictionary.matchAll(ENTRY)].map((m) => ({ key: m[1], value: m[2] }));
+
+  /*
+   * A FLOOR ON THE READER. If the entry pattern stops matching — a reformat, a
+   * different quote style, a nested dictionary — every group below is empty and
+   * the set comparison reports agreement, which is the most confident wrong
+   * answer available (`workflow.md` §11a).
+   */
+  const english = new Map();
+  const arabic = new Map();
+  for (const { key, value } of entries) {
+    if (!english.has(key)) english.set(key, value);
+    else if (!arabic.has(key)) arabic.set(key, value);
+  }
+  checkTrue('the dictionaries were read', english.size >= 500 && arabic.size === english.size);
+
+  const PLURAL_CATEGORIES = ['zero', 'one', 'two', 'few', 'many', 'other'];
+  const pluralStem = (key) => {
+    const dot = key.lastIndexOf('.');
+    return dot > 0 && PLURAL_CATEGORIES.includes(key.slice(dot + 1)) ? key.slice(0, dot) : null;
+  };
+  const isPluralFamily = (keys) => {
+    const stems = keys.map(pluralStem);
+    return stems.every((s) => s !== null) && new Set(stems).size === 1;
+  };
+
+  const divergentGroups = (primary, other) => {
+    const byValue = new Map();
+    for (const [key, value] of primary) {
+      if (!byValue.has(value)) byValue.set(value, []);
+      byValue.get(value).push(key);
+    }
+    return [...byValue.values()]
+      .filter((keys) => keys.length > 1)
+      .filter((keys) => new Set(keys.map((k) => other.get(k))).size > 1)
+      .filter((keys) => !isPluralFamily(keys))
+      .map((keys) => [...keys].sort().join(' + '))
+      .sort();
+  };
+
+  const found = [...divergentGroups(english, arabic), ...divergentGroups(arabic, english)].sort();
+
+  /*
+   * ---------------------------------------------------------------------------
+   * THE DECLARED SET, AND IT IS PINNED IN BOTH DIRECTIONS
+   * ---------------------------------------------------------------------------
+   *
+   * ⚠ THESE ARE RECORDED AS KNOWN, NOT AS APPROVED. Seventeen pairs existed on
+   * the day this check was written, and annotating all seventeen with a ruling
+   * would be a separate pass with seventeen judgement calls in it. **The pin is
+   * what stops the eighteenth arriving unnoticed** — which is the property that
+   * was missing, since the population was previously zero-visibility.
+   *
+   * **MUTUAL, per `0041`'s own lesson about one-sided exemptions:** a pair here
+   * that is no longer divergent fails too, and the entry must come out rather
+   * than be left as a permanent excuse. A pin that only fails upward is a pin
+   * that accumulates.
+   *
+   * Several of these are legitimate — a nav label and a page title may
+   * reasonably differ in Arabic. Several are not, and are reported rather than
+   * silently blessed by appearing here.
+   */
+  const DECLARED = [
+    'app.subtitle + signIn.title',
+    'audit.filter.operatorPlaceholder + detail.lookup.principalId',
+    'audit.noTarget + dashboard.none',
+    'column.created + column.createdOn + templates.created.before',
+    'dashboard.templates + nav.templates',
+    'detail.loading + loading.organizationDetail',
+    'gate.wrongLocale.nothingChanged + identity.nothingChanged + reset.notStarted.unchanged',
+    'identity.cr.label + identity.cr.short',
+    'identity.failed.notFoundBody + onboard.failed.notFoundBody',
+    'identity.nothingChanged + identity.nothingChangedDraft',
+    'identity.notRecorded + orgTemplate.none',
+    'identity.recorded + identity.recordedOn',
+    'identity.saveChanges + template.save',
+    'loading.credential + reset.preparing',
+    'nav.audit + platformAudit.title',
+    'onboard.signInWith + reset.done.identifierLabel',
+    'onboard.templatesChoose + orgTemplate.choose',
+  ];
+
+  /*
+   * ⚠ JOINED TO A STRING, AND NOT AS A STYLE CHOICE. This file's `check` is
+   * `actual === expected` — REFERENCE equality — where `verify-settings.mjs`'s
+   * stringifies. Passing two empty arrays reported `expected [] actual []` and
+   * FAILED, which is a check that can never pass. The sibling script's idiom
+   * does not transfer, and the failure was loud only because the arrays were
+   * empty; a populated one would have failed for the right reason by accident.
+   */
+  check('no UNDECLARED twin-key pair', notInSet(found, DECLARED).join(' | '), '');
+  check(
+    'and no DECLARED pair has silently stopped being one',
+    notInSet(DECLARED, found).join(' | '),
+    '',
+  );
+
+  console.log(
+    `\n      population: ${String(entries.length)} dictionary entries, ${String(english.size)} keys; ` +
+      `${String(found.length)} divergent twin groups after exempting plural families\n`,
+  );
+}
+
+/*
+ * Members of `candidates` that `known` does not contain, sorted. Extracted so
+ * the two assertions above and the controls below share LOGIC and not INPUTS —
+ * a control fed the same tree the assertion reads has two possible causes for
+ * failing and only one of them is about the checker.
+ */
+function notInSet(candidates, known) {
+  const have = new Set(known);
+  return [...candidates].filter((value) => !have.has(value)).sort();
+}
+
+/* THE KNOWN-FAILING INPUTS, all literals. */
+checkTrue(
+  'NEGATIVE CONTROL: an undeclared twin pair is caught',
+  notInSet(['a + b', 'new.twin + other.twin'], ['a + b']).length > 0,
+);
+check(
+  'NEGATIVE CONTROL: and a fully declared set is not flagged',
+  notInSet(['a + b'], ['a + b']).join(' | '),
+  '',
+);
+checkTrue(
+  'NEGATIVE CONTROL: a declared pair that stopped diverging is caught',
+  notInSet(['a + b', 'fixed + pair'], ['a + b']).length > 0,
+);
+/*
+ * The plural exemption is the half that carries the false-positive risk, so it
+ * is controlled in both directions: it must exempt a real family and must NOT
+ * exempt two unrelated keys that happen to end in a category name.
+ */
+{
+  const CATS = ['zero', 'one', 'two', 'few', 'many', 'other'];
+  const stem = (key) => {
+    const dot = key.lastIndexOf('.');
+    return dot > 0 && CATS.includes(key.slice(dot + 1)) ? key.slice(0, dot) : null;
+  };
+  const family = (keys) => {
+    const stems = keys.map(stem);
+    return stems.every((s) => s !== null) && new Set(stems).size === 1;
+  };
+  checkTrue(
+    'NEGATIVE CONTROL: a real plural family is exempted',
+    family(['audit.showing.two', 'audit.showing.few', 'audit.showing.many']),
+  );
+  check(
+    'NEGATIVE CONTROL: two unrelated keys ending in a category are NOT a family',
+    family(['audit.showing.other', 'operators.showing.other']),
+    false,
+  );
+  check(
+    'NEGATIVE CONTROL: a group with one non-plural member is NOT a family',
+    family(['audit.showing.two', 'identity.recorded']),
+    false,
+  );
+}
+
+/* =========================================================================
+   `.short` KEYS — the abbreviated form WHERE THE LANGUAGE HAS ONE
+   ========================================================================= */
+
+console.log('\n=== .short keys are actually shorter ===\n');
+
+{
+  const ENTRY = /^ {2}'([a-zA-Z0-9._-]+)':\s*\n?\s*'((?:[^'\\]|\\.)*)'/gmu;
+  const raw = readFileSync(join(import.meta.dirname, '..', 'src', 'lib', 'i18n.tsx'), 'utf8');
+  const english = new Map();
+  const arabic = new Map();
+  for (const m of raw.matchAll(ENTRY)) {
+    if (!english.has(m[1])) english.set(m[1], m[2]);
+    else if (!arabic.has(m[1])) arabic.set(m[1], m[2]);
+  }
+
+  /*
+   * THE SUBJECT IS DERIVED, NOT TRANSCRIBED. A third `.short` key appears here
+   * without anyone editing this check — `workflow.md` §11a, a check that holds
+   * a name of its own goes stale when the name moves.
+   */
+  const shortKeys = [...english.keys()].filter((k) => k.endsWith('.short')).sort();
+  checkTrue('the .short keys were found', shortKeys.length >= 2);
+  check(
+    'every .short key has a matching .label — the pairing assumption holds',
+    shortKeys.filter((k) => !english.has(`${k.slice(0, -6)}.label`)).join(' | '),
+    '',
+  );
+
+  /*
+   * Code points, not `.length`. `.length` counts UTF-16 code units, and this
+   * repository has already been bitten once by a bound that counted one where
+   * its subject counted the other.
+   */
+  const notShorter = [];
+  for (const shortKey of shortKeys) {
+    const labelKey = `${shortKey.slice(0, -6)}.label`;
+    for (const [language, dictionary] of [
+      ['en', english],
+      ['ar', arabic],
+    ]) {
+      const label = [...(dictionary.get(labelKey) ?? '')].length;
+      const short = [...(dictionary.get(shortKey) ?? '')].length;
+      if (!(short < label)) notShorter.push(`${shortKey}/${language}`);
+    }
+  }
+  /*
+   * ---------------------------------------------------------------------------
+   * ⚠ THE KNOWN NON-ABBREVIATION, PINNED IN BOTH DIRECTIONS
+   * ---------------------------------------------------------------------------
+   *
+   * `identity.cr.short` in Arabic is the SAME 13 code points as its `.label` —
+   * `السجل التجاري` twice. It is declared rather than fixed because **writing an
+   * Arabic abbreviation is not this agent's to invent**; it belongs to someone
+   * who reads the language, and inventing one would be the same class of error
+   * as inventing a permission.
+   *
+   * **MUTUAL:** the day a real abbreviation is written, this pin FAILS saying so
+   * and the entry comes out. A pin that only fails upward accumulates.
+   */
+  const KNOWN_NOT_ABBREVIATED = ['identity.cr.short/ar'];
+  check(
+    'no .short key is as long as its .label, beyond the declared one',
+    notShorter.filter((entry) => !KNOWN_NOT_ABBREVIATED.includes(entry)).sort().join(' | '),
+    '',
+  );
+  check(
+    'and the declared non-abbreviation is still one — remove the entry when it is fixed',
+    KNOWN_NOT_ABBREVIATED.filter((entry) => !notShorter.includes(entry)).join(' | '),
+    '',
+  );
+
+  /*
+   * ===========================================================================
+   * ⚠ WHAT THIS DOES NOT REACH, AND THE LIVE EXAMPLE IS NAMED
+   * ===========================================================================
+   *
+   * **This is a PROXY and it is labelled one.** `.short`'s contract is *the
+   * abbreviated form where the language has one*. The check tests *shorter*.
+   * **The layout needs *short*, and no lexical comparison of two strings can
+   * express that.**
+   *
+   * Measured, code points:
+   *
+   *     identity.cr.label   ar  13    identity.cr.short   ar  13   ratio 1.00  CAUGHT
+   *     identity.vat.label  ar  31    identity.vat.short  ar  26   ratio 0.84  PASSES
+   *     identity.cr.label   en  28    identity.cr.short   en   2   ratio 0.07
+   *     identity.vat.label  en  16    identity.vat.short  en   3   ratio 0.19
+   *
+   * **`identity.vat.short` is the live miss and it is the pair that motivated
+   * this check.** Neither Arabic string abbreviates anything — English
+   * abbreviates to two and three characters because English abbreviates;
+   * **Arabic drops a preposition, which is not the same operation.** 26 against
+   * 31 is technically shorter and not short, and this check passes it.
+   *
+   * **A ratio threshold would catch it and is refused.** With two pairs in the
+   * corpus a threshold is fitted to two data points, and `§11a` records that a
+   * fuzzy check goes red on correct copy and is switched off within a week.
+   *
+   * **So this makes the IDENTICAL case unaddable — the form the hazard took
+   * first and will take again — and it is not the control.** The control is the
+   * ruling recorded at `identity.cr.short` in `i18n.tsx`: no layout may depend
+   * on a `.short` key's width in any language.
+   */
+  console.log(
+    `\n      population: ${String(shortKeys.length)} .short keys x 2 languages = ` +
+      `${String(shortKeys.length * 2)} comparisons; ` +
+      `${String(KNOWN_NOT_ABBREVIATED.length)} declared non-abbreviation(s)\n` +
+      `      NOT REACHED: a .short that is shorter but still not short — identity.vat.short/ar, 26 against 31\n`,
+  );
+}
+
+/* THE KNOWN-FAILING INPUTS, literals, sharing the predicate's shape. */
+{
+  const beyond = (found, declared) => found.filter((e) => !declared.includes(e)).sort().join(' | ');
+  checkTrue(
+    'NEGATIVE CONTROL: an undeclared .short that is not shorter is caught',
+    beyond(['identity.cr.short/ar', 'new.short/ar'], ['identity.cr.short/ar']).length > 0,
+  );
+  check(
+    'NEGATIVE CONTROL: and the declared one alone is not flagged',
+    beyond(['identity.cr.short/ar'], ['identity.cr.short/ar']),
+    '',
+  );
+  checkTrue(
+    'NEGATIVE CONTROL: a declared entry that stopped failing is caught',
+    ['identity.cr.short/ar'].filter((e) => ![].includes(e)).length > 0,
+  );
+  /*
+   * The comparison itself, in both directions — a check that flagged a
+   * legitimately abbreviated key would be worse than none.
+   */
+  const isNotShorter = (label, short) => !([...short].length < [...label].length);
+  checkTrue('NEGATIVE CONTROL: an equal-length pair is caught', isNotShorter('السجل التجاري', 'السجل التجاري'));
+  check('NEGATIVE CONTROL: a genuinely abbreviated pair is NOT flagged', isNotShorter('Commercial registration (CR)', 'CR'), false);
+  checkTrue('NEGATIVE CONTROL: a LONGER short is caught', isNotShorter('CR', 'Commercial registration'));
 }
 
 console.log('');

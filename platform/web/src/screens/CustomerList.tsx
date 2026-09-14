@@ -368,6 +368,12 @@ export function CustomerList({ search }: { search: CustomerListSearch }) {
         ) : rows && rows.length > 0 ? (
           <DataTable
             columns={columns}
+            // The array arrives `readonly` from the contract and `DataTable`
+            // takes it that way as of `c48d400`. This was `[...rows]` for a few
+            // hours — a copy rather than a cast, because a cast would have
+            // asserted the array is mutable, which is exactly the claim the
+            // contract had just withdrawn. Widening the prop cost nothing and
+            // removed the copy.
             rows={rows}
             getRowId={(row) => row.customer_id}
             columnWidths={['26%', '9%', '25%', '15%', '16%', '9%']}

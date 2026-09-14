@@ -160,6 +160,38 @@
    one layer down and harder to see.
    --------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------
+   The no-JavaScript panel in `index.html`.
+
+   ⚠ IT WAS A `style=""` ATTRIBUTE, AND CONTENT-SECURITY-POLICY BLOCKS THOSE.
+   `style-src` governs inline style attributes through `style-src-attr`, so
+   under the policy in `public/_headers` the attribute is dropped and the panel
+   renders unstyled — to JS-disabled visitors only, which is a population that
+   reports nothing.
+
+   AN AUTHORED CLASS RATHER THAN TAILWIND UTILITIES, AND THE REASON IS NOT
+   STYLE. A utility only exists in the artifact if the scanner produced it, and
+   the scanner's view of `index.html` is a property of the build configuration
+   rather than of this file. THIS RULE CANNOT BE PURGED — it is authored CSS,
+   the same argument `packages/ui`'s `data-table` classes made after moving a
+   component without its styling.
+
+   The stylesheet reaches the panel because Vite emits it as a `<link>` in the
+   production build, which needs no JavaScript. IN `vite dev` THE CSS IS
+   INJECTED BY JAVASCRIPT, so a dev build shows this panel unstyled — stated
+   because it looks like a defect and is not one, and because the panel is
+   unreachable in dev for the same reason.
+
+   `text-align: center` is direction-neutral and safe in both writing modes;
+   the padding is logical.
+   --------------------------------------------------------------------------- */
+.noscript-panel {
+  padding-block: 3rem;
+  padding-inline: 1.5rem;
+  text-align: center;
+  font-family: system-ui, sans-serif;
+}
+
 /* The route-change progress bar in AppShell. Named rather than inlined so the
    reduced-motion rule below can reach it. */
 @keyframes dudo-progress {

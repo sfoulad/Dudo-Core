@@ -261,10 +261,109 @@ permissions:
       split with no decision in it (§3.2 read in the direction it is usually read backwards).
       *** IT DOES NOT GRANT ENUMERATION. *** Creating an invitation and seeing who has been invited
       are different disclosures over different populations — see core.invitation.list.
+      *** AND "EXPIRE" IS NOT A FOURTH CAPABILITY. RULED 2026-09-13 against docs/decisions/0043
+      §6c, which lists "resend, revoke, expire" as a gap. *** The word covers two different things.
+      AUTOMATIC EXPIRY is a property of the record — an invitation carries a non-null `expires_at`
+      and is unacceptable after it. Nothing needs to be granted for time to pass, and no permission
+      can gate it.
+      FORCED EARLY EXPIRY IS REVOKE, which is already here. A second route for it would be two
+      words for one act — the reasoning core.template.retire used in refusing to be called
+      `archive`. `expired` and `revoked` remain distinct STATUS values because they record WHO
+      ended the invitation, which is worth knowing; they are not distinct OPERATIONS, because the
+      administrator did the same thing.
+      *** THE SCOPE REFINEMENT THE FOLDING-IN ARGUMENT DOES NOT STATE, AND IT MATTERS: *** "both act
+      on an invitation this holder COULD HAVE created" is true within one scope and false across
+      scopes — a branch-scope holder resending an organization-scope invitation is acting on
+      something they could not have created. tenant-invitations-v1 therefore evaluates all three at
+      `organization` and publishes only organization-scoped invitations. A business- or
+      branch-scoped invitation surface must re-run this argument rather than inherit it.
     sensitivity: sensitive
     scopes: [organization, business, branch]
     status: proposed
     phase: 1
+  # =========================================================================================
+  # MILESTONE 2 — TWO MEMBERSHIP-LIFECYCLE PERMISSIONS. REGISTERED 2026-09-13, HELD BY NO ROLE.
+  # =========================================================================================
+  # PROPOSED BY architecture-agent AGAINST docs/decisions/0043 §6c, which assigns it either a
+  # proposal with a sensitivity argument OR an explicit written ruling that an existing permission
+  # expresses the capability. These two are the proposal half; the invitation and business/branch
+  # rows of §6c are ruled in place (see core.user.invite above and core.business.archive below).
+  #
+  # *** REGISTRATION IS NOT A GRANT. NEITHER APPEARS IN ANY ROLE'S PERMISSION LIST. *** 0007 rule 4:
+  # a permission does not exist until it is here, so contracts can name it. security-agent reviews
+  # before integration (security.md §8), and only the user grants.
+  #
+  # THE BASIS ON WHICH THESE WERE PROPOSED RATHER THAN ASKED ABOUT, on the same footing the three
+  # organization permissions below record: the user scoped the CAPABILITIES by name in the
+  # Milestone 2 brief — "member suspension, removal, restoration". A permission that gates a
+  # capability the user required is the least-privilege implementation of what they asked for, not
+  # a new grant of reach. Neither widens access beyond what was scoped.
+  - id: core.user.reactivate
+    group: identity
+    description: >-
+      Restore a suspended membership. THE COUNTERPART TO core.user.deactivate AND DELIBERATELY A
+      SEPARATE PERMISSION.
+      *** THE OBVIOUS PRECEDENT POINTS THE OTHER WAY AND IS ANSWERED RATHER THAN IGNORED. ***
+      core.template.retire gates BOTH directions on the reasoning that a separate restore "could
+      only ever be held alongside" the damaging half — "a split with no decision in it". THAT
+      REASONING DEPENDS ON THE RECOVERY HALF BEING HARMLESS. Restoring a Template makes a business
+      type adoptable again. RESTORING A MEMBER LETS A PERSON SUSPENDED FOR CAUSE SIGN IN AGAIN —
+      a departure, a compromised account, an investigation. Reactivation is an ACCESS GRANT, not a
+      recovery.
+      SO THE TRUE PRECEDENT IS core.principal.grant-platform-scope VERSUS
+      core.principal.revoke-platform-scope: granting and revoking access are different risks in
+      opposite directions, and §3.2 splits them.
+      *** WHAT THE SPLIT BUYS, AND IT IS THE MIRROR OF THE USUAL ARGUMENT: *** the platform-scope
+      split exists so REVOKE can be held without GRANT — the break-glass responder. THIS ONE EXISTS
+      SO SUSPEND CAN BE HELD WITHOUT REACTIVATE: a security-response role that can cut off a
+      compromised account at 3am without being able to restore one. Same split, opposite direction,
+      and naming which direction it protects is the difference between copying a precedent and
+      applying one.
+      WHAT IT COSTS, RECORDED RATHER THAN IMPLIED: a help-desk role that may reinstate a locked-out
+      employee now needs a deliberate grant, and until it is made, reinstatement requires the role
+      that can also suspend. That is the fail-closed direction. The trigger to reopen the merge is
+      a tenant reporting reinstatement is bottlenecked, and the answer then is a role holding this
+      alone — which the split makes a grant rather than a redesign.
+      SENSITIVE: §6's examples include "change membership" verbatim. NOT critical — nothing is
+      destroyed, no money moves, and its counterpart undoes it (docs/decisions/0026 grades what the
+      OPERATION does).
+      Requested by packages/contracts/core/tenant-admin/tenant-members-v1.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 2
+  - id: core.user.remove
+    group: identity
+    description: >-
+      Delete a membership and this Organization's role assignments to that principal. Removal is
+      FROM AN ORGANIZATION and deletes no person: the `principal` row survives, every audit record
+      naming them survives, and their membership of any other Organization is untouched.
+      *** THE COUNTERARGUMENT IS STRONG AND IS ANSWERED RATHER THAN SKIPPED. *** core.user.deactivate
+      reads "Withdraw a user's access to the tenant", and removal does exactly that — so on the
+      plain words it is already covered, and §3.2 read the way this catalogue reads it calls a split
+      where both halves reach the same person and withdraw the same access "a split with no decision
+      in it".
+      WHAT MAKES IT A SPLIT: *** THE TWO DIFFER IN WHAT SURVIVES, NOT IN WHO THEY REACH. ***
+      Suspension preserves the membership row, the seed tier and every role assignment — the
+      configuration that would restore access. Removal DESTROYS them. So removal is not "withdraw
+      access", it is "withdraw access AND discard what would restore it", and a grantor may
+      reasonably want the first without the second.
+      scopes [organization] AND NOT [organization, business], DELIBERATELY: membership is of the
+      ORGANIZATION, so a business-scope principal removing a member would be ending a relationship
+      it holds one side of. The intersection rule then makes it impossible for a business-scope role
+      to hold at all — the same outcome customers.customer.move and .delete have, for the same
+      reason.
+      SENSITIVE, AND THIS ONE IS CLOSER TO THE LINE THAN core.user.reactivate — SAYING SO BEATS
+      ASSERTING THE RUNG. It destroys role assignments, which is destruction. What holds it below
+      critical is that it destroys CONFIGURATION and never DATA: no business record, no audit record
+      and no principal is touched, and the person can be invited back. IF A FUTURE CHANGE MAKES
+      REMOVAL REACH THE AUDIT TRAIL OR THE PRINCIPAL, THIS PERMISSION IS WHAT MUST BE REVISITED,
+      because §7's confirmation requirement is read from the permission's rung.
+      Requested by packages/contracts/core/tenant-admin/tenant-members-v1.
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
   # =========================================================================================
   # MILESTONE 2 — INVITATION ENUMERATION. REGISTERED 2026-09-13, HELD BY NO ROLE.
   # =========================================================================================
@@ -308,6 +407,70 @@ permissions:
     scopes: [organization, business]
     status: proposed
     phase: 1
+  # =========================================================================================
+  # MILESTONE 2 — SETTING A MEMBER'S TIER. REGISTERED 2026-09-13, HELD BY NO ROLE.
+  # SPLIT OFF core.role.assign ON security-agent's HIGH-2. See the entry for the attack it closes.
+  # =========================================================================================
+  - id: core.membership.set-role
+    group: identity
+    description: >-
+      Change a member's SEED TIER — the value on `organization_membership.role`. Gates
+      tenant.roles.set-membership-role and nothing else.
+      *** SPLIT OFF core.role.assign BECAUSE ONE PERMISSION WAS GATING TWO DIFFERENT ACTS, AND
+      security-agent RATED THE COMBINATION HIGH. *** core.role.assign grants a CUSTOM ROLE to a
+      member. This changes their TIER. The catalogue already split `assign` from `revoke` on §3.2's
+      reasoning that acts of different risk get different permissions; TIER-SETTING HAS THE BIGGER
+      BLAST RADIUS OF THE THREE AND WAS THE ONE NEVER SPLIT.
+      THE ATTACK IT CLOSES, ENTIRELY WITHIN THE RULES AS THEY WERE WRITTEN: `business-admin` holds
+      core.role.assign; `authorization/roles.ts` issues every tenant grant at `organization` scope
+      with no exceptions, so it satisfied an organization-scope evaluation; docs/decisions/0007 D16's
+      ceiling bounds WHICH tier may be set and says nothing about WHOSE; and setting a target to
+      `business-admin` passes the ceiling trivially because the set IS the caller's own.
+      *** THE OWNER IS REFUSED BY 0043 §3d. AN `admin` IS NOT. So a business-admin could demote every
+      `admin` to `business-admin`, unilaterally *** — stripping organization read and update, session
+      list and revoke, role create and update, user deactivate, api-credential and service-account
+      management. `roles.ts` already names the mechanism one object short: "a `business-admin` with an
+      authorized business set of every Business is an organization-wide administrator OF RECORDS."
+      This is that sentence with AUTHORITY substituted, and docs/decisions/0020's business-set
+      narrowing does not reach it — A MEMBERSHIP ROW IS AN ORGANIZATION-LEVEL OBJECT WITH NO BUSINESS
+      TO NARROW BY.
+      *** ⚠ THIS ENTRY CLAIMED scopes: [organization] MAKES THE PERMISSION "IMPOSSIBLE for a
+      business- or branch-scope role to hold — not ungranted, UNHOLDABLE… a property of the
+      declaration rather than of anybody's grant discipline." THAT IS FALSE. CORRECTED 2026-09-13
+      against docs/decisions/0043 §1b, which core-agent measured. ***
+      `holdsAtOrAbove(grants, permissionId, actionScope)` calls `implies(grant.scope, actionScope)` —
+      **the GRANT's scope against the ACTION's scope, both RUNTIME values. The catalogue's declared
+      `scopes:` list is not an input, and Core never reads this file at all.** Measured:
+      `business-admin` holding core.membership.set-role, evaluated at organization scope, is ALLOWED,
+      because `organizationGrant()` issues every business-admin grant at `organization`.
+      *** SO THE REPAIR RESTS ENTIRELY ON THIS PERMISSION NOT BEING WRITTEN INTO business-admin's
+      LIST — A TRANSCRIPTION DISCIPLINE, WHICH IS EXACTLY WHAT THE DECLARATION WAS MEANT TO ESCAPE.
+      *** The declared scope is as widenable as the placement; it is a reviewable line rather than a
+      mechanism.
+      **THE SPLIT IS STILL WORTH KEEPING AND ITS VALUE IS UNCHANGED IN ONE RESPECT:** one permission
+      gating two acts was invisible, and two permissions make the second act a line somebody must
+      deliberately add to a role. **What is lost is the claim that nobody CAN add it.**
+      WHAT WOULD MAKE A DECLARATION BITE is recorded in `0043` §1b and is not chosen here: either
+      Core's role mapping issues each grant at the permission's declared scope rather than always at
+      `organization`, or the constraint is enforced where the grant is WRITTEN — which is where D16
+      constraint 1 also belongs, and they may be one mechanism.
+      SENSITIVE, ON docs/decisions/0026's LADDER: it changes authority, which is §6's "change
+      permissions" in effect; nothing is destroyed, no money moves, and the same route reverses it.
+      *** NOT critical, AND THE REASON MUST NOT BE THE ONE THAT IS TEMPTING. *** A `critical` rung
+      would make this unreachable today, because no tenant-admin confirmation challenge route exists
+      — and THAT IS NOT AN ARGUMENT FOR A LOWER RUNG. 0026 refused to let a route be reached by
+      lowering its class and this entry does not reopen it: the rung is `sensitive` on the merits of
+      what the operation DOES, and the reachability consequence is an observation that follows,
+      never a premise.
+      PROPOSED PLACEMENT, WHICH IS NOT A GRANT AND IS NOT APPLIED: `owner` and `admin` only. The user
+      grants; the Team Lead relays; security-agent reviews (security.md §8).
+      NOTE WHAT THIS SPLIT DELIBERATELY DOES NOT DO: it does not remove core.role.assign from
+      `business-admin`. Assigning a custom role within a Business is legitimate work and the repair
+      that removed it would take that away to close a hole in a different act.
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
   - id: core.session.list
     group: identity
     description: "View active sessions for a principal."
@@ -460,6 +623,84 @@ permissions:
     scopes: [organization, business, branch]
     status: proposed
     phase: 1
+  # =========================================================================================
+  # MILESTONE 2 — WITHDRAWING A BUSINESS OR A BRANCH. REGISTERED 2026-09-13, HELD BY NO ROLE.
+  # =========================================================================================
+  # docs/decisions/0043 §6c records the gap as "delete-or-archive on business and branch", derived
+  # against the 79-id enumeration, and assigns architecture-agent a proposal with a sensitivity
+  # argument or an explicit ruling that an existing permission expresses it.
+  #
+  # *** THE RULING ON THE EXISTING PERMISSION, WRITTEN DOWN BECAUSE §6c REQUIRES IT TO BE: ***
+  # IT IS **NOT** COVERED BY core.business.update / core.branch.update, and "it is covered by
+  # update" would have been a legitimate answer if it were true. An update changes a field.
+  # WITHDRAWING A BUSINESS WITHDRAWS AN AUTHORIZATION SCOPE — business-read-v1: "a Business belongs
+  # to exactly one Organization and is an AUTHORIZATION SCOPE inside it" — so it changes what every
+  # principal assigned to that Business can reach. Gating it on `update` would widen a write
+  # permission into a scope-removal permission BY ADOPTION rather than by decision, which is the
+  # escalation AZ8 exists to record, one level down.
+  #
+  # *** AND `delete` IS DELIBERATELY NOT DECLARED, FOR EITHER. *** business-read-v1's precedent:
+  # "the way to keep it separate is to not declare it until an Action exists". A Business identifier
+  # is a REQUIRED foreign key on customers.customer and will be on every future App's rows, so
+  # deletion orphans data across Apps that do not exist yet — and a permission whose implementation
+  # requires a cascade decision nobody has made is not a permission, it is a data-model question
+  # wearing one. NOBODY CAN HOLD WHAT IS NOT DECLARED, which is the point.
+  - id: core.business.archive
+    group: organization
+    description: >-
+      Withdraw a Business/Workspace from use, and restore one. GATES BOTH DIRECTIONS.
+      An archived Business keeps every row that references it, keeps its identifier, and remains
+      resolvable so that existing records still render a name. What it stops is NEW use: no new
+      record may be filed into it, and it is offered in no picker.
+      *** THE MERGE IS THE core.template.retire ANSWER AND IT IS ARGUED RATHER THAN COPIED, BECAUSE
+      THE SIBLING PROPOSAL IN THE SAME PASS SPLIT INSTEAD. *** core.user.reactivate is a separate
+      permission precisely because restoring a MEMBER restores a person's live access. RESTORING A
+      BUSINESS GRANTS NOBODY ANYTHING THEY DID NOT ALREADY HOLD — a Business is a container, its
+      archived state removes no assignment, and un-archiving returns it to exactly the state its
+      assignees were already authorized over. The recovery half is genuinely harmless here and
+      genuinely is not there, which is the test core.template.retire's merge depends on.
+      TWO TRIGGERS REOPEN THE SPLIT, on core.template.retire's own terms: an archival that carries a
+      reason which must not be undone, OR a responder role needing recovery without withdrawal.
+      NAMED `archive` AND NOT `retire`, correcting nothing and following the catalogue's own
+      distinction: "Customer records archive; Templates retire." A Business holds customer records,
+      so it archives with them.
+      SENSITIVE RATHER THAN write: it withdraws an authorization scope, which changes what every
+      principal assigned to that Business can reach — that is §6's "change permissions" in effect if
+      not in name. NOT critical: nothing is destroyed, no data is lost, and the same permission
+      restores it.
+      *** ROUTES NOW EXIST: `core.ArchiveBusiness` and `core.RestoreBusiness` in
+      packages/contracts/core/organization/organization-structure-v1. *** This entry said "NO
+      CONTRACT PUBLISHES A ROUTE FOR THIS YET" and that was true when written and false the same day.
+      *** AND THE CONTRACT IS **ACTION** CLASS, NOT tenant-admin — WHICH THIS ENTRY ASSUMED WITHOUT
+      SAYING SO. *** `business` and `branch` are tenant-database tables, so `ActionContext.store`
+      reaches them. **The ruling is unchanged by that** — sensitivity grades what the OPERATION does
+      and withdrawing an authorization scope is the same act in either class — but the class buys one
+      thing the assumed one would not have: an Action is additionally bounded by
+      `ActionContext.authorizedBusinessIds`, so a caller cannot archive a Business outside its own
+      authorized set even at the declared scope. **A strengthening, arriving from the class rather
+      than from the permission.**
+    sensitivity: sensitive
+    scopes: [organization]
+    status: proposed
+    phase: 2
+  - id: core.branch.archive
+    group: organization
+    description: >-
+      Withdraw a Branch/Location from use, and restore one. GATES BOTH DIRECTIONS, on
+      core.business.archive's argument unchanged: a Branch is a container, archiving removes no
+      assignment, and restoring grants nobody anything they did not already hold.
+      scopes [organization, business] AND NOT [..., branch]: a branch-scope principal archiving its
+      own Branch is archiving the scope it holds — an act that removes the actor's own authority to
+      undo it, which is the one shape a self-service withdrawal must not have.
+      SENSITIVE, for core.business.archive's reason at a narrower span. NOT critical.
+      ROUTES NOW EXIST — `core.ArchiveBranch` and `core.RestoreBranch` in
+      organization-structure-v1, **Action class**. This entry said "NO ROUTE PUBLISHES IT YET" and
+      was false the same day. See core.business.archive above for why the class does not change the
+      ruling and does strengthen it.
+    sensitivity: sensitive
+    scopes: [organization, business]
+    status: proposed
+    phase: 2
 
   # --- teams ------------------------------------------------------------------
   - id: core.team.read
@@ -599,10 +840,21 @@ permissions:
       IT IS SEPARATE FROM core.organization.update, which is declared [organization] and is a
       TENANT principal editing its OWN Organization record. Two permissions rather than one
       widened one, for the reason AZ8 records: widening a tenant-scoped permission above the
-      tenant boundary is an escalation, not a convenience. THE TENANT PERMISSION HAS NO ROUTE AND
-      CANNOT BE GIVEN ONE OVER THIS TABLE TODAY — `organization` is control-plane and an Action
-      reaches no control-plane port — which is organization-identity-v1's OI-1 and is the reason
-      the platform enters these values on the customer's behalf.
+      tenant boundary is an escalation, not a convenience.
+      *** THIS ENTRY SAID "THE TENANT PERMISSION HAS NO ROUTE AND CANNOT BE GIVEN ONE OVER THIS
+      TABLE TODAY — `organization` is control-plane and an Action reaches no control-plane port".
+      CORRECTED 2026-09-13: THE FIRST HALF IS STILL TRUE AND THE SECOND IS NOT. *** No route exists
+      yet. But docs/decisions/0044 created the TENANT-ADMIN request class precisely because the
+      Action pipeline cannot reach the control plane — a tenant-admin route is authenticated at
+      principal level, resolves the tenant from the authenticated context, evaluates a permission
+      AND REACHES CONTROL-PLANE PORTS. So the impossibility is gone and
+      packages/contracts/core/tenant-admin/tenant-organization-profile-v1 is the route.
+      WHY THIS SENTENCE SURVIVED THE DECISION THAT FALSIFIED IT: everybody quoting it was quoting
+      the half that is still true — an Action reaches no control-plane port, which is unchanged and
+      is 0044 §1's own measurement. .claude/rules/workflow.md §12: a sentence about a missing
+      capability outlives the capability arriving, because every citation is for the surviving half.
+      *** OI-1 IS STILL OPEN AND IS NOT CLOSED BY THIS CORRECTION. *** 0044 §4: it closes when a
+      route in that class IS BUILT, not when one is contracted and not when a record says so.
       IT DOES NOT COVER STATUS. Not suspension, not deletion, not activation. A suspend route,
       when it exists, is a separate permission and a separate argument — §3.2's splitting
       discipline applied before rather than after.
@@ -916,7 +1168,33 @@ permissions:
   # --- notifications ----------------------------------------------------------
   - id: core.notification.read
     group: notification
-    description: "Read notifications addressed to the principal."
+    description: >-
+      Read notifications addressed to the principal.
+      *** PROPOSED FOR ADDITION TO `owner`, `admin` AND `business-admin`. NOT APPLIED — A GRANT IS
+      THE USER'S (security.md §8), AND THIS ENTRY RECORDS THE PROPOSAL RATHER THAN MAKING IT. ***
+      Raised by security-agent as MEDIUM-1, and the finding is not about notifications at all.
+      THE MEASUREMENT: this permission is held by `member` and by NO OTHER TENANT ROLE. It is the
+      ONLY difference between `member` and each of the three tiers above it —
+      member MINUS owner, member MINUS admin and member MINUS business-admin each come to exactly
+      { core.notification.read }.
+      *** THE CONSEQUENCE IS THAT NO ROLE, INCLUDING `owner`, CAN DEMOTE ANYONE TO `member`. ***
+      tenant-roles-v1's set-membership-role applies docs/decisions/0007 D16 constraint 1 to the
+      tier's WHOLE permission set, so setting a tier requires holding everything that tier holds. The
+      tier `member` is a subset of nobody's grants, so THE MOST ORDINARY ADMINISTRATIVE ACT IN
+      MILESTONE 2 IS REFUSED TO EVERY CALLER ALIVE.
+      IT FAILS CLOSED, SO IT IS NOT EXPOSURE. IT IS RATED MEDIUM FOR THE REPAIR PRESSURE, and the
+      wrong repair is the one somebody reaches for while blocked:
+        (a) ADD IT TO THE THREE UPPER TIERS — correct, and it grants almost nothing because the
+            permission is `scopes: [own]`: reading one's own notifications. STILL A GRANT, STILL THE
+            USER'S.
+        (b) RELAX THE CEILING — *** DO NOT. *** D16 constraint 1 is the single property holding the
+            custom-role model together, and `tenant-admin-permissions.ts` relies on it to keep its
+            static reachability check sound. Relaxing it to unblock tier-setting would make that
+            argument fail SILENTLY at the same moment.
+      (a) IS PROPOSED. The ceiling is not touched.
+      WHY IT IS `scopes: [own]` AND STAYS THERE: reading one's own notifications is not an
+      organization-scope power (openQuestions AZ5). Nothing here proposes widening the scope — only
+      that three more roles hold it at the scope it already declares.
     sensitivity: read
     scopes: [own]
     status: proposed
@@ -1649,11 +1927,16 @@ defaultRoles:
   #
   # WHAT WAS HERE BEFORE, AND WHY IT IS INSTRUCTIVE RATHER THAN EMBARRASSING. This comment read
   # "59 of the 62 CORE permissions", listed "the three core permissions omitted", and closed
-  # "Total for this role: 68 of the 71 catalogued permissions". MEASURED 2026-09-08: there are
-  # 71 core and 9 customers = 80 catalogued, this role holds 68, and it omits TWELVE core
-  # permissions, not three. ALL THREE FIGURES ROTTED AND THE ROLE NEVER CHANGED — 0025 through
-  # 0031 added platform-scope permissions above, and every one of them widened the gap between
-  # "core permissions that exist" and "core permissions this role may hold".
+  # "Total for this role: 68 of the 71 catalogued permissions". ALL THREE FIGURES ROTTED AND THE
+  # ROLE NEVER CHANGED — 0025 through 0031 added platform-scope permissions above, and every one of
+  # them widened the gap between "core permissions that exist" and "core permissions this role may
+  # hold".
+  # *** THE CORRECTION WRITTEN ON 2026-09-08 CARRIED ITS OWN FIGURES — "71 core and 9 customers = 80
+  # catalogued… it omits TWELVE core permissions" — AND ALL THREE OF THOSE ARE NOW WRONG TOO. ***
+  # They are struck rather than updated. A CORRECTED ARTIFACT IS NOT A VERIFIED ARTIFACT, and a
+  # correction that replaces stale numbers with fresh ones has fixed the instance and kept the
+  # mechanism. The authority is the `permissions:` list itself; run a count against the file at the
+  # moment you need one, and see the user's standing ruling below.
   #
   # *** THE PART WORTH KEEPING: THE FIX WAS ALREADY APPLIED ONE BLOCK UP AND WAS NOT PROPAGATED
   # HERE. *** The defaultRoles preamble above replaced a count with a property and said so in
@@ -1663,9 +1946,23 @@ defaultRoles:
   # stating once is a claim somebody restated, and the instance you did not fix is the one the
   # next reader finds.
   #
-  # THE SIXTEEN OMITTED, ENUMERATED RATHER THAN COUNTED, because a category absorbs the entry
-  # that does not belong to it:
-  #   FIFTEEN declared scopes: [platform] — a tenant role must never reach platform scope, and
+  # WHAT THIS ROLE OMITS, ENUMERATED RATHER THAN COUNTED, because a category absorbs the entry
+  # that does not belong to it.
+  #
+  # *** THIS HEADING SAID "THE SIXTEEN OMITTED" UNTIL 2026-09-13 AND WENT STALE THE SAME DAY, WHICH
+  # IS THE THIRD TIME A FIGURE IN THIS BLOCK HAS ROTTED. *** Milestone 2 registered five permissions
+  # held by no role — core.invitation.list, core.user.reactivate, core.user.remove,
+  # core.business.archive, core.branch.archive — and three organization-scoped ones registered
+  # earlier and deliberately ungranted: core.organization.transfer-ownership, .request-deletion and
+  # .cancel-deletion-request. THE FIGURE MOVED BECAUSE THE CATALOGUE GREW, NOT BECAUSE THE ROLE
+  # CHANGED, which is exactly what the paragraph above says happens and is exactly what happened to
+  # the paragraph.
+  # THE NUMBER IS REMOVED RATHER THAN INCREMENTED, under the user's standing ruling of 2026-09-13
+  # (.claude/rules/workflow.md §11a): DERIVE COUNTS, ENFORCE EQUALITY THROUGH QA, DO NOT RESTATE A
+  # FIGURE IN PROSE. The lists below are the authority; a total above them is a second copy that
+  # cannot see the first.
+  #
+  #   DECLARED scopes: [platform] — a tenant role must never reach platform scope, and
   #   this is the CRITICAL escalation the preamble's invariant exists to forbid:
   #     core.principal.grant-platform-scope   core.marketplace.moderate
   #     core.organization.create              core.organization.list
@@ -1675,11 +1972,26 @@ defaultRoles:
   #     core.credential.reset                 core.template.update
   #     core.template.retire                  core.template-adoption.read
   #     core.platform-organization.set-template
-  #   (ELEVEN until 2026-09-11; the four Template-lifecycle permissions were granted that day.
-  #    ENUMERATED RATHER THAN COUNTED, which is why adding four was a mechanical edit: a category
-  #    absorbs the entry that does not belong to it, and a list cannot.)
-  #   ONE declared scopes: [own] — core.notification.read. Held at 'own', not at 'organization'.
+  #   (The four Template-lifecycle permissions were added to this list on 2026-09-11, when the user
+  #    granted them. ENUMERATED RATHER THAN COUNTED, which is why adding four was a mechanical edit:
+  #    a category absorbs the entry that does not belong to it, and a list cannot.)
+  #
+  #   DECLARED scopes: [own] — core.notification.read. Held at 'own', not at 'organization'.
   #   Reading one's own notifications is not an organization-scope power; see openQuestions AZ5.
+  #
+  #   ORGANIZATION-SCOPED AND DELIBERATELY UNGRANTED — the interesting category, because these are
+  #   permissions this role IS eligible for and does not hold. Every one is `status: proposed`,
+  #   registered so a contract can name it, and HELD BY NO ROLE pending the user's grant:
+  #     core.organization.transfer-ownership   core.organization.request-deletion
+  #     core.organization.cancel-deletion-request
+  #     core.invitation.list                   core.user.reactivate
+  #     core.user.remove                       core.business.archive
+  #     core.branch.archive                                    (core.branch.archive: [organization, business])
+  #   *** SO EVERY MILESTONE 2 ROUTE GATED ON ONE OF THESE IS FORBIDDEN TO EVERY CALLER ALIVE. ***
+  #   That is the correct fail-closed state, it is what registration-without-grant means, and it is
+  #   the condition platform-routes.ts::assertEveryRoutePermissionIsReachable fails the BUILD on for
+  #   the platform class — because the revoke route once shipped unreachable and somebody had to
+  #   diagnose a `forbidden`. The tenant-admin registry owes the same assertion (0044 §3d).
   #
   # *** THE TWO DIRECTIONS ARE NOT THE SAME CLAIM, AND CONFLATING THEM IS WHAT THE COUNT DID. ***
   # A count asserts both at once and can be satisfied by neither being checked.
@@ -1718,13 +2030,42 @@ defaultRoles:
   # because the key cannot be minted, not because the lock is missing.
   #
   # THIS COMMENT ENDED "Total for this role: 68 of the 71 catalogued permissions" AND THE FIGURE
-  # ROTTED: 80 are catalogued, and 68 is still the size of the list below. Deleted rather than
-  # corrected — the list IS the source, and a total restated beside it is a second copy that can
-  # disagree with the first. See the property block above this role for the check that is owed.
-  - id: business-owner
+  # ROTTED. Deleted rather than corrected — the list IS the source, and a total restated beside it
+  # is a second copy that can disagree with the first. See the property block above this role for
+  # the check that is owed.
+  #
+  # ⭑ USER RULING, 2026-09-13 (.claude/rules/workflow.md §11a), AND IT GOVERNS EVERY FIGURE IN THIS
+  # FILE: DERIVE COUNTS FROM THE CATALOGUE. ENFORCE EQUALITY THROUGH QA. DO NOT RESTATE A FIGURE IN
+  # PROSE. It was made after a hand-maintained count directly above the list it counted was wrong
+  # three times. THIS FILE IS WHERE THAT CLASS KEEPS RECURRING — four separate figures in this one
+  # block have now rotted — so the ruling is recorded here as well as in the rules, and the repair
+  # is always the same: name the authority, never the value.
+  # ===========================================================================================
+  # RENAMED `business-owner` -> `owner` ON 2026-09-13. docs/decisions/0043 §3a, ACCEPTED.
+  # ===========================================================================================
+  # *** ALIGN THE UNBUILT VOCABULARY TO THE BUILT ONE, NEVER THE REVERSE. *** `organization_
+  # membership.role` has held the literal `'owner'` since 0007_membership_role.sql, behind a CHECK,
+  # and control-plane/0018_membership_role_admin.sql widens that CHECK to the four names below
+  # WITHOUT CHANGING ANY ROW'S VALUE. This entry was the only place the fifth spelling lived, it was
+  # `status: proposed` and unbuilt, and renaming it cost a text edit. Renaming the STORED value
+  # would have cost a migration and an audit-history rewrite. That is 0025's `business_id`
+  # precedent applied to a role.
+  #
+  # THE NAME `business-owner` SURVIVES IN PROSE ACROSS THIS REPOSITORY — in contracts, in decision
+  # records and in Core. Those are references to THIS ROLE under its old name and they are stale
+  # rather than wrong; a sweep of them is owed and is not performed by this edit. Recorded so the
+  # absence of the sweep is visible: workflow.md §2b — a rename's consumers are enumerated
+  # repository-wide, and the mover enumerates the trees it owns, which is exactly the wrong set.
+  - id: owner
     scope: organization
     status: proposed
-    description: "Owns the tenant. The most privileged tenant role — and strictly a TENANT role: it holds no platform-scope permission."
+    description: >-
+      Owns the tenant. EXACTLY ONE PER ORGANIZATION — the invariant is a partial unique index
+      enforced in the same statement that writes it (0043 §3c), never a check above the call. The
+      most privileged tenant role, and strictly a TENANT role: it holds no platform-scope
+      permission.
+      SINGULARITY IS WHAT MAKES `transfer` MEANINGFUL. Without it, transferring ownership is "add a
+      second owner" and the strong confirmation is theatre.
     permissions:
       - core.user.read
       - core.user.list
@@ -1794,6 +2135,133 @@ defaultRoles:
       - customers.customer.move
       - customers.customer.delete
       - customers.customer.restore-deleted
+  # ===========================================================================================
+  # `admin` — ADDED 2026-09-13. docs/decisions/0043 §3 and §3d, ACCEPTED. HELD BY NOBODY.
+  # ===========================================================================================
+  # *** THE TIER 0043 §1a FOUND MISSING FROM BOTH VOCABULARIES: "There is nothing between 'can
+  # delete the Organization' and 'administers one Business.'" *** Milestone 2 requires
+  # organization-level administration — settings, members, invitations, roles, retention, sessions
+  # — and requires ownership transfer, which only means anything if ownership is singular and
+  # precious. Both point at the same missing rung: AN ADMINISTRATOR OF THE WHOLE ORGANIZATION WHO
+  # CANNOT DESTROY OR TRANSFER IT.
+  #
+  # WHY A NEW NAME RATHER THAN WIDENING `business-admin` TO ORGANIZATION SCOPE (0043 §3b): widening
+  # would make one name mean two spans — the catalogue's business-admin "administers one Business",
+  # a widened one would administer everything. architecture.md §1a: a name that does not say WHOSE
+  # is a name two readers use correctly and mean different things by.
+  #
+  # THE LIST BELOW IS `owner`'s MINUS ONE ENTRY — core.organization.delete — AND THE SUBTRACTION IS
+  # WHAT 0043 §3d SPECIFIES. It also excludes, by not being in owner's list either,
+  # core.organization.transfer-ownership, .request-deletion and .cancel-deletion-request: those are
+  # registered and HELD BY NO ROLE pending the user's grant, and adding them here would be granting
+  # them.
+  #
+  # *** THE THIRD EXCLUSION CANNOT BE EXPRESSED HERE AT ALL, AND THAT IS 0043 §3d's OWN FINDING. ***
+  # `admin` must not act on the OWNER — suspend, remove, demote, revoke sessions. That is a property
+  # of the TARGET, not of the actor, and nothing in a permission id can say "except to that person".
+  # It is a CORE OBLIGATION AND A TEST REQUIREMENT (0043 §8.4: qa-agent owes a behavioural case per
+  # action, not a comment in roles.ts), and platform/core/tenant-admin/owner-immunity.ts is where
+  # Core is implementing it.
+  #   WITHOUT IT, `admin` IS `owner` WITH EXTRA STEPS: demote the owner, then do anything.
+  #
+  # *** ONE THING THIS LIST GRANTS THAT IS WORTH A SECOND LOOK RATHER THAN A SILENT INHERITANCE: ***
+  # core.subscription.change is `critical` and the catalogue calls it "A spend decision". 0043 §3d
+  # enumerates exactly three exclusions and this is not among them, so it is included AS THE
+  # ACCEPTED RECORD SPECIFIES rather than trimmed on architecture-agent's own judgement — a role
+  # composition is a security decision and narrowing an accepted one unilaterally is the same class
+  # of act as widening it. IT IS FLAGGED FOR security-agent, and the question is whether an
+  # administrator who cannot delete the Organization should be able to commit it to spending.
+  # Also included and worth naming for the same review: core.tenant.export (critical),
+  # core.api-credential.issue (critical), core.service-account.manage (critical) and
+  # customers.customer.delete (critical).
+  - id: admin
+    scope: organization
+    status: proposed
+    description: >-
+      Administers the whole Organization. Everything `owner` holds EXCEPT deleting it, transferring
+      it, and acting on the owner. The tier Milestone 2's administration surface is built for.
+    permissions:
+      - core.user.read
+      - core.user.list
+      - core.user.invite
+      - core.user.update
+      - core.user.deactivate
+      - core.session.list
+      - core.session.revoke
+      - core.organization.read
+      - core.organization.update
+      - core.business.read
+      - core.business.create
+      - core.business.update
+      - core.branch.read
+      - core.branch.create
+      - core.branch.update
+      - core.team.read
+      - core.team.create
+      - core.team.update
+      - core.team.manage-membership
+      - core.role.read
+      - core.role.create
+      - core.role.update
+      - core.role.assign
+      - core.role.revoke
+      - core.api-credential.list
+      - core.api-credential.issue
+      - core.api-credential.revoke
+      - core.service-account.manage
+      - core.subscription.read
+      - core.subscription.change
+      - core.usage.read
+      - core.file.read
+      - core.file.create
+      - core.file.delete
+      - core.notification.send
+      - core.audit.read
+      - core.audit.export
+      - core.setting.read
+      - core.setting.update
+      - core.feature-flag.read
+      - core.feature-flag.update
+      - core.tenant.export
+      - core.app.read
+      - core.app.install
+      - core.app.configure
+      - core.app.grant-permission
+      - core.app.revoke-permission
+      - core.app.upgrade
+      - core.app.disable
+      - core.app.uninstall
+      - core.capability.read
+      - core.capability.configure-provider
+      - core.ai.invoke
+      - core.ai.configure
+      - core.mcp.connect
+      - core.mcp.configure-external
+      - core.developer.register
+      - core.marketplace.submit
+      - customers.customer.create
+      - customers.customer.read
+      - customers.customer.list
+      - customers.customer.update
+      - customers.customer.archive
+      - customers.customer.restore
+      - customers.customer.move
+      - customers.customer.delete
+      - customers.customer.restore-deleted
+  # THE SAFETY INVARIANT ABOVE APPLIES TO `admin` IDENTICALLY: every permission it names declares
+  # 'organization' among its own scopes, and none is platform-scoped. The qa-agent check the
+  # preamble owes must examine BOTH organization-scope tenant roles, not one — a check written when
+  # there was a single such role and never widened is a check whose population shrank relative to
+  # the corpus without anything going red (workflow.md §11a).
+  #
+  # *** AND THE FIVE MILESTONE 2 PERMISSIONS ARE IN NEITHER TENANT ROLE, DELIBERATELY: ***
+  # core.invitation.list · core.user.reactivate · core.user.remove · core.business.archive ·
+  # core.branch.archive. All five are registered `status: proposed` and held by NO role, so every
+  # route gated on one is FORBIDDEN TO EVERY CALLER ALIVE until the user grants it. That is the
+  # correct fail-closed state and it is the condition platform-routes.ts::
+  # assertEveryRoutePermissionIsReachable exists to catch at BUILD time — the tenant-admin registry
+  # owes the same assertion (docs/decisions/0044 §3d, per conjunct).
+  #
   # The six customers.* permissions declared [organization, business] are held here; the
   # three declared [organization] only — move, delete, restore-deleted — are NOT, and the
   # intersection rule makes them impossible for a business-scope role to hold at all. That
@@ -1835,18 +2303,65 @@ defaultRoles:
       - customers.customer.update
       - customers.customer.archive
       - customers.customer.restore
-  # HOLDS NONE OF THE NINE customers.* PERMISSIONS, and the omission is the decision rather
-  # than an oversight. The user's CD-2 ruling states that member reaches customers only
-  # through explicitly registered permissions; granting nothing by default is the
-  # fail-closed reading, and a member who needs directory access gets a custom role. Note
-  # that member is ELIGIBLE for the six at business scope — eligibility is not a grant, and
-  # nothing here grants it. 'developer', 'platform-admin' and 'marketplace-moderator'
-  # likewise hold none: all nine are tenant-scoped, and a platform-scope role holding one is
-  # the escalation removed from marketplace-moderator above.
+  # ===========================================================================================
+  # ⚠ CORRECTED 2026-09-13. THIS BLOCK SAID `member` HOLDS NO customers.* PERMISSION AND THAT HAS
+  # BEEN FALSE OF THE RUNNING SYSTEM SINCE 2026-09-04.
+  # ===========================================================================================
+  #
+  # *** RECORDING A GRANT docs/decisions/0019 ALREADY MADE. NOT MAKING ONE. *** The two entries added
+  # below have been in shipped code for over a week; this register was the half that did not say so.
+  # Correcting a description to match an existing decision is not making a new decision, and no user
+  # grant is required — but an uncited addition to a role block in the REGISTER is indistinguishable
+  # from a new placement (0007 rule 4), so the citation is a condition of the edit rather than a
+  # courtesy.
+  #
+  # WHAT IS BEING RECORDED, BY LINE RATHER THAN BY RECORD (architecture.md §3c — quote the line and
+  # its location):
+  #   docs/decisions/0019-where-permission-grants-live.md
+  #     Status:   Accepted
+  #     Date:     2026-09-04
+  #     Deciders: Dudo Team Lead, UNDER AUTHORITY THE USER DELEGATED 2026-09-04
+  #     line 76:  | `member` | The read-only subset |
+  #   "The read-only subset" of a set is not the empty set, and the grant was made under DELEGATED
+  #   authority rather than unilaterally.
+  #
+  # MEASURED IN CORE RATHER THAN TRANSCRIBED FROM A REPORT —
+  # platform/core/authorization/roles.ts, MEMBER_PERMISSIONS:
+  #     customers.customer.read · customers.customer.list · core.business.read
+  #   The third was already listed here. roles.ts:251 gives its reason on its own face: "A read-only
+  #   user still has to see the name of the Business whose customers it is reading."
+  #
+  # *** THE DEFECT'S SHAPE, AND IT WILL RECUR WHEREVER THIS REGISTER DESCRIBES SOMETHING IT DOES NOT
+  # DECIDE. *** The comment block that stood here was SCRUPULOUS AND TRUE — "eligibility is not a
+  # grant, and NOTHING HERE grants it" is a claim about THE CATALOGUE, and it was correct. The
+  # description then said "Holds no customers.* permission", WHICH READS AS A CLAIM ABOUT THE SYSTEM.
+  # Same paragraph, same author, one sentence true of one side and false of the other, AND NEITHER
+  # SENTENCE SAYS WHICH SIDE IT MEANS — architecture.md §3b exactly, and the same class as 0043 §1b's
+  # `holdsAtOrAbove` sentence. A register that describes the world must name which of the two it is
+  # describing, every time.
+  #
+  # AND CD-2 WAS MIS-STATED HERE, WHICH IS WHY THE FALSE CLAIM SURVIVED. This block said CD-2 "states
+  # that member reaches customers only through explicitly registered permissions". What
+  # customer-directory-v1:196-198 says is: "'business-admin' and 'member' are now ELIGIBLE to hold
+  # the six at business scope… eligibility, not a grant. Nothing is granted until the Team Lead
+  # registers these." *** CD-2 DID NOT RULE THAT member HOLDS NONE. IT SAID THE GRANT WAS A SEPARATE
+  # ACT THAT HAD NOT HAPPENED YET — and `0019` is that act. *** Reasoning from a record's reputation
+  # rather than its text (architecture.md §3c).
+  #
+  # 'developer', 'platform-admin' and 'marketplace-moderator' still hold none of the nine, and that
+  # sentence is unaffected: all nine are tenant-scoped, and a platform-scope role holding one is the
+  # escalation removed from marketplace-moderator above.
   - id: member
     scope: business
     status: proposed
-    description: "An ordinary user. Deliberately narrow — default = deny. Holds no customers.* permission."
+    description: >-
+      An ordinary user. Deliberately narrow — default = deny. HOLDS THE READ-ONLY SUBSET OF THE
+      CUSTOMER DIRECTORY: read and list, and nothing that mutates. Not archive, which is a mutation
+      however reversible; not move; not create. docs/decisions/0019 line 76, Accepted 2026-09-04
+      under authority the user delegated.
+      *** THIS DESCRIPTION SAID "Holds no customers.* permission" AND WAS FALSE OF THE RUNNING SYSTEM
+      FROM THE DAY 0019 WAS ACCEPTED. *** See the block above for how a true statement about this
+      register became a false one about the platform.
     permissions:
       - core.user.read
       - core.business.read
@@ -1856,6 +2371,9 @@ defaultRoles:
       - core.file.create
       - core.notification.read
       - core.setting.read
+      # RECORDED FROM docs/decisions/0019 line 76, NOT GRANTED HERE. See the block above.
+      - customers.customer.read
+      - customers.customer.list
 
 # ---------------------------------------------------------------------------
 # openQuestions — recorded, not resolved. See AUTHORIZATION_STANDARD.md §13.
@@ -2053,7 +2571,29 @@ openQuestions:
       role rather than one per permission, and makes vocabulary a customisation rather than a
       fork. Opening per-tenant PERMISSION authoring is the larger step and drags in D11 and
       D16's four constraints; it is separable and should be decided separately. Either way the
-      catalog's six seed roles and the code's two must stop being two vocabularies.
+      catalog's seed roles and the code's must stop being two vocabularies.
+    amendment2026_09_13: >-
+      *** PARTLY OVERTAKEN BY docs/decisions/0043, ACCEPTED, AND THE TRIGGER IS NOW MET RATHER THAN
+      MERELY FIRED. *** 0043 §7 records that 0023's "before a second App exists" is MET BY MILESTONE
+      2 rather than by a second App — which matters, because as written that trigger would have kept
+      reading as unfired forever (workflow.md §12: a conditional whose condition turned true while
+      its own text still describes the future).
+      WHAT 0043 SETTLED: the tenant vocabulary is FOUR seed roles — owner, admin, business-admin,
+      member — matching `organization_membership.role`'s CHECK exactly after
+      control-plane/0018_membership_role_admin.sql. The catalogue's `business-owner` is RENAMED to
+      `owner` and `admin` is added, so the two vocabularies now agree on names. THE FIGURES THIS
+      ENTRY CARRIED — "six seed roles", "the code's two" — ARE REMOVED RATHER THAN UPDATED, under
+      the user's 2026-09-13 ruling: the `defaultRoles` list and `roles.ts` are the two authorities,
+      and a count in an open question is a third copy.
+      WHAT 0043 DID **NOT** SETTLE, AND IT IS THIS ENTRY'S ACTUAL SUBJECT: per-business-type role
+      VOCABULARIES. 0043 §2 adopts seed roles AND D16 custom roles together — which is close to this
+      entry's own recommendation, "separate the label from the capability set" — but a custom role
+      under D16 constraint 1 is bounded by the CREATOR'S grants, and a per-business-type vocabulary
+      is a set of labels the PLATFORM ships per Template. Those are different mechanisms and only
+      the first exists. This question stays open.
+      AND NOTE WHICH HALF OF THE CONTRADICTION SURVIVES: D10 says "roles are data, never code", and
+      after 0018 `roles.ts` still holds a closed compile-time union of four. It is a WIDER closed
+      union, not an open one. The crack is narrower and it is the same crack.
     blocks: "Per-business-type role vocabularies; and it is the third patch over the crack 0019, 0021 and 0023 each papered."
   - id: AZ12
     question: >-

@@ -46,7 +46,7 @@ import {
   type SessionState,
 } from '@/api/auth';
 import { onUnauthenticated } from '@/api/session-signal';
-import type { Transport } from '@/api/fixture-transport';
+import type { Transport } from '@/api/transport';
 import type { ApiError } from '@/api/errors';
 import { CONFIG } from '@/api/config';
 

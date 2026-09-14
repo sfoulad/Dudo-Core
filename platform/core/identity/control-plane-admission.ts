@@ -216,16 +216,38 @@ export const ORGANIZATION_UPDATE_ROW_WRITES = 1;
 export const ORGANIZATION_TEMPLATE_UPDATE_ROW_WRITES = 2;
 
 /**
- * `organization_membership` (`0003`): 1 table row + 1 implicit primary-key index.
+ * `organization_membership`: 1 table row + 1 implicit primary-key index + **1 entry in
+ * `organization_membership_by_organization` (`0020`) + 1 in `organization_single_owner` (`0019`)**.
  *
- * Also unwritten here — membership administration is the organization-structure slice. Note for
- * that slice: a membership change is one of the operations `.claude/rules/security.md` §6
- * requires to be audited, and the audit record belongs in the AFFECTED ORGANIZATION'S
- * tenant-scoped `audit_event` table, not in the control plane. That keeps the trail where the
- * Organization can read its own, and keeps the control plane free of an append-only log that
- * spans every tenant.
+ * *** IT WENT 2 → 4 ON 2026-09-13 WITH `0019` AND `0020`, IN THE SAME CHANGE AS THOSE MIGRATIONS ***
+ * — which is what the instruction on every constant in this file requires and what `0016` and
+ * `0017` are the worked examples of. `0020` states the arithmetic; this line is the half that would
+ * otherwise be an obligation nobody collects.
+ *
+ * **IT IS AN UPPER BOUND AND OVER-CHARGES AN ORDINARY MEMBER WRITE BY ONE.** `0019`'s index is
+ * PARTIAL — `WHERE role = 'owner'` — so a member, an admin or a role-less row maintains no entry in
+ * it and genuinely costs three. A second constant conditional on the role would be exact and would
+ * be *"correct today and silently wrong the first time"* a caller reached the wrong one, which is
+ * the trade `SESSION_ROW_WRITES` and `CONFIRMATION_SPEND_ROW_WRITES` both make and both explain.
+ * `0014` §A.12 decides the direction: over-reserving delays a write, under-reserving takes the
+ * platform out.
+ *
+ * `ONBOARDING_CONTROL_PLANE_ROW_WRITES` MOVES ON ITS OWN, 11 → 13, because it is a SUM of these
+ * constants rather than a literal — `onboarding-service.ts`'s stated reason for summing, and the
+ * second time it has been called upon.
+ *
+ * **NOTHING IN THIS REPOSITORY WRITES THIS TABLE EXCEPT ONBOARDING**, which writes one row per
+ * Organization. `tenant-admin/membership-administration.ts` declares the port that will, and
+ * requires a reservation on every method so the charge cannot be forgotten.
+ *
+ * A membership change is one of the operations `.claude/rules/security.md` §6 requires to be
+ * audited, and the audit record belongs in the AFFECTED ORGANIZATION'S tenant-scoped `audit_event`
+ * table, not in the control plane — `0044` §3c, and `0003_organization_membership.sql` said it
+ * first. **That audit row is a SECOND reservation, from the TENANT's budget, and this constant does
+ * not cover it**: a reader summing this number has the operation's control-plane cost and not its
+ * cost (`tenant-admin/tenant-admin-audit.ts`).
  */
-export const ORGANIZATION_MEMBERSHIP_ROW_WRITES = 2;
+export const ORGANIZATION_MEMBERSHIP_ROW_WRITES = 4;
 
 /** `tenant_directory` (`0005`): 1 table row + 1 implicit primary-key index. Unwritten here. */
 export const TENANT_DIRECTORY_ROW_WRITES = 2;

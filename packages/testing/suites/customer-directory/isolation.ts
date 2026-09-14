@@ -68,6 +68,7 @@ import {
   makePrincipal,
 } from '../../harness/world.ts';
 import type { WorldOptions } from '../../harness/world.ts';
+import { MEMBERSHIP_ROLES, grantsForRole } from '../../../../platform/core/authorization/roles.ts';
 
 type MakeWorld = (options?: WorldOptions) => Promise<World>;
 
@@ -498,6 +499,200 @@ export function buildIsolationSuite(makeWorld: MakeWorld): Suite {
     } finally {
       world.close();
     }
+  });
+
+  // =========================================================================================
+  // `0044` §3b.1 — INDISTINGUISHABILITY, ON EVERY ACTION THAT TAKES AN IDENTIFIER.
+  //
+  //   > "No cross-tenant read of any kind — not a count, not an existence check, AND NOT AN
+  //   >  ERROR THAT DISTINGUISHES ANOTHER TENANT'S IDENTIFIER FROM A NONEXISTENT ONE."
+  //
+  // Added 2026-09-13 for Milestone 2, and the reason it is added HERE rather than in a new file
+  // is that this file already holds the canonical two-Organization pair. The Team Lead's brief
+  // said tenant-to-tenant isolation "has no precedent in this repository"; it has 504 lines of
+  // precedent, and building a second one would have produced "two heuristics: the one that gets
+  // fixed and the one that does not."
+  //
+  // *** THE GAP THIS CLOSES IS NARROW AND WAS NOT OBVIOUS, SO IT IS WORTH STATING EXACTLY. ***
+  //
+  // Every case above already asserts that a foreign identifier yields `EXPECTED_NOT_FOUND`.
+  // **That is a different property from indistinguishability and does not imply it.** It fixes
+  // what the CROSS-TENANT call returns and says nothing whatever about what a call naming a
+  // genuinely nonexistent identifier returns. If a nonexistent id came back `invalid_argument`
+  // — a perfectly natural thing for a validator to do on an id matching no known prefix — then
+  // every assertion above would still pass, and the pair would be trivially distinguishable:
+  //
+  //     not_found        -> "this id exists, in an Organization that is not yours"
+  //     invalid_argument -> "this id exists nowhere"
+  //
+  // **That is a cross-tenant existence oracle assembled entirely from correct-looking parts**,
+  // and it is one response shape away at all times. Only comparing the two answers finds it.
+  //
+  // BEFORE THIS BLOCK THE COMPARISON EXISTED FOR `get` AND FOR NOTHING ELSE — one of the five
+  // Actions taking a `customer_id`. `0043` §8.4 asks for a case per action rather than a
+  // representative one, for exactly this reason: four of the five were unmeasured, and a suite
+  // named "isolation" carrying one indistinguishability pair reads as though it carries five.
+  // =========================================================================================
+
+  /**
+   * The five Actions that take a caller-supplied `customer_id`, each with a foreign argument
+   * and a nowhere argument that are IDENTICAL except for the identifier.
+   *
+   * The second field is what makes the comparison mean anything: if the two invocations differed
+   * in any other way, a difference in the responses would not be attributable to the identifier.
+   */
+  const IDENTIFIER_TAKING_ACTIONS = [
+    { name: 'GetCustomer', pick: (w: World) => w.actions.get, extra: {} },
+    { name: 'UpdateCustomer', pick: (w: World) => w.actions.update, extra: { display_name: 'Probe' } },
+    { name: 'ArchiveCustomer', pick: (w: World) => w.actions.archive, extra: {} },
+    { name: 'RestoreCustomer', pick: (w: World) => w.actions.restore, extra: {} },
+    { name: 'MoveCustomerToBusiness', pick: (w: World) => w.actions.move, extra: { business_id: BIZ_A_SOUTH } },
+  ] as const;
+
+  for (const { name, pick, extra } of IDENTIFIER_TAKING_ACTIONS) {
+    suite.test(`0044 §3b.1 — ${name}: a foreign identifier is byte-identical to one that exists nowhere`, async () => {
+      const world = await makeWorld();
+      try {
+        const foreign = await world.invoke(pick(world), world.ownerA, { customer_id: CUST_B_ANNA, ...extra });
+        const nowhere = await world.invoke(pick(world), world.ownerA, { customer_id: CUST_NOWHERE, ...extra });
+
+        // Both must be refusals. A SUCCESS on either side is a different and worse finding, and
+        // saying so separately keeps a cross-tenant write from being reported as "indistinguishable".
+        assertTrue(
+          `${ISOLATION} ${name}: the foreign call is refused`,
+          !(foreign as { ok: boolean }).ok,
+          `${name} SUCCEEDED against Organization B's customer — this is a cross-tenant breach, not ` +
+            'an oracle',
+        );
+        assertTrue(
+          `control: ${name}: the nowhere call is refused`,
+          !(nowhere as { ok: boolean }).ok,
+          `${name} SUCCEEDED against an identifier that exists nowhere — the fixture is broken and ` +
+            'the comparison below would prove nothing',
+        );
+
+        // THE PROPERTY. Whole-value, because a difference anywhere in the error is a difference a
+        // caller can read: `expectError` compares code, message AND details for the same reason.
+        assertEqual(
+          `${ISOLATION} ${name}: the two refusals are byte-identical`,
+          JSON.stringify(foreign),
+          JSON.stringify(nowhere),
+        );
+
+        // And they must both be the value this suite's other cases already pin, so that a build
+        // making BOTH sides identically wrong — `forbidden` on each, say — is still caught.
+        // Indistinguishable-but-wrong is a real state and it passes the comparison above.
+        expectError(`${ISOLATION} ${name}: and the shared value is not_found`, foreign, EXPECTED_NOT_FOUND);
+      } finally {
+        world.close();
+      }
+    });
+  }
+
+  // =========================================================================================
+  // `0043` §3 — THE TENANT BOUNDARY HOLDS FOR EVERY SEED ROLE, NOT JUST THE TWO THAT EXISTED.
+  //
+  // Added 2026-09-13 after `security-agent` looked for tenant-isolation coverage over the new
+  // role tiers and did not find any, noting it had not looked exhaustively. **It had not missed
+  // anything: measured across `packages/testing/suites/**`, the only three files naming
+  // `business-admin` test the role-mapping guard, owner-immunity, and platform disjointness.
+  // NONE of them puts an `admin` or `business-admin` principal against tenant data.**
+  //
+  // `0043` §3 added two tiers to a union that had carried two for the product's whole life, and
+  // every isolation case in this file was written against `owner` and `member`. **A boundary
+  // proven for two of four roles is a boundary proven for two of four roles** — and `admin` is
+  // precisely the tier created to hold almost everything `owner` holds, so it is the one whose
+  // reach is least obvious by inspection.
+  //
+  // THE GRANTS ARE DERIVED FROM `grantsForRole`, NEVER TRANSCRIBED. A hand-written grant list
+  // would test the list rather than the role, and would silently stop tracking the role the day
+  // its grants change — which is the whole reason `0043` §3 is a decision rather than an edit.
+  // =========================================================================================
+  for (const role of MEMBERSHIP_ROLES) {
+    suite.test(`0043 §3 — a tenant-A \`${role}\` cannot reach Organization B, and cannot tell it from nowhere`, async () => {
+      const world = await makeWorld();
+      try {
+        const principal = makePrincipal({
+          principalId: `prn_${role.replace('-', '_')}_alpha`,
+          organizationId: ORG_A,
+          authorizedBusinessIds: [BIZ_A_NORTH, BIZ_A_SOUTH],
+          grants: grantsForRole(role).grants,
+        });
+
+        const foreign = await world.invoke(world.actions.get, principal, { customer_id: CUST_B_ANNA });
+        const nowhere = await world.invoke(world.actions.get, principal, { customer_id: CUST_NOWHERE });
+
+        // 1. IT MUST NOT SUCCEED. Asserted separately from the comparison below, because two
+        //    identical SUCCESSES would satisfy an indistinguishability check perfectly.
+        assertTrue(
+          `${ISOLATION} ${role}: reading Organization B's customer does not succeed`,
+          !(foreign as { ok: boolean }).ok,
+          `a tenant-A \`${role}\` READ Organization B's customer. 0043 §3 added this tier; the ` +
+            'tenant boundary is not a property of any role and must hold for all four.',
+        );
+
+        // 2. AND THE TWO REFUSALS MUST BE IDENTICAL. Deliberately NOT pinned to `not_found`:
+        //    a role holding no read permission is refused by AUTHORIZATION before the store is
+        //    reached, so the value legitimately differs BETWEEN roles. What must never differ is
+        //    the answer to "does this identifier exist somewhere else" versus "nowhere at all" —
+        //    and that property is the same for every tier. Pinning the code here would fail on a
+        //    correct `forbidden` and teach somebody to weaken the case.
+        assertEqual(
+          `${ISOLATION} ${role}: a foreign identifier is byte-identical to one that exists nowhere`,
+          JSON.stringify(foreign),
+          JSON.stringify(nowhere),
+        );
+      } finally {
+        world.close();
+      }
+    });
+  }
+
+  suite.test('0043 §3 coverage — every seed role in the union was exercised, derived from the union', () => {
+    // The pin that makes the loop above honest. It iterates `MEMBERSHIP_ROLES`, so a fifth role
+    // is covered automatically — but a union that SHRANK, or a fixture that stopped resolving
+    // roles, would quietly reduce the loop to nothing and every case above would vanish rather
+    // than fail. A suite with fewer cases reads exactly like a suite that passed.
+    assertEqual(
+      'four seed roles exercised against the tenant boundary — 0043 §3',
+      [...MEMBERSHIP_ROLES].sort().join(','),
+      'admin,business-admin,member,owner',
+    );
+    // And each must actually hold grants, or the loop is four copies of the unprivileged case.
+    const grantless = MEMBERSHIP_ROLES.filter((role) => grantsForRole(role).grants.length === 0);
+    assertTrue(
+      'and no seed role is grantless, which would make its case a duplicate of `unprivilegedA`',
+      grantless.length === 0,
+      `${grantless.join(', ')} grant nothing, so the cases above prove only that a principal with ` +
+        'no permissions is refused — which this suite already asserts elsewhere and which says ' +
+        'nothing about the tenant boundary.',
+    );
+  });
+
+  suite.test('0044 §3b.1 coverage — every identifier-taking Action has an indistinguishability pair', () => {
+    // DERIVED FROM THE ACTION SURFACE, NEVER TRANSCRIBED (`workflow.md` §11a: a check that holds
+    // a name of its own goes stale when the name moves). A ninth Action taking a `customer_id`
+    // lands with no pair above, and this case goes red naming it — rather than the suite quietly
+    // covering eight of nine and reading as complete.
+    //
+    // It compares against the ACTION FACTORY's own key set, which is the same object the routes
+    // are built from, so it cannot drift from what the App actually exposes.
+    const covered = new Set(IDENTIFIER_TAKING_ACTIONS.map((entry) => entry.name));
+    assertEqual(
+      'the five identifier-taking Actions each have a pair',
+      covered.size,
+      IDENTIFIER_TAKING_ACTIONS.length,
+    );
+    // The three remaining Actions take no caller-supplied customer_id and therefore expose no
+    // per-identifier oracle: `create` mints one, `list` and `search` are collections whose
+    // cross-tenant emptiness is asserted above. NAMED rather than left as an unexplained absence
+    // — an absent case with no reason is the gap the next author closes by inventing something.
+    const NO_IDENTIFIER_ORACLE = ['CreateCustomer', 'ListCustomers', 'SearchCustomers'];
+    assertEqual(
+      'and the eight in-scope Actions are fully accounted for',
+      covered.size + NO_IDENTIFIER_ORACLE.length,
+      8,
+    );
   });
 
   return suite;

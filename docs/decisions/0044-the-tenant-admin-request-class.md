@@ -92,6 +92,66 @@ them one shared port apart.
 `0024`'s mutual exclusion doing the work. **It is the one place where the two administrations cannot
 merge by mistake.**
 
+#### 3a-i. ⚠ "BY CONSTRUCTION" IS TRUE OF ONE POPULATION AND FALSE OF THE OTHER — AND THE SENTENCE DOES NOT SAY WHICH
+
+**Added 2026-09-13, from `qa-agent` testing §3a's claim rather than re-deriving it, which is exactly
+what it was asked to do. The sentence above is `architecture.md` §3b's defect in an accepted record
+of my own.**
+
+**Measured, `tenant-admin-authority.ts:194` and `:206`:**
+
+```ts
+resolve(principalId: string, organizationId: string): Promise<Result<TenantAdminAuthority>>
+  const membershipOutcome = await store.findActiveMembership(principalId, organizationId);
+```
+
+| Population | Why it is refused | Is that "by construction"? |
+|---|---|---|
+| **A platform operator** | holds **zero** membership rows, so **no** lookup can succeed | **YES.** `0024` makes the row impossible. The claim holds exactly as written |
+| **A tenant principal in A, naming B** | `findActiveMembership` returns nothing | **NO. THAT IS A CHECK** — a correct one, and a check is not a construction |
+
+> **§3a is TRUE of platform operators and FALSE of cross-tenant principals, and it names only the
+> first while reading as a property of the class.** A reader auditing cross-tenant reach meets a
+> sentence saying the question is settled by construction and stops — which is §3b's finding
+> precisely: **a dismissal that is specific about the wrong party is worse than silence, because
+> silence prompts the question.**
+
+**THE SHARPER HALF IS NOT THE SENTENCE. IT IS THE SIGNATURE.**
+
+**`organizationId` is a bare `string`.** Nothing in the type records where it came from, so **the
+safety property of this entire class depends on a fact the type system cannot see** — that every
+call site fills that parameter from the authenticated context and never from the request.
+
+**§3b.2 already forbids the request-supplied form and enforces it at REGISTRATION.** That is a real
+mechanism and it is not what is being questioned. **What §3b.2 cannot reach is a handler that
+obtains the value correctly and passes it on incorrectly**, or a future call site that does not go
+through a registered route at all — a background job, a test harness, a second dispatcher.
+**`architecture.md` §3a ranks the layers, and a registration check sits at *a guard inside the
+statement*, not at *omission does not compile*.**
+
+**RULED, and it is a hardening of an existing rule rather than a new one:**
+
+- **`organizationId` on this port becomes a branded type that ONLY the context extraction can mint** —
+  §3a's receipt pattern, applied to a tenant identifier instead of to a write. **A request-supplied
+  value then fails to compile at the call site rather than being refused at registration**, and
+  "by construction" becomes true in the sense the sentence already claims.
+- **The brand must name its subject.** A receipt minted for the caller's Organization and spent on
+  another is the obvious hole, and it closes the same way it does for `ControlPlaneWriteReservation`.
+- **`findActiveMembership` STAYS.** It is the in-statement guard, and §3a is explicit that this is
+  the layer with no window at all — **the one that still holds when a receipt has gone stale, or on a
+  database restored past a migration.** Nothing here removes it; the brand is added above it.
+- **Owner: `core-agent`.** The record is mine; the types are Core's.
+
+**AND THE CORRECTION TO §3a ITSELF IS ONE CLAUSE, NOT A REWRITE.** The claim is kept and scoped:
+*no platform operator can reach this class by construction* — **true, load-bearing, and `0024`'s.**
+What is struck is the implication that the same argument covers tenant-to-tenant, which it never
+did.
+
+> **The finding cost one reading of one signature, and it was reached by an agent I had told to test
+> a claim rather than apply a verdict.** `§11a`: *"I built this because the contract said it was
+> accepted"* is the sentence that locates these afterwards — **and asking for the outcome instead of
+> naming the axis is what got it found before a route existed to be wrong.**
+
 ### 3b. What the class must never acquire — a class is where reach accumulates
 
 1. **No cross-tenant read of any kind** — not a count, not an existence check, not an error that
@@ -110,10 +170,81 @@ merge by mistake.**
 `0028`'s platform-originated records land in, so a tenant reading their trail sees what they did and
 what the platform did in one place.
 
+> #### ⚠ AND THIS WHOLE CLAUSE IS A RELAXATION OF `API_STANDARD.md` §1, WHICH SAYS "MANDATORY" WITH NO "UNLESS". RECORDED 2026-09-13.
+>
+> ```
+> API_STANDARD.md §1   | `audit` | Mandatory `true` for `sensitive` and `critical`. |
+> 0044 §3c             audited unless a per-route argument says otherwise
+> ```
+>
+> **An accepted ADR may relax a standard. What must not happen is the standard reading as
+> unchanged** — and it does. **`API_STANDARD.md` §1 owes a pointer to this section**; routed to
+> `architecture-agent`, whose file it is.
+>
+> **`architecture-agent` found this AFTER arguing three exemptions against this clause, and named
+> the mechanism against itself:**
+>
+> > **"I argued the three exemptions against `0044` §3c and never opened the standard the class is a
+> > relaxation of. The clause I was reasoning about was itself the carve-out, and A CARVE-OUT READS
+> > AS THE RULE WHEN IT IS THE NEAREST THING TO HAND."**
+>
+> **That is `architecture.md` §3c's reader half one level up.** The citation checked out, the clause
+> was real and accepted — **and it was the exception, reasoned about as though it were the baseline,
+> by the party closest to it.** Everyone arguing about an exemption was standing inside a prior
+> exemption nobody re-opened.
+
 **Reads are not universally audited, and that is a DIFFERENCE FROM P4 stated rather than inherited.**
 P4 audits platform reads because the actor is outside the tenant and enumeration is reconnaissance.
-**Here the actor is a member reading their own data**, and a write per settings page view costs the
+~~**Here the actor is a member reading their own data**~~, and a write per settings page view costs the
 tenant's own allowance for no detection value. **Sensitive reads are audited individually, per route.**
+
+> #### ⚠ THAT STRUCK CLAUSE WAS LICENSING THREE EXEMPTIONS AND ITS WORDS COVER NONE OF THEM. AMENDED 2026-09-13.
+>
+> **`security-agent` opened this record rather than working from either paraphrase in front of it,
+> and found the record and its Core transcription disagree on the one axis that decides the
+> question:**
+>
+> ```
+> 0044 §3c (this record)      "the actor is a member reading THEIR OWN DATA"
+> tenant-admin-audit.ts:19    "the actor is a member reading THEIR OWN ORGANIZATION'S DATA"
+> ```
+>
+> **One word, inserted in transcription. On the record's words the clause licenses NOTHING beyond a
+> self-read; on Core's it licenses EVERY intra-tenant read, which is every route in the class.**
+>
+> **THE SENTENCE WAS DOING TWO JOBS AND ONLY ONE OF THEM WAS IN ITS WORDS.** Its argumentative work
+> is the contrast with P4 — **the actor is INSIDE the tenant rather than outside it** — and its
+> words said *reading their own data*. `architecture.md` §3b: a dismissal precise about the wrong
+> party. **Core resolved the ambiguity in the widening direction, silently, and that became the
+> version an implementer reads.**
+>
+> **THE CORRECTED CLAUSE, AND THE SECOND SENTENCE IS THE ONE THAT WAS MISSING:**
+>
+> > **The contrast with P4 is the ACTOR'S POSITION: a member acting inside their own Organization,
+> > not an operator reaching in from outside. THAT CONTRAST LICENSES ONLY THE ABSENCE OF A BLANKET
+> > READ AUDIT. IT LICENSES NO INDIVIDUAL EXEMPTION.** A `sensitive` read is audited unless a
+> > per-route argument says otherwise, **and that argument may not be this paragraph** — being
+> > inside the tenant is true of every route here and therefore distinguishes none of them.
+>
+> **WHY THIS MATTERS MORE THAN THE ROUTE THAT SURFACED IT.** `0043` §5.4's exemption list has three
+> entries — `tenant.members.sessions.list`, `tenant.invitations.get`, `tenant.invitations.pending-count`
+> — **and they are not three judgements. They are three uses of this one clause.** On its own words
+> the reason fits none: **sessions.list reads ANOTHER MEMBER'S data, `invitations.get` reads a
+> NON-MEMBER'S plaintext address, `pending-count` counts NON-MEMBERS.**
+>
+> > **That is exactly how an enumerated exemption list becomes a default** — which is the failure
+> > `architecture.md` §3a-i's enumeration was chosen to prevent, arriving through the *reason* rather
+> > than through the *mechanism*. **The list stayed enumerated and honest; the licence behind every
+> > entry was one sentence nobody re-read.**
+>
+> **ALL THREE ARE REOPENED.** Each owes its own argument or an `audit: required`. **`security-agent`
+> reviewed only the first on its merits and said so** — it is claiming the licence does not cover the
+> other two, not that they are wrong.
+>
+> **AND CORE'S TRANSCRIPTION IS CORRECTED TO THE AMENDED WORDING, NOT DELETED.** The divergence is the
+> evidence — *the record and its copy disagreed, and the copy was the one being built against.*
+> `workflow.md` §12's duplicated constraint: **the rule was restated once and agreed with itself
+> never.**
 
 > **⚠ THE CONSEQUENCE: THIS CLASS HAS NO EQUIVALENT OF P4'S ACCIDENTAL READ BOUND.** P4 makes every
 > platform read a write, so the write ceiling bounds read cost — which `0042` recorded as
@@ -217,6 +348,46 @@ assertion stays exactly as it is.**
 of an accepted contract was set aside by *a comment in an implementation file* — *"accurate about its
 own reasoning and silent about the contract it contradicted."* **The deferral's stated condition —
 *"until a critical Action exists"* — has fired twice over now.**
+
+### 3e-i. NEITHER CHALLENGE ROUTE NEEDS A PERMISSION OF ITS OWN — CHECKED, BECAUSE THE OPPOSITE WOULD HAVE COST A SECOND USER APPROVAL
+
+**Added 2026-09-13. The question was *"does building the tenant-admin challenge route require a
+nineteenth permission?"*, and it was worth one file read because a wrong answer means going back to
+the user for a supplementary grant while eighteen sit undecided.**
+
+**`confirmation-v1` answers it in the `permission:` field of both published challenge routes,
+verbatim:**
+
+```
+platform    "THE SAME PERMISSION AS THE OPERATION NAMED IN THE REQUEST, resolved from
+             action_id. NOT A PERMISSION OF ITS OWN."
+Action      "THE SAME PERMISSION AS THE ACTION NAMED IN THE REQUEST. It IS an Action and is
+             invoked through the ordinary pipeline."
+```
+
+> **A challenge route evaluates the permission of the operation it is a challenge FOR.** So the
+> tenant-admin one resolves to whichever tenant-admin permission the target declares — **all of
+> which are already in the eighteen.**
+
+**AND THAT IS A SAFETY PROPERTY RATHER THAN A CONVENIENCE, which is why it is recorded here rather
+than noted in a dispatch.** A challenge route with a permission of its own would be **a second door
+to every `critical` operation**, gated by something other than what the operation itself requires —
+and `security.md` §2's *deny by default* would be satisfied while the gate protected the wrong thing.
+**Resolving from the request means the challenge is exactly as hard to obtain as the act it
+authorises, and no easier.**
+
+**CONSEQUENCES, both of which unblock work:**
+
+- **The eighteen-permission grant is COMPLETE for this class as it stands.** No supplementary
+  request is owed for either outstanding challenge route.
+- **The tenant-admin challenge route is a BUILD ITEM AVAILABLE NOW** — `0038`'s framing for F-1
+  transfers, and it does not wait on the grant.
+
+**ONE THING THIS RECORD DOES NOT SETTLE, named rather than assumed:** `assertEveryRoutePermissionIsReachable`
+compares a route's DECLARED permission against what roles hold. **A route whose permission is
+resolved from the request at call time declares none statically**, so how that assertion treats it —
+exempt, or keyed on the resolvable set — **is Core's to decide and is not decided here.** Getting it
+wrong in the exempting direction would put a hole in the assertion the whole class relies on.
 
 ## 4. What this does not decide
 

@@ -120,6 +120,23 @@ declare module '*/generate-types.mjs' {
    */
   export function exitCodeFor(report: unknown): 0 | 1 | 2 | 3;
 
+  /**
+   * Walks a root for `*.schema.json` and indexes each by its `$id`, so a cross-schema `$ref`
+   * can be resolved.
+   *
+   * DECLARED SO A SUITE CAN POINT IT AT A FIXTURE DIRECTORY rather than hand-building a `Map`.
+   * A hand-built index is a second implementation of the indexer, and the two disagree silently
+   * — which is the class of defect the same-name-`$ref` suite exists to catch, one layer up.
+   *
+   * `problems` is the population's other half: a schema that could not be read or carries no
+   * `$id` is REPORTED rather than skipped, so an index that saw less than the tree does not
+   * render as an index that saw a clean tree.
+   */
+  export function buildSchemaIndex(root?: string): {
+    readonly index: Map<string, unknown>;
+    readonly problems: readonly { readonly code: string; readonly contract?: string; readonly message: string }[];
+  };
+
   /** Pure: no file access, so it is testable without a filesystem. */
   export function emitModule(input: {
     readonly schema: unknown;

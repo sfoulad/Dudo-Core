@@ -160,9 +160,9 @@ import {
   MAX_TEMPLATE_NAME_LENGTH,
   TEMPLATE_LEVELS,
   TEMPLATE_LEVEL_DEFAULTS,
-  isKnownTemplateStatus,
   templateLabelRefusal,
   templateNameRefusal,
+  type KnownTemplateStatus,
   type ListTemplatesOutput,
   type Template,
   type TemplateLevel,
@@ -1153,24 +1153,65 @@ function EditTemplate({
 }
 
 /**
- * `active` is the only value version 1 produces. An unrecognised one is rendered
- * verbatim and styled neutrally rather than hidden or mapped onto `active` —
- * showing the real value is recoverable, quietly showing the wrong one is not.
+ * ⚠ THIS BADGE WAS RENDERING THE RAW WIRE VALUE — ENGLISH `active` / `retired`,
+ * VISIBLY, ON THE ARABIC CONSOLE — AND BOTH TRANSLATIONS ALREADY EXISTED.
+ *
+ * `template.active` and `template.retired` are in both dictionaries. Only
+ * `retired` was wired, and only in `OrganizationDetail.tsx`, so `template.
+ * active` sat unreferenced while this badge printed the wire value beside it.
+ * **Not `sr-only`: this one is on the screen**, which is the difference from
+ * the nine hidden strings and the reason it is worth saying it was found by
+ * reading rather than by any pattern — no untranslated-prose scan can see a
+ * value interpolated straight from a response.
+ *
+ * `Record<KnownTemplateStatus, MessageKey>` is TOTAL, so a third status cannot
+ * be added to the union without a label. That is the same guard the level
+ * titles use twenty lines up, and it is the direction that catches the defect
+ * this badge had: not a wrong label, an absent one.
+ *
+ * ===========================================================================
+ * THE UNKNOWN ARM IS GONE, AND WHICH LAYER REPLACED IT
+ * ===========================================================================
+ *
+ * It rendered an unrecognised value verbatim in a neutral badge with an
+ * `sr-only` note. `templateStatus` narrowed from `extensible` to `closed`
+ * (`0043` §7c-i), and **three independent layers now forbid what the arm
+ * caught**, so it was guarding against a value nothing can produce:
+ *
+ *   the column     `0012_template.sql:135` — CHECK (status IN ('active','retired'))
+ *   the contract   the enum is closed, so the emitted type has no unknown arm
+ *   the parse      `requireTemplateStatus` throws before a value reaches here
+ *
+ * ⚠ **THE COMPILER DID NOT NAME THIS BRANCH AND WAS NEVER GOING TO.** The
+ * narrowing was expected to make it unreachable and say so; the parameter was
+ * `status: string`, so `isKnownTemplateStatus` still narrowed a widened type
+ * and `tsc` exited 0 with the dead arm standing. **One widened parameter, one
+ * call site from a typed field, and the loud direction goes silent.** It is
+ * `KnownTemplateStatus` now, so the type is what refuses an untaught value
+ * rather than a branch that renders one.
+ *
+ * ⚠ **AND THIS SAID "`active` is the only value version 1 produces."** True when
+ * written; `platform.templates.retire` and `platform.templates.restore` both
+ * set the field. **The identical sentence was corrected in `api/platform.ts`
+ * and this copy was not** — §12's propagation case. A THIRD copy is still live
+ * in `0012_template.sql`'s own comment, which is `core-agent`'s tree.
  */
-function StatusBadge({ status }: { status: string }) {
+const TEMPLATE_STATUS_KEYS: Readonly<Record<KnownTemplateStatus, MessageKey>> = {
+  active: 'template.active',
+  retired: 'template.retired',
+};
+
+function StatusBadge({ status }: { status: KnownTemplateStatus }) {
   const t = useT();
-  const known = isKnownTemplateStatus(status);
   return (
     <span
       className={cn(
         'inline-block rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap',
         status === 'active' && 'bg-green-50 text-green-700',
         status === 'retired' && 'bg-sunk text-ink-muted',
-        !known && 'bg-gold-50 text-gold-700',
       )}
     >
-      {status}
-      {!known ? <span className="sr-only"> {t('unknown.status')}</span> : null}
+      <bdi>{t(TEMPLATE_STATUS_KEYS[status])}</bdi>
     </span>
   );
 }

@@ -1,0 +1,557 @@
+---
+# Organization Structure — Businesses and Branches — Action contract, version 1
+#
+# Shapes: organization-structure-v1.schema.json. Reasoning: this file and README.md in this
+# directory. `business-read-v1` is the companion and must be read first — it owns the READS.
+#
+# Governed by: docs/decisions/0006 (Accepted) — tenancy · 0007 (Accepted) — the permission model ·
+#              0043 (Accepted) — Milestone 2's contract obligations, which bind this set even
+#              though it is not in the tenant-admin class · 0008 / 0030 — cost and expandability
+#              docs/architecture/standards/API_STANDARD.md, MULTITENANCY_STANDARD.md
+# Owner:       architecture-agent authors; Team Lead accepts.
+#
+# STATUS: proposed. NOT APPROVED AND NOT BUILT. Every write here needs a `name` column that does
+# not exist, which is a migration and therefore the user's, every time (security.md §7).
+
+contractVersion: 1
+apiVersion: v1
+namespace: core
+domain: organization
+status: proposed
+updated: "2026-09-13"
+documentsExistingImplementation: false
+
+# ---------------------------------------------------------------------------
+# requestClass — docs/decisions/0039. DECLARED, AND IT IS NOT THE CLASS THIS SET WAS EXPECTED IN.
+# ---------------------------------------------------------------------------
+requestClass: action
+
+whyThisIsAnActionAndNotTenantAdmin:
+  theExpectation: >-
+    `packages/contracts/core/tenant-admin/README.md` §4 listed "businesses and branches" among the
+    unwritten Milestone 2 sets and said of that list: *"all belonging to this class."*
+  theMeasurement: >-
+    *** `business` AND `branch` ARE TENANT-DATABASE TABLES. *** `platform/core/migrations/0002_business.sql`
+    and `0004_branch.sql` — NOT under `control-plane/`, which is where `organization`,
+    `organization_membership`, `session`, `principal`, `tenant_role` and `invitation` live.
+  theConsequence: >-
+    An Action reaches tenant data through `ActionContext.store` and that is all this contract needs.
+    **docs/decisions/0044 §1's blocker does not apply here**: the tenant-admin class exists because
+    almost nothing Milestone 2 administers is in the tenant database, and this is the part that is.
+    SO THIS SET IS AN ORDINARY ACTION CONTRACT, in `core/organization/` beside `business-read-v1`,
+    which is already Action-class over the same two tables.
+  andTHEREADMECLAIMWASWRONG: >-
+    *** §4's "all belonging to this class" was an absence list carrying an unchecked assertion about
+    where each item belongs. *** It is corrected in the same unit of work as this contract landing —
+    0043 §7a's shape a third time, and the first time it has been about a CLASS rather than a table.
+    **The list was right that the work was unwritten and wrong about who it belonged to**, which is
+    the more useful half to record: an absence list invites a claim about the missing thing, and
+    nobody checks a claim about something that does not exist yet.
+  whyITMATTERSRATHERTHANBEINGFILING: >-
+    The classes differ in what they can reach and in who can call them. Had this been authored as
+    tenant-admin it would have asked Core for a control-plane port it does not need, and it would
+    have been UNREACHABLE BY EVERY APP — where an Action is reachable by the Customer Directory,
+    which files records into these very Businesses. **Getting the class wrong would have been a
+    capability decision made by a filing mistake.**
+
+# ---------------------------------------------------------------------------
+# scope — WHAT THIS IS NOT, and the companion that owns the rest
+# ---------------------------------------------------------------------------
+scope:
+  thisContractOwns: "Creating, renaming, archiving and restoring Businesses and Branches; and listing the Branches of one Business."
+  businessReadV1Owns: >-
+    *** LISTING BUSINESSES AND RESOLVING THEIR NAMES. `core.ListAuthorizedBusinesses` and
+    `core.ResolveBusinessReferences` ARE NOT DUPLICATED HERE AND MUST NOT BE. *** That contract is
+    ACCEPTED, both clients build against it, and a second Business listing would be a shape one
+    client has and the other does not — a contract defect by architecture.md §1.
+    IF AN ADMINISTRATION SCREEN NEEDS ARCHIVED BUSINESSES IN A LISTING, THAT IS A CHANGE TO
+    `business-read-v1`, not a new listing here. It is additive there (a new nullable `status` field)
+    and breaking here (two listings, two answers). **Recorded as OS-2 rather than solved by adding a
+    route**, because the temptation to add one is exactly what this paragraph exists to catch.
+  deliberatelyAbsent:
+    - "DELETE, for both objects. Not declared, not published, and no permission exists — see permissionRuling."
+    - "MOVING a Branch between Businesses. It changes the authorization scope of every record filed into it; that is `customers.customer.move`'s shape and needs its own argument."
+    - "Business HIERARCHY. `0002` models Businesses as flat within an Organization; a parent reference here would invent a shape no record supports."
+    - "TEAMS. `core.team.*` is catalogued and is a different object family with its own membership semantics."
+
+# ---------------------------------------------------------------------------
+# tenancy
+# ---------------------------------------------------------------------------
+tenancy:
+  tenant: Organization
+  basis: >-
+    MULTITENANCY_STANDARD.md §2. The Organization is the isolation boundary; a Business is an
+    AUTHORIZATION SCOPE inside it and a Branch is one level below that. `0004_branch.sql` says it in
+    its own words: a Branch "narrows within a tenant and never across one".
+  model: "docs/decisions/0006 — one shared D1 database with mandatory TenantStoreResolver indirection."
+  rules:
+    - "Tenant identity is derived from the authenticated context on every call. Never from the request."
+    - >-
+      NO organization_id IN ANY SHAPE. An Action handler is never given the organization identifier
+      at all (tenancy/tenant-context.ts), so there is no value available to put in a response — the
+      same structural argument business-read-v1 makes, inherited rather than restated.
+    - >-
+      *** `tenant_id` IS SET BY THE STORAGE BOUNDARY AND NEVER BY A CALLER *** — `0002`'s rule, which
+      `0004` repeats verbatim and explains: "a second table applying it differently is how the
+      boundary stops being a boundary." Every write here goes through `ActionContext.store`, whose
+      tenant predicate is applied centrally and is never hand-written.
+    - >-
+      A BRANCH IS ADDRESSED BY (business_id, branch_id) AND NEVER BY branch_id ALONE. The primary key
+      is (tenant_id, business_id, branch_id); a statement naming only the Branch has left the
+      authorization scope out of the key.
+    - >-
+      THE FOREIGN KEY IS COMPOSITE AND THE CONTRACT DOES NOT RELY ON IT. `0004` declares
+      `FOREIGN KEY (tenant_id, business_id)` and notes that a single-column reference would permit a
+      cross-tenant edge — **and foreign-key enforcement is a runtime setting** (`0003`), so the
+      authorization decision rests on the tenant-scoped read, not on the constraint.
+
+# ---------------------------------------------------------------------------
+# authorizationModel
+# ---------------------------------------------------------------------------
+authorizationModel:
+  authority: "Core, and only Core, at every entry point, on every call (0007 rule 1). Deny by default."
+  default: deny
+
+  evaluationOrder:
+    - "1. Authenticate the principal. Failure -> unauthenticated."
+    - "2. Derive the tenant AND the authorized business set from the authenticated context (0014 §C.5). Neither comes from the request."
+    - "3. Authorize the declared permission at the declared scope, WITHOUT reference to any record. Failure -> forbidden."
+    - "4. Validate the input schema. Unknown fields rejected. Failure -> invalid_argument."
+    - >-
+      5. Resolve the named Business — and the Branch's Business — WITHIN the tenant AND within the
+      caller's authorized business set. Absent from either -> not_found.
+    - "6. Apply the state rules: archive requires `active`, restore requires `archived`, a Branch's Business must be `active`. failed_precondition."
+    - "7. Write."
+
+  theUnknownIdentifierRuling:
+    declaredAsAField: "unknownIdentifierResponse: not_found — on every operation."
+    ruling: >-
+      A business_id or branch_id outside the caller's authorized set answers not_found —
+      IDENTICALLY whether it names another Organization's object, an object of this Organization the
+      caller is not authorized over, or nothing.
+    whyITFOLLOWSbusinessReadV1RATHERTHANcustomerDirectoryV1: >-
+      *** THE TWO ACCEPTED CONTRACTS OVER THIS DATA DISAGREE, AND THE DISAGREEMENT IS REASONED
+      RATHER THAN ACCIDENTAL, SO PICKING ONE NEEDS AN ARGUMENT. ***
+      `customer-directory-v1`'s step-5c returns `forbidden` for an in-tenant unauthorized Business,
+      on a DATA-CORRUPTION argument: told not_found, a user re-enters the customer and the tenant's
+      directory silently acquires a duplicate.
+      `business-read-v1` returns the indistinguishable answer, because "nobody re-creates a Business
+      because a name failed to render, and this contract has no create at all."
+      *** THIS CONTRACT DOES HAVE A CREATE, WHICH IS EXACTLY THE CONDITION THAT MADE THE CORRUPTION
+      ARGUMENT BITE — AND IT STILL DOES NOT REACH. *** The corruption case needs a user who, told
+      "no such thing", CREATES A DUPLICATE OF THE THING THEY WERE LOOKING FOR. An administrator told
+      a business_id is unknown does not create a Business — they have no name for it, no reason to
+      believe it should exist, and the identifier they typed came from somewhere. **The duplicate
+      requires the user to know what the object WAS, and an opaque identifier tells them nothing.**
+      So the fail-closed answer holds, and it holds for a reason rather than by inheritance.
+    theNAMESARENOTUNIQUE: >-
+      *** AND THAT IS WHAT KEEPS THE ABOVE TRUE. *** Two Businesses, or two Branches of one Business,
+      may share a name. A uniqueness constraint would create a `conflict` answer, and a `conflict` on
+      a name is an EXISTENCE ORACLE OVER NAMES: an administrator not authorized over a Business could
+      learn it exists by trying to create one called the same thing.
+      IT ALSO WOULD NOT SURVIVE CONTACT WITH THE PRODUCT — "Downtown" is a reasonable name for a
+      Branch of two different Businesses — and the tenant owns its own vocabulary. **A client that
+      wants to warn about a near-duplicate does so in the client, where it is a courtesy rather than
+      a refusal.**
+
+  permissionRuling:
+    alreadyRegistered:
+      core.business.create: "write, scopes [organization], phase 1. FIRST ROUTE."
+      core.business.update: "write, scopes [organization, business], phase 1. FIRST ROUTE."
+      core.branch.create: "write, scopes [organization, business], phase 1. FIRST ROUTE."
+      core.branch.update: "write, scopes [organization, business, branch], phase 1. FIRST ROUTE."
+      core.branch.read: "read, scopes [organization, business, branch], phase 1. Gates the Branch listing. FIRST ROUTE."
+      core.business.archive: >-
+        sensitive, scopes [organization], phase 2, registered 2026-09-13, HELD BY NO ROLE. Gates
+        archive AND restore. Proposed by architecture-agent for 0043 §6c and NOT YET GRANTED.
+      core.branch.archive: >-
+        sensitive, scopes [organization, business], phase 2, registered 2026-09-13, HELD BY NO ROLE.
+        Gates archive AND restore.
+    proposedByThisContract: "NONE. All seven exist; two are the §6c proposals awaiting the user."
+    theARCHIVEPERMISSIONSAREWHYTHISCONTRACTISPARTLYUNREACHABLE: >-
+      `core.business.archive` and `core.branch.archive` are `status: proposed` and held by no role,
+      so all four lifecycle operations are FORBIDDEN TO EVERY CALLER ALIVE until the user grants
+      them. **The other five operations are reachable the day the routes land**, because their
+      permissions sit on `owner`, `admin` and — for the Business-scoped ones — `business-admin`.
+      *** THAT SPLIT IS WORTH SEEING RATHER THAN AVERAGING: create and rename work; archive does not.
+      *** A client must not present an archive control that is guaranteed to be refused.
+    permissionsDeliberatelyNotDeclared:
+      - >-
+        core.business.delete and core.branch.delete — NOT DECLARED, SO NOBODY CAN HOLD THEM, and the
+        reason is not caution. A `business_id` is a REQUIRED foreign key on `customers.customer` and
+        will be on every future App's rows; `branch` carries a composite FK to `business`. **Deletion
+        orphans data across Apps that do not exist yet, so a delete permission's implementation
+        requires a cascade decision nobody has made** — which makes it a data-model question wearing
+        a permission's clothes. business-read-v1's precedent: the way to keep a capability separate
+        is to not declare it until an operation exists.
+      - "core.business.list — business-read-v1 argued this at length and declined it: its listing returns exactly the caller's authorized set, so there is no wider population for a second permission to guard. Unchanged here, because this contract publishes no Business listing at all."
+      - "core.branch.list — the Branch listing is gated on `core.branch.read`, on business-read-v1's identical reasoning: the row set IS the caller's authorized set within one Business they already hold, so enumerating it is not a second disclosure."
+
+  scopeRuling:
+    businessCreate: organization
+    businessUpdate: business
+    businessArchiveAndRestore: organization
+    branchCreateUpdateArchiveRestoreAndList: business
+    reasoning: >-
+      THE OPERATION'S `scope` IS THE LEVEL ITS PERMISSION IS EVALUATED AT — a single value, not the
+      list the permission may be declared at. A grant at a level implies the levels beneath it and
+      never above (AUTHORIZATION_STANDARD.md §4).
+      CREATE AND ARCHIVE OF A BUSINESS ARE `organization` BECAUSE THEY CHANGE THE SET OF SCOPES.
+      A business-scope principal creating a Business would be creating a scope it does not hold, and
+      archiving one is withdrawing a scope from everyone assigned to it. **Neither is an act within a
+      Business; both are acts on the Organization's structure.**
+      RENAMING IS `business`, AND THE ASYMMETRY IS DELIBERATE. A business-admin renaming the Business
+      it administers changes a label inside its own scope and reaches nothing else. Requiring
+      organization scope for a rename would mean a business-admin cannot correct a typo in its own
+      Business's name, which is the "locked out of its own scope" defect business-read-v1 records.
+      EVERYTHING BRANCH-LEVEL IS `business`, INCLUDING ARCHIVE, because a Branch sits inside one
+      Business and the Business is the scope its administrator holds. **`core.branch.archive` is
+      declared [organization, business] rather than [..., branch] deliberately: a branch-scope
+      principal archiving its own Branch would be withdrawing the scope it holds, removing its own
+      authority to undo it** — the one shape a self-service withdrawal must not have.
+
+# ---------------------------------------------------------------------------
+# theARCHIVESEMANTICS — the ruling this contract is most likely to be read wrongly on
+# ---------------------------------------------------------------------------
+theARCHIVESEMANTICS:
+  ruling: >-
+    ARCHIVING WITHDRAWS A CONTAINER FROM NEW USE. IT DESTROYS NOTHING, DETACHES NOTHING, AND HIDES
+    NOTHING THAT ALREADY EXISTS.
+  whatCHANGES:
+    - "No new record may be filed into it — an App creating a record against an archived Business or Branch is refused with failed_precondition."
+    - "No new Branch may be created inside an archived Business."
+    - "It is offered in no picker. THAT IS A CLIENT OBLIGATION and it is presentation, never security (security.md §2) — the refusal above is the control."
+  whatDOESNOT:
+    - >-
+      *** EVERY EXISTING RECORD REFERENCING IT IS UNTOUCHED AND STILL RESOLVES. *** A customer filed
+      into an archived Business is still readable, still listable and still renders that Business's
+      name. `business-read-v1`'s resolve MUST continue to resolve an archived Business — otherwise
+      archiving silently blanks the label on every historical record, which is data loss wearing a
+      lifecycle's clothes.
+    - >-
+      *** AUTHORIZATION IS UNCHANGED. *** Archiving does not revoke anybody's assignment and does not
+      remove the Business from `authorizedBusinessIds`. A principal authorized over it before is
+      authorized over it after — which is what makes RESTORE a return to the previous state rather
+      than a re-grant, and is why one permission gates both directions.
+  whyBOTHDIRECTIONSAREONEPERMISSION: >-
+    `core.template.retire`'s merge test, and it holds here for the same reason it held for
+    `tenant_role` and FAILED for `core.user.reactivate`: **restoring a container grants nobody
+    anything they did not already hold.** The recovery half is harmless. Restoring a suspended MEMBER
+    is not, which is why that one is split — and stating the test each time rather than copying the
+    answer is what makes the two rulings different rather than inconsistent.
+    TWO TRIGGERS REOPEN IT, on core.template.retire's own terms: an archival carrying a reason that
+    must not be undone, or a responder role needing recovery without withdrawal.
+  theCASCADEQUESTION_ANSWEREDRATHERTHANLEFT: >-
+    *** ARCHIVING A BUSINESS DOES NOT ARCHIVE ITS BRANCHES, AND IT DOES NOT REFUSE WHILE IT HAS ANY.
+    *** Both alternatives were weighed and both are worse.
+    A CASCADE would change the status of an unbounded number of rows in one un-reviewable act, with
+    none of them named in the request or in its audit record — the reasoning that made
+    `tenant.roles.delete` refuse rather than cascade, and the row-write cost is unbounded in the same
+    way `tenant.members.sessions.revoke`'s is.
+    A REFUSAL-WHILE-POPULATED would make archiving a Business require archiving every Branch first,
+    which is the cascade with the work moved to the operator and no safety gained.
+    SO THE ARCHIVED BUSINESS'S BRANCHES STAY `active` AND ARE UNREACHABLE FOR NEW USE ANYWAY, because
+    creating a record against them requires an active Business. **A client rendering a Branch's own
+    `status` beside an archived Business's would show `active` on something nobody can use** — which
+    is a real rendering trap and is why `listBranches` returns the Business's status nowhere: the
+    client already knows it, because it named the Business to get the list.
+
+# ---------------------------------------------------------------------------
+# actions — API_STANDARD.md §1. Action ids follow business-read-v1's `core.VerbNoun` convention,
+# which is the Action class's form and is NOT the dotted `tenant.*` form the tenant-admin class uses.
+# ---------------------------------------------------------------------------
+actions:
+
+  - id: core.CreateBusiness
+    title: "Create a Business"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/createBusinessInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/createBusinessOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.business.create
+    scope: organization
+    sensitivity: write
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 2
+    writes: "One `business` row plus its primary-key entry. `0002_business.sql`'s own free-tier note gives 2 and says there is no secondary index; re-derive it from that file if one is added."
+    notes: >-
+      NO CONFLICT — names are not unique. See theNAMESARENOTUNIQUE.
+      NOT AUDITED, and it is the only write here that is not. `sensitivity: write` carries no audit
+      requirement (permission-catalog `sensitivityClasses`), and creating an empty container reaches
+      nothing and destroys nothing. **The archive operations ARE audited because they are
+      `sensitive`, and the rung is read off the catalogue rather than chosen per route.**
+
+  - id: core.RenameBusiness
+    title: "Rename a Business"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/updateBusinessInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/updateBusinessOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.business.update
+    scope: business
+    sensitivity: write
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 1
+    writes: "One row updated; the name is not indexed, so no index entry moves."
+    notes: >-
+      AN ARCHIVED BUSINESS MAY BE RENAMED. Deliberate: correcting the name of an archived container
+      is how a historical record stops being mislabelled, and refusing it would freeze a mistake.
+      Archiving withdraws from NEW USE, and a rename is not a use.
+
+  - id: core.ArchiveBusiness
+    title: "Archive a Business"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/businessLifecycleInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/businessLifecycleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.business.archive
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 6
+    writes: "One row updated (1) plus AUDIT_EVENT_ROW_WRITES (5, platform/core/storage/write-cost.ts). ONE LEDGER ONLY, unlike every tenant-admin operation — both writes are tenant-side, because this is an Action."
+    reachableToday: false
+    whyITISUNREACHABLETODAY: "`core.business.archive` is `status: proposed` and held by no role. Forbidden to every caller alive until the user grants it."
+    notes: "Requires `active`; every other value is failed_precondition. Does NOT cascade to Branches and does not refuse while it has any — theARCHIVESEMANTICS.theCASCADEQUESTION."
+
+  - id: core.RestoreBusiness
+    title: "Restore an archived Business"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/businessLifecycleInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/businessLifecycleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.business.archive
+    scope: organization
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 6
+    writes: "As archive."
+    reachableToday: false
+    notes: "Requires `archived`. One permission gates both directions — theARCHIVESEMANTICS.whyBOTHDIRECTIONSAREONEPERMISSION."
+
+  - id: core.CreateBranch
+    title: "Create a Branch"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/createBranchInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/createBranchOutput" }
+    successStatus: 201
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.branch.create
+    scope: business
+    sensitivity: write
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 2
+    writes: "One `branch` row plus its primary-key entry — `0004_branch.sql`'s own figure, which also says a `BRANCH_ROW_WRITES` constant would start at 2 and move the day a secondary index is added."
+    notes: "The Business must be `active` — failed_precondition otherwise. A new Branch is the clearest possible new use of a container that has been withdrawn from new use."
+
+  - id: core.RenameBranch
+    title: "Rename a Branch"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/updateBranchInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/updateBranchOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.branch.update
+    scope: business
+    sensitivity: write
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 1
+    notes: "Both identifiers required. NO business_id change — that is a MOVE and is not published here."
+
+  - id: core.ArchiveBranch
+    title: "Archive a Branch"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/branchLifecycleInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/branchLifecycleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.branch.archive
+    scope: business
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 6
+    reachableToday: false
+    whyITISUNREACHABLETODAY: "`core.branch.archive` is `status: proposed` and held by no role."
+    notes: "Requires `active`."
+
+  - id: core.RestoreBranch
+    title: "Restore an archived Branch"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/branchLifecycleInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/branchLifecycleOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, failed_precondition, rate_limited, quota_exceeded, internal, unavailable, timeout]
+    permission: core.branch.archive
+    scope: business
+    sensitivity: sensitive
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: required
+    auditOnDenial: true
+    exposure: [internal, public]
+    maxRowWrites: 6
+    reachableToday: false
+    notes: "Requires `archived`, AND the Branch's Business must be `active` — restoring into an archived container produces an active Branch nobody can reach."
+
+  - id: core.ListBranches
+    title: "List a Business's Branches"
+    request: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/listBranchesInput" }
+    response: { schemaRef: "urn:dudo:schema:organization-structure:1#/$defs/listBranchesOutput" }
+    successStatus: 200
+    errors: [invalid_argument, unauthenticated, forbidden, not_found, rate_limited, internal, unavailable, timeout]
+    permission: core.branch.read
+    scope: business
+    sensitivity: read
+    unknownIdentifierResponse: not_found
+    confirmation: derived
+    audit: false
+    auditOnDenial: false
+    exposure: [internal, public]
+    maxRowWrites: 0
+    freeTierImpact:
+      pageCap: 100
+      boundingIndex: >-
+        `branch` PRIMARY KEY (tenant_id, business_id, branch_id) — **a bounded prefix scan, and
+        `0004_branch.sql` says so on its own face**: "a Business's Branch list is a bounded prefix
+        scan on the primary key, which is why no secondary index is needed for it." *** THIS IS THE
+        ONLY LISTING IN MILESTONE 2 WHOSE INDEX ALREADY EXISTS AND WAS DESIGNED FOR IT. ***
+    notes: >-
+      NO quota_exceeded — a read, and 0014 §A.10 keeps reads available at a write ceiling.
+      Returns BOTH statuses with `status` on each row; no filter in v1, on the ruling in
+      `listBranchesInput`.
+      A collection endpoint never 404s for its contents — a Business with no Branches returns
+      `data: []`. **The `not_found` in the error list is for the BUSINESS, not for the collection.**
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+
+  thisContractRequiresANameColumnOnBOTHTABLES:
+    theCondition: >-
+      Every create and every rename here requires a `name` column on `business` and on `branch`; the
+      migrations adding them are the USER'S TO APPROVE, every time (security.md §7).
+    measured: >-
+      `0002_business.sql` defines `business` as exactly (tenant_id, business_id) and states that it
+      DECLINED a name: *"There is deliberately NO Business name… they belong to the
+      organization-structure slice, with its own contract."* `0004_branch.sql` follows it with
+      (tenant_id, business_id, branch_id, created_at).
+      *** THIS CONTRACT IS THAT SLICE, SO THE SENTENCE IN `0002` IS NOW ADDRESSED RATHER THAN
+      OUTSTANDING — and it is addressed by a CONTRACT, not by a column. *** The column is still the
+      user's.
+    andSTATUSANDcreated_atGOWITHIT: >-
+      `status` does not exist on either table and `created_at` does not exist on `business`. **Three
+      columns and one of them is on both tables**, which is one migration rather than three, and it
+      is named as one so nobody approves it twice.
+    theHONESTCONSEQUENCE: >-
+      *** UNTIL THAT MIGRATION LANDS, NOTHING IN THIS CONTRACT CAN BE BUILT — not even the read. ***
+      `listBranches` returns `name` and `status`, and neither has a source. This is stronger than
+      business-read-v1's position, where the READS work and return null; here the WRITES are the
+      point and there is nowhere to write to.
+
+  theBusinessNameUnblocksBusinessReadV1: >-
+    *** AND THAT IS THE MOST USEFUL THING THIS CONTRACT DOES BEFORE IT IS BUILT. *** `business-read-v1`
+    is ACCEPTED, both clients consume it, and its `display_name` is null on every response because
+    nothing stores a Business name. **The same migration closes that**, and its own `dependencies`
+    section says exactly what would: *"A name column on Core's business table, plus something that
+    writes a Business row."* This contract is the something.
+
+  archivePermissionsAreUngranted: >-
+    `core.business.archive` and `core.branch.archive` are `status: proposed` and held by NO role, so
+    four of the nine operations are forbidden to every caller alive. Registration is not a grant
+    (0007 rule 4); security-agent reviews; only the user grants.
+
+  theActionClassEXISTSANDTHATISWHYTHISSETISDIFFERENT: >-
+    Unlike everything in `core/tenant-admin/`, THIS CLASS IS BUILT AND SERVING. `core-routes.ts`
+    registers Action routes today and `business-read-v1`'s two Actions are contracted against it.
+    **So the only thing standing between this contract and a working surface is the migration and
+    the two grants** — not a request class, not a registry, not a dispatcher branch.
+
+# ---------------------------------------------------------------------------
+# freeTierImpact — docs/decisions/0008 and 0030
+# ---------------------------------------------------------------------------
+freeTierImpact:
+  allowancesConsumed: [d1-storage, d1-rows-read, d1-rows-written]
+  storage: >-
+    NO NEW TABLE. Three new COLUMNS across two existing tables — `name` on both, `status` on both,
+    `created_at` on `business`. `0004_branch.sql` measures a Branch row at ~130 bytes and a closed
+    beta at under 10 KB against a 500 MB per-database ceiling; a name and a status add tens of bytes
+    per row against that.
+  itIsCONFIGURATIONANDNOTSCHEMACOST: >-
+    *** docs/decisions/0030's test, applied and passed: the free tier costs us nothing here. *** No
+    figure is denormalised, nothing is aggregated on write, no audit record is omitted to save
+    row-writes, and no two logical values are packed into one column. **The columns are added because
+    the product needs them, not because a limit made a normalised shape unaffordable.**
+  reads: "One listing, capped at 100, over an index that already exists and was designed for this access path."
+  writes: >-
+    Every write declares its cost against the migrations' own figures. **The two archive operations
+    cost one row plus AUDIT_EVENT_ROW_WRITES; nothing here cascades**, which is what keeps every
+    figure in this contract a constant rather than a function of N — unlike
+    `tenant.members.sessions.revoke` and `tenant.members.remove`, both of which had to bound a
+    multiplicand.
+  whatIsNOTBOUNDED: >-
+    THE NUMBER OF BUSINESSES OR BRANCHES AN ORGANIZATION MAY CREATE. Nothing here caps it, and
+    `core.business.create` is `write` and unaudited, so a caller may create them in a loop bounded
+    only by the daily row-write ceiling. **That ceiling is a real control and it is a blunt one** —
+    it stops the abuse by stopping everything else too. A per-Organization structural limit is a
+    product decision nobody has made; recorded as OS-3 rather than invented here.
+
+# ---------------------------------------------------------------------------
+# openQuestions
+# ---------------------------------------------------------------------------
+openQuestions:
+  - id: OS-1
+    question: "Should `business-read-v1`'s listing exclude archived Businesses once `status` exists?"
+    recommendation: >-
+      YES for the picker and NO for the resolve. A picker offering an archived Business recreates the
+      "indistinguishable to the operator choosing one" defect; a resolve that stopped resolving one
+      would blank the label on every historical record. **That is an ADDITIVE change to an accepted
+      contract — a new nullable `status` on `businessSummary` — and it is that contract's to make,
+      not this one's.**
+    status: open
+
+  - id: OS-2
+    question: "An administration screen wants archived Businesses in a listing, and this contract publishes no Business listing."
+    recommendation: "Extend `business-read-v1`, do not add a second listing here. Two listings over one table is a shape one client has and the other does not — architecture.md §1's cross-client drift, self-inflicted."
+    status: open
+
+  - id: OS-3
+    question: "Nothing caps how many Businesses or Branches an Organization may create."
+    recommendation: "A per-Organization structural limit is a product decision. The daily row-write ceiling bounds it today and bounds everything else at the same time, which is not the same as a control."
+    status: open
+
+  - id: OS-4
+    question: >-
+      `business-read-v1` calls the field `display_name`; this contract calls it `name`. One column,
+      two wire names.
+    recommendation: >-
+      **Do not unify by editing `business-read-v1`** — its field is published and both clients have
+      shipped against it, which is exactly the argument `template-v1` used to refuse the `Workspace`
+      rename. Either this contract adopts `display_name`, or the divergence is recorded and lived
+      with. **Team Lead ruling owed before acceptance**, and I have deliberately not chosen: adopting
+      `display_name` here is free today and impossible after this contract is accepted.
+    status: "OPEN — and it is cheapest to decide now, which is the only reason it is flagged rather than deferred."

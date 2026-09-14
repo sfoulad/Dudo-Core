@@ -21,7 +21,7 @@
  * cannot hold.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createSqliteDatabase } from './sqlite-d1.ts';
 import type { SqliteHarness } from './sqlite-d1.ts';
 
@@ -58,7 +58,51 @@ const MIGRATION_DIRECTORY = new URL(
  * the assertions run against now matches the schema Core requires. The five cases pass again
  * because the fixture is right, not because the bar moved.
  */
-export const APPLIED_MIGRATIONS: readonly string[] = [
+/**
+ * ===========================================================================================
+ * DERIVED FROM DISK SINCE 2026-09-13. IT WAS A HAND-MAINTAINED LIST AND IT WENT STALE TWICE.
+ * ===========================================================================================
+ *
+ * The transcribed list is kept below, struck, because the reasons attached to individual
+ * entries are worth reading and `workflow.md` §12 keeps a struck ruling visible when it was
+ * right on its own terms.
+ *
+ * **Why it changed:** this repository keeps TWO control-plane migration lists, and `0043`/`0044`
+ * landed six migrations in one morning. `platform-fixture.ts` was repaired first, its case went
+ * green, and **this list stayed at seventeen** — the exact repeat its own note had predicted.
+ * The cost, in `core-agent`'s words: *"the fixtures never apply the six migrations, so every case
+ * runs against a schema with no `invitation`, no `branch` and no owner index — AND PASSES,
+ * proving nothing about any of them."*
+ *
+ * **A hardcoded 17 against a directory holding 23 is two copies of one fact and only one of them
+ * moves.** That is the user's counts ruling in a different file type, and the remedy is the same:
+ * derive it.
+ *
+ * *** THE DEFAULT IS "APPLY IT", AND THAT IS THE FAIL-SAFE DIRECTION. *** `platform-fixture.ts`
+ * already states the governing principle — **a fixture matches production unless there is a
+ * stated reason it should not** — so a new migration joining automatically is the behaviour that
+ * principle asks for. An omission becomes a declared exception rather than an accident of
+ * nobody editing an array (`architecture.md` §3a-i: key the predicate on the exception).
+ *
+ * *** WHAT DERIVING COSTS, STATED RATHER THAN GLOSSED. *** `harness-fidelity.ts` compared this
+ * list against the directory, and **that comparison is now `derived === derived` and cannot
+ * fail** — `§11a`'s two-derivations-one-scope, which is exactly the trap this change could have
+ * walked into. It is replaced there by a POPULATION PIN a human must move, so a new migration
+ * still prompts somebody to look, **without the fixture lagging production while they do.**
+ */
+const DELIBERATE_OMISSIONS: Readonly<Record<string, string>> = Object.freeze({});
+
+export const APPLIED_MIGRATIONS: readonly string[] = Object.freeze(
+  readdirSync(MIGRATION_DIRECTORY)
+    .filter((entry) => entry.endsWith('.sql'))
+    .filter((entry) => !(entry in DELIBERATE_OMISSIONS))
+    .sort(),
+);
+
+/* THE RETIRED HAND-MAINTAINED LIST, kept verbatim as a COMMENT rather than as an unused
+   constant — see the note on the same change in `platform-fixture.ts`. The entries below carry
+   the reasons individual migrations were added, which is the half worth keeping.
+
   '0001_principal.sql',
   '0002_organization.sql',
   '0003_organization_membership.sql',
@@ -131,7 +175,23 @@ export const APPLIED_MIGRATIONS: readonly string[] = [
   // divergence is that each list has its own check comparing it against the DIRECTORY** — neither
   // asserts a count, so neither could be satisfied by the other's repair.
   '0017_organization_template_index.sql',
-];
+  // ADDED 2026-09-13 — Milestone 2's six, and **the note four lines up predicted this exactly.**
+  // It records that this repository keeps TWO control-plane migration lists, that a previous
+  // author fixed one and not the other, and that the only reason it cost a red rather than a
+  // silent divergence is that **each list has its own check against the DIRECTORY, and neither
+  // asserts a count** — so repairing one cannot satisfy the other's check.
+  //
+  // That is what happened again today, and it is the note earning its keep: `platform-fixture.ts`
+  // was repaired first, `the platform fixture omits nothing` went green, and **this list stayed at
+  // seventeen with its own case still red naming all six.** A count-based check would have been
+  // satisfied by the first repair.
+  '0018_membership_role_admin.sql',
+  '0019_organization_single_owner.sql',
+  '0020_organization_membership_by_organization.sql',
+  '0021_invitation.sql',
+  '0022_tenant_role.sql',
+  '0023_organization_deletion_request.sql',
+*/
 
 export function readMigration(fileName: string): string {
   return readFileSync(new URL(fileName, MIGRATION_DIRECTORY), 'utf8');

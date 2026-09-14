@@ -141,4 +141,4 @@ export type TenantRolesRevokeError = 'invalid_argument' | 'unauthenticated' | 'f
 export const TenantRolesRevokePermission = 'core.role.revoke' as const;
 
 export type TenantRolesSetMembershipRoleError = 'invalid_argument' | 'unauthenticated' | 'forbidden' | 'not_found' | 'failed_precondition' | 'rate_limited' | 'quota_exceeded' | 'internal' | 'unavailable' | 'timeout';
-export const TenantRolesSetMembershipRolePermission = 'core.role.assign' as const;
+export const TenantRolesSetMembershipRolePermission = 'core.membership.set-role' as const;

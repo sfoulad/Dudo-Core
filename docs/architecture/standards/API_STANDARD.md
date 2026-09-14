@@ -44,6 +44,31 @@ Required fields on every Action:
 **Exposure is opt-in.** An Action is internal unless it says otherwise. Nothing becomes
 public, and nothing becomes an AI tool, by default or by accident.
 
+> **⚠ `audit` IS RELAXED FOR ONE REQUEST CLASS, AND THIS TABLE READ AS UNCHANGED. Added 2026-09-13.**
+>
+> The row above says **mandatory `true` for `sensitive` and `critical`, with no "unless".**
+> **`docs/decisions/0044` §3c relaxes it for the tenant-admin class**: that class does not audit
+> reads universally, because its actor is inside the tenant and a write per settings-page view costs
+> the tenant's own allowance. **As amended 2026-09-13 the condition is narrow — the contrast with P4
+> licenses only the absence of a BLANKET read audit and licenses NO individual exemption**, so a
+> `sensitive` read there is audited unless a per-route argument says otherwise, and **that argument
+> may not be §3c's own clause.**
+>
+> **`critical` is NOT relaxed anywhere, for any class.**
+>
+> **Why the pointer is owed rather than optional.** An accepted ADR may relax a standard; what must
+> not happen is the standard reading as unaffected. **Three routes took the exemption and all three
+> were argued against `0044` §3c without anyone opening this table** — and against the unrelaxed rule
+> they were never available. `architecture.md` §3c's reader half, one level up:
+> **a carve-out reads as the rule when it is the nearest thing to hand.**
+>
+> **`exposure` carries the same hazard in the opposite direction and is worth checking against this
+> paragraph.** It is opt-in and absent means internal — so **an unargued `public` is not an opt-in,
+> it is a default overridden without a decision.** Eight Milestone 2 contract sets declared
+> `[internal, public]` uniformly on every operation with no argument anywhere; the `critical` ones
+> have since been ruled `[internal]`, because a Bearer caller mints its own confirmation challenge
+> and answers it, **so the statement `confirmation-v1` renders is read by nobody.**
+
 ---
 
 ## 2. Internal API

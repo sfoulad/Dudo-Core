@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-usage:1",
+  "title": "Organization Plan, Quota and Usage — contract v1",
+  "description": "Every request and response shape of the Organization USAGE contract, contract version 1 — what the tenant's plan is, what its ceilings are, and how much of them it has consumed. SHAPES ONLY; the rulings are in tenant-usage-v1.contract.yaml.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044).\n\n*** IT INTRODUCES NO BILLING, AND THAT IS A CONSTRAINT FROM THE MILESTONE BRIEF RATHER THAN A GAP. *** No price, no currency, no invoice, no payment method, no plan CHANGE. `core.subscription.change` exists in the catalogue, is `critical`, is described as 'A spend decision', and IS NOT GATED BY ANY OPERATION HERE.\n\n*** AND THE FIGURES ARE DERIVED FROM ROWS ALREADY WRITTEN, NEVER FROM A COUNTER. *** docs/decisions/0030: the free tier may cost us CONFIGURATION and never SCHEMA, and 'aggregating on write and losing the source rows' is named as a violation. See the contract's theDERIVATIONRULING — it is the load-bearing decision in this set.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "planTier": {
+      "type": "string",
+      "enum": ["free"],
+      "enumPolicy": "closed",
+      "description": "The Organization's plan.\n\n*** ONE MEMBER, AND A ONE-MEMBER ENUM IS AN HONEST SHAPE RATHER THAN A PLACEHOLDER. *** docs/decisions/0008 holds: Dudo's cost is USD 0 / BD 0 per month and no paid tier exists, is approved, or is being built. **A `pro` or `enterprise` member declared now would be a value no Organization can hold and no route can set** — a vocabulary asserting a product that does not exist, on a screen a customer reads.\n\n`closed`, AND THE ARGUMENT IS THE STRONGEST FORM OF `0041`'s: a second tier is not merely a migration, it is a PAID PRODUCT, which is a user decision, a billing decision and a spend decision at once (`0008`: no agent may approve paid usage, only the user). **If any enum in this corpus should force a decision before it widens, it is this one.**\n\nA CLIENT MUST NOT RENDER AN UPGRADE CONTROL. There is nothing to upgrade to, and a disabled 'Upgrade' button is a claim that a paid tier exists and is coming."
+    },
+
+    "allowance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "limit", "used", "window", "resets_at"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "enum": ["principal-daily-row-writes", "organization-daily-row-writes"],
+          "enumPolicy": "closed",
+          "description": "Which ceiling this row reports.\n\n  principal-daily-row-writes     PER_PRINCIPAL_DAILY_ROW_WRITES, per member, per UTC day.\n  organization-daily-row-writes  the Organization's own aggregate ceiling.\n\n*** THESE ARE THE CEILINGS THAT ALREADY EXIST AND ALREADY REFUSE WORK, NOT A NEW METERING CONCEPT. *** `platform/core/identity/control-plane-admission.ts` declares `PER_PRINCIPAL_DAILY_ROW_WRITES = 600`; the write-admission path enforces it today and returns `quota_exceeded` when it is reached. **This contract makes a control that already bites VISIBLE to the customer it bites** — it does not create metering.\n\n`closed`. A third allowance is a new ceiling in Core, which is a decision. **AND THE ENUM IS THE HONEST BOUND ON THIS CONTRACT'S SCOPE**: d1-storage, d1-rows-read, R2 and Queues all consume `0008` allowances and NONE of them is per-Organization measurable, so none is published. Naming only what is real is what stops this shape becoming a dashboard of zeroes."
+        },
+        "limit": { "type": "integer", "minimum": 0, "description": "The ceiling, as the constant Core enforces. A CONSTANT AND NOT A SETTING — no route changes it, and `0030` is why: a ceiling constant is CONFIGURATION and reversible, which is exactly the kind of free-tier accommodation that record permits." },
+        "used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How much of the window has been consumed.\n\n*** DERIVED FROM ROWS ALREADY WRITTEN, NEVER FROM A COUNTER COLUMN. *** See the contract's theDERIVATIONRULING. It may therefore be a moment stale, and it may cost more to compute than the read it reports on.\n\nIT MAY EXCEED `limit`. Admission charges an estimate before a handler runs and the handler may write less, so the recorded consumption and the enforced ceiling are measured slightly differently. **A client must render `used > limit` without treating it as impossible** — clamping it in the client would hide a real discrepancy between what was charged and what was written."
+        },
+        "window": { "type": "string", "enum": ["utc-day"], "enumPolicy": "closed", "description": "The period the ceiling applies over. One member: every allowance Dudo enforces today resets at UTC midnight. `0014` §A.10 fixes the reset to 'the next UTC reset', so this is a transcription rather than a choice." },
+        "resets_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC. The next reset instant.\n\n*** THIS ONE A CLIENT MAY RENDER AS A COUNTDOWN, UNLIKE `scheduled_purge_at` IN tenant-lifecycle-v1. *** The difference is that something acts on this date: the window genuinely rolls and the allowance genuinely returns. The lifecycle contract's date is read by nothing." }
+      },
+      "description": "One ceiling and what the Organization has spent against it."
+    },
+
+    "getUsageOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan", "allowances", "measured_at"],
+      "properties": {
+        "plan": { "$ref": "#/$defs/planTier" },
+        "allowances": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/allowance" }, "description": "Every allowance this contract can measure. Bounded at 8 against an enum of two so the shape does not need a version when a third ceiling lands — a bound above the population rather than at it, which is the same reasoning `tenant-roles-v1`'s 200-permission cap uses: the bound must not be reachable by a legitimate response." },
+        "measured_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339, UTC. When the figures were computed.\n\n*** IT IS REQUIRED, AND IT IS THE FIELD THAT MAKES THE DERIVATION HONEST. *** Because `used` is derived rather than counted, it is a measurement rather than a running total, and a measurement without a timestamp is a number a reader will assume is current. `workflow.md` §2a's rule about stating a number as what a thing held at a time T, arriving in a wire shape."
+        }
+      },
+      "description": "The Organization's plan and its consumption.\n\n*** WHAT IS DELIBERATELY ABSENT: NO MONEY, IN ANY FORM. *** No price, no currency, no amount due, no invoice, no payment method, no next billing date. `0008` holds and there is nothing to bill; a currency field on a usage screen is the first half of a billing product and it would be published before anybody decided to build one.\n\nNO PER-MEMBER BREAKDOWN. `principal-daily-row-writes` is per member and this response reports the ORGANIZATION's aggregate against it, never a row per member — see the contract's theBREAKDOWNISREFUSED. A map from member to consumption is an activity report on named colleagues, which is a different product with a different permission and a different conversation."
+    }
+  }
+}

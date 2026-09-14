@@ -30,8 +30,21 @@ common/         platform-wide shapes every contract reuses — the error envelop
 registries/     the five machine-readable registries (permissions, events, Core objects,
                 manifest schemas)
 validation/     zero-dependency validators (docs/decisions/0009)
+generator/      the contract-to-types generator (docs/decisions/0037)
+generated/      its output — the ONLY thing @dudo/contracts exports (docs/decisions/0040)
 core/<domain>/  Core's own published contracts, one directory per Core domain
 apps/<app-id>/  one directory per App, holding that App's contract set
+```
+
+**`core/` domains, and each is a REQUEST CLASS as much as a subject area** — which is why
+`organization` and `tenant-admin` are separate directories rather than one:
+
+```
+core/identity/      pre-authentication and session routes (0014 §B, 0021)
+core/platform/      the platform-operator class (0025 D3) — admin.dudo.work
+core/organization/  tenant ACTIONS over tenant data (business-read-v1)
+core/tenant-admin/  the tenant-admin class (0044) — app.dudo.work/settings, Milestone 2
+core/audit/         the tenant's view of its own trail
 ```
 
 Each contract set is three artifacts, all normative together: a `README.md` carrying the
@@ -40,9 +53,22 @@ and response shapes; and a `*.contract.yaml` carrying the Action definitions, pe
 tenancy, audit, HTTP binding and free-tier impact. **A type alone is not a contract**, which
 is why the shapes file is never the whole set.
 
-`core/identity` uses **two** files rather than three — the reasoning lives in its
-`*.contract.yaml` — and says so in its own header, so a reader does not conclude a `README.md`
-was lost. It is also the one set that describes **pre-authentication entry points rather than
+**TWO DIRECTORIES DEPART FROM THAT SHAPE, AND EACH SAYS SO ON ITS OWN FACE** so that a reader does
+not conclude a file was lost.
+
+- `core/identity` uses **two** files rather than three — the reasoning lives in its
+  `*.contract.yaml`.
+- **`core/tenant-admin` uses ONE `README.md` for FOUR contract sets.** Added 2026-09-13. Every
+  contract there inherits the same request class, the same tenancy argument, the same not-found
+  ruling and the same page-bound requirement, and restating those in four files would produce **a
+  duplicated constraint with no citations** — `workflow.md` §12's hardest sweep target, and the
+  reason it is hard is that nothing cites a restatement. The shared half is stated once; each
+  contract carries a `readThisFirst:` key naming it, **and that pointer is weaker than the
+  constraint being present, which is stated there rather than glossed over.**
+
+**This sentence said `core/identity` was *"the one set"* that departs.** It was true when written
+and is not now — the same shape as every other absence claim this corpus keeps producing
+(`workflow.md` §12). A departure arriving is the sweep trigger, exactly as a capability arriving is. It is also the one set that describes **pre-authentication entry points rather than
 Actions**: no permission, no scope, no `ActionContext`, no tenant. That is not a gap in the
 set; it is what `docs/decisions/0014` §B's admission rule is.
 
@@ -75,10 +101,34 @@ concept — `Core stays small` is a boundary this directory records rather than 
 | `core/platform` — Organization identity | 1 | **Accepted 2026-09-08.** `0031` decided its substance and the user granted `core.platform-organization.update` on 2026-09-07, relayed by the Team Lead. `sensitive`, **not** `critical`, and the argument is worth keeping: if a VAT number were critical *because the value may later appear on a document*, so would the commercial registration and the display name, and **the rung would stop sorting anything.** What replaces a confirmation acts at the point of harm instead — a **verification record** saying who checked this value against the issuing registry and when. **`OI-1` stays open:** the customer still cannot enter or correct their own name, CR or VAT number. |
 | `core/audit` — Tenant audit read | 1 | **Proposed.** The customer's view of their own trail, **including what the platform did to them**. It exists because `0028` rests on a term that was struck: the residual was accepted as *"N requests, audited in both homes, VISIBLE TO EACH VICTIM, rate limited"*, and **two of those four terms are false** — visibility is *"a property of a route that does not exist"*, and *rate limited* was measured false. **This contract makes the third term true and states plainly that it does not restore the fourth.** Every audit record Dudo writes into a customer's Organization today is **written and unreadable by the party it protects.** |
 
-**THE TABLE IS NOW COMPLETE: 15 rows for 15 contracts**, checked against the file count rather
-than assumed. It carried **10** until 2026-09-09 — **a table that silently covers two thirds of
-the corpus reads exactly like a complete one** (`workflow.md` §11a), and stating the gap without
-closing it would have re-created the problem one level up.
+| `core/tenant-admin` — Organization members | 1 | **Proposed, 2026-09-13.** Milestone 2. The Organization's own member directory, suspension, reactivation and removal, in the **tenant-admin** class (`0044`). Proposes `core.user.reactivate` and `core.user.remove`, both `status: proposed` and held by no role. **Its central finding is a dependency rather than a design:** `principal` has no name column and `principal_credential` stores an HMAC, so *"the plaintext identifier is never stored"* — **a name is ABSENT and an email is UNRECOVERABLE**, and every member renders as an opaque identifier until a migration adds one. |
+| `core/tenant-admin` — Organization invitations | 1 | **Proposed, 2026-09-13.** Milestone 2. Create, list, read, resend, revoke, and the pending count — which is **the corpus's only permission CONJUNCTION** (`core.user.invite ∧ core.invitation.list`, `0043` §4, the first live consumer of `0044` §3d). **Acceptance is deliberately not here and cannot be:** an invitee has no membership, so no tenant resolves for them and the class refuses the route. Two independent reasons nothing can join today — that, and no outbound-message capability. |
+| `core/tenant-admin` — Organization roles | 1 | **Proposed, 2026-09-13.** Milestone 2. Seed and custom roles with **their exact permission lists on the wire** (`0043` §5.6), custom-role CRUD under `0007` D16, assignment and revocation, and the seed-tier change. The one contract in Dudo that publishes permission ids to a customer. **Rules that `delete` is gated on `core.role.update`** because update is strictly more powerful while deletion refuses to cascade — and records that a cascade would need its own permission immediately. |
+| `core/tenant-admin` — Organization profile | 1 | **Proposed, 2026-09-13.** Milestone 2. Display name, legal name, registrations, contact, language, timezone and regional settings. **This is the route that closes `organization-identity-v1`'s OI-1** — and `0044` §4 is explicit that OI-1 closes when it is BUILT, not when it is contracted. A tenant may now CLAIM a registration number and can never ATTEST one: every tenant edit clears the verification, structurally, because the submission shape carries no `verified` field to preserve. |
+| `core/tenant-admin` — Organization lifecycle | 1 | **Proposed, 2026-09-13.** Ownership transfer, deletion request and its cancellation. **Two of its four operations are `critical` and CANNOT BE CALLED BY ANYONE** — `confirmation-v1` requires one challenge route per class and the tenant-admin one does not exist, so registering them FAILS THE BUILD naming the gap rather than shipping an operation that authorizes, gates and can never be satisfied. **`purged` is declared and unreachable and `scheduled_purge_at` is read by nothing**, so a client must not render a countdown: it is the date deletion becomes permissible, not the date it happens. |
+| `core/tenant-admin` — Organization sessions | 1 | **Proposed, 2026-09-13.** **Two properties of `0004_session.sql` decide the whole contract.** `session_id` is the primary key AND the unguessable secret — *"a session identifier that could be ordered or guessed would be a session stealable without a credential"* — **so it can never appear in a listing and there is therefore NO per-session revoke**, only revoke-all. And `active_organization_id` may name another Organization, so every operation is scoped to sessions active in the authenticated one: **"sign out everywhere" is a phrase both clients are forbidden to use.** |
+| `core/tenant-admin` — Organization usage | 1 | **Proposed, 2026-09-13.** Plan, ceilings and consumption, **with no billing of any kind** — `core.subscription.change` is gated by nothing here. Its ruling is `0030`'s: **every figure is DERIVED from rows already written, never from a counter column**, because *"aggregating on write and losing the source rows"* is the schema cost paid forever. **The honest consequence is on the face of it: reading your usage consumes the allowance it reports on.** |
+| `core/tenant-admin` — Organization configuration | 1 | **Proposed, 2026-09-13. One read and one refusal, and the refusal is the larger half.** Publishes the adopted Template's name and level labels — which decide what every screen calls a Business and a Branch. **The installed-App half is REFUSED**: the isolation mechanism is unselected (`0003` did not approve Workers for Platforms; `0008` prohibits paid-only), there is no manifest-admission path, and the App permission and trust ADR is unwritten — **while `core.app.*` is already granted to `owner` and `admin`, so a route would be live the day it landed over a model nobody has designed.** |
+| `core/organization` — Organization structure | 1 | **Proposed, 2026-09-13.** Creating, renaming, archiving and restoring Businesses and Branches — **the slice `business-read-v1` refused to design and asked for by name.** **Action class, not tenant-admin**, because `business` and `branch` are tenant-database tables: measured, and it corrects a claim the tenant-admin README made about work that did not exist yet. **Its migration also unblocks `business-read-v1`'s `display_name`**, null on every response since that contract was accepted. |
+| `core/platform` — Template lifecycle | 1 | **Accepted 2026-09-10.** PA-16 and PA-17's substance: edit, retire, restore, re-assign, and the adoption census. **Its row was missing from this table until 2026-09-13** — see the note below. |
+
+> **THIS TABLE CARRIES ONE ROW PER `*.contract.yaml`. THE FILES ARE THE AUTHORITY AND THE TABLE IS
+> THE COPY.**
+>
+> **It has now been wrong twice, in the same direction, and the second time was inside the paragraph
+> announcing it fixed.** It carried **10** rows until 2026-09-09, when it was extended and closed
+> with *"THE TABLE IS NOW COMPLETE: 15 rows for 15 contracts, checked against the file count rather
+> than assumed."* **`template-lifecycle-v1` landed the next day and the sentence stayed.** So a
+> paragraph whose whole subject is a stale count went stale, by one, within twenty-four hours —
+> and **nothing went red**, because a documentation table has no gate.
+>
+> **The total is deleted rather than corrected, under the user's standing ruling of 2026-09-13**
+> (`workflow.md` §11a): *derive counts, enforce equality through QA, do not restate a figure in
+> prose.* **The check that is owed is one line and it belongs to `qa-agent`: every
+> `*.contract.yaml` under `packages/contracts/**` has a row here, and every row names a file that
+> exists.** Both directions — a missing row hides a contract, and an orphan row describes one that
+> was deleted. **Until that check exists, this paragraph is a promise and not a mechanism, and
+> saying so is the difference between the two.**
 
 ## The corpus boundary — what `packages/contracts/**` means
 
@@ -126,20 +176,27 @@ synonyms**, and normalising them to one word would erase a distinction the code 
 | Key | Request class | Authenticates | Tenant | Permission |
 |---|---|---|---|---|
 | `entryPoints:` | Pre-authentication entry point (`0014` §B) | nothing | none | **none evaluated** |
-| `operations:` | Platform route (`0025` D3) **and, today, the session class (`0021`)** | principal | none | platform route: **yes**; session class: **none** |
+| `operations:` | Platform route (`0025` D3) · the session class (`0021`) · **tenant-admin (`0044`)** | principal, except session (session level) | platform: none · session: none · **tenant-admin: from the authenticated context** | platform: **yes** · session: **none** · **tenant-admin: yes** |
 | `actions:` | Action pipeline — Core Actions and App Actions | principal | **required** | **yes** |
 
 **The generator accepts exactly these three and refuses an unknown fourth, loudly.** An unknown
 key is a contract publishing something into a class nobody declared.
 
-> **MEASURED, AND THE MAPPING IS NOT CLEAN — see `operations:` above.** There are **four** request
-> classes and **three** keys. `organization-selection-v1` uses `operations:` and its two entries
-> are session-class routes, not platform routes. So one key covers two classes that `0021` and
-> `0025` deliberately separated, and a reader inferring the class from the key gets the wrong
-> answer for that contract. **The key name is an implicit encoding of a property that should be
-> explicit**, and the durable repair is a declared `requestClass:` field the generator can check
-> against the route tables — not a fourth key name, which would encode the same property the same
-> implicit way.
+> **MEASURED, AND THE MAPPING IS NOT CLEAN — see `operations:` above.** There are **more request
+> classes than keys**, and `operations:` carries three of them. `organization-selection-v1` uses
+> `operations:` and its two entries are session-class routes, not platform routes; the Milestone 2
+> tenant-administration contracts use the same key and are neither. So one key covers three classes
+> that `0021`, `0025` and `0044` deliberately separated, and a reader inferring the class from the
+> key gets the wrong answer for two of the three. **The key name is an implicit encoding of a
+> property that should be explicit**, and the durable repair is the declared `requestClass:` field
+> — not another key name, which would encode the same property the same implicit way.
+>
+> **THIS PARAGRAPH SAID "four request classes and three keys" AND WENT STALE THE DAY `0044` WAS
+> ACCEPTED.** The count is removed rather than incremented, under the user's 2026-09-13 ruling
+> (`workflow.md` §11a): **the authority is `REQUEST_CLASSES` in `generator/generate-types.mjs`,
+> which the generator refuses an unknown value against on every run.** A figure restated in prose
+> is a second copy that nothing compares against the first — and the reason nobody caught this one
+> is that the sentence's *claim* stayed true and got stronger while its *number* went wrong.
 
 ## Where a request shape is DECLARED and where it is MACHINE-READABLE
 

@@ -56,7 +56,13 @@
  */
 
 import { ApiError, ERROR_CODES, type ErrorCode, type ErrorDetail } from './errors';
-import type { DudoAction, Transport } from './fixture-transport';
+/*
+ * ⚠ THIS IMPORTED ITS OWN INTERFACE FROM THE FIXTURE. The transport written to
+ * REPLACE the fixture was declaring itself against a type the fixture owned —
+ * the clearest single symptom of why a production build shipped fixture data.
+ * `./transport.ts` owns the shape now and neither implementation owns the other.
+ */
+import type { DudoAction, Transport } from './transport';
 import { BASE_PATH, ROUTES } from './client';
 import { CORE_BASE_PATH, CORE_ROUTES } from '@/contracts/business-read';
 import { CONFIG } from './config';

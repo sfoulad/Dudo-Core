@@ -80,6 +80,16 @@ import { ISOLATION, Suite, assertEqual, assertTrue } from '../../harness/runner.
 
 const CONTRACTS = fileURLToPath(new URL('../../../contracts/', import.meta.url));
 
+/**
+ * A fixture carrying a mutually-declared `enumPolicyDivergence` pair.
+ *
+ * **It is the READER's known-present input**, and it exists because the corpus may legitimately
+ * contain zero — at which point `live = []` from a working reader and `live = []` from a broken
+ * one are the same value. Read with the SAME `enumOccurrences` the corpus is read with, so a
+ * change to the extraction breaks both together rather than silently sparing this one.
+ */
+const DIVERGENCE_FIXTURE = fileURLToPath(new URL('../../fixtures/enum-divergence/', import.meta.url));
+
 /** One node carrying an `enum`, wherever it sits. */
 export type EnumOccurrence = {
   readonly file: string;
@@ -515,18 +525,70 @@ export function buildEnumPolicyConsistencySuite(): Suite {
       `faults=${JSON.stringify(foreign.faults)}`,
     );
 
-    // ---- AND THE REAL PAIR, read from disk, MUST BE EXEMPT. The constructed mirror above proves
-    // the logic; this proves it accepts the actual artifact `0041` amendment 1 sanctioned.
-    const live = enumOccurrences(CONTRACTS).filter(
-      (entry) => entry.divergence !== undefined,
+    // =====================================================================================
+    // ⚠ THE LIVE HALF, REPAIRED 2026-09-13 AFTER A CORRECT RULING TURNED IT RED.
+    // =====================================================================================
+    //
+    // **It used to assert `live.length >= 2`** — that the corpus contains a mutually-declared
+    // pair — on the reasoning that the constructed mirror proves the logic and the live pair
+    // proves the logic accepts the real artifact. That was true while a pair existed.
+    //
+    // **The Team Lead then narrowed `templateStatus` to `closed` and stripped both
+    // `enumPolicyDivergence` markers.** That pair was the ONLY live mutually-declared exemption
+    // in the corpus, so `live` became `[]` and this case failed.
+    //
+    // > **Nothing about the ruling was wrong and nothing about the floor was wrong.** A
+    // > correction that removes the LAST instance of a category leaves every check whose floor
+    // > asserts that category is inhabited. **The floor announced it instead of passing over
+    // > nothing, which is what it exists for.**
+    //
+    // *** AND IT MUST NOT BE WEAKENED TO CLEAR THE RED, BECAUSE THE TWO STATES ARE IDENTICAL
+    // *** FROM HERE: ***
+    //
+    // ```
+    // live = []   because the corpus declares no divergence      LEGITIMATE
+    // live = []   because the reader stopped seeing the field    A DEAD CHECK REPORTING GREEN
+    // ```
+    //
+    // Deleting the floor accepts both. So the floor MOVES rather than going: **off the corpus,
+    // which may legitimately be empty, and onto the READER, which may not.** `§11a`: a check
+    // that reads its input needs a floor on the READER, not only on the result.
+    //
+    // ---- 7. THE READER FLOOR. A fixture that DOES carry a mutual pair, on disk, read by the
+    // same `enumOccurrences` the corpus is read with. If the extraction of `enumPolicyDivergence`
+    // ever breaks, THIS goes red — and it cannot be satisfied by an empty corpus.
+    const fromFixture = enumOccurrences(DIVERGENCE_FIXTURE).filter((entry) => entry.divergence !== undefined);
+    assertEqual(
+      `${ISOLATION} READER FLOOR: the fixture's mutual pair is still visible to enumOccurrences`,
+      fromFixture.length,
+      2,
     );
     assertTrue(
-      `${ISOLATION} the live divergence pair is present and mutually declared`,
-      live.length >= 2 && divergenceExemption(live).exempt,
-      `the corpus's declared-divergence enums do not form a valid exemption: ` +
-        `${JSON.stringify(live.map((e) => `${e.file}${e.pointer}`))} ` +
-        `faults=${JSON.stringify(divergenceExemption(live).faults)}`,
+      `${ISOLATION} and the reader's output still satisfies the exemption`,
+      divergenceExemption(fromFixture).exempt,
+      `the fixture pair was refused: ${JSON.stringify(divergenceExemption(fromFixture).faults)}`,
     );
+
+    // ---- 8. THE CORPUS. Zero is a legitimate answer and is REPORTED rather than asserted; any
+    // declared divergence must form a valid exemption. **The count is printed either way**, so
+    // "the corpus declares none" can never be read as "the check examined none".
+    const live = enumOccurrences(CONTRACTS).filter((entry) => entry.divergence !== undefined);
+    console.log(
+      `      corpus: ${String(live.length)} declared enumPolicyDivergence marker(s)` +
+        (live.length === 0
+          ? ' — NONE. Legitimate: the only pair was retired when `templateStatus` was narrowed to ' +
+            '`closed`. The reader floor above is what makes this distinguishable from a broken walk.'
+          : ` — ${live.map((entry) => `${entry.file}${entry.pointer}`).join(', ')}`),
+    );
+    if (live.length > 0) {
+      const verdict = divergenceExemption(live);
+      assertTrue(
+        `${ISOLATION} every declared divergence in the corpus forms a valid, mutual exemption`,
+        verdict.exempt,
+        `${JSON.stringify(live.map((entry) => `${entry.file}${entry.pointer}`))} ` +
+          `faults=${JSON.stringify(verdict.faults)}`,
+      );
+    }
   });
 
   suite.test('*** SAME `$defs` NAME, SAME VALUES — the drift the value-keyed check cannot see ***', () => {

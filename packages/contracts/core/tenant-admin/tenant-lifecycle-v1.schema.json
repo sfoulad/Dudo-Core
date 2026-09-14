@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dudo:schema:tenant-lifecycle:1",
+  "title": "Organization Lifecycle — ownership transfer, deletion request, retention — contract v1",
+  "description": "Every request and response shape of the Organization LIFECYCLE contract, contract version 1. SHAPES ONLY; the rulings are in tenant-lifecycle-v1.contract.yaml and the shared class obligations in README.md.\n\nREQUEST CLASS: tenant-admin (docs/decisions/0044). No organization_id in any shape — the Organization is the authenticated one.\n\n*** TWO OF THE FOUR OPERATIONS ARE `critical` AND NEITHER CAN BE CALLED TODAY. *** confirmation-v1 requires one challenge route per request class and only the platform one is registered; the tenant-admin one does not exist. core-agent's class carries `assertGatedRoutesCanObtainAConfirmation`, so registering these FAILS THE BUILD naming the missing work rather than shipping an operation that authorizes, gates and can never be satisfied. That is the intended outcome and it is flagged on each operation's own face rather than only here.\n\nNOT EXECUTED. Normative and hand-checked.",
+  "$defs": {
+
+    "errorResponse": { "$ref": "urn:dudo:schema:error-envelope:1#/$defs/errorEnvelope" },
+
+    "deletionRequestStatus": {
+      "type": "string",
+      "enum": ["pending", "cancelled", "purged"],
+      "enumPolicy": "closed",
+      "description": "Transcribed from control-plane/0023_organization_deletion_request.sql's CHECK, which admits exactly these three.\n\n  pending    the retention window is running. Cancellable.\n  cancelled  an administrator stopped it. Terminal for that request.\n  purged     the Organization's data has been destroyed. Terminal.\n\n*** `purged` IS DECLARED AND UNREACHABLE, AND THE MIGRATION SAYS SO ITSELF: 'nothing purges'. *** It is published rather than withheld for the migration's own stated reason — so that the day a purge mechanism is decided the terminal state already exists and the transition is not invented alongside the mechanism. **A CLIENT MUST NOT RENDER `purged` AS A STATE THAT HAPPENS.** Three declared states must not be read as three states that occur, which is the sentence the migration wrote to stop exactly that inference.\n\nCLOSED, and matching the CHECK is the argument: a fourth value is a migration plus a decision about the lifecycle."
+    },
+
+    "deletionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "requested_at", "requested_by", "scheduled_purge_at", "closed_at", "closed_by"],
+      "properties": {
+        "status": { "$ref": "#/$defs/deletionRequestStatus" },
+        "requested_at": { "type": "string", "format": "date-time", "description": "RFC 3339, UTC. The server's clock, never a request value." },
+        "requested_by": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" },
+        "scheduled_purge_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The end of the retention window.\n\n*** NOTHING READS THIS COLUMN AND NOTHING ACTS ON THIS DATE. *** 0023 states it in terms: there is no purge mechanism, and 'a date that nothing acts on must not be described as a schedule'. **SO A CLIENT MUST NOT RENDER IT AS A COUNTDOWN TO DELETION.** It is the date on which deletion BECOMES PERMISSIBLE, not the date on which it happens — and a countdown is a promise to a customer that Dudo cannot presently keep, in the direction that reassures.\n\nAlways present on a request in any state, including `cancelled`, because it records what the window WOULD have been."
+        },
+        "closed_at": { "type": ["string", "null"], "format": "date-time", "description": "Set when the request leaves `pending`; null while open. One pair for both terminal states, so `status` is the only thing that says which." },
+        "closed_by": {
+          "oneOf": [{ "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" }, { "type": "null" }],
+          "description": "Who closed it, or null while open. Present even if that member has since been removed — an accountability fact on the most consequential act a tenant can take outlives the actor's membership."
+        }
+      },
+      "description": "The Organization's deletion request, if it has one.\n\n*** THERE IS AT MOST ONE, EVER, AND THAT IS STRUCTURAL RATHER THAN A RULE. *** 0023 declares `PRIMARY KEY (organization_id)`, so the table admits exactly one row per Organization. **A SECOND REQUEST DOES NOT INSERT — IT OVERWRITES.** That has a consequence the shape cannot express and the contract must: re-requesting deletion after a cancellation REPLACES the cancelled record, so the fact that somebody once asked and somebody else stopped it survives only in the audit trail. See tenant-lifecycle-v1.contract.yaml -> theHISTORYLIVESINTHEAUDITTRAILANDNOTHERE."
+    },
+
+    "getLifecycleOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner_principal_id", "deletion_request", "retention_window_days"],
+      "properties": {
+        "owner_principal_id": {
+          "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId",
+          "description": "The single owner. NOT NULLABLE: ownership is singular AND mandatory (docs/decisions/0043 §3c), enforced by a partial unique index in the same statement that writes it. An Organization with no owner has nobody who may transfer or delete it, so a null here would describe a state the invariant forbids."
+        },
+        "deletion_request": {
+          "oneOf": [{ "$ref": "#/$defs/deletionRequest" }, { "type": "null" }],
+          "description": "The Organization's deletion request, or null if it has never had one. Null and `cancelled` are DIFFERENT and both must render distinctly: one is an Organization nobody has ever tried to delete, the other is one where somebody did and it was stopped."
+        },
+        "retention_window_days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How long the window between a request and permissible purge is, in days. A CORE CONSTANT, not a tenant setting and not a per-request input.\n\nIT IS PUBLISHED SO THE CLIENT CAN STATE THE CONSEQUENCE BEFORE THE ACT rather than after it — the confirmation statement for a deletion request has to say how long the customer has to change their mind, and a client that hardcoded that number would state a different one from the server the day it moves.\n\n*** IT IS NOT SETTABLE, DELIBERATELY. *** A tenant choosing its own retention window can choose one day, which turns a safety period into a formality; and a retention period is a customer-facing and legal commitment, which 0023 says is why the column has no default."
+        }
+      },
+      "description": "The Organization's lifecycle state, whole.\n\nNO STATUS FIELD FOR THE ORGANIZATION ITSELF. `organization.status` is `active | suspended` and SUSPENSION IS A PLATFORM ACT, not a tenant one — a suspended tenant is one the platform has stopped, and publishing it on a tenant settings screen would invite a client to offer a control for it. If a tenant needs to see that it is suspended, that is a different surface with a different argument."
+    },
+
+    "transferOwnershipInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["to_principal_id"],
+      "properties": {
+        "to_principal_id": {
+          "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId",
+          "description": "The member who becomes owner. MUST be an ACTIVE member of the authenticated Organization; a suspended member, a removed one, or a principal of another Organization all answer not_found identically.\n\n*** A SUSPENDED MEMBER IS REFUSED AND THAT IS NOT THE not_found CASE — IT IS failed_precondition. *** They are a member, so the identifier resolves; the refusal is about state. Transferring an Organization to somebody who cannot sign in leaves it with an owner nobody can act as, and the owner is the one role that cannot be suspended or removed to fix it."
+        }
+      },
+      "description": "Transfer ownership of the Organization.\n\n*** NO `from_principal_id`. *** The current owner is a fact the server holds; accepting it from the caller would create a field whose only interesting value is a wrong one, and a request that names its own precondition is a request that can disagree with the server about what it is doing.\n\nTHE CALLER NEED NOT BE THE OWNER, AND THAT IS THE PERMISSION'S DECISION RATHER THAN THIS SHAPE'S. `core.organization.transfer-ownership` is `critical` and held by nobody today; whoever is granted it may perform the transfer. `admin` must never hold it (0043 §3d).\n\nTHE CONFIRMATION IS NOT A FIELD HERE. It travels by the mechanism confirmation-v1 defines for the request class, and inventing a `confirmation_token` property would be building a second gate beside the pipeline's."
+    },
+
+    "transferOwnershipOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous_owner_principal_id", "owner_principal_id", "transferred_at"],
+      "properties": {
+        "previous_owner_principal_id": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" },
+        "owner_principal_id": { "$ref": "urn:dudo:schema:tenant-members:1#/$defs/principalId" },
+        "transferred_at": { "type": "string", "format": "date-time" }
+      },
+      "description": "Both sides of the transfer, named.\n\nBOTH ARE RETURNED BECAUSE THE ACT IS A SWAP AND A RESPONSE NAMING ONLY THE NEW OWNER DESCRIBES HALF OF IT. It is also the response a client renders into a confirmation of what just happened, and 'you are no longer the owner of this Organization' is the half the caller most needs to see when the caller was the previous owner."
+    },
+
+    "requestDeletionInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {},
+      "description": "*** NO PARAMETERS. NOT EVEN A REASON, AND NOT A RETENTION PERIOD. ***\n\nNO RETENTION PERIOD: the window is a Core constant (see getLifecycleOutput.retention_window_days). A caller choosing it can choose one day.\n\nNO REASON FIELD, AND THE OMISSION IS ARGUED RATHER THAN AN OVERSIGHT. A free-text reason on the most consequential act a tenant can take is a field that will be rendered to platform operators, which makes it a channel from a customer's administrator to Dudo's staff that nothing moderates, and it invites a customer to put personal or commercial detail into a control-plane row that the deletion itself will not remove. If a reason is ever wanted it belongs in the audit record's own structure, not in the request that starts an irreversible clock.\n\nAN EMPTY OBJECT IS A VALID BODY. `required: []` with no properties and `additionalProperties: false` means exactly one instance satisfies this — `{}` — which is what makes 'sending nothing' unambiguous rather than a convention."
+    },
+
+    "requestDeletionOutput": { "$ref": "#/$defs/deletionRequest" },
+
+    "cancelDeletionRequestInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {},
+      "description": "No parameters. The Organization has at most one deletion request (0023's PRIMARY KEY), so there is nothing to name — and an identifier here would be a value the caller could get wrong on a recovery operation, which is the one class of operation that must not fail for a reason the caller has to debug."
+    },
+
+    "cancelDeletionRequestOutput": { "$ref": "#/$defs/deletionRequest" }
+  }
+}

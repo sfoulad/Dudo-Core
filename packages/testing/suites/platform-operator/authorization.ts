@@ -345,7 +345,15 @@ export function buildPlatformAuthorizationSuite(
       '',
     );
     assertEqual('the platform roles are exactly two', [...PLATFORM_ROLES].sort().join(','), 'marketplace-moderator,platform-admin');
-    assertEqual('the membership roles are exactly two', [...MEMBERSHIP_ROLES].sort().join(','), 'member,owner');
+    // PIN MOVED 2026-09-13: `0043` §3a adds `admin` and `business-admin`. The case went red on a
+    // correct change and that is the pin working — the `0024` disjointness assertion above is the
+    // one that matters, and it is STRENGTHENED rather than weakened by the union growing: four
+    // membership roles are four more chances for a platform-tier value to appear in it.
+    assertEqual(
+      'the membership roles are exactly the four seed roles of 0043 §3',
+      [...MEMBERSHIP_ROLES].sort().join(','),
+      'admin,business-admin,member,owner',
+    );
   });
 
   suite.test('the coherence guard throws when a role value appears in both unions', () => {

@@ -695,6 +695,30 @@ reservedApiPathSegments:
       The route block is additionally mounted ONLY on the admin host, and a request to
       /api/v1/platform/** on app.dudo.work or api.dudo.work answers 404 rather than 403 — but that
       host binding is defence in depth and this reservation is the structural control.
+  - segment: organization
+    owner: core
+    status: proposed
+    description: >-
+      ADDED 2026-09-13, REQUIRED BY THE MILESTONE 2 TENANT-ADMINISTRATION CONTRACTS. The fifth
+      request class — tenant-admin, docs/decisions/0044 — is served here:
+      /api/v1/organization/members, /organization/invitations, /organization/roles,
+      /organization/profile.
+      *** SINGULAR, AND THE DIFFERENCE FROM `organizations` BELOW IS THE WHOLE POINT RATHER THAN A
+      SPELLING CHOICE. *** `organizations` is a COLLECTION a platform operator enumerates, and every
+      route under it names one by identifier. `organization` IS THE CALLER'S OWN, RESOLVED FROM THE
+      AUTHENTICATED CONTEXT, AND CARRIES NO IDENTIFIER ANYWHERE IN THE PATH. 0044 §3b.2 makes an
+      organization identifier in any request position a REGISTRATION refusal, and the singular
+      segment is what makes that absence readable in the URL instead of only in a route table: a
+      path of the form /organization/{id}/... is visibly the wrong shape.
+      RESERVING IT MAKES assertNoReservedPathCollision REFUSE ANY App ROUTE TABLE THAT COULD RESOLVE
+      ONTO IT, and the reason is `platform`'s reason transposed: AN App THAT COULD SERVE A PATH
+      UNDER /api/v1/organization COULD PRESENT ITSELF AS THE ORGANIZATION SETTINGS SURFACE and
+      harvest a tenant administrator's actions — including role composition, which is where a
+      tenant's authority is decided.
+      IT IS SERVED ON app.dudo.work AND NEVER ON admin.dudo.work. That host binding is defence in
+      depth; the structural control is 0024's mutual exclusion, under which a platform operator
+      holds no membership, so no tenant resolves for them and no route here is reachable by one
+      (0044 §3a).
   - segment: auth
     owner: core
     status: proposed
@@ -704,6 +728,10 @@ reservedApiPathSegments:
   - segment: organizations
     owner: core
     status: proposed
+    description: >-
+      PLURAL, AND IT IS NOT THE SAME NAMESPACE AS `organization` ABOVE. A collection addressed by
+      identifier, for callers who may name an Organization other than their own — which today is
+      the platform class alone. Read the singular entry's note before adding a route to either.
   - segment: businesses
     owner: core
     status: proposed
